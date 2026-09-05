@@ -38,7 +38,13 @@ fn parse_reward_account(reward_account: &ConfigRewardAccount) -> Vec<u8> {
 
 fn parse_pool(dto: &ConfigPool) -> PoolState {
     let snapshot = PoolSnapshot {
-        is_new: true,
+        // `is_new` means this registration paid a pool deposit, which is what
+        // the epoch boundary counts to move that deposit from the utxo pot
+        // into the deposit obligation. A pool declared in the genesis arrives
+        // without a transaction, so no pot was ever debited for it and the
+        // deposit recorded below is zero. Flagging it as new would add an
+        // obligation with no source and the boundary would create ada.
+        is_new: false,
         is_retired: false,
         blocks_minted: 0,
         params: PoolParams {
