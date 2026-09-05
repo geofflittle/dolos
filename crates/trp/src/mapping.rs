@@ -7,7 +7,10 @@ use pallas::{
     codec::{minicbor, utils::KeyValuePairs},
     ledger::{
         primitives::{conway::DatumOption, BigInt, Constr, PlutusData},
-        traverse::{Era, MultiEraAsset, MultiEraOutput, MultiEraPolicyAssets, MultiEraValue},
+        traverse::{
+            Era, MultiEraAsset, MultiEraOutput, MultiEraPolicyAssets, MultiEraScriptRef,
+            MultiEraValue,
+        },
     },
 };
 
@@ -136,9 +139,15 @@ pub fn into_tx3_utxo(
     // compiler can read the reference script's Plutus language directly from
     // its tag. We must NOT store only the inner script body, which would drop
     // the language tag.
+    // The two eras are encoded through their own types rather than through one
+    // shared type, because Dijkstra's script reference carries a fifth tag
+    // (PlutusV4) that the Conway type cannot express.
     let script = parsed
         .script_ref()
-        .map(|script_ref| minicbor::to_vec(&script_ref))
+        .map(|script_ref| match script_ref {
+            MultiEraScriptRef::Conway(x) => minicbor::to_vec(x.as_ref()),
+            MultiEraScriptRef::Dijkstra(x) => minicbor::to_vec(x.as_ref()),
+        })
         .transpose()
         .map_err(|e| tx3_resolver::Error::StoreError(e.to_string()))?
         .map(Expression::Bytes);

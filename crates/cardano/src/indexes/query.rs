@@ -4,7 +4,7 @@
 use pallas::{
     crypto::hash::Hash,
     ledger::{
-        primitives::conway::{DatumOption, PlutusData, ScriptRef},
+        primitives::conway::{DatumOption, PlutusData},
         traverse::{ComputeHash, MultiEraBlock, OriginalHash},
     },
 };
@@ -28,13 +28,7 @@ pub enum SlotOrder {
     Desc,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScriptLanguage {
-    Native,
-    PlutusV1,
-    PlutusV2,
-    PlutusV3,
-}
+pub use crate::pallas_extras::ScriptLanguage;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptData {
@@ -553,39 +547,12 @@ where
 
                     for (_, output) in tx.produces() {
                         if let Some(script_ref) = output.script_ref() {
-                            match script_ref {
-                                ScriptRef::NativeScript(script) => {
-                                    if script.original_hash() == script_hash {
-                                        return Some(ScriptData {
-                                            language: ScriptLanguage::Native,
-                                            script: script.raw_cbor().to_vec(),
-                                        });
-                                    }
-                                }
-                                ScriptRef::PlutusV1Script(script) => {
-                                    if script.compute_hash() == script_hash {
-                                        return Some(ScriptData {
-                                            language: ScriptLanguage::PlutusV1,
-                                            script: script.as_ref().to_vec(),
-                                        });
-                                    }
-                                }
-                                ScriptRef::PlutusV2Script(script) => {
-                                    if script.compute_hash() == script_hash {
-                                        return Some(ScriptData {
-                                            language: ScriptLanguage::PlutusV2,
-                                            script: script.as_ref().to_vec(),
-                                        });
-                                    }
-                                }
-                                ScriptRef::PlutusV3Script(script) => {
-                                    if script.compute_hash() == script_hash {
-                                        return Some(ScriptData {
-                                            language: ScriptLanguage::PlutusV3,
-                                            script: script.as_ref().to_vec(),
-                                        });
-                                    }
-                                }
+                            let parts = crate::pallas_extras::script_ref_parts(&script_ref);
+                            if parts.hash == script_hash {
+                                return Some(ScriptData {
+                                    language: parts.language,
+                                    script: parts.bytes,
+                                });
                             }
                         }
                     }

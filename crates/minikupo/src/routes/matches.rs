@@ -11,8 +11,8 @@ use dolos_core::{
 use pallas::codec::minicbor;
 use pallas::ledger::{
     addresses::{Address, StakeAddress},
-    primitives::{conway::DatumOption, conway::ScriptRef, StakeCredential},
-    traverse::{ComputeHash, Era, MultiEraOutput, MultiEraTx, MultiEraValue, OriginalHash},
+    primitives::{conway::DatumOption, StakeCredential},
+    traverse::{Era, MultiEraOutput, MultiEraTx, MultiEraValue, OriginalHash},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -532,12 +532,9 @@ fn output_datum_info(output: &MultiEraOutput<'_>) -> (Option<String>, Option<Str
 }
 
 fn output_script_hash(output: &MultiEraOutput<'_>) -> Option<pallas::crypto::hash::Hash<28>> {
-    output.script_ref().map(|script| match script {
-        ScriptRef::NativeScript(x) => x.original_hash(),
-        ScriptRef::PlutusV1Script(x) => x.compute_hash(),
-        ScriptRef::PlutusV2Script(x) => x.compute_hash(),
-        ScriptRef::PlutusV3Script(x) => x.compute_hash(),
-    })
+    output
+        .script_ref()
+        .map(|script| dolos_cardano::pallas_extras::script_ref_hash(&script))
 }
 
 async fn resolve_output_extras<D: Domain>(

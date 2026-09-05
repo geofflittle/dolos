@@ -11,12 +11,14 @@ use pallas::{
         addresses::{Address, Network, ShelleyPaymentPart, StakeAddress, StakePayload},
         primitives::{
             alonzo::{self, Certificate as AlonzoCert},
-            conway::{Certificate as ConwayCert, DRep, DatumOption, RedeemerTag, ScriptRef},
+            conway::{Certificate as ConwayCert, DRep, DatumOption},
+            dijkstra::RedeemerTag,
             Epoch, ExUnitPrices, ExUnits, PlutusData, StakeCredential,
         },
         traverse::{
             ComputeHash, MultiEraBlock, MultiEraCert, MultiEraHeader, MultiEraInput,
-            MultiEraOutput, MultiEraRedeemer, MultiEraTx, MultiEraValue, OriginalHash,
+            MultiEraOutput, MultiEraRedeemer, MultiEraScriptRef, MultiEraTx, MultiEraValue,
+            OriginalHash,
         },
     },
 };
@@ -446,7 +448,7 @@ impl IntoModel<String> for Result<Address, pallas::ledger::addresses::Error> {
     }
 }
 
-impl<'a> IntoModel<String> for ScriptRef<'a> {
+impl<'a> IntoModel<String> for MultiEraScriptRef<'a> {
     type SortKey = ();
 
     fn into_model(self) -> Result<String, StatusCode> {

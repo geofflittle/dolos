@@ -61,6 +61,7 @@ impl<D: Domain> Facade<D> {
                 CardanoLanguage::PlutusV1 => types::ScriptLanguage::PlutusV1,
                 CardanoLanguage::PlutusV2 => types::ScriptLanguage::PlutusV2,
                 CardanoLanguage::PlutusV3 => types::ScriptLanguage::PlutusV3,
+                CardanoLanguage::PlutusV4 => types::ScriptLanguage::PlutusV4,
             };
 
             types::Script {

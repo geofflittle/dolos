@@ -33,6 +33,8 @@ pub enum ScriptLanguage {
     PlutusV2,
     #[serde(rename = "plutus:v3")]
     PlutusV3,
+    #[serde(rename = "plutus:v4")]
+    PlutusV4,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

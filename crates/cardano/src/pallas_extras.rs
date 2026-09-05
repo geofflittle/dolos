@@ -9,12 +9,15 @@ use pallas::ledger::primitives::alonzo::MoveInstantaneousReward;
 use pallas::ledger::primitives::conway::{
     CostModels, DRep, DRepVotingThresholds, PoolVotingThresholds, ScriptRef,
 };
+use pallas::ledger::primitives::dijkstra::ScriptRef as DijkstraScriptRef;
 use pallas::ledger::primitives::{
     alonzo::Certificate as AlonzoCert, conway::Certificate as ConwayCert, PoolMetadata,
     RationalNumber, Relay, StakeCredential,
 };
 use pallas::ledger::primitives::{Epoch, ExUnitPrices, ExUnits, Nonce, NonceVariant};
-use pallas::ledger::traverse::{ComputeHash, MultiEraCert, MultiEraTx, OriginalHash};
+use pallas::ledger::traverse::{
+    ComputeHash, MultiEraCert, MultiEraScriptRef, MultiEraTx, OriginalHash,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::eras::ChainSummary;
@@ -436,17 +439,97 @@ pub fn default_cost_models() -> CostModels {
     }
 }
 
-/// Compute the on-chain script hash of a reference script.
+/// The language of a script, across every era that can carry one.
 ///
-/// Each language hashes its own tagged serialization, so the match must stay
-/// per-variant instead of hashing the raw bytes once.
-pub fn script_ref_hash(script_ref: &ScriptRef) -> Hash<28> {
+/// Dijkstra adds PlutusV4. The enum is exhaustive on purpose: a language that
+/// no consumer has a case for must be a compile error, because the alternative
+/// is a catch-all that reports a real script as absent or as the wrong
+/// language.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptLanguage {
+    Native,
+    PlutusV1,
+    PlutusV2,
+    PlutusV3,
+    PlutusV4,
+}
+
+/// A reference script decomposed into everything a consumer needs from it.
+///
+/// The three fields travel together because they are only correct together.
+/// Each language hashes its own tagged serialization over its own bytes, so a
+/// hash taken from one variant and bytes taken from another describe no script
+/// that exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptRefParts {
+    pub language: ScriptLanguage,
+    pub hash: Hash<28>,
+    pub bytes: Vec<u8>,
+}
+
+/// Decompose a reference script from any era into its language, on-chain hash
+/// and bytes.
+///
+/// Both era arms are written out rather than collapsed, because the Dijkstra
+/// script reference is a different type with a fifth variant and folding it
+/// into the Conway type would mean dropping a PlutusV4 script.
+pub fn script_ref_parts(script_ref: &MultiEraScriptRef) -> ScriptRefParts {
     match script_ref {
-        ScriptRef::NativeScript(x) => x.original_hash(),
-        ScriptRef::PlutusV1Script(x) => x.compute_hash(),
-        ScriptRef::PlutusV2Script(x) => x.compute_hash(),
-        ScriptRef::PlutusV3Script(x) => x.compute_hash(),
+        MultiEraScriptRef::Conway(x) => match x.deref() {
+            ScriptRef::NativeScript(x) => ScriptRefParts {
+                language: ScriptLanguage::Native,
+                hash: x.original_hash(),
+                bytes: x.raw_cbor().to_vec(),
+            },
+            ScriptRef::PlutusV1Script(x) => ScriptRefParts {
+                language: ScriptLanguage::PlutusV1,
+                hash: x.compute_hash(),
+                bytes: x.as_ref().to_vec(),
+            },
+            ScriptRef::PlutusV2Script(x) => ScriptRefParts {
+                language: ScriptLanguage::PlutusV2,
+                hash: x.compute_hash(),
+                bytes: x.as_ref().to_vec(),
+            },
+            ScriptRef::PlutusV3Script(x) => ScriptRefParts {
+                language: ScriptLanguage::PlutusV3,
+                hash: x.compute_hash(),
+                bytes: x.as_ref().to_vec(),
+            },
+        },
+        MultiEraScriptRef::Dijkstra(x) => match x.deref() {
+            DijkstraScriptRef::NativeScript(x) => ScriptRefParts {
+                language: ScriptLanguage::Native,
+                hash: x.original_hash(),
+                bytes: x.raw_cbor().to_vec(),
+            },
+            DijkstraScriptRef::PlutusV1Script(x) => ScriptRefParts {
+                language: ScriptLanguage::PlutusV1,
+                hash: x.compute_hash(),
+                bytes: x.as_ref().to_vec(),
+            },
+            DijkstraScriptRef::PlutusV2Script(x) => ScriptRefParts {
+                language: ScriptLanguage::PlutusV2,
+                hash: x.compute_hash(),
+                bytes: x.as_ref().to_vec(),
+            },
+            DijkstraScriptRef::PlutusV3Script(x) => ScriptRefParts {
+                language: ScriptLanguage::PlutusV3,
+                hash: x.compute_hash(),
+                bytes: x.as_ref().to_vec(),
+            },
+            DijkstraScriptRef::PlutusV4Script(x) => ScriptRefParts {
+                language: ScriptLanguage::PlutusV4,
+                hash: x.compute_hash(),
+                bytes: x.as_ref().to_vec(),
+            },
+        },
     }
+}
+
+/// Compute the on-chain script hash of a reference script.
+pub fn script_ref_hash(script_ref: &MultiEraScriptRef) -> Hash<28> {
+    script_ref_parts(script_ref).hash
 }
 
 pub const DREP_KEY_PREFIX: u8 = 0b00100010;
