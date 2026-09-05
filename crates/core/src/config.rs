@@ -31,6 +31,13 @@ impl UpstreamConfig {
             _ => None,
         }
     }
+
+    pub fn leios_peer_address(&self) -> Option<&str> {
+        match self {
+            Self::Peer(peer) => peer.leios_peer_address.as_deref(),
+            Self::Emulator(_) => None,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -41,6 +48,20 @@ pub struct EmulatorConfig {
 #[derive(Serialize, Deserialize)]
 pub struct PeerConfig {
     pub peer_address: String,
+
+    /// A peer that speaks the Leios endorser block protocols, for a chain whose
+    /// ranking blocks certify endorser blocks.
+    ///
+    /// On such a chain most transactions are never in a ranking block, so a
+    /// client that follows only chainsync and blockfetch builds a ledger that is
+    /// silently short. Set this and the pull stage fetches every certified
+    /// endorser block over leios-fetch and resolves the certifying block against
+    /// it. Leave it unset and the chain is followed as an ordinary Praos chain.
+    ///
+    /// It is a separate address because leios-fetch lives in the newer
+    /// networking stack, so it cannot ride the chainsync connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leios_peer_address: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, PartialEq, Eq)]

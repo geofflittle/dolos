@@ -8,6 +8,7 @@ use crate::prelude::*;
 
 pub mod apply;
 pub mod emulator;
+pub mod leios;
 pub mod pull;
 pub mod submit;
 

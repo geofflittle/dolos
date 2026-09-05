@@ -63,6 +63,7 @@ fn test_mainnet_upstream() {
         &SyncConfig::default().with_pull_batch_size(20),
         &PeerConfig {
             peer_address: "relays-new.cardano-mainnet.iohk.io:3001".into(),
+            leios_peer_address: None,
         },
         764824073,
         wal,

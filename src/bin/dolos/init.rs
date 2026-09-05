@@ -131,6 +131,7 @@ impl From<&KnownNetwork> for PeerConfig {
     fn from(value: &KnownNetwork) -> Self {
         PeerConfig {
             peer_address: value.demeter_peer_address().into(),
+            leios_peer_address: None,
         }
     }
 }
