@@ -13,6 +13,11 @@ fn era_to_header_variant(era: Era) -> u8 {
         Era::Alonzo => 4,
         Era::Babbage => 5,
         Era::Conway => 6,
+        // The chainsync header envelope tag, which is a different number from
+        // the block wrapper tag: the wrapper counts Byron twice, so from
+        // Shelley on the envelope tag is one lower. Dijkstra is wrapper tag 8
+        // and envelope tag 7.
+        Era::Dijkstra => 7,
         _ => todo!("don't know how to process era"),
     }
 }

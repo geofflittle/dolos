@@ -2285,7 +2285,25 @@ impl<'a> BlockModelBuilder<'a> {
                         .to_string(),
                 ),
             ),
-            _ => (None, None),
+            MultiEraHeader::Dijkstra(x) => (
+                Some(hex::encode(
+                    x.header_body
+                        .operational_cert
+                        .operational_cert_hot_vkey
+                        .as_slice(),
+                )),
+                Some(
+                    x.header_body
+                        .operational_cert
+                        .operational_cert_sequence_number
+                        .to_string(),
+                ),
+            ),
+            // Byron headers carry no operational certificate, so an absent one
+            // is the right answer and the only right one. Written out rather
+            // than left to a catch-all: MultiEraHeader is deliberately not
+            // non-exhaustive, so a new era becomes a compile error here.
+            MultiEraHeader::EpochBoundary(_) | MultiEraHeader::Byron(_) => (None, None),
         }
     }
 

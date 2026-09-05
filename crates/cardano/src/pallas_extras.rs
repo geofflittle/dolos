@@ -11,8 +11,8 @@ use pallas::ledger::primitives::conway::{
 };
 use pallas::ledger::primitives::dijkstra::ScriptRef as DijkstraScriptRef;
 use pallas::ledger::primitives::{
-    alonzo::Certificate as AlonzoCert, conway::Certificate as ConwayCert, PoolMetadata,
-    RationalNumber, Relay, StakeCredential,
+    alonzo::Certificate as AlonzoCert, conway::Certificate as ConwayCert,
+    dijkstra::Certificate as DijkstraCert, PoolMetadata, RationalNumber, Relay, StakeCredential,
 };
 use pallas::ledger::primitives::{Epoch, ExUnitPrices, ExUnits, Nonce, NonceVariant};
 use pallas::ledger::traverse::{
@@ -22,6 +22,94 @@ use serde::{Deserialize, Serialize};
 
 use crate::eras::ChainSummary;
 use crate::{hacks, Lovelace};
+
+/// A Dijkstra certificate expressed as the Conway certificate it means.
+///
+/// Every Dijkstra variant has a Conway counterpart carrying the same values.
+/// Dijkstra drops Conway's two legacy stake variants and adds nothing, apart
+/// from an optional Leios key on the pool parameters. That key is the one
+/// thing this does not carry across, because no accessor in this module has a
+/// field to put it in and [`MultiEraPoolRegistration`] would have to grow one
+/// first.
+///
+/// Written with no catch-all so that a variant added to either era becomes a
+/// compile error here, rather than a certificate that disappears.
+fn dijkstra_cert_as_conway(cert: &DijkstraCert) -> ConwayCert {
+    match cert {
+        DijkstraCert::StakeDelegation(cred, pool) => {
+            ConwayCert::StakeDelegation(cred.clone(), *pool)
+        }
+        DijkstraCert::PoolRegistration {
+            operator,
+            vrf_keyhash,
+            leios_key: _,
+            pledge,
+            cost,
+            margin,
+            reward_account,
+            pool_owners,
+            relays,
+            pool_metadata,
+        } => ConwayCert::PoolRegistration {
+            operator: *operator,
+            vrf_keyhash: *vrf_keyhash,
+            pledge: *pledge,
+            cost: *cost,
+            margin: margin.clone(),
+            reward_account: reward_account.clone(),
+            pool_owners: pool_owners.clone(),
+            relays: relays.clone(),
+            pool_metadata: pool_metadata.clone(),
+        },
+        DijkstraCert::PoolRetirement(pool, epoch) => ConwayCert::PoolRetirement(*pool, *epoch),
+        DijkstraCert::Reg(cred, coin) => ConwayCert::Reg(cred.clone(), *coin),
+        DijkstraCert::UnReg(cred, coin) => ConwayCert::UnReg(cred.clone(), *coin),
+        DijkstraCert::VoteDeleg(cred, drep) => ConwayCert::VoteDeleg(cred.clone(), drep.clone()),
+        DijkstraCert::StakeVoteDeleg(cred, pool, drep) => {
+            ConwayCert::StakeVoteDeleg(cred.clone(), *pool, drep.clone())
+        }
+        DijkstraCert::StakeRegDeleg(cred, pool, coin) => {
+            ConwayCert::StakeRegDeleg(cred.clone(), *pool, *coin)
+        }
+        DijkstraCert::VoteRegDeleg(cred, drep, coin) => {
+            ConwayCert::VoteRegDeleg(cred.clone(), drep.clone(), *coin)
+        }
+        DijkstraCert::StakeVoteRegDeleg(cred, pool, drep, coin) => {
+            ConwayCert::StakeVoteRegDeleg(cred.clone(), *pool, drep.clone(), *coin)
+        }
+        DijkstraCert::AuthCommitteeHot(cold, hot) => {
+            ConwayCert::AuthCommitteeHot(cold.clone(), hot.clone())
+        }
+        DijkstraCert::ResignCommitteeCold(cold, anchor) => {
+            ConwayCert::ResignCommitteeCold(cold.clone(), anchor.clone())
+        }
+        DijkstraCert::RegDRepCert(cred, coin, anchor) => {
+            ConwayCert::RegDRepCert(cred.clone(), *coin, anchor.clone())
+        }
+        DijkstraCert::UnRegDRepCert(cred, coin) => ConwayCert::UnRegDRepCert(cred.clone(), *coin),
+        DijkstraCert::UpdateDRepCert(cred, anchor) => {
+            ConwayCert::UpdateDRepCert(cred.clone(), anchor.clone())
+        }
+    }
+}
+
+/// The Conway view of a certificate, for every era whose certificates have a
+/// Conway shape.
+///
+/// The accessors below all read Conway-shaped certificates, and there are now
+/// two eras that produce them. Going through one place means a new era is
+/// added once rather than in eleven matches, and that missing it shows up as
+/// every certificate on the chain vanishing at once rather than one accessor
+/// quietly answering nothing.
+pub fn as_conway_cert<'a>(cert: &'a MultiEraCert) -> Option<std::borrow::Cow<'a, ConwayCert>> {
+    match cert {
+        MultiEraCert::Conway(x) => Some(std::borrow::Cow::Borrowed(x.deref().deref())),
+        MultiEraCert::Dijkstra(x) => Some(std::borrow::Cow::Owned(dijkstra_cert_as_conway(
+            x.deref().deref(),
+        ))),
+        _ => None,
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MultiEraPoolRegistration {
@@ -62,7 +150,7 @@ pub fn cert_as_pool_registration(cert: &MultiEraCert) -> Option<MultiEraPoolRegi
             }),
             _ => None,
         },
-        MultiEraCert::Conway(cow) => match cow.deref().deref() {
+        _ => match as_conway_cert(cert)?.as_ref() {
             ConwayCert::PoolRegistration {
                 operator,
                 vrf_keyhash,
@@ -86,7 +174,6 @@ pub fn cert_as_pool_registration(cert: &MultiEraCert) -> Option<MultiEraPoolRegi
             }),
             _ => None,
         },
-        _ => None,
     }
 }
 
@@ -105,14 +192,13 @@ pub fn cert_as_pool_retirement(cert: &MultiEraCert) -> Option<MultiEraPoolRetire
             }),
             _ => None,
         },
-        MultiEraCert::Conway(cow) => match cow.deref().deref() {
+        _ => match as_conway_cert(cert)?.as_ref() {
             ConwayCert::PoolRetirement(operator, epoch) => Some(MultiEraPoolRetirement {
                 operator: *operator,
                 epoch: *epoch,
             }),
             _ => None,
         },
-        _ => None,
     }
 }
 
@@ -123,7 +209,7 @@ pub struct MultiEraVoteDelegation {
 
 pub fn cert_as_vote_delegation(cert: &MultiEraCert) -> Option<MultiEraVoteDelegation> {
     match cert {
-        MultiEraCert::Conway(cow) => match cow.deref().deref() {
+        _ => match as_conway_cert(cert)?.as_ref() {
             ConwayCert::VoteDeleg(delegator, drep) => Some(MultiEraVoteDelegation {
                 delegator: delegator.clone(),
                 drep: drep.clone(),
@@ -142,7 +228,6 @@ pub fn cert_as_vote_delegation(cert: &MultiEraCert) -> Option<MultiEraVoteDelega
             }),
             _ => None,
         },
-        _ => None,
     }
 }
 
@@ -153,14 +238,13 @@ pub struct MultiEraDRepRegistration {
 
 pub fn cert_as_drep_registration(cert: &MultiEraCert) -> Option<MultiEraDRepRegistration> {
     match cert {
-        MultiEraCert::Conway(cow) => match cow.deref().deref() {
+        _ => match as_conway_cert(cert)?.as_ref() {
             ConwayCert::RegDRepCert(cred, deposit, _) => Some(MultiEraDRepRegistration {
                 cred: cred.clone(),
                 deposit: *deposit,
             }),
             _ => None,
         },
-        _ => None,
     }
 }
 
@@ -168,14 +252,13 @@ pub type MultiEraDRepUnRegistration = MultiEraDRepRegistration;
 
 pub fn cert_as_drep_unregistration(cert: &MultiEraCert) -> Option<MultiEraDRepUnRegistration> {
     match cert {
-        MultiEraCert::Conway(cow) => match cow.deref().deref() {
+        _ => match as_conway_cert(cert)?.as_ref() {
             ConwayCert::UnRegDRepCert(cred, deposit) => Some(MultiEraDRepRegistration {
                 cred: cred.clone(),
                 deposit: *deposit,
             }),
             _ => None,
         },
-        _ => None,
     }
 }
 
@@ -186,14 +269,13 @@ pub struct MultiEraCommitteeAuth {
 
 pub fn cert_as_committee_auth(cert: &MultiEraCert) -> Option<MultiEraCommitteeAuth> {
     match cert {
-        MultiEraCert::Conway(cow) => match cow.deref().deref() {
+        _ => match as_conway_cert(cert)?.as_ref() {
             ConwayCert::AuthCommitteeHot(cold, hot) => Some(MultiEraCommitteeAuth {
                 cold: cold.clone(),
                 hot: hot.clone(),
             }),
             _ => None,
         },
-        _ => None,
     }
 }
 
@@ -204,14 +286,13 @@ pub struct MultiEraCommitteeResign {
 
 pub fn cert_as_committee_resign(cert: &MultiEraCert) -> Option<MultiEraCommitteeResign> {
     match cert {
-        MultiEraCert::Conway(cow) => match cow.deref().deref() {
+        _ => match as_conway_cert(cert)?.as_ref() {
             ConwayCert::ResignCommitteeCold(cold, anchor) => Some(MultiEraCommitteeResign {
                 cold: cold.clone(),
                 anchor: anchor.clone(),
             }),
             _ => None,
         },
-        _ => None,
     }
 }
 
@@ -230,7 +311,7 @@ pub fn cert_as_stake_delegation(cert: &MultiEraCert) -> Option<MultiEraStakeDele
             }),
             _ => None,
         },
-        MultiEraCert::Conway(cow) => match cow.deref().deref() {
+        _ => match as_conway_cert(cert)?.as_ref() {
             ConwayCert::StakeDelegation(delegator, pool) => Some(MultiEraStakeDelegation {
                 delegator: delegator.clone(),
                 pool: *pool,
@@ -249,7 +330,6 @@ pub fn cert_as_stake_delegation(cert: &MultiEraCert) -> Option<MultiEraStakeDele
             }),
             _ => None,
         },
-        _ => None,
     }
 }
 
@@ -259,7 +339,7 @@ pub fn cert_as_stake_registration(cert: &MultiEraCert) -> Option<StakeCredential
             AlonzoCert::StakeRegistration(credential) => Some(credential.clone()),
             _ => None,
         },
-        MultiEraCert::Conway(cow) => match cow.deref().deref() {
+        _ => match as_conway_cert(cert)?.as_ref() {
             ConwayCert::StakeRegistration(credential) => Some(credential.clone()),
             ConwayCert::Reg(cred, _) => Some(cred.clone()),
             ConwayCert::StakeRegDeleg(cred, _, _) => Some(cred.clone()),
@@ -267,7 +347,6 @@ pub fn cert_as_stake_registration(cert: &MultiEraCert) -> Option<StakeCredential
             ConwayCert::StakeVoteRegDeleg(cred, _, _, _) => Some(cred.clone()),
             _ => None,
         },
-        _ => None,
     }
 }
 
@@ -277,15 +356,17 @@ pub fn cert_as_stake_deregistration(cert: &MultiEraCert) -> Option<StakeCredenti
             AlonzoCert::StakeDeregistration(credential) => Some(credential.clone()),
             _ => None,
         },
-        MultiEraCert::Conway(cow) => match cow.deref().deref() {
+        _ => match as_conway_cert(cert)?.as_ref() {
             ConwayCert::StakeDeregistration(credential) => Some(credential.clone()),
             ConwayCert::UnReg(cred, _) => Some(cred.clone()),
             _ => None,
         },
-        _ => None,
     }
 }
 
+/// Move instantaneous rewards were removed by Conway and never came back, so
+/// no Conway or Dijkstra certificate can be one and the catch-all here is the
+/// right answer rather than a dropped era.
 pub fn cert_as_mir_certificate(cert: &MultiEraCert) -> Option<MoveInstantaneousReward> {
     match cert {
         MultiEraCert::AlonzoCompatible(cow) => match cow.deref().deref() {
@@ -580,6 +661,187 @@ pub fn tx_treasury_donation(tx: &MultiEraTx) -> Option<Lovelace> {
         MultiEraTx::Babbage(..) => None,
         MultiEraTx::Byron(..) => None,
         _ => panic!("unexpected tx era"),
+    }
+}
+
+#[cfg(test)]
+mod dijkstra_certificate_tests {
+    use super::*;
+    use pallas::ledger::primitives::dijkstra::Certificate as DijkstraCert;
+    use std::borrow::Cow;
+
+    const POOL: &str = "747aca09f322d2dfc56243b839e2d573ab92287684e5e37d66ec0f87";
+    const VRF: &str = "d8252bd637a90ba4dbd2cf63afda20a19888b7895ede067081ce7fb7411a972b";
+    const CRED: &str = "5e81366cb6f3c0d14837614afcea669d51b8be9519eaec4a237504f8";
+
+    fn wrap(cert: DijkstraCert) -> MultiEraCert<'static> {
+        MultiEraCert::Dijkstra(Box::new(Cow::Owned(cert)))
+    }
+
+    fn cred() -> StakeCredential {
+        StakeCredential::AddrKeyhash(CRED.parse().unwrap())
+    }
+
+    fn pool_registration() -> DijkstraCert {
+        DijkstraCert::PoolRegistration {
+            operator: POOL.parse().unwrap(),
+            vrf_keyhash: VRF.parse().unwrap(),
+            // The Leios key slot is what makes a Dijkstra pool registration a
+            // different shape from Conway's. Present and populated is the
+            // interesting one of its three states.
+            leios_key: Some(pallas::codec::utils::Nullable::Null),
+            pledge: 1_000_000,
+            cost: 340_000_000,
+            margin: RationalNumber {
+                numerator: 3,
+                denominator: 100,
+            },
+            reward_account: vec![0xe0].into(),
+            pool_owners: pallas::codec::utils::Set::from(vec![CRED.parse::<Hash<28>>().unwrap()]),
+            relays: vec![],
+            pool_metadata: None,
+        }
+    }
+
+    /// Which of the eleven accessors answers for a given certificate. Any
+    /// accessor that answers is named, so a test can say both which one fired
+    /// and that no other one did.
+    fn answered_by(cert: &MultiEraCert) -> Vec<&'static str> {
+        let mut out = vec![];
+
+        if cert_as_pool_registration(cert).is_some() {
+            out.push("pool_registration");
+        }
+        if cert_as_pool_retirement(cert).is_some() {
+            out.push("pool_retirement");
+        }
+        if cert_as_vote_delegation(cert).is_some() {
+            out.push("vote_delegation");
+        }
+        if cert_as_drep_registration(cert).is_some() {
+            out.push("drep_registration");
+        }
+        if cert_as_drep_unregistration(cert).is_some() {
+            out.push("drep_unregistration");
+        }
+        if cert_as_committee_auth(cert).is_some() {
+            out.push("committee_auth");
+        }
+        if cert_as_committee_resign(cert).is_some() {
+            out.push("committee_resign");
+        }
+        if cert_as_stake_delegation(cert).is_some() {
+            out.push("stake_delegation");
+        }
+        if cert_as_stake_registration(cert).is_some() {
+            out.push("stake_registration");
+        }
+        if cert_as_stake_deregistration(cert).is_some() {
+            out.push("stake_deregistration");
+        }
+        if cert_as_mir_certificate(cert).is_some() {
+            out.push("mir");
+        }
+
+        out
+    }
+
+    /// The must-fire case, over every certificate a Dijkstra chain can carry.
+    /// Musashi is Dijkstra from slot 86400, so every certificate the node ever
+    /// applies past that point arrives through this type.
+    #[test]
+    fn every_dijkstra_certificate_kind_is_read() {
+        let cases: Vec<(DijkstraCert, &str)> = vec![
+            (pool_registration(), "pool_registration"),
+            (
+                DijkstraCert::PoolRetirement(POOL.parse().unwrap(), 42),
+                "pool_retirement",
+            ),
+            (DijkstraCert::Reg(cred(), 2_000_000), "stake_registration"),
+            (DijkstraCert::UnReg(cred(), 2_000_000), "stake_deregistration"),
+            (
+                DijkstraCert::StakeDelegation(cred(), POOL.parse().unwrap()),
+                "stake_delegation",
+            ),
+            (
+                DijkstraCert::VoteDeleg(cred(), DRep::Abstain),
+                "vote_delegation",
+            ),
+            (
+                DijkstraCert::RegDRepCert(cred(), 500_000_000, None),
+                "drep_registration",
+            ),
+            (
+                DijkstraCert::UnRegDRepCert(cred(), 500_000_000),
+                "drep_unregistration",
+            ),
+            (
+                DijkstraCert::AuthCommitteeHot(cred(), cred()),
+                "committee_auth",
+            ),
+            (
+                DijkstraCert::ResignCommitteeCold(cred(), None),
+                "committee_resign",
+            ),
+        ];
+
+        for (cert, expected) in cases {
+            let wrapped = wrap(cert);
+            let answered = answered_by(&wrapped);
+
+            assert!(
+                answered.contains(&expected),
+                "{expected} did not answer for {wrapped:?}, answered: {answered:?}",
+            );
+        }
+    }
+
+    /// The must-not case. Reading Dijkstra certificates must not turn every
+    /// accessor into one that answers for everything, so a pool retirement has
+    /// to be read as a pool retirement and as nothing else.
+    #[test]
+    fn a_dijkstra_certificate_answers_only_its_own_accessor() {
+        let cert = wrap(DijkstraCert::PoolRetirement(POOL.parse().unwrap(), 42));
+
+        assert_eq!(answered_by(&cert), vec!["pool_retirement"]);
+
+        let cert = wrap(DijkstraCert::Reg(cred(), 2_000_000));
+
+        assert_eq!(answered_by(&cert), vec!["stake_registration"]);
+
+        // A registration that also delegates is genuinely two things, and both
+        // accessors are meant to answer.
+        let cert = wrap(DijkstraCert::StakeVoteRegDeleg(
+            cred(),
+            POOL.parse().unwrap(),
+            DRep::Abstain,
+            2_000_000,
+        ));
+
+        let answered = answered_by(&cert);
+
+        assert!(answered.contains(&"vote_delegation"));
+        assert!(answered.contains(&"stake_delegation"));
+        assert!(!answered.contains(&"pool_retirement"));
+        assert!(!answered.contains(&"committee_auth"));
+    }
+
+    /// The pool parameters have to survive the read, not merely be present.
+    /// An accessor that answered with a default would pass the test above.
+    #[test]
+    fn a_dijkstra_pool_registration_carries_its_parameters() {
+        let cert = wrap(pool_registration());
+
+        let read = cert_as_pool_registration(&cert).expect("must be read");
+
+        assert_eq!(read.operator, POOL.parse::<Hash<28>>().unwrap());
+        assert_eq!(read.vrf_keyhash, VRF.parse::<Hash<32>>().unwrap());
+        assert_eq!(read.pledge, 1_000_000);
+        assert_eq!(read.cost, 340_000_000);
+        assert_eq!(read.margin.numerator, 3);
+        assert_eq!(read.margin.denominator, 100);
+        assert_eq!(read.reward_account, vec![0xe0]);
+        assert_eq!(read.pool_owners, vec![CRED.parse::<Hash<28>>().unwrap()]);
     }
 }
 

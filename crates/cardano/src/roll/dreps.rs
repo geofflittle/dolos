@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Deref as _, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use dolos_core::{ChainError, EntityKey, Genesis, TxOrder, TxoRef};
 use pallas::ledger::{
@@ -19,14 +19,13 @@ use crate::{
     DRepUnRegistration, GovDormancyReset, PParamsSet,
 };
 
+/// Read through the shared Conway view rather than matching one era, so a
+/// DRep certificate in a newly added era is not silently dropped.
 fn cert_drep(cert: &MultiEraCert) -> Option<DRep> {
-    match &cert {
-        MultiEraCert::Conway(conway) => match conway.deref().deref() {
-            conway::Certificate::RegDRepCert(cert, _, _) => Some(stake_cred_to_drep(cert)),
-            conway::Certificate::UnRegDRepCert(cert, _) => Some(stake_cred_to_drep(cert)),
-            conway::Certificate::UpdateDRepCert(cert, _) => Some(stake_cred_to_drep(cert)),
-            _ => None,
-        },
+    match pallas_extras::as_conway_cert(cert)?.as_ref() {
+        conway::Certificate::RegDRepCert(cert, _, _) => Some(stake_cred_to_drep(cert)),
+        conway::Certificate::UnRegDRepCert(cert, _) => Some(stake_cred_to_drep(cert)),
+        conway::Certificate::UpdateDRepCert(cert, _) => Some(stake_cred_to_drep(cert)),
         _ => None,
     }
 }
@@ -232,8 +231,11 @@ impl BlockVisitor for DRepStateVisitor {
             return Ok(());
         };
 
-        if let MultiEraCert::Conway(conway) = &cert {
-            match conway.deref().deref() {
+        // Same shared view as `cert_drep` above, for the same reason: the era
+        // specific test here dropped every certificate of any era it did not
+        // name, and adding one is not a compile error.
+        if let Some(conway) = pallas_extras::as_conway_cert(cert) {
+            match conway.as_ref() {
                 conway::Certificate::RegDRepCert(_, deposit, anchor) => {
                     deltas.add_for_entity(DRepRegistration::new(
                         drep.clone(),

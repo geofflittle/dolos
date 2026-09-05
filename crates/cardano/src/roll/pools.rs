@@ -1,5 +1,3 @@
-use std::ops::Deref;
-
 use dolos_core::{ChainError, Genesis, TxOrder};
 use pallas::crypto::hash::{Hash, Hasher};
 use pallas::ledger::primitives::Epoch;
@@ -62,27 +60,15 @@ impl BlockVisitor for PoolStateVisitor {
             ));
         }
 
-        match cert {
-            MultiEraCert::AlonzoCompatible(cow) => {
-                if let pallas::ledger::primitives::alonzo::Certificate::PoolRetirement(
-                    operator,
-                    epoch,
-                ) = cow.deref().deref()
-                {
-                    deltas.add_for_entity(PoolDeRegistration::new(*operator, *epoch));
-                }
-            }
-            MultiEraCert::Conway(cow) => {
-                if let pallas::ledger::primitives::conway::Certificate::PoolRetirement(
-                    operator,
-                    epoch,
-                ) = cow.deref().deref()
-                {
-                    deltas.add_for_entity(PoolDeRegistration::new(*operator, *epoch));
-                }
-            }
-            _ => {}
-        };
+        // Read through the shared accessor rather than era by era, so a
+        // retirement in a newly added era is not dropped by a catch-all that
+        // still compiles.
+        if let Some(retirement) = pallas_extras::cert_as_pool_retirement(cert) {
+            deltas.add_for_entity(PoolDeRegistration::new(
+                retirement.operator,
+                retirement.epoch,
+            ));
+        }
 
         Ok(())
     }

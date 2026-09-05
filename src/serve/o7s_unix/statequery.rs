@@ -248,8 +248,16 @@ impl<D: Domain> Session<D> {
                     4 => 3,      // Mary
                     5..=6 => 4,  // Alonzo
                     7..=8 => 5,  // Babbage
-                    9..=10 => 6, // Conway
-                    _ => 6,      // Unknown/future versions default to Conway
+                    9..=11 => 6, // Conway, including the Van Rossem intra-era fork at 11
+                    12 => 7,     // Dijkstra
+                    // A version with no era here cannot be answered. Naming the
+                    // newest era we know would report the wrong era to a client
+                    // that has no way of telling it is wrong.
+                    other => {
+                        return Err(Error::server(format!(
+                            "no era is known for protocol version {other}"
+                        )))
+                    }
                 };
 
                 AnyCbor::from_encode(era_index as u16)
