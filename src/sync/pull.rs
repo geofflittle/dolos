@@ -10,7 +10,7 @@ use pallas::ledger::traverse::MultiEraHeader;
 use pallas::network::facades::PeerClient;
 use pallas::network::miniprotocols::chainsync::{HeaderContent, NextResponse, Tip};
 use pallas::network::miniprotocols::Point;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::adapters::WalAdapter;
 use crate::prelude::*;
@@ -197,7 +197,20 @@ impl Worker {
         };
 
         let outcome = self.certification.observe(header).map_err(|err| {
-            warn!(%err, "the certification walk refused a header");
+            // The walk carries the announcement a later block certifies, and
+            // nothing persists it, so a sync that resumes between an
+            // announcement and its certificate starts cold and meets the
+            // certificate with nothing to fetch. Stopping is the only honest
+            // answer: continuing would apply a certifying block with no
+            // transactions and leave the ledger short with no error anywhere,
+            // which is the whole failure this stage exists to prevent.
+            error!(
+                %err,
+                slot = header.slot(),
+                "the certification walk cannot resolve this block. If this is a resumed sync, \
+                 it began between an announcement and its certificate. Sync from origin, or \
+                 from a point that is not inside an endorsement window."
+            );
             WorkerError::Panic
         })?;
 
