@@ -571,10 +571,54 @@ pub fn cred_matches_hash(cred: &StakeCredential, hash: &str) -> bool {
 pub fn tx_treasury_donation(tx: &MultiEraTx) -> Option<Lovelace> {
     match tx {
         MultiEraTx::Conway(x) => x.transaction_body.donation.map(|x| x.into()),
+        // Dijkstra keeps the donation at the same body key as Conway. An era
+        // that carries the field has to read it, because the wildcard below
+        // stops the node rather than answering, and a chain past the Dijkstra
+        // hard fork puts every one of its transactions through here.
+        MultiEraTx::Dijkstra(x, _) => x.transaction_body.donation.map(|x| x.into()),
         MultiEraTx::AlonzoCompatible(..) => None,
         MultiEraTx::Babbage(..) => None,
         MultiEraTx::Byron(..) => None,
         _ => panic!("unexpected tx era"),
+    }
+}
+
+#[cfg(test)]
+mod treasury_donation_tests {
+    use super::*;
+
+    /// The smallest Dijkstra transaction that carries a treasury donation:
+    /// one input, no outputs, zero fee, and body key 22 set to 1000000. Built
+    /// by hand because no transaction on any Dijkstra chain has ever set that
+    /// key, so there are no real bytes to take it from.
+    const DIJKSTRA_TX_WITH_DONATION: &str = "83a40081825820000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f0001800200161a000f4240a0f6";
+
+    /// The same transaction with body key 22 absent.
+    const DIJKSTRA_TX_WITHOUT_DONATION: &str = "83a30081825820000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f0001800200a0f6";
+
+    fn dijkstra_tx(hex: &str) -> MultiEraTx<'static> {
+        let bytes: &'static [u8] = hex::decode(hex).unwrap().leak();
+        MultiEraTx::decode_for_era(pallas::ledger::traverse::Era::Dijkstra, bytes).unwrap()
+    }
+
+    /// The must-fire case. A Dijkstra transaction's donation has to come back
+    /// as the amount it carries. Musashi is a Dijkstra chain from slot 86400
+    /// on, so every transaction the node applies reaches this accessor.
+    #[test]
+    fn a_dijkstra_donation_is_read() {
+        let tx = dijkstra_tx(DIJKSTRA_TX_WITH_DONATION);
+        assert!(matches!(tx, MultiEraTx::Dijkstra(..)));
+        assert_eq!(tx_treasury_donation(&tx), Some(1_000_000));
+    }
+
+    /// The must-not case. Reading the field must not turn every Dijkstra
+    /// transaction into a donation, so one without the key has to come back
+    /// as none.
+    #[test]
+    fn a_dijkstra_transaction_without_a_donation_reports_none() {
+        let tx = dijkstra_tx(DIJKSTRA_TX_WITHOUT_DONATION);
+        assert!(matches!(tx, MultiEraTx::Dijkstra(..)));
+        assert_eq!(tx_treasury_donation(&tx), None);
     }
 }
 
