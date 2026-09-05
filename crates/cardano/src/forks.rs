@@ -243,6 +243,14 @@ pub fn migrate_pparams_version(
         (9, 10) => intra_era_hardfork(current, to),
         // Van Rossem: intra-era hard-fork to protocol version 11
         (10, 11) => intra_era_hardfork(current, to),
+        // Protocol version 12 transitions from Conway to Dijkstra. Dijkstra
+        // keeps all 31 Conway parameters with the same meanings and adds four
+        // reference script sizing and cost parameters, sourced from a Dijkstra
+        // genesis file. Those four have no member in PParamsSet and nothing
+        // here reads a reference script cost, so the transition carries the
+        // Conway set forward and moves the version on. A consumer that needs
+        // the Dijkstra additions needs a PParamsSet that can hold them first.
+        (11, 12) => intra_era_hardfork(current, to),
         (from, to) => {
             unimplemented!("don't know how to bump from version {from} to {to} (#1033)",)
         }
@@ -304,5 +312,44 @@ mod tests {
         let result = force_pparams_version(&initial, &genesis, 0, 11).unwrap();
 
         assert_eq!(result.protocol_major(), Some(11));
+    }
+
+    fn mainnet_genesis() -> dolos_core::Genesis {
+        let path = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
+            .join("test_data")
+            .join("mainnet")
+            .join("genesis");
+
+        load_genesis(&path)
+    }
+
+    /// The Musashi testnet runs at protocol major 12, so the ladder has to
+    /// reach it. Dijkstra keeps every parameter Conway had and adds four, so
+    /// the step must change the version and nothing else.
+    #[test]
+    fn force_pparams_to_dijkstra() {
+        let genesis = mainnet_genesis();
+        let initial = from_byron_genesis(&genesis.byron);
+
+        let at_eleven = force_pparams_version(&initial, &genesis, 0, 11).unwrap();
+        let at_twelve = force_pparams_version(&initial, &genesis, 0, 12).unwrap();
+
+        assert_eq!(at_twelve.protocol_major(), Some(12));
+
+        let expected = at_eleven.with(PParamValue::ProtocolVersion((12, 0)));
+        assert_eq!(at_twelve, expected);
+    }
+
+    /// The must-not case for the one above. Adding a rule for 12 must not turn
+    /// the ladder into something that accepts any bump at all, because a
+    /// version Dolos has no rule for has to stop it rather than produce a
+    /// parameter set that is quietly wrong.
+    #[test]
+    #[should_panic(expected = "don't know how to bump")]
+    fn a_version_with_no_rule_is_still_refused() {
+        let genesis = mainnet_genesis();
+        let initial = from_byron_genesis(&genesis.byron);
+
+        let _ = force_pparams_version(&initial, &genesis, 0, 13);
     }
 }
