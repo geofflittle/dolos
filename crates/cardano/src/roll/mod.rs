@@ -271,6 +271,12 @@ impl<'a> DeltaBuilder<'a> {
         let block = block.view();
         let mut deltas = WorkDeltas::default();
 
+        // Inputs this block spends that a later transaction of the same block
+        // produces. The network removes nothing for them, so no visitor is
+        // shown a consumption that did not happen. Empty for every Praos block,
+        // see `utxoset::compute_forward_references`.
+        let forward = utxoset::compute_forward_references(block);
+
         self.account_state.visit_root(
             &mut deltas,
             block,
@@ -363,6 +369,10 @@ impl<'a> DeltaBuilder<'a> {
 
             for input in tx.consumes() {
                 let txoref = TxoRef::from(&input);
+
+                if forward.contains(&txoref) {
+                    continue;
+                }
 
                 let resolved = self.utxos.get(&txoref).ok_or_else(|| {
                     StateError::InvariantViolation(InvariantViolation::InputNotFound(txoref))

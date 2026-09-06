@@ -6,6 +6,64 @@ use std::sync::Arc;
 
 use crate::owned::OwnedMultiEraOutput;
 
+/// The inputs a block spends that a LATER transaction of the same block
+/// produces.
+///
+/// On a Praos chain this is always empty. The ledger applies a block's
+/// transactions in sequence, so a transaction spending an output produced after
+/// it does not validate and no such block reaches a follower. Treating a
+/// block's transactions as a set, which is what resolving every produced output
+/// before any consumed one does, is therefore harmless there and is what this
+/// module has always done.
+///
+/// A certified Leios endorser block is not like that. Its transactions arrive
+/// in the order the endorser block lists them, nothing requires that order to
+/// be topological, and the producing node applies them in that order with
+/// validation switched off. A spend of an output that does not exist yet
+/// removes nothing there, and the output is still unspent when the later
+/// transaction of the same block creates it.
+///
+/// So resolving such an input against the block's own later output consumes an
+/// output the rest of the network still holds. The follower and the chain then
+/// disagree about one entry of the UTxO set, and the disagreement surfaces much
+/// later as an input not found, when a subsequent block spends it. This names
+/// those inputs so they can be left unconsumed, which is what the network does
+/// with them.
+///
+/// Membership is a positive fact about the block in hand and never an absence.
+/// An input is here only because a transaction of this same block produces it
+/// after the one spending it. An input nothing in the block produces is not
+/// here, and stays exactly as missing as it ever was.
+pub fn compute_forward_references(block: &MultiEraBlock) -> HashSet<TxoRef> {
+    let txs = block.txs();
+
+    let mut produced_at: HashMap<TxoRef, usize> = HashMap::new();
+
+    for (position, tx) in txs.iter().enumerate() {
+        let hash = tx.hash();
+
+        for (idx, _) in tx.produces() {
+            produced_at.insert(TxoRef(hash, idx as u32), position);
+        }
+    }
+
+    let mut forward = HashSet::new();
+
+    for (position, tx) in txs.iter().enumerate() {
+        for consumed in tx.consumes() {
+            let txoref = TxoRef(*consumed.hash(), consumed.index() as u32);
+
+            if let Some(produced) = produced_at.get(&txoref) {
+                if *produced > position {
+                    forward.insert(txoref);
+                }
+            }
+        }
+    }
+
+    forward
+}
+
 pub fn compute_block_dependencies(block: &MultiEraBlock, loaded: &mut RawUtxoMap) -> Vec<TxoRef> {
     let txs: HashMap<_, _> = block.txs().into_iter().map(|tx| (tx.hash(), tx)).collect();
 
@@ -54,6 +112,11 @@ pub fn compute_apply_delta(
 ) -> Result<UtxoSetDelta, BrokenInvariant> {
     let mut delta = UtxoSetDelta::default();
 
+    // An input a later transaction of this same block produces is spent by a
+    // transaction that runs before the output exists, so the network removes
+    // nothing for it and neither does this. See `compute_forward_references`.
+    let forward = compute_forward_references(block);
+
     let txs: HashMap<_, _> = block.txs().into_iter().map(|tx| (tx.hash(), tx)).collect();
 
     for (tx_hash, tx) in txs.iter() {
@@ -66,6 +129,10 @@ pub fn compute_apply_delta(
 
         for consumed in tx.consumes() {
             let stxi_ref = TxoRef(*consumed.hash(), consumed.index() as u32);
+
+            if forward.contains(&stxi_ref) {
+                continue;
+            }
 
             let stxi_body = loaded
                 .get(&stxi_ref)
@@ -333,6 +400,138 @@ mod tests {
 
         for (consumed, _) in apply.consumed_utxo.iter() {
             assert!(undo.recovered_stxi.contains_key(consumed));
+        }
+    }
+
+    /// The block and the transaction pair that first met this on the Musashi
+    /// chain.
+    ///
+    /// The ranking block at slot 1861242 certifies endorser block
+    /// `b1d005f34c47d00b03e11028a70260517814e0efc9e294cc58e325ffb530acb9`,
+    /// which carries 1803 transactions and lists eighteen of them before the
+    /// transaction of the same endorser block that produces what they spend.
+    /// The fixture keeps the block whole and the first such pair in the order
+    /// the endorser block delivered them, index 946 and index 1125, so the
+    /// file stays small.
+    ///
+    /// Transaction `837edbc2…` at index 946 spends
+    /// `ec42621b8c6705b724291d2511039ac7760b1d235cfd21c507f891f14231e410#0`,
+    /// which transaction `ec42621b…` at index 1125 produces. The chain settles
+    /// what the network did with that: the ordinary ranking block at slot
+    /// 1861279, applied with full validation like every ranking block, spends
+    /// that same output, so it was still unspent on every node after 1861242.
+    fn forward_ref_block() -> Vec<u8> {
+        let block = load_test_block("dijkstra-forward-ref.block");
+
+        let txs: Vec<Vec<u8>> = include_str!("../test_data/dijkstra-forward-ref.ebtxs")
+            .split_whitespace()
+            .map(|line| {
+                let wire = hex::decode(line).unwrap();
+                pallas::ledger::traverse::leios::unwrap_tx(&wire)
+                    .unwrap()
+                    .to_vec()
+            })
+            .collect();
+
+        let borrowed: Vec<&[u8]> = txs.iter().map(|t| t.as_slice()).collect();
+
+        pallas::ledger::traverse::leios::resolve_certified_block(&block, &borrowed).unwrap()
+    }
+
+    fn forward_ref_txoref() -> TxoRef {
+        TxoRef(
+            Hash::from_str("ec42621b8c6705b724291d2511039ac7760b1d235cfd21c507f891f14231e410")
+                .unwrap(),
+            0,
+        )
+    }
+
+    /// MUST FIRE: an input a later transaction of the same block produces is
+    /// named as a forward reference.
+    ///
+    /// MUST NOT FIRE: ordinary transaction chaining, where a transaction spends
+    /// an output an EARLIER transaction of the same block produced, is not. The
+    /// alonzo block is in the fixtures precisely because it chains, and a
+    /// predicate that could not tell the two apart would strip the payload out
+    /// of every ordinary block on the chain.
+    #[test]
+    fn a_forward_reference_is_named_and_ordinary_chaining_is_not() {
+        let cbor = forward_ref_block();
+        let block = MultiEraBlock::decode(&cbor).unwrap();
+        assert_eq!(block.slot(), 1861242, "fixture precondition");
+        assert_eq!(block.tx_count(), 2, "fixture precondition");
+
+        let forward = super::compute_forward_references(&block);
+
+        assert_eq!(forward.len(), 1);
+        assert!(forward.contains(&forward_ref_txoref()));
+
+        let chained = load_test_block("alonzo27.block");
+        let chained = MultiEraBlock::decode(&chained).unwrap();
+
+        assert!(
+            chained
+                .txs()
+                .iter()
+                .flat_map(MultiEraTx::consumes)
+                .any(|i| chained
+                    .txs()
+                    .iter()
+                    .any(|t| t.hash() == *i.hash())),
+            "fixture precondition: the alonzo block chains within itself"
+        );
+        assert!(
+            super::compute_forward_references(&chained).is_empty(),
+            "backward chaining is not a forward reference"
+        );
+    }
+
+    /// MUST FIRE: the delta of a block carrying a forward reference does not
+    /// consume the forward referenced output, because the network did not
+    /// consume it either, and it does produce it, because the later transaction
+    /// creates it.
+    ///
+    /// MUST NOT FIRE: the block's other inputs are still consumed. A delta that
+    /// stopped consuming anything would leave every spent output alive and
+    /// would pass an assertion about one absent entry while being wrong about
+    /// all the rest.
+    #[test]
+    fn a_forward_referenced_output_is_produced_and_not_consumed() {
+        let cbor = forward_ref_block();
+        let block = MultiEraBlock::decode(&cbor).unwrap();
+        let context = fake_slice_for_block(&block);
+
+        let delta = super::compute_apply_delta(&block, &context).unwrap();
+
+        let target = forward_ref_txoref();
+
+        assert!(
+            delta.produced_utxo.contains_key(&target),
+            "the later transaction still produces it"
+        );
+        assert!(
+            !delta.consumed_utxo.contains_key(&target),
+            "the earlier transaction must not consume an output that does not exist yet"
+        );
+
+        let other_inputs: Vec<TxoRef> = block
+            .txs()
+            .iter()
+            .flat_map(MultiEraTx::consumes)
+            .map(|i| TxoRef(*i.hash(), i.index() as u32))
+            .filter(|r| *r != target)
+            .collect();
+
+        assert!(
+            !other_inputs.is_empty(),
+            "fixture precondition: the pair spends something else too"
+        );
+
+        for input in other_inputs {
+            assert!(
+                delta.consumed_utxo.contains_key(&input),
+                "every other input is still consumed"
+            );
         }
     }
 }
