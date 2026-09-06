@@ -23,13 +23,15 @@
 //! short or reordered block batch cannot silently move one block's transactions
 //! onto another.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::time::Duration;
+
+use pallas::crypto::hash::Hash;
 
 use pallas::ledger::traverse::leios::{
     resolve_certified_block, AnnouncedEndorserBlock, EndorserBlockBody, PendingAnnouncement,
 };
-use pallas::ledger::traverse::MultiEraBlock;
+use pallas::ledger::traverse::{Era, MultiEraBlock, MultiEraTx};
 use pallas::network2::behavior::initiator::{
     Config as HandshakeConfig, HandshakeBehavior, InitiatorBehavior, InitiatorCommand,
     InitiatorEvent,
@@ -103,6 +105,19 @@ pub enum Error {
          applying it would apply an empty block where a whole endorser block belongs"
     )]
     Unfetched { slot: u64 },
+
+    #[error("a transaction of endorser block {hash} does not decode: {reason}")]
+    BadEndorserTx { hash: String, reason: String },
+
+    #[error(
+        "an endorser block named {named} transactions, {repeated} of them already applied and \
+         {spliced} spliced, and those do not add up"
+    )]
+    ContributionDoesNotAddUp {
+        named: usize,
+        repeated: usize,
+        spliced: usize,
+    },
 
     #[error(
         "leios-fetch answered a request for {asked} transactions of endorser block {hash} with \
@@ -217,6 +232,213 @@ pub struct CertifiedPayload {
     pub txs: Vec<Vec<u8>>,
 }
 
+/// How many blocks back the follower remembers which transactions it applied.
+///
+/// An endorser block is announced by the very ranking block that certifies the
+/// one before it, so its producer built it from a mempool that could not yet
+/// have dropped the previous endorser block's transactions. Two consecutive
+/// certified endorser blocks overlapping is therefore ordinary rather than
+/// exceptional, and the follower has to apply each of those transactions once.
+///
+/// The depth is in blocks because blocks are what the log walks back through,
+/// and it is set from a measurement rather than a guess. Over the 37825 ranking
+/// blocks of the Musashi chain between slot 1742539 and the tip, 7421 of them
+/// certified an endorser block, so a certification lands about every five
+/// blocks. Those endorser blocks carried 8213496 transactions of which 2411
+/// were repeats, 2410 of them repeated by the very next certified endorser
+/// block and the furthest by the seventh. Seven certifications is about thirty
+/// six blocks, so this is seven times the furthest repeat measured.
+///
+/// It is bounded at all because the ids of a whole chain do not fit in memory.
+/// Origin to tip is about fifteen million endorser transactions, and this holds
+/// on the order of a hundred and fifty thousand ids, about ten megabytes.
+///
+/// An overlap reaching further back than this is not silently mishandled. The
+/// repeated transaction is spliced in, the ledger meets an input that is
+/// already spent, and the follower stops on it, which is exactly the behaviour
+/// before this window existed.
+const APPLIED_WINDOW_BLOCKS: usize = 256;
+
+/// What one certified endorser block contributed to the block that certified it.
+///
+/// The three counts are one fact in three parts and are held together so a
+/// caller cannot read one without the others. Every transaction the endorser
+/// block named was either spliced into the certifying block or already applied
+/// by an earlier block, so a triple that does not add up is refused rather than
+/// constructed. Reporting only the spliced count would say a short block was a
+/// small one, and reporting only the named count would hide that anything was
+/// dropped at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Contribution {
+    named: usize,
+    repeated: usize,
+    spliced: usize,
+}
+
+impl Contribution {
+    pub fn new(named: usize, repeated: usize, spliced: usize) -> Result<Self, Error> {
+        if repeated + spliced != named {
+            return Err(Error::ContributionDoesNotAddUp {
+                named,
+                repeated,
+                spliced,
+            });
+        }
+
+        Ok(Self {
+            named,
+            repeated,
+            spliced,
+        })
+    }
+
+    /// Transactions the endorser block named.
+    pub fn named(&self) -> usize {
+        self.named
+    }
+
+    /// Transactions an earlier block had already applied.
+    pub fn repeated(&self) -> usize {
+        self.repeated
+    }
+
+    /// Transactions spliced into the certifying block.
+    pub fn spliced(&self) -> usize {
+        self.spliced
+    }
+}
+
+/// The transaction ids the blocks just behind the tip carried.
+///
+/// This is the follower's answer to "have I applied this transaction already".
+/// It holds one set per block rather than one flat set so the oldest block's
+/// ids leave together when the window moves on, and so a rollback can be
+/// answered by rebuilding from the stored blocks rather than by unpicking a
+/// merged set that no longer says where anything came from.
+///
+/// Both kinds of block are recorded. A ranking block's own transactions and a
+/// certified endorser block's transactions are disjoint on the chain measured
+/// so far, but nothing in the protocol says they must be, and recording both
+/// costs nothing while covering the case where they are not.
+#[derive(Debug, Default)]
+pub struct AppliedTxWindow {
+    /// Oldest first, newest last, at most [`APPLIED_WINDOW_BLOCKS`] entries.
+    blocks: VecDeque<(u64, HashSet<Hash<32>>)>,
+}
+
+impl AppliedTxWindow {
+    /// Whether some block still inside the window carried this transaction.
+    pub fn contains(&self, id: &Hash<32>) -> bool {
+        self.blocks.iter().any(|(_, ids)| ids.contains(id))
+    }
+
+    /// Records the transactions one block carried, dropping the oldest block
+    /// once the window is full.
+    pub fn record(&mut self, slot: u64, ids: HashSet<Hash<32>>) {
+        self.blocks.push_back((slot, ids));
+
+        while self.blocks.len() > APPLIED_WINDOW_BLOCKS {
+            self.blocks.pop_front();
+        }
+    }
+
+    /// Blocks the window is holding.
+    pub fn depth(&self) -> usize {
+        self.blocks.len()
+    }
+
+    /// Transaction ids the window is holding, counted with repeats across
+    /// blocks, so a caller can see the memory it is paying for.
+    pub fn ids(&self) -> usize {
+        self.blocks.iter().map(|(_, ids)| ids.len()).sum()
+    }
+}
+
+/// Why a window read back from stored blocks stopped where it did.
+///
+/// A depth on its own cannot say whether the follower remembers as far back as
+/// it means to or only as far as its log goes, and those are different
+/// positions to resume from. The reason is carried beside the count so the
+/// caller never has to read a small number as either one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowReach {
+    /// The window filled to its intended depth.
+    Full { blocks: usize },
+    /// The stored blocks ran out first, and this is how many there were.
+    ShortLog { blocks: usize },
+}
+
+/// A window rebuilt from stored blocks, and the evidence for how deep it is.
+#[derive(Debug)]
+pub struct ResumedWindow {
+    pub window: AppliedTxWindow,
+    pub reach: WindowReach,
+}
+
+/// Rebuilds the applied transaction window from stored blocks, read newest
+/// first.
+///
+/// A follower that resumes with an empty memory reapplies the first repeated
+/// transaction it meets and stops on an input that is already spent, which is
+/// the failure this window exists to prevent, moved from the first sync to the
+/// first restart. The memory is derived from the blocks the follower already
+/// stored rather than saved beside the cursor, for the same reason the
+/// certification walk is: a separately saved copy can disagree with the cursor
+/// after a crash or a rollback and nothing would notice.
+///
+/// The blocks arrive newest first and are recorded oldest first, so the window
+/// ends up in the same order a forward sync would have built it in.
+pub fn resume_window(blocks: impl Iterator<Item = RawBlock>) -> Result<ResumedWindow, Error> {
+    let mut newest_first = Vec::with_capacity(APPLIED_WINDOW_BLOCKS);
+
+    for cbor in blocks.take(APPLIED_WINDOW_BLOCKS) {
+        let block = MultiEraBlock::decode(&cbor).map_err(|e| Error::BadBlock(e.to_string()))?;
+
+        newest_first.push((block.slot(), block.txs().iter().map(|tx| tx.hash()).collect()));
+    }
+
+    let reach = if newest_first.len() == APPLIED_WINDOW_BLOCKS {
+        WindowReach::Full {
+            blocks: newest_first.len(),
+        }
+    } else {
+        WindowReach::ShortLog {
+            blocks: newest_first.len(),
+        }
+    };
+
+    let mut window = AppliedTxWindow::default();
+
+    for (slot, ids) in newest_first.into_iter().rev() {
+        window.record(slot, ids);
+    }
+
+    Ok(ResumedWindow { window, reach })
+}
+
+/// The transaction id of every transaction an endorser block delivered, in
+/// endorser block order.
+///
+/// The id is taken by decoding each transaction rather than by hashing the
+/// bytes here, so it is the same id the ledger will key the transaction's
+/// outputs by. A transaction that does not decode is refused: it would
+/// otherwise be a transaction with no id, which no window can answer for and
+/// which would be spliced in unchecked.
+fn endorser_tx_ids(payload: &CertifiedPayload) -> Result<Vec<Hash<32>>, Error> {
+    payload
+        .txs
+        .iter()
+        .map(|tx| {
+            MultiEraTx::decode_for_era(Era::Dijkstra, tx)
+                .map(|tx| tx.hash())
+                .map_err(|e| Error::BadEndorserTx {
+                    hash: payload.endorser_block.hash.to_string(),
+                    reason: e.to_string(),
+                })
+        })
+        .collect()
+}
+
 /// What the walk owes each certifying ranking block, keyed by that block's slot.
 ///
 /// Every certification the walk sees is recorded here before its endorser block
@@ -274,30 +496,66 @@ impl PendingPayloads {
     /// Every payload this consumes is removed. A payload left over is an
     /// endorser block that was fetched and never applied, which is refused
     /// rather than dropped, for the same reason in the other direction.
-    pub fn apply(&mut self, blocks: Vec<BlockBody>) -> Result<Vec<BlockBody>, Error> {
+    ///
+    /// A transaction a block still inside `window` already carried is left out
+    /// of the block this builds. Two consecutive certified endorser blocks
+    /// overlap as a matter of course, and splicing a repeated transaction in a
+    /// second time spends an input that is already spent, which the ledger
+    /// meets as an input it cannot find. The window is updated with every
+    /// transaction each block carries, including the ones left out, because
+    /// after this block they are all applied.
+    pub fn apply(
+        &mut self,
+        window: &mut AppliedTxWindow,
+        blocks: Vec<BlockBody>,
+    ) -> Result<Vec<BlockBody>, Error> {
         let mut out = Vec::with_capacity(blocks.len());
 
         for cbor in blocks {
-            let slot = MultiEraBlock::decode(&cbor)
-                .map_err(|e| Error::BadBlock(e.to_string()))?
-                .slot();
+            let (slot, own) = {
+                let block =
+                    MultiEraBlock::decode(&cbor).map_err(|e| Error::BadBlock(e.to_string()))?;
+
+                let ids: HashSet<Hash<32>> = block.txs().iter().map(|tx| tx.hash()).collect();
+
+                (block.slot(), ids)
+            };
 
             match self.0.remove(&slot) {
-                None => out.push(cbor),
+                None => {
+                    window.record(slot, own);
+                    out.push(cbor);
+                }
                 Some(None) => {
                     return Err(Error::Unfetched { slot });
                 }
                 Some(Some(payload)) => {
-                    let borrowed: Vec<&[u8]> = payload.txs.iter().map(|t| t.as_slice()).collect();
-                    let resolved = resolve_certified_block(&cbor, &borrowed)?;
+                    let named = endorser_tx_ids(&payload)?;
+
+                    let keep: Vec<&[u8]> = payload
+                        .txs
+                        .iter()
+                        .zip(named.iter())
+                        .filter(|(_, id)| !window.contains(id))
+                        .map(|(tx, _)| tx.as_slice())
+                        .collect();
+
+                    let repeated = payload.txs.len() - keep.len();
+                    let contribution =
+                        Contribution::new(payload.txs.len(), repeated, keep.len())?;
+
+                    let resolved = resolve_certified_block(&cbor, &keep)?;
 
                     info!(
                         slot,
                         eb = %payload.endorser_block.hash,
-                        txs = payload.txs.len(),
+                        named = contribution.named(),
+                        repeated = contribution.repeated(),
+                        spliced = contribution.spliced(),
                         "applied the transactions of a certified endorser block"
                     );
 
+                    window.record(slot, named.into_iter().collect());
                     out.push(resolved);
                 }
             }
@@ -1123,7 +1381,7 @@ mod tests {
         pending.deliver(certifying_slot, payload());
 
         let out = pending
-            .apply(vec![plain.clone(), certifying.clone()])
+            .apply(&mut AppliedTxWindow::default(), vec![plain.clone(), certifying.clone()])
             .expect("must resolve");
 
         assert_eq!(out.len(), 2);
@@ -1152,7 +1410,9 @@ mod tests {
         pending.expect(999_999);
         pending.deliver(999_999, payload());
 
-        let out = pending.apply(vec![plain_block()]).unwrap();
+        let out = pending
+            .apply(&mut AppliedTxWindow::default(), vec![plain_block()])
+            .unwrap();
         assert_eq!(out.len(), 1);
 
         let err = pending
@@ -1173,7 +1433,9 @@ mod tests {
         let blocks = vec![plain_block(), certifying_block()];
         let mut pending = PendingPayloads::default();
 
-        let out = pending.apply(blocks.clone()).unwrap();
+        let out = pending
+            .apply(&mut AppliedTxWindow::default(), blocks.clone())
+            .unwrap();
 
         assert_eq!(out, blocks);
         assert!(pending.refuse_undelivered().is_ok());
@@ -1202,7 +1464,10 @@ mod tests {
         assert_eq!(pending.outstanding(), vec![slot]);
 
         let err = pending
-            .apply(vec![plain_block(), certifying.clone()])
+            .apply(
+                &mut AppliedTxWindow::default(),
+                vec![plain_block(), certifying.clone()],
+            )
             .expect_err("a certification with no payload must be refused");
 
         match err {
@@ -1216,7 +1481,9 @@ mod tests {
         pending.deliver(slot, payload());
         assert!(pending.outstanding().is_empty());
 
-        let out = pending.apply(vec![certifying.clone()]).expect("must resolve");
+        let out = pending
+            .apply(&mut AppliedTxWindow::default(), vec![certifying.clone()])
+            .expect("must resolve");
         assert_ne!(out[0], certifying, "the certifying block is rewritten");
         assert!(pending.refuse_undelivered().is_ok());
     }
@@ -1245,5 +1512,245 @@ mod tests {
             Error::Undelivered { slot, .. } => assert_eq!(slot, 4242),
             other => panic!("wrong refusal: {other}"),
         }
+    }
+
+    /// The two ranking blocks of the Musashi chain that first met this, and a
+    /// faithful sub-sequence of the two endorser blocks they certify.
+    ///
+    /// Block 1742305 certifies endorser block
+    /// `f8f854f079cab3fe398d9abbb0a9318d5885ad9b5b9e53c796c1ee9593ff957b`,
+    /// announced at slot 1742239 with 490 transactions. Block 1742326
+    /// certifies endorser block
+    /// `e81c96b691602c44e4bd8481c85121dafca0db127ee4e25316abfd542f001f5c`,
+    /// announced at slot 1742305 with 613 transactions, of which the first 490
+    /// are byte for byte the whole of the endorser block before it.
+    ///
+    /// The fixtures keep the two blocks whole and four of the repeated
+    /// transactions beside three of the new ones, in the order each endorser
+    /// block delivered them, so the files stay small. Among the four kept is
+    /// `e31a871fbee9e85970bfdeaa9f906220ef3cc3ac0118d4c080865d58a2e92c34`,
+    /// which is the transaction the sync from origin stopped on: applied once
+    /// from the first endorser block, it spends
+    /// `636fe3f97867f643b0f58620620fc0b3b20025c008889e703c6e63d7b010c24e#0`,
+    /// and applied a second time from the second there is no such output left.
+    fn repeat_first_block() -> BlockBody {
+        hex::decode(include_str!("../../test_data/dijkstra-repeat-first.block").trim()).unwrap()
+    }
+
+    fn repeat_second_block() -> BlockBody {
+        hex::decode(include_str!("../../test_data/dijkstra-repeat-second.block").trim()).unwrap()
+    }
+
+    fn wire_txs(listing: &str) -> Vec<Vec<u8>> {
+        listing
+            .split_whitespace()
+            .map(|l| {
+                let wire = hex::decode(l).unwrap();
+                pallas::ledger::traverse::leios::unwrap_tx(&wire)
+                    .unwrap()
+                    .to_vec()
+            })
+            .collect()
+    }
+
+    fn repeat_first_payload() -> CertifiedPayload {
+        CertifiedPayload {
+            endorser_block: AnnouncedEndorserBlock {
+                slot: 1742239,
+                hash: "f8f854f079cab3fe398d9abbb0a9318d5885ad9b5b9e53c796c1ee9593ff957b"
+                    .parse()
+                    .unwrap(),
+                size: 17643,
+            },
+            txs: wire_txs(include_str!("../../test_data/dijkstra-repeat-first.ebtxs")),
+        }
+    }
+
+    fn repeat_second_payload() -> CertifiedPayload {
+        CertifiedPayload {
+            endorser_block: AnnouncedEndorserBlock {
+                slot: 1742305,
+                hash: "e81c96b691602c44e4bd8481c85121dafca0db127ee4e25316abfd542f001f5c"
+                    .parse()
+                    .unwrap(),
+                size: 22071,
+            },
+            txs: wire_txs(include_str!("../../test_data/dijkstra-repeat-second.ebtxs")),
+        }
+    }
+
+    fn tx_ids(block: &[u8]) -> Vec<Hash<32>> {
+        MultiEraBlock::decode(block)
+            .unwrap()
+            .txs()
+            .iter()
+            .map(|tx| tx.hash())
+            .collect()
+    }
+
+    /// MUST FIRE: a transaction the endorser block certified one block earlier
+    /// already contributed is spliced once and not twice. This is the whole
+    /// defect: applied a second time it spends an input that is already spent,
+    /// and the follower stops thousands of slots from anything that explains
+    /// it.
+    ///
+    /// MUST NOT FIRE: the transactions the second endorser block adds are all
+    /// spliced. A window that dropped those would leave the ledger short by
+    /// exactly the payload this stage exists to deliver, which is the same
+    /// silence in the other direction and would not show up until something
+    /// spent one of them.
+    #[test]
+    fn a_transaction_an_earlier_endorser_block_carried_is_spliced_once() {
+        let first = repeat_first_block();
+        let second = repeat_second_block();
+
+        let first_slot = MultiEraBlock::decode(&first).unwrap().slot();
+        let second_slot = MultiEraBlock::decode(&second).unwrap().slot();
+        assert_eq!(first_slot, 1742305, "fixture precondition");
+        assert_eq!(second_slot, 1742326, "fixture precondition");
+
+        let first_payload = repeat_first_payload();
+        let second_payload = repeat_second_payload();
+        assert_eq!(first_payload.txs.len(), 4, "fixture precondition");
+        assert_eq!(second_payload.txs.len(), 7, "fixture precondition");
+
+        let mut window = AppliedTxWindow::default();
+
+        let mut pending = PendingPayloads::default();
+        pending.expect(first_slot);
+        pending.deliver(first_slot, first_payload);
+
+        let out = pending
+            .apply(&mut window, vec![first.clone()])
+            .expect("the first certifying block must resolve");
+
+        let after_first = tx_ids(&out[0]);
+        assert_eq!(
+            after_first.len(),
+            4,
+            "the first endorser block's transactions are all new"
+        );
+
+        let mut pending = PendingPayloads::default();
+        pending.expect(second_slot);
+        pending.deliver(second_slot, second_payload);
+
+        let out = pending
+            .apply(&mut window, vec![second.clone()])
+            .expect("the second certifying block must resolve");
+
+        let after_second = tx_ids(&out[0]);
+
+        assert_eq!(
+            after_second.len(),
+            3,
+            "the four transactions the first endorser block already carried must not be \
+             spliced again"
+        );
+
+        for id in &after_first {
+            assert!(
+                !after_second.contains(id),
+                "transaction {id} was applied twice"
+            );
+        }
+
+        let offender: Hash<32> = "e31a871fbee9e85970bfdeaa9f906220ef3cc3ac0118d4c080865d58a2e92c34"
+            .parse()
+            .unwrap();
+        assert!(
+            after_first.contains(&offender),
+            "the transaction the sync stopped on must be applied once"
+        );
+        assert!(
+            !after_second.contains(&offender),
+            "the transaction the sync stopped on must not be applied twice"
+        );
+    }
+
+    /// MUST NOT FIRE: with an empty window every transaction of an endorser
+    /// block is spliced. This is the case that catches a window that answers
+    /// yes to everything, which would empty every certifying block on the
+    /// chain and say nothing about it.
+    #[test]
+    fn an_empty_window_suppresses_nothing() {
+        let second = repeat_second_block();
+        let slot = MultiEraBlock::decode(&second).unwrap().slot();
+
+        let mut pending = PendingPayloads::default();
+        pending.expect(slot);
+        pending.deliver(slot, repeat_second_payload());
+
+        let out = pending
+            .apply(&mut AppliedTxWindow::default(), vec![second])
+            .expect("must resolve");
+
+        assert_eq!(tx_ids(&out[0]).len(), 7);
+    }
+
+    /// MUST FIRE: the window read back from stored blocks knows what those
+    /// blocks carried, so a follower that resumes across the overlap
+    /// deduplicates it. A window that started empty on every restart would
+    /// move this failure from the first sync to the first restart, and the
+    /// restart is where it was actually met.
+    ///
+    /// MUST NOT FIRE: the read reports a log shorter than the window as short,
+    /// with the number of blocks it did read, rather than as a window of the
+    /// intended depth.
+    #[test]
+    fn the_window_is_read_back_out_of_stored_blocks() {
+        let stored = vec![plain_block(), certifying_block()];
+        let carried = tx_ids(&stored[0]);
+        assert!(
+            !carried.is_empty(),
+            "fixture precondition: the stored block carries transactions"
+        );
+
+        // Stored blocks are read newest first, the order the log walks back in.
+        let resumed = resume_window(stored.into_iter().rev().map(std::sync::Arc::new))
+            .expect("must read back");
+
+        assert_eq!(resumed.reach, WindowReach::ShortLog { blocks: 2 });
+        assert_eq!(resumed.window.depth(), 2);
+
+        for id in &carried {
+            assert!(
+                resumed.window.contains(id),
+                "a transaction of a stored block must be remembered"
+            );
+        }
+
+        assert!(
+            !resumed.window.contains(&Hash::new([0; 32])),
+            "a transaction no stored block carried must not be remembered"
+        );
+    }
+
+    /// MUST FIRE: the three counts are refused unless they add up, so a future
+    /// edit that filters in one place and counts in another cannot report a
+    /// short block as a small one.
+    ///
+    /// MUST NOT FIRE: counts that do add up are accepted, including the case
+    /// where nothing was repeated at all.
+    #[test]
+    fn a_contribution_that_does_not_add_up_is_refused() {
+        match Contribution::new(613, 490, 7).expect_err("must refuse") {
+            Error::ContributionDoesNotAddUp {
+                named,
+                repeated,
+                spliced,
+            } => {
+                assert_eq!((named, repeated, spliced), (613, 490, 7));
+            }
+            other => panic!("wrong refusal: {other}"),
+        }
+
+        let ok = Contribution::new(613, 490, 123).expect("must accept");
+        assert_eq!(ok.named(), 613);
+        assert_eq!(ok.repeated(), 490);
+        assert_eq!(ok.spliced(), 123);
+
+        let none_repeated = Contribution::new(7, 0, 7).expect("must accept");
+        assert_eq!(none_repeated.repeated(), 0);
     }
 }
