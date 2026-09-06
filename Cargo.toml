@@ -218,7 +218,7 @@ readme = "README.md"
 authors = ["TxPipe <hello@txpipe.io>"]
 
 [workspace.dependencies]
-pallas = { git = "https://github.com/geofflittle/pallas", rev = "9b7e43362a3702537874be2eb9f24f6e3fe698cb", features = ["hardano", "phase2", "unstable", "network2"] }
+pallas = { git = "https://github.com/geofflittle/pallas", rev = "60fe08ba2ca3305039c98b81845e9d45b1f8cdd9", features = ["hardano", "phase2", "unstable", "network2"] }
 # pallas = { version = "1.1.1", features = ["hardano", "phase2", "unstable"] }
 # pallas = { git = "https://github.com/txpipe/pallas.git", rev = "a7b5a86", features = ["hardano", "phase2", "unstable"] }
 # pallas = { path = "../pallas/pallas", features = ["hardano", "phase2", "unstable"] }
