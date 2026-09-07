@@ -14,7 +14,7 @@ use pallas::{
         },
     },
 };
-use tracing::{debug, instrument};
+use tracing::{debug, info, instrument};
 
 use crate::{
     load_effective_pparams, load_gov, owned::OwnedMultiEraOutput, roll::proposals::ProposalVisitor,
@@ -217,6 +217,15 @@ pub struct DeltaBuilder<'a> {
     protocol: u16,
     utxos: &'a HashMap<TxoRef, OwnedMultiEraOutput>,
 
+    /// Exactly the inputs the lenient utxo walk consumed, when that rule is on.
+    ///
+    /// `None` is the strict rule, where every input a transaction names is
+    /// consumed and one that cannot be resolved is a refusal. `Some` is a
+    /// positive list rather than a licence to skip: an input outside it was not
+    /// consumed by the ledger either, so showing it to a visitor would report a
+    /// spend the network did not make.
+    consumed: Option<std::collections::HashSet<TxoRef>>,
+
     account_state: AccountVisitor,
     asset_state: AssetStateVisitor,
     datum_state: DatumVisitor,
@@ -238,6 +247,7 @@ impl<'a> DeltaBuilder<'a> {
         work: &'a mut WorkBlock,
         utxos: &'a HashMap<TxoRef, OwnedMultiEraOutput>,
         dormancy: DormancyContext,
+        consumed: Option<std::collections::HashSet<TxoRef>>,
     ) -> Self {
         Self {
             genesis,
@@ -247,6 +257,7 @@ impl<'a> DeltaBuilder<'a> {
             epoch_start,
             protocol,
             utxos,
+            consumed,
             account_state: Default::default(),
             asset_state: Default::default(),
             datum_state: Default::default(),
@@ -271,11 +282,6 @@ impl<'a> DeltaBuilder<'a> {
         let block = block.view();
         let mut deltas = WorkDeltas::default();
 
-        // Inputs this block spends that a later transaction of the same block
-        // produces. The network removes nothing for them, so no visitor is
-        // shown a consumption that did not happen. Empty for every Praos block,
-        // see `utxoset::compute_forward_references`.
-        let forward = utxoset::compute_forward_references(block);
 
         self.account_state.visit_root(
             &mut deltas,
@@ -370,8 +376,15 @@ impl<'a> DeltaBuilder<'a> {
             for input in tx.consumes() {
                 let txoref = TxoRef::from(&input);
 
-                if forward.contains(&txoref) {
-                    continue;
+                // Under the lenient rule the utxo walk has already decided
+                // which inputs were available at their own transaction's
+                // position. An input it did not consume was not consumed by the
+                // ledger either, so showing it here would report a spend the
+                // network did not make.
+                if let Some(consumed) = &self.consumed {
+                    if !consumed.contains(&txoref) {
+                        continue;
+                    }
                 }
 
                 let resolved = self.utxos.get(&txoref).ok_or_else(|| {
@@ -636,7 +649,42 @@ pub(crate) fn compute_delta<D: Domain>(
         dormancy.drep_keys = Arc::new(keys);
     }
 
+    let lenient = batch.lenient_apply;
+
     for block in batch.blocks.iter_mut() {
+        // Under the lenient rule the utxo walk runs first, because it is the
+        // one place that decides whether an input was available at its own
+        // transaction's position, and the visitors have to be shown exactly the
+        // consumptions it made and no others.
+        let lenient_delta = if lenient {
+            let blockd = block.decoded();
+            let blockd = blockd.view();
+
+            let (delta, stats) = utxoset::compute_apply_delta_lenient(
+                blockd,
+                &batch.utxos_decoded,
+                &batch.store_utxos,
+            )?;
+
+            if stats.skipped_inputs > 0 || stats.recreated_outputs > 0 {
+                info!(
+                    slot = blockd.slot(),
+                    txs = blockd.tx_count(),
+                    skipped_inputs = stats.skipped_inputs,
+                    recreated_outputs = stats.recreated_outputs,
+                    "applied a block the way the node does"
+                );
+            }
+
+            Some(delta)
+        } else {
+            None
+        };
+
+        let consumed: Option<std::collections::HashSet<TxoRef>> = lenient_delta
+            .as_ref()
+            .map(|d| d.consumed_utxo.keys().cloned().collect());
+
         let mut builder = DeltaBuilder::new(
             genesis.clone(),
             *protocol,
@@ -646,6 +694,7 @@ pub(crate) fn compute_delta<D: Domain>(
             block,
             &batch.utxos_decoded,
             std::mem::take(&mut dormancy),
+            consumed,
         );
 
         builder.crawl()?;
@@ -654,9 +703,15 @@ pub(crate) fn compute_delta<D: Domain>(
 
         // TODO: we treat the UTxO set differently due to tech-debt. We should migrate
         // this into the entity system. (#1042)
-        let blockd = block.decoded();
-        let blockd = blockd.view();
-        let utxos = utxoset::compute_apply_delta(blockd, &batch.utxos_decoded)?;
+        let utxos = match lenient_delta {
+            Some(delta) => delta,
+            None => {
+                let blockd = block.decoded();
+                let blockd = blockd.view();
+                utxoset::compute_apply_delta(blockd, &batch.utxos_decoded)?
+            }
+        };
+
         block.utxo_delta = Some(utxos);
     }
 
@@ -814,6 +869,7 @@ mod tests {
             &mut work,
             &utxos,
             DormancyContext::default(),
+            None,
         );
 
         builder.crawl().unwrap();

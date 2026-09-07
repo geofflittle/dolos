@@ -1,67 +1,138 @@
 use dolos_core::config::CardanoConfig;
 use dolos_core::*;
+use itertools::Itertools as _;
 use pallas::ledger::traverse::{MultiEraBlock, MultiEraOutput, MultiEraTx};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::owned::OwnedMultiEraOutput;
 
-/// The inputs a block spends that a LATER transaction of the same block
-/// produces.
+/// What applying a block leniently did that applying it strictly would not.
 ///
-/// On a Praos chain this is always empty. The ledger applies a block's
-/// transactions in sequence, so a transaction spending an output produced after
-/// it does not validate and no such block reaches a follower. Treating a
-/// block's transactions as a set, which is what resolving every produced output
-/// before any consumed one does, is therefore harmless there and is what this
-/// module has always done.
+/// Both counts are facts carried out of the walk rather than inferred from the
+/// delta afterwards, because neither can be recovered from it: an input that was
+/// left unconsumed leaves nothing behind, and an output written over an existing
+/// one is indistinguishable from a fresh one once written.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct LenientApply {
+    /// Inputs that were not in the ledger and not produced earlier in this
+    /// block, so nothing was consumed for them.
+    pub skipped_inputs: usize,
+    /// Outputs created over an entry that was already there.
+    pub recreated_outputs: usize,
+}
+
+/// The refs a block spends, all of them, for the lenient path.
 ///
-/// A certified Leios endorser block is not like that. Its transactions arrive
-/// in the order the endorser block lists them, nothing requires that order to
-/// be topological, and the producing node applies them in that order with
-/// validation switched off. A spend of an output that does not exist yet
-/// removes nothing there, and the output is still unspent when the later
-/// transaction of the same block creates it.
+/// The strict path asks the store only for what the block does not produce
+/// itself, because it resolves a block's transactions as a set. The lenient path
+/// applies them in order, so it has to know what the store really holds and
+/// cannot let a block's own later output stand in for it.
+pub fn compute_block_dependencies_lenient(block: &MultiEraBlock) -> Vec<TxoRef> {
+    block
+        .txs()
+        .iter()
+        .flat_map(MultiEraTx::consumes)
+        .map(|utxo| TxoRef(*utxo.hash(), utxo.index() as u32))
+        .unique()
+        .collect()
+}
+
+/// Applies a block the way the Leios prototype node applies one, in wire order,
+/// consuming what is there and leaving what is not.
 ///
-/// So resolving such an input against the block's own later output consumes an
-/// output the rest of the network still holds. The follower and the chain then
-/// disagree about one entry of the UTxO set, and the disagreement surfaces much
-/// later as an input not found, when a subsequent block spends it. This names
-/// those inputs so they can be left unconsumed, which is what the network does
-/// with them.
+/// This mirrors a deployment's observed behaviour and is not a reading of any
+/// specification. The node folds a certified endorser block's transactions with
+/// validation switched off, so removing an input that is absent removes nothing
+/// and the transaction still creates its outputs. Three cases on the Musashi
+/// chain each depend on some part of that, and no rule narrower than this one
+/// covers all three:
 ///
-/// Membership is a positive fact about the block in hand and never an absence.
-/// An input is here only because a transaction of this same block produces it
-/// after the one spending it. An input nothing in the block produces is not
-/// here, and stays exactly as missing as it ever was.
-pub fn compute_forward_references(block: &MultiEraBlock) -> HashSet<TxoRef> {
-    let txs = block.txs();
+/// - a transaction spending an output a LATER transaction of the same block
+///   produces, which consumes nothing there and leaves the output for whoever
+///   spends it next;
+/// - a transaction carried twice, whose second application finds its input
+///   already spent and consumes nothing;
+/// - a transaction carried twice whose output was spent in between, whose
+///   second application RE-CREATES that output, which a later block then spends.
+///
+/// The third is why suppressing repeats is not equivalent and why this is done
+/// here rather than by filtering blocks upstream.
+///
+/// An input is available if the store holds it and this block has not already
+/// consumed it, or if an earlier transaction of this block produced it and this
+/// block has not already consumed it.
+///
+/// `store_has` is which refs the store itself answered for, which is not the
+/// same question as which refs `loaded` has a body for. `loaded` also carries
+/// the outputs the block produces, so that the visitors can resolve an
+/// intra-block spend, and letting a block's own later output stand in for one
+/// the store holds is the exact mistake this rule exists to stop.
+pub fn compute_apply_delta_lenient(
+    block: &MultiEraBlock,
+    loaded: &HashMap<TxoRef, OwnedMultiEraOutput>,
+    store_has: &HashSet<TxoRef>,
+) -> Result<(UtxoSetDelta, LenientApply), BrokenInvariant> {
+    let mut delta = UtxoSetDelta::default();
+    let mut stats = LenientApply::default();
 
-    let mut produced_at: HashMap<TxoRef, usize> = HashMap::new();
+    // What this block has created so far, and what it has spent so far, so
+    // availability is answered at each transaction's own position rather than
+    // for the block as a whole.
+    let mut produced_here: HashMap<TxoRef, Arc<EraCbor>> = HashMap::new();
+    let mut spent_here: HashSet<TxoRef> = HashSet::new();
 
-    for (position, tx) in txs.iter().enumerate() {
-        let hash = tx.hash();
+    for tx in block.txs().iter() {
+        let tx_hash = tx.hash();
 
-        for (idx, _) in tx.produces() {
-            produced_at.insert(TxoRef(hash, idx as u32), position);
-        }
-    }
-
-    let mut forward = HashSet::new();
-
-    for (position, tx) in txs.iter().enumerate() {
         for consumed in tx.consumes() {
-            let txoref = TxoRef(*consumed.hash(), consumed.index() as u32);
+            let stxi_ref = TxoRef(*consumed.hash(), consumed.index() as u32);
 
-            if let Some(produced) = produced_at.get(&txoref) {
-                if *produced > position {
-                    forward.insert(txoref);
+            if spent_here.contains(&stxi_ref) {
+                stats.skipped_inputs += 1;
+                continue;
+            }
+
+            let body = match produced_here.get(&stxi_ref) {
+                Some(body) => Some(body.clone()),
+                None if store_has.contains(&stxi_ref) => {
+                    loaded.get(&stxi_ref).map(|x| x.borrow_owner().clone())
+                }
+                None => None,
+            };
+
+            match body {
+                Some(body) => {
+                    spent_here.insert(stxi_ref.clone());
+                    delta.consumed_utxo.insert(stxi_ref, body);
+                }
+                None => {
+                    stats.skipped_inputs += 1;
                 }
             }
         }
+
+        for (idx, produced) in tx.produces() {
+            let utxo_ref = TxoRef(tx_hash, idx as u32);
+            let body: Arc<EraCbor> = Arc::new(produced.into());
+
+            let existed = store_has.contains(&utxo_ref) || produced_here.contains_key(&utxo_ref);
+
+            if existed && !spent_here.contains(&utxo_ref) {
+                stats.recreated_outputs += 1;
+            }
+
+            // Creating it again un-spends it, which is exactly what the node
+            // does and the reason a later block can spend it a second time.
+            spent_here.remove(&utxo_ref);
+            delta.consumed_utxo.remove(&utxo_ref);
+
+            produced_here.insert(utxo_ref.clone(), body.clone());
+            delta.produced_utxo.insert(utxo_ref, body);
+        }
     }
 
-    forward
+    Ok((delta, stats))
 }
 
 pub fn compute_block_dependencies(block: &MultiEraBlock, loaded: &mut RawUtxoMap) -> Vec<TxoRef> {
@@ -112,11 +183,6 @@ pub fn compute_apply_delta(
 ) -> Result<UtxoSetDelta, BrokenInvariant> {
     let mut delta = UtxoSetDelta::default();
 
-    // An input a later transaction of this same block produces is spent by a
-    // transaction that runs before the output exists, so the network removes
-    // nothing for it and neither does this. See `compute_forward_references`.
-    let forward = compute_forward_references(block);
-
     let txs: HashMap<_, _> = block.txs().into_iter().map(|tx| (tx.hash(), tx)).collect();
 
     for (tx_hash, tx) in txs.iter() {
@@ -129,10 +195,6 @@ pub fn compute_apply_delta(
 
         for consumed in tx.consumes() {
             let stxi_ref = TxoRef(*consumed.hash(), consumed.index() as u32);
-
-            if forward.contains(&stxi_ref) {
-                continue;
-            }
 
             let stxi_body = loaded
                 .get(&stxi_ref)
@@ -446,92 +508,286 @@ mod tests {
         )
     }
 
-    /// MUST FIRE: an input a later transaction of the same block produces is
-    /// named as a forward reference.
+    fn trimmed_block(name: &str) -> Vec<u8> {
+        let path = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
+            .join("test_data")
+            .join(name);
+
+        hex::decode(std::fs::read_to_string(path).unwrap().trim()).unwrap()
+    }
+
+    /// A ledger the tests can walk a sequence of blocks over, which is what the
+    /// two block cases need: the second block's behaviour depends on what the
+    /// first one did to the store, and a fabricated slice cannot express that.
+    #[derive(Default)]
+    struct FakeLedger {
+        bodies: HashMap<TxoRef, OwnedMultiEraOutput>,
+        present: HashSet<TxoRef>,
+    }
+
+    impl FakeLedger {
+        /// Seeds the inputs the block spends that the block does not make
+        /// itself, so its spends of the outside world resolve.
+        ///
+        /// A ref the block produces is deliberately left out: the outside world
+        /// does not have it yet, and seeding it would make the block's own
+        /// chaining look like re-creation and hide what the counters mean.
+        fn seed_externals(&mut self, block: &MultiEraBlock) {
+            let sample = block
+                .txs()
+                .first()
+                .unwrap()
+                .produces()
+                .first()
+                .unwrap()
+                .1
+                .encode();
+
+            let made_here: HashSet<TxoRef> = block
+                .txs()
+                .iter()
+                .flat_map(|tx| {
+                    let hash = tx.hash();
+                    tx.produces()
+                        .into_iter()
+                        .map(move |(idx, _)| TxoRef(hash, idx as u32))
+                })
+                .collect();
+
+            for input in block.txs().iter().flat_map(MultiEraTx::consumes) {
+                let key = TxoRef(*input.hash(), input.index() as u32);
+
+                if self.present.contains(&key) || made_here.contains(&key) {
+                    continue;
+                }
+
+                let body = OwnedMultiEraOutput::decode(Arc::new(EraCbor(
+                    block.era().into(),
+                    sample.clone(),
+                )))
+                .unwrap();
+
+                self.bodies.insert(key.clone(), body);
+                self.present.insert(key);
+            }
+        }
+
+        fn apply(&mut self, block: &MultiEraBlock) -> LenientApply {
+            let (delta, stats) =
+                super::compute_apply_delta_lenient(block, &self.bodies, &self.present).unwrap();
+
+            // Produced first, then consumed. A ref a block both makes and
+            // spends has to end up spent, which is what ordinary transaction
+            // chaining inside a block means, and the walk has already removed
+            // from `consumed_utxo` anything a later transaction made again.
+            for (produced, body) in delta.produced_utxo.iter() {
+                self.bodies.insert(
+                    produced.clone(),
+                    OwnedMultiEraOutput::decode(body.clone()).unwrap(),
+                );
+                self.present.insert(produced.clone());
+            }
+
+            for consumed in delta.consumed_utxo.keys() {
+                self.present.remove(consumed);
+            }
+
+            stats
+        }
+
+        fn holds(&self, key: &TxoRef) -> bool {
+            self.present.contains(key)
+        }
+    }
+
+    /// MUST FIRE: a transaction spending an output a LATER transaction of the
+    /// same block produces consumes nothing, and the output survives for
+    /// whoever spends it next. This is the case at slot 1861242, and the chain
+    /// settles it: the ordinary ranking block at 1861279 spends that same
+    /// output, so it was still there.
     ///
-    /// MUST NOT FIRE: ordinary transaction chaining, where a transaction spends
-    /// an output an EARLIER transaction of the same block produced, is not. The
-    /// alonzo block is in the fixtures precisely because it chains, and a
-    /// predicate that could not tell the two apart would strip the payload out
-    /// of every ordinary block on the chain.
+    /// MUST NOT FIRE: the transactions are still applied. Their outputs are
+    /// created and the inputs that WERE there are still consumed, so this is
+    /// not a rule that quietly drops a transaction.
     #[test]
-    fn a_forward_reference_is_named_and_ordinary_chaining_is_not() {
+    fn a_forward_referenced_input_is_left_and_the_transaction_still_applies() {
         let cbor = forward_ref_block();
         let block = MultiEraBlock::decode(&cbor).unwrap();
         assert_eq!(block.slot(), 1861242, "fixture precondition");
         assert_eq!(block.tx_count(), 2, "fixture precondition");
 
-        let forward = super::compute_forward_references(&block);
+        let target = forward_ref_txoref();
 
-        assert_eq!(forward.len(), 1);
-        assert!(forward.contains(&forward_ref_txoref()));
+        let mut ledger = FakeLedger::default();
+        ledger.seed_externals(&block);
 
-        let chained = load_test_block("alonzo27.block");
-        let chained = MultiEraBlock::decode(&chained).unwrap();
+        // The forward referenced output is the one thing the outside world does
+        // not have: this block's own later transaction makes it.
+        ledger.present.remove(&target);
 
-        assert!(
-            chained
-                .txs()
-                .iter()
-                .flat_map(MultiEraTx::consumes)
-                .any(|i| chained
-                    .txs()
-                    .iter()
-                    .any(|t| t.hash() == *i.hash())),
-            "fixture precondition: the alonzo block chains within itself"
+        let stats = ledger.apply(&block);
+
+        assert_eq!(
+            stats.skipped_inputs, 1,
+            "exactly the forward reference was left unconsumed"
         );
         assert!(
-            super::compute_forward_references(&chained).is_empty(),
-            "backward chaining is not a forward reference"
+            ledger.holds(&target),
+            "the output the later transaction makes must survive, the chain spends it at 1861279"
+        );
+
+        for tx in block.txs().iter() {
+            for (idx, _) in tx.produces() {
+                assert!(
+                    ledger.holds(&TxoRef(tx.hash(), idx as u32)),
+                    "every transaction still creates its outputs"
+                );
+            }
+        }
+    }
+
+    /// MUST FIRE: a transaction carried a second time re-creates an output that
+    /// was spent in between, and a later block can spend it again.
+    ///
+    /// The two real ordinary ranking blocks of the Musashi chain that showed
+    /// this. In block 1861279, index 50 creates
+    /// `3fe3ab01a255960d22d63e7ad8fabdee8cd7d9d884790105c35fa3bea1b53e01#0` and
+    /// index 234 spends it. Block 1861288 carries index 50's transaction again,
+    /// which on the node re-creates that output, and a later block spends it a
+    /// second time. Suppressing the repeat instead was tried and stopped the
+    /// sync here, because the resurrection never happened.
+    ///
+    /// MUST NOT FIRE: the first block's own chain still resolves, so this is
+    /// not a rule that makes everything succeed by consuming nothing. Index 17
+    /// spends what index 2 made and index 50 spends what index 17 made, and all
+    /// three are consumed.
+    #[test]
+    fn a_repeated_transaction_recreates_an_output_spent_in_between() {
+        let first = trimmed_block("dijkstra-repeat-ranking-first.block");
+        let second = trimmed_block("dijkstra-repeat-ranking-second.block");
+
+        let first = MultiEraBlock::decode(&first).unwrap();
+        let second = MultiEraBlock::decode(&second).unwrap();
+
+        assert_eq!(first.slot(), 1861279, "fixture precondition");
+        assert_eq!(second.slot(), 1861288, "fixture precondition");
+
+        let resurrected = TxoRef(
+            Hash::from_str("3fe3ab01a255960d22d63e7ad8fabdee8cd7d9d884790105c35fa3bea1b53e01")
+                .unwrap(),
+            0,
+        );
+
+        let mut ledger = FakeLedger::default();
+        ledger.seed_externals(&first);
+
+        let first_stats = ledger.apply(&first);
+
+        assert_eq!(
+            first_stats.skipped_inputs, 0,
+            "the first block's own chain resolves, nothing is skipped"
+        );
+        assert!(
+            !ledger.holds(&resurrected),
+            "fixture precondition: index 234 of the first block spends what index 50 made"
+        );
+
+        let second_stats = ledger.apply(&second);
+
+        assert!(
+            ledger.holds(&resurrected),
+            "the repeat must re-create the output the first block spent"
+        );
+        assert!(
+            second_stats.skipped_inputs > 0,
+            "the repeat's own input was already spent, so it consumed nothing"
         );
     }
 
-    /// MUST FIRE: the delta of a block carrying a forward reference does not
-    /// consume the forward referenced output, because the network did not
-    /// consume it either, and it does produce it, because the later transaction
-    /// creates it.
+    /// MUST FIRE: applying the same block twice reports every one of its
+    /// outputs as re-created the second time, and consumes nothing the second
+    /// time because the first application already spent it all.
     ///
-    /// MUST NOT FIRE: the block's other inputs are still consumed. A delta that
-    /// stopped consuming anything would leave every spent output alive and
-    /// would pass an assertion about one absent entry while being wrong about
-    /// all the rest.
+    /// The counter is what an operator reads to see how much of a chain is
+    /// re-application, so it has to count the case it is named for. Asserting
+    /// it is merely non-zero on a real block would pass on any transaction that
+    /// happened to repeat, which is a different fact.
     #[test]
-    fn a_forward_referenced_output_is_produced_and_not_consumed() {
-        let cbor = forward_ref_block();
+    fn re_applying_a_block_counts_every_output_as_re_created() {
+        let cbor = trimmed_block("dijkstra-repeat-ranking-first.block");
         let block = MultiEraBlock::decode(&cbor).unwrap();
-        let context = fake_slice_for_block(&block);
 
-        let delta = super::compute_apply_delta(&block, &context).unwrap();
+        let outputs: usize = block.txs().iter().map(|tx| tx.produces().len()).sum();
+        let inputs: usize = block.txs().iter().map(|tx| tx.consumes().len()).sum();
+        assert!(outputs > 0 && inputs > 0, "fixture precondition");
 
-        let target = forward_ref_txoref();
+        // The block's own outputs that the block itself spends. Those are gone
+        // by the end of the first application, so the second application finds
+        // them absent and creates them afresh rather than over anything.
+        let made_here: HashSet<TxoRef> = block
+            .txs()
+            .iter()
+            .flat_map(|tx| {
+                let hash = tx.hash();
+                tx.produces()
+                    .into_iter()
+                    .map(move |(idx, _)| TxoRef(hash, idx as u32))
+            })
+            .collect();
 
-        assert!(
-            delta.produced_utxo.contains_key(&target),
-            "the later transaction still produces it"
-        );
-        assert!(
-            !delta.consumed_utxo.contains_key(&target),
-            "the earlier transaction must not consume an output that does not exist yet"
-        );
-
-        let other_inputs: Vec<TxoRef> = block
+        let chained = block
             .txs()
             .iter()
             .flat_map(MultiEraTx::consumes)
-            .map(|i| TxoRef(*i.hash(), i.index() as u32))
-            .filter(|r| *r != target)
-            .collect();
+            .filter(|i| made_here.contains(&TxoRef(*i.hash(), i.index() as u32)))
+            .count();
 
-        assert!(
-            !other_inputs.is_empty(),
-            "fixture precondition: the pair spends something else too"
+        assert!(chained > 0, "fixture precondition: the block chains in itself");
+
+        let mut ledger = FakeLedger::default();
+        ledger.seed_externals(&block);
+
+        let first = ledger.apply(&block);
+        assert_eq!(
+            first.recreated_outputs, 0,
+            "nothing is re-created the first time"
+        );
+        assert_eq!(
+            first.skipped_inputs, 0,
+            "and every input resolves the first time"
         );
 
-        for input in other_inputs {
-            assert!(
-                delta.consumed_utxo.contains_key(&input),
-                "every other input is still consumed"
-            );
+        let second = ledger.apply(&block);
+        assert_eq!(
+            second.recreated_outputs,
+            outputs - chained,
+            "every output still standing is re-created the second time"
+        );
+        assert_eq!(
+            second.skipped_inputs,
+            inputs - chained,
+            "every input from outside the block was already spent, so none is consumed again"
+        );
+    }
+
+    /// MUST NOT FIRE: the strict rule is untouched and still refuses an input
+    /// it cannot resolve. Every network other than this one runs it, and a
+    /// leniency that leaked into it would hide a real defect rather than mirror
+    /// a prototype.
+    #[test]
+    fn the_strict_rule_still_refuses_a_missing_input() {
+        let cbor = forward_ref_block();
+        let block = MultiEraBlock::decode(&cbor).unwrap();
+
+        let mut context = fake_slice_for_block(&block);
+        context.remove(&forward_ref_txoref());
+
+        let err = super::compute_apply_delta(&block, &context)
+            .expect_err("the strict rule must refuse an input it cannot resolve");
+
+        match err {
+            BrokenInvariant::MissingUtxo(r) => assert_eq!(r, forward_ref_txoref()),
+            other => panic!("wrong refusal: {other:?}"),
         }
     }
 }

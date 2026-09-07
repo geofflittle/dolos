@@ -15,9 +15,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::adapters::WalAdapter;
 use crate::prelude::*;
-use crate::sync::leios::{
-    resume_walk, resume_window, AppliedTxWindow, CertifiedPayload, LeiosClient, PendingPayloads,
-};
+use crate::sync::leios::{resume_walk, CertifiedPayload, LeiosClient, PendingPayloads};
 
 /// How far back the certification walk reads stored blocks looking for the
 /// Leios event that settles what is waiting.
@@ -56,32 +54,6 @@ fn walk_at(wal: &WalAdapter, point: &ChainPoint) -> Result<CertificationTracker,
     Ok(CertificationTracker::resume_from(resumed.state))
 }
 
-/// Reads the applied transaction window back out of the blocks already stored
-/// at a point.
-///
-/// Two consecutive certified endorser blocks overlap as a matter of course, and
-/// the overlap does not care whether the follower restarted in the middle of
-/// it. A window that started empty at every resume would leave the follower
-/// applying the first repeated transaction a second time, which is the failure
-/// this reads back to avoid.
-fn window_at(wal: &WalAdapter, point: &ChainPoint) -> Result<AppliedTxWindow, WorkerError> {
-    let blocks = wal
-        .iter_blocks(None, Some(point.clone()))
-        .or_panic()?
-        .rev()
-        .map(|(_, raw)| raw);
-
-    let resumed = resume_window(blocks).or_panic()?;
-
-    info!(
-        slot = point.slot(),
-        reach = ?resumed.reach,
-        ids = resumed.window.ids(),
-        "applied transaction window read back from stored blocks"
-    );
-
-    Ok(resumed.window)
-}
 
 fn to_traverse(header: &HeaderContent) -> Result<MultiEraHeader<'_>, WorkerError> {
     let out = match header.byron_prefix {
@@ -173,9 +145,6 @@ pub struct Worker {
     /// is the only place it survives.
     outstanding: BTreeMap<u64, AnnouncedEndorserBlock>,
 
-    /// What the blocks just behind the tip carried, so a transaction two
-    /// certified endorser blocks both name is applied once.
-    applied: AppliedTxWindow,
 }
 
 impl Worker {
@@ -415,7 +384,7 @@ impl Worker {
         // never to a position in the batch, so a short or reordered batch cannot
         // move one block's endorsed transactions onto another. A payload no
         // block claimed is refused rather than dropped.
-        let blocks = self.payloads.apply(&mut self.applied, blocks).map_err(|err| {
+        let blocks = self.payloads.apply(blocks).map_err(|err| {
             warn!(%err, "resolving a certified block failed");
             WorkerError::Panic
         })?;
@@ -478,20 +447,15 @@ impl gasket::framework::Worker<Stage> for Worker {
 
         let intersection = ChainPoint::from(intersection);
 
-        let (leios, certification, applied) = match &stage.leios_peer_address {
-            None => (
-                None,
-                CertificationTracker::default(),
-                AppliedTxWindow::default(),
-            ),
+        let (leios, certification) = match &stage.leios_peer_address {
+            None => (None, CertificationTracker::default()),
             Some(address) => {
                 info!(address, "connecting to a Leios peer for endorser blocks");
 
                 let client = LeiosClient::new(address, stage.network_magic).or_panic()?;
                 let walk = walk_at(&stage.wal, &intersection)?;
-                let applied = window_at(&stage.wal, &intersection)?;
 
-                (Some(client), walk, applied)
+                (Some(client), walk)
             }
         };
 
@@ -502,7 +466,6 @@ impl gasket::framework::Worker<Stage> for Worker {
             certification,
             payloads: PendingPayloads::default(),
             outstanding: BTreeMap::new(),
-            applied,
         };
 
         Ok(worker)
@@ -550,13 +513,6 @@ impl gasket::framework::Worker<Stage> for Worker {
 
                 if self.leios.is_some() {
                     self.certification = walk_at(&stage.wal, &point)?;
-
-                    // The window says which transactions are already applied,
-                    // so a rollback that undid some of them leaves it claiming
-                    // more than the ledger holds. It is read back from the
-                    // stored blocks at the rollback point for the same reason
-                    // the walk is.
-                    self.applied = window_at(&stage.wal, &point)?;
                 }
 
                 stage.flush_rollback(point).await?

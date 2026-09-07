@@ -121,6 +121,19 @@ pub struct WorkBatch {
     pub utxos: RawUtxoMap,
     pub utxos_decoded: HashMap<TxoRef, OwnedMultiEraOutput>,
 
+    /// Which refs the state store itself answered for.
+    ///
+    /// Not the same as the keys of `utxos`, which also carries the outputs the
+    /// blocks of this batch produce so a visitor can resolve an intra-block
+    /// spend. The lenient rule has to tell those two apart, because letting a
+    /// block's own later output stand in for one the store holds is the mistake
+    /// it exists to stop.
+    pub store_utxos: std::collections::HashSet<TxoRef>,
+
+    /// Apply the way the Leios prototype node applies, rather than the way the
+    /// ledger specification says to. See `SyncConfig::leios_lenient_apply`.
+    pub lenient_apply: bool,
+
     entities: EntityMap<CardanoEntity>,
 
     // internal checks
@@ -214,15 +227,32 @@ impl WorkBatch {
     {
         // TODO: paralelize in chunks (#1040)
 
-        let all_refs: Vec<_> = self
+        let mut all_refs: Vec<_> = self
             .blocks
             .iter()
             .flat_map(|x| x.depends_on(&mut self.utxos))
             .unique()
             .collect();
 
+        if self.lenient_apply {
+            // The lenient rule needs the store's own answer for every ref a
+            // block spends, including the refs the block produces itself, which
+            // `depends_on` filters out because it has already put them in the
+            // map. Asking about them is how the rule tells "the store holds
+            // this" apart from "a later transaction of this block makes it".
+            let spent: Vec<_> = self
+                .blocks
+                .iter()
+                .flat_map(|x| crate::utxoset::compute_block_dependencies_lenient(x.decoded().view()))
+                .collect();
+
+            all_refs.extend(spent);
+            all_refs = all_refs.into_iter().unique().collect();
+        }
+
         let inputs: HashMap<_, _> = domain.state().get_utxos(all_refs)?.into_iter().collect();
 
+        self.store_utxos = inputs.keys().cloned().collect();
         self.utxos.extend(inputs);
 
         Ok(())

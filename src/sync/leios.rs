@@ -23,16 +23,13 @@
 //! short or reordered block batch cannot silently move one block's transactions
 //! onto another.
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::BTreeMap;
 use std::time::Duration;
 
-use pallas::crypto::hash::Hash;
-
 use pallas::ledger::traverse::leios::{
-    replace_transaction_list, resolve_certified_block, AnnouncedEndorserBlock, EndorserBlockBody,
-    PendingAnnouncement,
+    resolve_certified_block, AnnouncedEndorserBlock, EndorserBlockBody, PendingAnnouncement,
 };
-use pallas::ledger::traverse::{Era, MultiEraBlock, MultiEraTx};
+use pallas::ledger::traverse::MultiEraBlock;
 use pallas::network2::behavior::initiator::{
     Config as HandshakeConfig, HandshakeBehavior, InitiatorBehavior, InitiatorCommand,
     InitiatorEvent,
@@ -106,29 +103,6 @@ pub enum Error {
          applying it would apply an empty block where a whole endorser block belongs"
     )]
     Unfetched { slot: u64 },
-
-    #[error("a transaction of endorser block {hash} does not decode: {reason}")]
-    BadEndorserTx { hash: String, reason: String },
-
-    #[error(
-        "rewriting the block at slot {slot} to leave out a repeated transaction kept {kept} \
-         transactions and read back {found}, so the re-encoding did not round trip"
-    )]
-    RewriteChangedTransactions {
-        slot: u64,
-        kept: usize,
-        found: usize,
-    },
-
-    #[error(
-        "an endorser block named {named} transactions, {repeated} of them already applied and \
-         {spliced} spliced, and those do not add up"
-    )]
-    ContributionDoesNotAddUp {
-        named: usize,
-        repeated: usize,
-        spliced: usize,
-    },
 
     #[error(
         "leios-fetch answered a request for {asked} transactions of endorser block {hash} with \
@@ -243,270 +217,6 @@ pub struct CertifiedPayload {
     pub txs: Vec<Vec<u8>>,
 }
 
-/// How many blocks back the follower remembers which transactions it applied.
-///
-/// An endorser block is announced by the very ranking block that certifies the
-/// one before it, so its producer built it from a mempool that could not yet
-/// have dropped the previous endorser block's transactions. Two consecutive
-/// certified endorser blocks overlapping is therefore ordinary rather than
-/// exceptional, and the follower has to apply each of those transactions once.
-///
-/// The depth is in blocks because blocks are what the log walks back through,
-/// and it is set from a measurement rather than a guess. Over the 37825 ranking
-/// blocks of the Musashi chain between slot 1742539 and the tip, 7421 of them
-/// certified an endorser block, so a certification lands about every five
-/// blocks. Those endorser blocks carried 8213496 transactions of which 2411
-/// were repeats, 2410 of them repeated by the very next certified endorser
-/// block and the furthest by the seventh. Seven certifications is about thirty
-/// six blocks, so this is seven times the furthest repeat measured.
-///
-/// It is bounded at all because the ids of a whole chain do not fit in memory.
-/// Origin to tip is about fifteen million endorser transactions, and this holds
-/// on the order of a hundred and fifty thousand ids, about ten megabytes.
-///
-/// An overlap reaching further back than this is not silently mishandled. The
-/// repeated transaction is spliced in, the ledger meets an input that is
-/// already spent, and the follower stops on it, which is exactly the behaviour
-/// before this window existed.
-const APPLIED_WINDOW_BLOCKS: usize = 256;
-
-/// What one certified endorser block contributed to the block that certified it.
-///
-/// The three counts are one fact in three parts and are held together so a
-/// caller cannot read one without the others. Every transaction the endorser
-/// block named was either spliced into the certifying block or already applied
-/// by an earlier block, so a triple that does not add up is refused rather than
-/// constructed. Reporting only the spliced count would say a short block was a
-/// small one, and reporting only the named count would hide that anything was
-/// dropped at all.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Contribution {
-    named: usize,
-    repeated: usize,
-    spliced: usize,
-}
-
-impl Contribution {
-    pub fn new(named: usize, repeated: usize, spliced: usize) -> Result<Self, Error> {
-        if repeated + spliced != named {
-            return Err(Error::ContributionDoesNotAddUp {
-                named,
-                repeated,
-                spliced,
-            });
-        }
-
-        Ok(Self {
-            named,
-            repeated,
-            spliced,
-        })
-    }
-
-    /// Transactions the endorser block named.
-    pub fn named(&self) -> usize {
-        self.named
-    }
-
-    /// Transactions an earlier block had already applied.
-    pub fn repeated(&self) -> usize {
-        self.repeated
-    }
-
-    /// Transactions spliced into the certifying block.
-    pub fn spliced(&self) -> usize {
-        self.spliced
-    }
-}
-
-/// The transaction ids the blocks just behind the tip carried.
-///
-/// This is the follower's answer to "have I applied this transaction already".
-/// It holds one set per block rather than one flat set so the oldest block's
-/// ids leave together when the window moves on, and so a rollback can be
-/// answered by rebuilding from the stored blocks rather than by unpicking a
-/// merged set that no longer says where anything came from.
-///
-/// Both kinds of block are recorded. A ranking block's own transactions and a
-/// certified endorser block's transactions are disjoint on the chain measured
-/// so far, but nothing in the protocol says they must be, and recording both
-/// costs nothing while covering the case where they are not.
-#[derive(Debug, Default)]
-pub struct AppliedTxWindow {
-    /// Oldest first, newest last, at most [`APPLIED_WINDOW_BLOCKS`] entries.
-    blocks: VecDeque<(u64, HashSet<Hash<32>>)>,
-}
-
-impl AppliedTxWindow {
-    /// Whether some block still inside the window carried this transaction.
-    pub fn contains(&self, id: &Hash<32>) -> bool {
-        self.blocks.iter().any(|(_, ids)| ids.contains(id))
-    }
-
-    /// Records the transactions one block carried, dropping the oldest block
-    /// once the window is full.
-    pub fn record(&mut self, slot: u64, ids: HashSet<Hash<32>>) {
-        self.blocks.push_back((slot, ids));
-
-        while self.blocks.len() > APPLIED_WINDOW_BLOCKS {
-            self.blocks.pop_front();
-        }
-    }
-
-    /// Blocks the window is holding.
-    pub fn depth(&self) -> usize {
-        self.blocks.len()
-    }
-
-    /// Transaction ids the window is holding, counted with repeats across
-    /// blocks, so a caller can see the memory it is paying for.
-    pub fn ids(&self) -> usize {
-        self.blocks.iter().map(|(_, ids)| ids.len()).sum()
-    }
-}
-
-/// Why a window read back from stored blocks stopped where it did.
-///
-/// A depth on its own cannot say whether the follower remembers as far back as
-/// it means to or only as far as its log goes, and those are different
-/// positions to resume from. The reason is carried beside the count so the
-/// caller never has to read a small number as either one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WindowReach {
-    /// The window filled to its intended depth.
-    Full { blocks: usize },
-    /// The stored blocks ran out first, and this is how many there were.
-    ShortLog { blocks: usize },
-}
-
-/// A window rebuilt from stored blocks, and the evidence for how deep it is.
-#[derive(Debug)]
-pub struct ResumedWindow {
-    pub window: AppliedTxWindow,
-    pub reach: WindowReach,
-}
-
-/// Rebuilds the applied transaction window from stored blocks, read newest
-/// first.
-///
-/// A follower that resumes with an empty memory reapplies the first repeated
-/// transaction it meets and stops on an input that is already spent, which is
-/// the failure this window exists to prevent, moved from the first sync to the
-/// first restart. The memory is derived from the blocks the follower already
-/// stored rather than saved beside the cursor, for the same reason the
-/// certification walk is: a separately saved copy can disagree with the cursor
-/// after a crash or a rollback and nothing would notice.
-///
-/// The blocks arrive newest first and are recorded oldest first, so the window
-/// ends up in the same order a forward sync would have built it in.
-pub fn resume_window(blocks: impl Iterator<Item = RawBlock>) -> Result<ResumedWindow, Error> {
-    let mut newest_first = Vec::with_capacity(APPLIED_WINDOW_BLOCKS);
-
-    for cbor in blocks.take(APPLIED_WINDOW_BLOCKS) {
-        let block = MultiEraBlock::decode(&cbor).map_err(|e| Error::BadBlock(e.to_string()))?;
-
-        newest_first.push((block.slot(), block.txs().iter().map(|tx| tx.hash()).collect()));
-    }
-
-    let reach = if newest_first.len() == APPLIED_WINDOW_BLOCKS {
-        WindowReach::Full {
-            blocks: newest_first.len(),
-        }
-    } else {
-        WindowReach::ShortLog {
-            blocks: newest_first.len(),
-        }
-    };
-
-    let mut window = AppliedTxWindow::default();
-
-    for (slot, ids) in newest_first.into_iter().rev() {
-        window.record(slot, ids);
-    }
-
-    Ok(ResumedWindow { window, reach })
-}
-
-/// The transaction id of every transaction an endorser block delivered, in
-/// endorser block order.
-///
-/// The id is taken by decoding each transaction rather than by hashing the
-/// bytes here, so it is the same id the ledger will key the transaction's
-/// outputs by. A transaction that does not decode is refused: it would
-/// otherwise be a transaction with no id, which no window can answer for and
-/// which would be spliced in unchecked.
-fn endorser_tx_ids(payload: &CertifiedPayload) -> Result<Vec<Hash<32>>, Error> {
-    payload
-        .txs
-        .iter()
-        .map(|tx| {
-            MultiEraTx::decode_for_era(Era::Dijkstra, tx)
-                .map(|tx| tx.hash())
-                .map_err(|e| Error::BadEndorserTx {
-                    hash: payload.endorser_block.hash.to_string(),
-                    reason: e.to_string(),
-                })
-        })
-        .collect()
-}
-
-/// Leaves out of an ordinary ranking block every transaction a block still
-/// inside the window already carried, and says how many that was.
-///
-/// A transaction can be carried by a certified endorser block and then by an
-/// ordinary ranking block a few blocks later, or by two ordinary ranking blocks
-/// in a row. Measured over 254316 transactions in slots 1855000 to 1870000 of
-/// the Musashi chain, 591 were carried twice and 56 of those had their second
-/// occurrence in an ordinary ranking block, at a distance of at most ten
-/// containers and 198 slots.
-///
-/// The block is returned untouched when nothing was repeated, which is every
-/// block on a chain without this, so the common path allocates nothing and the
-/// bytes stay identical.
-fn strip_repeats(
-    cbor: &BlockBody,
-    window: &AppliedTxWindow,
-) -> Result<(BlockBody, Contribution), Error> {
-    let block = MultiEraBlock::decode(cbor).map_err(|e| Error::BadBlock(e.to_string()))?;
-
-    let txs = block.txs();
-    let named = txs.len();
-
-    let kept: Vec<(Hash<32>, Vec<u8>)> = txs
-        .iter()
-        .filter(|tx| !window.contains(&tx.hash()))
-        .map(|tx| (tx.hash(), tx.encode()))
-        .collect();
-
-    let contribution = Contribution::new(named, named - kept.len(), kept.len())?;
-
-    if contribution.repeated() == 0 {
-        return Ok((cbor.clone(), contribution));
-    }
-
-    let borrowed: Vec<&[u8]> = kept.iter().map(|(_, bytes)| bytes.as_slice()).collect();
-    let rewritten = replace_transaction_list(cbor, &borrowed)?;
-
-    // The transactions are re-encoded to get their bytes, so the rewritten
-    // block is read back and the ids checked against the ones kept. An encoding
-    // that did not round trip would otherwise change a transaction id, and the
-    // ledger would then be short an output nobody asked to remove.
-    let check = MultiEraBlock::decode(&rewritten).map_err(|e| Error::BadBlock(e.to_string()))?;
-
-    let got: Vec<Hash<32>> = check.txs().iter().map(|tx| tx.hash()).collect();
-    let want: Vec<Hash<32>> = kept.iter().map(|(id, _)| *id).collect();
-
-    if got != want {
-        return Err(Error::RewriteChangedTransactions {
-            slot: block.slot(),
-            kept: want.len(),
-            found: got.len(),
-        });
-    }
-
-    Ok((rewritten, contribution))
-}
-
 /// What the walk owes each certifying ranking block, keyed by that block's slot.
 ///
 /// Every certification the walk sees is recorded here before its endorser block
@@ -565,83 +275,35 @@ impl PendingPayloads {
     /// endorser block that was fetched and never applied, which is refused
     /// rather than dropped, for the same reason in the other direction.
     ///
-    /// A transaction a block still inside `window` already carried is left out
-    /// of the block this builds. Two consecutive certified endorser blocks
-    /// overlap as a matter of course, and splicing a repeated transaction in a
-    /// second time spends an input that is already spent, which the ledger
-    /// meets as an input it cannot find. The window is updated with every
-    /// transaction each block carries, including the ones left out, because
-    /// after this block they are all applied.
-    pub fn apply(
-        &mut self,
-        window: &mut AppliedTxWindow,
-        blocks: Vec<BlockBody>,
-    ) -> Result<Vec<BlockBody>, Error> {
+    /// Nothing is left out here. A transaction two blocks both carry is applied
+    /// twice, which is what the network does with it, and the ledger's lenient
+    /// rule is what makes the second application harmless. Filtering repeats
+    /// here was tried and is wrong: a second application re-creates an output
+    /// that was spent in between, and the chain relies on that.
+    pub fn apply(&mut self, blocks: Vec<BlockBody>) -> Result<Vec<BlockBody>, Error> {
         let mut out = Vec::with_capacity(blocks.len());
 
         for cbor in blocks {
-            let (slot, own) = {
-                let block =
-                    MultiEraBlock::decode(&cbor).map_err(|e| Error::BadBlock(e.to_string()))?;
-
-                let ids: HashSet<Hash<32>> = block.txs().iter().map(|tx| tx.hash()).collect();
-
-                (block.slot(), ids)
-            };
+            let slot = MultiEraBlock::decode(&cbor)
+                .map_err(|e| Error::BadBlock(e.to_string()))?
+                .slot();
 
             match self.0.remove(&slot) {
-                None => {
-                    // An ordinary ranking block carries its own transactions
-                    // and is normally passed through untouched. It can still
-                    // repeat one the chain already applied, in which case
-                    // applying it again spends an input that is already spent,
-                    // so the repeat is left out of it exactly as it would be
-                    // left out of an endorser block's payload.
-                    let (rewritten, contribution) = strip_repeats(&cbor, window)?;
-
-                    if contribution.repeated() > 0 {
-                        info!(
-                            slot,
-                            named = contribution.named(),
-                            repeated = contribution.repeated(),
-                            kept = contribution.spliced(),
-                            "left a repeated transaction out of a ranking block"
-                        );
-                    }
-
-                    window.record(slot, own);
-                    out.push(rewritten);
-                }
+                None => out.push(cbor),
                 Some(None) => {
                     return Err(Error::Unfetched { slot });
                 }
                 Some(Some(payload)) => {
-                    let named = endorser_tx_ids(&payload)?;
-
-                    let keep: Vec<&[u8]> = payload
-                        .txs
-                        .iter()
-                        .zip(named.iter())
-                        .filter(|(_, id)| !window.contains(id))
-                        .map(|(tx, _)| tx.as_slice())
-                        .collect();
-
-                    let repeated = payload.txs.len() - keep.len();
-                    let contribution =
-                        Contribution::new(payload.txs.len(), repeated, keep.len())?;
-
-                    let resolved = resolve_certified_block(&cbor, &keep)?;
+                    let borrowed: Vec<&[u8]> = payload.txs.iter().map(|t| t.as_slice()).collect();
+                    let resolved = resolve_certified_block(&cbor, &borrowed)?;
 
                     info!(
                         slot,
                         eb = %payload.endorser_block.hash,
-                        named = contribution.named(),
-                        repeated = contribution.repeated(),
-                        spliced = contribution.spliced(),
+                        txs = payload.txs.len(),
                         "applied the transactions of a certified endorser block"
                     );
 
-                    window.record(slot, named.into_iter().collect());
                     out.push(resolved);
                 }
             }
@@ -1467,7 +1129,7 @@ mod tests {
         pending.deliver(certifying_slot, payload());
 
         let out = pending
-            .apply(&mut AppliedTxWindow::default(), vec![plain.clone(), certifying.clone()])
+            .apply(vec![plain.clone(), certifying.clone()])
             .expect("must resolve");
 
         assert_eq!(out.len(), 2);
@@ -1497,7 +1159,7 @@ mod tests {
         pending.deliver(999_999, payload());
 
         let out = pending
-            .apply(&mut AppliedTxWindow::default(), vec![plain_block()])
+            .apply(vec![plain_block()])
             .unwrap();
         assert_eq!(out.len(), 1);
 
@@ -1520,7 +1182,7 @@ mod tests {
         let mut pending = PendingPayloads::default();
 
         let out = pending
-            .apply(&mut AppliedTxWindow::default(), blocks.clone())
+            .apply(blocks.clone())
             .unwrap();
 
         assert_eq!(out, blocks);
@@ -1550,10 +1212,7 @@ mod tests {
         assert_eq!(pending.outstanding(), vec![slot]);
 
         let err = pending
-            .apply(
-                &mut AppliedTxWindow::default(),
-                vec![plain_block(), certifying.clone()],
-            )
+            .apply(vec![plain_block(), certifying.clone()])
             .expect_err("a certification with no payload must be refused");
 
         match err {
@@ -1568,7 +1227,7 @@ mod tests {
         assert!(pending.outstanding().is_empty());
 
         let out = pending
-            .apply(&mut AppliedTxWindow::default(), vec![certifying.clone()])
+            .apply(vec![certifying.clone()])
             .expect("must resolve");
         assert_ne!(out[0], certifying, "the certifying block is rewritten");
         assert!(pending.refuse_undelivered().is_ok());
@@ -1600,356 +1259,4 @@ mod tests {
         }
     }
 
-    /// The two ranking blocks of the Musashi chain that first met this, and a
-    /// faithful sub-sequence of the two endorser blocks they certify.
-    ///
-    /// Block 1742305 certifies endorser block
-    /// `f8f854f079cab3fe398d9abbb0a9318d5885ad9b5b9e53c796c1ee9593ff957b`,
-    /// announced at slot 1742239 with 490 transactions. Block 1742326
-    /// certifies endorser block
-    /// `e81c96b691602c44e4bd8481c85121dafca0db127ee4e25316abfd542f001f5c`,
-    /// announced at slot 1742305 with 613 transactions, of which the first 490
-    /// are byte for byte the whole of the endorser block before it.
-    ///
-    /// The fixtures keep the two blocks whole and four of the repeated
-    /// transactions beside three of the new ones, in the order each endorser
-    /// block delivered them, so the files stay small. Among the four kept is
-    /// `e31a871fbee9e85970bfdeaa9f906220ef3cc3ac0118d4c080865d58a2e92c34`,
-    /// which is the transaction the sync from origin stopped on: applied once
-    /// from the first endorser block, it spends
-    /// `636fe3f97867f643b0f58620620fc0b3b20025c008889e703c6e63d7b010c24e#0`,
-    /// and applied a second time from the second there is no such output left.
-    fn repeat_first_block() -> BlockBody {
-        hex::decode(include_str!("../../test_data/dijkstra-repeat-first.block").trim()).unwrap()
-    }
-
-    fn repeat_second_block() -> BlockBody {
-        hex::decode(include_str!("../../test_data/dijkstra-repeat-second.block").trim()).unwrap()
-    }
-
-    fn wire_txs(listing: &str) -> Vec<Vec<u8>> {
-        listing
-            .split_whitespace()
-            .map(|l| {
-                let wire = hex::decode(l).unwrap();
-                pallas::ledger::traverse::leios::unwrap_tx(&wire)
-                    .unwrap()
-                    .to_vec()
-            })
-            .collect()
-    }
-
-    fn repeat_first_payload() -> CertifiedPayload {
-        CertifiedPayload {
-            endorser_block: AnnouncedEndorserBlock {
-                slot: 1742239,
-                hash: "f8f854f079cab3fe398d9abbb0a9318d5885ad9b5b9e53c796c1ee9593ff957b"
-                    .parse()
-                    .unwrap(),
-                size: 17643,
-            },
-            txs: wire_txs(include_str!("../../test_data/dijkstra-repeat-first.ebtxs")),
-        }
-    }
-
-    fn repeat_second_payload() -> CertifiedPayload {
-        CertifiedPayload {
-            endorser_block: AnnouncedEndorserBlock {
-                slot: 1742305,
-                hash: "e81c96b691602c44e4bd8481c85121dafca0db127ee4e25316abfd542f001f5c"
-                    .parse()
-                    .unwrap(),
-                size: 22071,
-            },
-            txs: wire_txs(include_str!("../../test_data/dijkstra-repeat-second.ebtxs")),
-        }
-    }
-
-    fn tx_ids(block: &[u8]) -> Vec<Hash<32>> {
-        MultiEraBlock::decode(block)
-            .unwrap()
-            .txs()
-            .iter()
-            .map(|tx| tx.hash())
-            .collect()
-    }
-
-    /// MUST FIRE: a transaction the endorser block certified one block earlier
-    /// already contributed is spliced once and not twice. This is the whole
-    /// defect: applied a second time it spends an input that is already spent,
-    /// and the follower stops thousands of slots from anything that explains
-    /// it.
-    ///
-    /// MUST NOT FIRE: the transactions the second endorser block adds are all
-    /// spliced. A window that dropped those would leave the ledger short by
-    /// exactly the payload this stage exists to deliver, which is the same
-    /// silence in the other direction and would not show up until something
-    /// spent one of them.
-    #[test]
-    fn a_transaction_an_earlier_endorser_block_carried_is_spliced_once() {
-        let first = repeat_first_block();
-        let second = repeat_second_block();
-
-        let first_slot = MultiEraBlock::decode(&first).unwrap().slot();
-        let second_slot = MultiEraBlock::decode(&second).unwrap().slot();
-        assert_eq!(first_slot, 1742305, "fixture precondition");
-        assert_eq!(second_slot, 1742326, "fixture precondition");
-
-        let first_payload = repeat_first_payload();
-        let second_payload = repeat_second_payload();
-        assert_eq!(first_payload.txs.len(), 4, "fixture precondition");
-        assert_eq!(second_payload.txs.len(), 7, "fixture precondition");
-
-        let mut window = AppliedTxWindow::default();
-
-        let mut pending = PendingPayloads::default();
-        pending.expect(first_slot);
-        pending.deliver(first_slot, first_payload);
-
-        let out = pending
-            .apply(&mut window, vec![first.clone()])
-            .expect("the first certifying block must resolve");
-
-        let after_first = tx_ids(&out[0]);
-        assert_eq!(
-            after_first.len(),
-            4,
-            "the first endorser block's transactions are all new"
-        );
-
-        let mut pending = PendingPayloads::default();
-        pending.expect(second_slot);
-        pending.deliver(second_slot, second_payload);
-
-        let out = pending
-            .apply(&mut window, vec![second.clone()])
-            .expect("the second certifying block must resolve");
-
-        let after_second = tx_ids(&out[0]);
-
-        assert_eq!(
-            after_second.len(),
-            3,
-            "the four transactions the first endorser block already carried must not be \
-             spliced again"
-        );
-
-        for id in &after_first {
-            assert!(
-                !after_second.contains(id),
-                "transaction {id} was applied twice"
-            );
-        }
-
-        let offender: Hash<32> = "e31a871fbee9e85970bfdeaa9f906220ef3cc3ac0118d4c080865d58a2e92c34"
-            .parse()
-            .unwrap();
-        assert!(
-            after_first.contains(&offender),
-            "the transaction the sync stopped on must be applied once"
-        );
-        assert!(
-            !after_second.contains(&offender),
-            "the transaction the sync stopped on must not be applied twice"
-        );
-    }
-
-    /// MUST NOT FIRE: with an empty window every transaction of an endorser
-    /// block is spliced. This is the case that catches a window that answers
-    /// yes to everything, which would empty every certifying block on the
-    /// chain and say nothing about it.
-    #[test]
-    fn an_empty_window_suppresses_nothing() {
-        let second = repeat_second_block();
-        let slot = MultiEraBlock::decode(&second).unwrap().slot();
-
-        let mut pending = PendingPayloads::default();
-        pending.expect(slot);
-        pending.deliver(slot, repeat_second_payload());
-
-        let out = pending
-            .apply(&mut AppliedTxWindow::default(), vec![second])
-            .expect("must resolve");
-
-        assert_eq!(tx_ids(&out[0]).len(), 7);
-    }
-
-    /// MUST FIRE: the window read back from stored blocks knows what those
-    /// blocks carried, so a follower that resumes across the overlap
-    /// deduplicates it. A window that started empty on every restart would
-    /// move this failure from the first sync to the first restart, and the
-    /// restart is where it was actually met.
-    ///
-    /// MUST NOT FIRE: the read reports a log shorter than the window as short,
-    /// with the number of blocks it did read, rather than as a window of the
-    /// intended depth.
-    #[test]
-    fn the_window_is_read_back_out_of_stored_blocks() {
-        let stored = vec![plain_block(), certifying_block()];
-        let carried = tx_ids(&stored[0]);
-        assert!(
-            !carried.is_empty(),
-            "fixture precondition: the stored block carries transactions"
-        );
-
-        // Stored blocks are read newest first, the order the log walks back in.
-        let resumed = resume_window(stored.into_iter().rev().map(std::sync::Arc::new))
-            .expect("must read back");
-
-        assert_eq!(resumed.reach, WindowReach::ShortLog { blocks: 2 });
-        assert_eq!(resumed.window.depth(), 2);
-
-        for id in &carried {
-            assert!(
-                resumed.window.contains(id),
-                "a transaction of a stored block must be remembered"
-            );
-        }
-
-        assert!(
-            !resumed.window.contains(&Hash::new([0; 32])),
-            "a transaction no stored block carried must not be remembered"
-        );
-    }
-
-    /// The two ordinary ranking blocks of the Musashi chain that first showed a
-    /// repeat outside the endorser payload.
-    ///
-    /// Block 1861279 carries 375 transactions of its own. At index 2 it applies
-    /// `0654930d…`, at index 17 `d92084d2…` spends what index 2 made, and at
-    /// index 50 `3fe3ab01a255960d22d63e7ad8fabdee8cd7d9d884790105c35fa3bea1b53e01`
-    /// spends what index 17 made. A clean chain, and every one of those spends
-    /// was honoured.
-    ///
-    /// Block 1861288, nine slots later, carries `3fe3ab01…` again at index 0,
-    /// and this time the output it names is gone, because the block before it
-    /// spent it. Neither block has a forward reference, so the fix for those
-    /// does not reach this and the transaction is simply applied twice.
-    fn repeat_ranking_first() -> BlockBody {
-        hex::decode(include_str!("../../test_data/dijkstra-repeat-ranking-first.block").trim())
-            .unwrap()
-    }
-
-    fn repeat_ranking_second() -> BlockBody {
-        hex::decode(include_str!("../../test_data/dijkstra-repeat-ranking-second.block").trim())
-            .unwrap()
-    }
-
-    /// MUST FIRE: a transaction an earlier ordinary ranking block already
-    /// carried is left out of the later one. Applied twice it spends an input
-    /// that is already spent, which is what stopped the sync at 71.87 percent.
-    ///
-    /// MUST NOT FIRE: every other transaction of that block survives, and the
-    /// first block passes through byte identical because nothing before it had
-    /// carried anything. A rewrite that dropped more than the repeat would
-    /// leave the ledger short by exactly the payload it is meant to apply.
-    #[test]
-    fn a_transaction_an_earlier_ranking_block_carried_is_left_out() {
-        let first = repeat_ranking_first();
-        let second = repeat_ranking_second();
-
-        let first_ids = tx_ids(&first);
-        let second_ids = tx_ids(&second);
-        assert_eq!(first_ids.len(), 375, "fixture precondition");
-        assert_eq!(second_ids.len(), 384, "fixture precondition");
-
-        let shared: Vec<Hash<32>> = second_ids
-            .iter()
-            .filter(|id| first_ids.contains(id))
-            .copied()
-            .collect();
-        assert!(
-            !shared.is_empty(),
-            "fixture precondition: the second block repeats something"
-        );
-
-        let mut window = AppliedTxWindow::default();
-        let mut pending = PendingPayloads::default();
-
-        let out = pending
-            .apply(&mut window, vec![first.clone()])
-            .expect("the first block must pass");
-
-        assert_eq!(
-            out[0], first,
-            "with an empty window the first block is untouched"
-        );
-
-        let mut pending = PendingPayloads::default();
-        let out = pending
-            .apply(&mut window, vec![second.clone()])
-            .expect("the second block must resolve");
-
-        let kept = tx_ids(&out[0]);
-
-        // Identity first, then the counts. A break that leaves the repeat in
-        // has to trip the assertion about that transaction, not an arithmetic
-        // one that a differently wrong rewrite could also trip.
-        for id in &shared {
-            assert!(!kept.contains(id), "transaction {id} was applied twice");
-        }
-
-        for id in &second_ids {
-            if !shared.contains(id) {
-                assert!(kept.contains(id), "transaction {id} was wrongly dropped");
-            }
-        }
-
-        assert_eq!(
-            kept.len(),
-            second_ids.len() - shared.len(),
-            "exactly the repeated transactions are left out, no more and no fewer"
-        );
-
-        let offender: Hash<32> = *second_ids.first().unwrap();
-        assert!(
-            shared.contains(&offender),
-            "fixture precondition: index 0 of the second block is the repeat"
-        );
-    }
-
-    /// MUST NOT FIRE: a block carrying nothing the window knows is returned
-    /// byte identical, not re-encoded. Every block on a chain without this is
-    /// in that case, so a rewrite there would change every block's bytes for
-    /// nothing and would be the most expensive possible no-op.
-    #[test]
-    fn a_block_with_no_repeat_is_not_rewritten() {
-        let plain = plain_block();
-        let mut window = AppliedTxWindow::default();
-        let mut pending = PendingPayloads::default();
-
-        let out = pending
-            .apply(&mut window, vec![plain.clone()])
-            .expect("must pass");
-
-        assert_eq!(out[0], plain, "the bytes must be identical, not re-encoded");
-    }
-
-    /// MUST FIRE: the three counts are refused unless they add up, so a future
-    /// edit that filters in one place and counts in another cannot report a
-    /// short block as a small one.
-    ///
-    /// MUST NOT FIRE: counts that do add up are accepted, including the case
-    /// where nothing was repeated at all.
-    #[test]
-    fn a_contribution_that_does_not_add_up_is_refused() {
-        match Contribution::new(613, 490, 7).expect_err("must refuse") {
-            Error::ContributionDoesNotAddUp {
-                named,
-                repeated,
-                spliced,
-            } => {
-                assert_eq!((named, repeated, spliced), (613, 490, 7));
-            }
-            other => panic!("wrong refusal: {other}"),
-        }
-
-        let ok = Contribution::new(613, 490, 123).expect("must accept");
-        assert_eq!(ok.named(), 613);
-        assert_eq!(ok.repeated(), 490);
-        assert_eq!(ok.spliced(), 123);
-
-        let none_repeated = Contribution::new(7, 0, 7).expect("must accept");
-        assert_eq!(none_repeated.repeated(), 0);
-    }
 }

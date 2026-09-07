@@ -63,6 +63,8 @@ where
             .check_continuity(cursor.as_ref())
             .map_err(ChainError::from)?;
 
+        self.batch.lenient_apply = domain.sync_config().leios_lenient_apply;
+
         self.batch.load_utxos(domain)?;
         self.batch.decode_utxos()?;
 
