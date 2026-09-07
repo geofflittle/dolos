@@ -127,6 +127,36 @@ impl PotsDrift {
     }
 }
 
+/// Whether this process applies blocks the way the Leios prototype node does.
+///
+/// Process wide, and deliberately so. The supply invariant is asserted in three
+/// places, and two of them are inside `EntityDelta::apply` on the epoch
+/// transition deltas, which take only the entity: no configuration, no context,
+/// and they are decoded from the write ahead log, so the flag cannot ride along
+/// inside them without changing the stored encoding of every delta and
+/// invalidating every store and checkpoint on disk. The setting is fixed for the
+/// life of the process, so a global is a faithful model of it rather than a
+/// shortcut around plumbing.
+static LENIENT_APPLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_lenient_apply(on: bool) {
+    LENIENT_APPLY.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn lenient_apply() -> bool {
+    LENIENT_APPLY.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The supply invariant, or the standing reason this deployment does not hold
+/// it.
+///
+/// Both epoch transition deltas assert through this rather than through
+/// `is_consistent` directly, so the two of them cannot drift apart and so there
+/// is one place to read to learn when the invariant is not enforced.
+pub fn supply_holds_or_lenient(new_pots: &Pots, expected_max_supply: Lovelace) -> bool {
+    lenient_apply() || new_pots.is_consistent(expected_max_supply)
+}
+
 /// Measures the drift between the pots an epoch started with and the pots it
 /// ended with, or `None` when the supply is conserved.
 ///

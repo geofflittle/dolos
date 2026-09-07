@@ -1385,9 +1385,10 @@ impl dolos_core::EntityDelta for EpochTransition {
     fn apply(&mut self, entity: &mut Option<Self::Entity>) {
         let entity = entity.as_mut().expect("existing epoch");
 
-        debug_assert!(self
-            .new_pots
-            .is_consistent(entity.initial_pots.max_supply()));
+        debug_assert!(crate::pots::supply_holds_or_lenient(
+            &self.new_pots,
+            entity.initial_pots.max_supply()
+        ));
 
         // save undo info (snapshot whole EpochValues so rotation + any era migration
         // are both covered)
@@ -1493,9 +1494,10 @@ impl dolos_core::EntityDelta for EpochTransitionV2 {
     fn apply(&mut self, entity: &mut Option<Self::Entity>) {
         let entity = entity.as_mut().expect("existing epoch");
 
-        debug_assert!(self
-            .new_pots
-            .is_consistent(entity.initial_pots.max_supply()));
+        debug_assert!(crate::pots::supply_holds_or_lenient(
+            &self.new_pots,
+            entity.initial_pots.max_supply()
+        ));
 
         // save undo info (snapshot whole EpochValues so rotation + any era migration
         // are both covered)

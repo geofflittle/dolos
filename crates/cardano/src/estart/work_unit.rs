@@ -190,11 +190,11 @@ where
     fn finalize(&mut self, domain: &D) -> Result<(), DomainError> {
         debug!(slot = self.slot, "loading estart finalize work context");
 
-        let mut context = WorkContext::load_finalize::<D>(
-            domain.state(),
-            self.genesis.clone(),
-            domain.sync_config().leios_lenient_apply,
-        )?;
+        let lenient = domain.sync_config().leios_lenient_apply;
+        crate::pots::set_lenient_apply(lenient);
+
+        let mut context =
+            WorkContext::load_finalize::<D>(domain.state(), self.genesis.clone(), lenient)?;
 
         info!(epoch = context.starting_epoch_no(), "starting epoch");
 

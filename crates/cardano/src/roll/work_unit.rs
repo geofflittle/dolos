@@ -65,6 +65,13 @@ where
 
         self.batch.lenient_apply = domain.sync_config().leios_lenient_apply;
 
+        // The two epoch transition deltas assert the supply invariant from
+        // inside `EntityDelta::apply`, which is handed only the entity and sees
+        // no configuration, so the setting is published process wide as well.
+        // Set here because this runs for every batch, so it cannot be reached
+        // after a delta that needed it.
+        crate::pots::set_lenient_apply(self.batch.lenient_apply);
+
         self.batch.load_utxos(domain)?;
         self.batch.decode_utxos()?;
 

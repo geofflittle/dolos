@@ -309,6 +309,47 @@ mod drift_tests {
         report_drift(false, 42, &initial, &ended, || {});
     }
 
+    /// MUST FIRE: the guard the two epoch transition deltas assert through
+    /// lets a drifted boundary past when the process is lenient.
+    ///
+    /// MUST NOT FIRE: it refuses one when the process is strict, and it accepts
+    /// a consistent boundary under both. Those deltas are handed only the
+    /// entity, so this guard is the only thing standing between the setting and
+    /// a panic five seconds after the boundary has already been reported, which
+    /// is exactly what happened when only the reset path was fixed.
+    ///
+    /// The flag is process wide, so this test sets and restores it rather than
+    /// leaving it set for whatever runs next in the same binary.
+    #[test]
+    fn the_delta_guard_follows_the_process_setting() {
+        let (initial, ended) = boundary();
+        let expected = initial.max_supply();
+
+        let before = crate::pots::lenient_apply();
+
+        crate::pots::set_lenient_apply(false);
+        assert!(
+            !crate::pots::supply_holds_or_lenient(&ended, expected),
+            "a drifted boundary is refused under the strict setting"
+        );
+        assert!(
+            crate::pots::supply_holds_or_lenient(&initial, expected),
+            "a consistent boundary is accepted under the strict setting"
+        );
+
+        crate::pots::set_lenient_apply(true);
+        assert!(
+            crate::pots::supply_holds_or_lenient(&ended, expected),
+            "a drifted boundary is let past under the lenient setting"
+        );
+        assert!(
+            crate::pots::supply_holds_or_lenient(&initial, expected),
+            "and a consistent one still is"
+        );
+
+        crate::pots::set_lenient_apply(before);
+    }
+
     /// MUST NOT FIRE: a consistent boundary is silent under both settings, so
     /// neither one is reporting or asserting on every epoch.
     #[test]
