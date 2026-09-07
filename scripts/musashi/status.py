@@ -164,7 +164,9 @@ def main():
             # than as a drift of zero, which would read as "supply conserved".
             ep = re.search(r"epoch=(\d+)", line)
             lv = re.search(r"drift_lovelace=(-?\d+)", line)
-            mv = re.search(r'moved="([^"]*)"', line)
+            # tracing renders the field unquoted and it runs to end of line,
+            # so it is taken as the rest of the line rather than as a token.
+            mv = re.search(r"moved=(.+)$", line)
             if ep and lv:
                 drifts.append((int(ep.group(1)), int(lv.group(1)),
                                mv.group(1) if mv else "unreported"))
