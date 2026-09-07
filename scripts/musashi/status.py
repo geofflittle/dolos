@@ -127,7 +127,7 @@ def main():
     applied = []     # (time, slot, spliced)
     repeated = 0     # transactions an earlier endorser block had already carried
     unreadable = 0   # apply lines whose transaction count could not be read
-    drifts = []      # (epoch, signed lovelace, which pots moved)
+    drifts = {}      # epoch -> (signed lovelace, which pots moved)
     lenient = {"skipped_inputs": 0, "recreated_outputs": 0, "blocks": 0}
     retention = None # wal retention window in slots, read from the pruning line
     prunes = []      # (time, cutoff_slot)
@@ -168,8 +168,13 @@ def main():
             # so it is taken as the rest of the line rather than as a token.
             mv = re.search(r"moved=(.+)$", line)
             if ep and lv:
-                drifts.append((int(ep.group(1)), int(lv.group(1)),
-                               mv.group(1) if mv else "unreported"))
+                # Keyed by epoch, last one wins. The container's log spans
+                # every run including the ones before a rewind, so the same
+                # boundary appears once per time it was applied. Summing the
+                # lines would report a rewind as extra supply, which is the one
+                # number here that must not be inflated.
+                drifts[int(ep.group(1))] = (int(lv.group(1)),
+                                            mv.group(1) if mv else "unreported")
             else:
                 unreadable += 1
         elif "applied a block the way the node does" in line:
@@ -248,10 +253,11 @@ def main():
               f"{lenient['recreated_outputs']} outputs re-created")
 
     if drifts:
-        total = sum(d for _, d, _ in drifts)
+        total = sum(lovelace for lovelace, _ in drifts.values())
         print(f"pots drift      {len(drifts)} epoch boundaries, "
               f"{total} lovelace total ({total / 1_000_000:.0f} ada)")
-        for epoch, lovelace, moved in drifts[-6:]:
+        for epoch in sorted(drifts)[-6:]:
+            lovelace, moved = drifts[epoch]
             print(f"                epoch {epoch}: {lovelace:+d} lovelace "
                   f"({lovelace / 1_000_000:+.0f} ada)  {moved}")
     else:
