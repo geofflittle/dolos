@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Musashi Leios Dolos checkpoint check every five minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitInactiveSec=5min
+AccuracySec=30s
+Unit=dolos-checkpoint.service
+
+[Install]
+WantedBy=timers.target

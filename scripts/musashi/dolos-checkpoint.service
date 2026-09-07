@@ -1,0 +1,9 @@
+[Unit]
+Description=Checkpoint the Musashi Leios Dolos sync once it crosses another ten percent
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/build/run/checkpoint.sh --if-crossed
+TimeoutStartSec=1800
