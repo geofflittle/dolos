@@ -322,6 +322,7 @@ mod tests {
             chain_summary: ChainSummary::default(),
             genesis: domain.genesis(),
             avvm_reclamation: Default::default(),
+            lenient_apply: false,
             deltas: Default::default(),
             logs: Default::default(),
         }

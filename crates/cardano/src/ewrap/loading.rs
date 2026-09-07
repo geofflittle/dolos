@@ -3005,6 +3005,7 @@ mod ratification_tests {
         let mut estart = crate::estart::WorkContext::load_finalize::<ToyDomain>(
             domain.state(),
             domain.genesis(),
+            false,
         )
         .unwrap();
         let slot = estart.chain_summary.epoch_start(estart.starting_epoch_no());

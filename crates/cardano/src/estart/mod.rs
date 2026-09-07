@@ -98,6 +98,12 @@ pub struct WorkContext {
     /// set, which are one event and travel together. Empty everywhere else.
     pub avvm_reclamation: AvvmReclamation,
 
+    /// Apply the way the Leios prototype node applies, see
+    /// `SyncConfig::leios_lenient_apply`. Under it the pots cannot sum to the
+    /// supply the epoch started with, so the boundary reports the drift rather
+    /// than asserting on it.
+    pub lenient_apply: bool,
+
     // computed via visitors
     pub deltas: WorkDeltas,
     pub logs: Vec<(EntityKey, CardanoEntity)>,

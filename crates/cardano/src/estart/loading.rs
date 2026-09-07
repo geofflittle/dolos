@@ -118,6 +118,7 @@ impl WorkContext {
             active_protocol,
             genesis,
             avvm_reclamation,
+            lenient_apply: false,
             deltas: WorkDeltas::default(),
             logs: Default::default(),
         })
@@ -127,11 +128,17 @@ impl WorkContext {
     /// transitions (those landed via the preceding per-shard runs) and
     /// emits pool / drep / proposal transitions plus the closing
     /// `EpochTransition`.
+    ///
+    /// `lenient_apply` has to arrive before the compute, because the closing
+    /// epoch transition is emitted inside it and that is where the pots are
+    /// checked.
     pub fn load_finalize<D: Domain>(
         state: &D::State,
         genesis: Arc<Genesis>,
+        lenient_apply: bool,
     ) -> Result<Self, ChainError> {
         let mut ctx = Self::new_empty::<D>(state, genesis)?;
+        ctx.lenient_apply = lenient_apply;
         ctx.compute_global_deltas::<D>(state)?;
         Ok(ctx)
     }

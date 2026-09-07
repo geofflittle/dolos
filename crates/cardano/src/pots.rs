@@ -74,6 +74,88 @@ impl Pots {
     }
 }
 
+/// How far the pots have moved away from the supply the epoch started with,
+/// and which pots moved.
+///
+/// On a chain that conserves value this cannot happen and the epoch boundary
+/// asserts so. On the Musashi Leios devnet it happens every epoch, because the
+/// node re-creates outputs that were already spent and skips inputs that are
+/// not there, so the utxo pot drifts from what the reward calculation expects.
+/// The drift is not a rounding error to be tolerated quietly: it is the amount
+/// of value that chain has created, so it is measured, signed, and reported.
+///
+/// Every field is carried rather than just the total. A total on its own cannot
+/// say whether the utxo pot gained what the reserves lost, which is an ordinary
+/// epoch, or whether the utxo pot gained from nowhere, which is this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PotsDrift {
+    pub epoch: u64,
+    pub expected_max_supply: Lovelace,
+    pub actual_max_supply: Lovelace,
+    pub reserves: i128,
+    pub treasury: i128,
+    pub utxos: i128,
+    pub rewards: i128,
+    pub fees: i128,
+    pub obligations: i128,
+}
+
+impl PotsDrift {
+    /// Signed, in lovelace. Positive means the chain now holds more than the
+    /// supply it started the epoch with.
+    pub fn total(&self) -> i128 {
+        self.actual_max_supply as i128 - self.expected_max_supply as i128
+    }
+
+    /// The pots that moved, largest absolute movement first, so a reader sees
+    /// which one the drift came out of rather than only that it happened.
+    pub fn moved(&self) -> Vec<(&'static str, i128)> {
+        let mut out: Vec<(&'static str, i128)> = [
+            ("reserves", self.reserves),
+            ("treasury", self.treasury),
+            ("utxos", self.utxos),
+            ("rewards", self.rewards),
+            ("fees", self.fees),
+            ("obligations", self.obligations),
+        ]
+        .into_iter()
+        .filter(|(_, v)| *v != 0)
+        .collect();
+
+        out.sort_by_key(|(_, v)| -v.abs());
+        out
+    }
+}
+
+/// Measures the drift between the pots an epoch started with and the pots it
+/// ended with, or `None` when the supply is conserved.
+///
+/// `None` is the only answer that means "consistent". It is returned from a
+/// comparison of the two totals rather than from any check that could pass by
+/// not running, so a caller that gets `None` has been told the sums are equal.
+pub fn measure_drift(epoch: u64, initial: &Pots, ended: &Pots) -> Option<PotsDrift> {
+    let expected = initial.max_supply();
+    let actual = ended.max_supply();
+
+    if actual == expected {
+        return None;
+    }
+
+    let d = |after: Lovelace, before: Lovelace| after as i128 - before as i128;
+
+    Some(PotsDrift {
+        epoch,
+        expected_max_supply: expected,
+        actual_max_supply: actual,
+        reserves: d(ended.reserves, initial.reserves),
+        treasury: d(ended.treasury, initial.treasury),
+        utxos: d(ended.utxos, initial.utxos),
+        rewards: d(ended.rewards, initial.rewards),
+        fees: d(ended.fees, initial.fees),
+        obligations: d(ended.obligations(), initial.obligations()),
+    })
+}
+
 #[derive(Debug, Clone, Encode, Decode, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct EpochIncentives {
     #[n(0)]

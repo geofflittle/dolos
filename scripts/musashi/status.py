@@ -127,6 +127,8 @@ def main():
     applied = []     # (time, slot, spliced)
     repeated = 0     # transactions an earlier endorser block had already carried
     unreadable = 0   # apply lines whose transaction count could not be read
+    drifts = []      # (epoch, signed lovelace, which pots moved)
+    lenient = {"skipped_inputs": 0, "recreated_outputs": 0, "blocks": 0}
     retention = None # wal retention window in slots, read from the pruning line
     prunes = []      # (time, cutoff_slot)
     errors = []
@@ -155,6 +157,25 @@ def main():
             applied.append((t, int(re.search(r"slot=(\d+)", line).group(1)),
                             int(spliced.group(1))))
             repeated += int(again.group(1)) if again else 0
+        elif "pots drifted from max supply under lenient apply" in line:
+            # The epoch boundary cannot conserve supply under the lenient rule,
+            # so the drift is reported rather than asserted. Every field is read
+            # from the line; a line missing one is shown as unreadable rather
+            # than as a drift of zero, which would read as "supply conserved".
+            ep = re.search(r"epoch=(\d+)", line)
+            lv = re.search(r"drift_lovelace=(-?\d+)", line)
+            mv = re.search(r'moved="([^"]*)"', line)
+            if ep and lv:
+                drifts.append((int(ep.group(1)), int(lv.group(1)),
+                               mv.group(1) if mv else "unreported"))
+            else:
+                unreadable += 1
+        elif "applied a block the way the node does" in line:
+            si = re.search(r"skipped_inputs=(\d+)", line)
+            ro = re.search(r"recreated_outputs=(\d+)", line)
+            lenient["blocks"] += 1
+            lenient["skipped_inputs"] += int(si.group(1)) if si else 0
+            lenient["recreated_outputs"] += int(ro.group(1)) if ro else 0
         elif "cutoff_slot=" in line:
             prunes.append((t, int(re.search(r"cutoff_slot=(\d+)", line).group(1))))
         elif "max_slots=" in line:
@@ -218,6 +239,21 @@ def main():
     print(f"endorser blocks applied {len(applied)}")
     print(f"endorser txs    applied {sum(x[2] for x in applied)}")
     print(f"                repeated by a later endorser block, left out {repeated}")
+
+    if lenient["blocks"]:
+        print(f"lenient apply   {lenient['blocks']} blocks needed it, "
+              f"{lenient['skipped_inputs']} inputs skipped, "
+              f"{lenient['recreated_outputs']} outputs re-created")
+
+    if drifts:
+        total = sum(d for _, d, _ in drifts)
+        print(f"pots drift      {len(drifts)} epoch boundaries, "
+              f"{total} lovelace total ({total / 1_000_000:.0f} ada)")
+        for epoch, lovelace, moved in drifts[-6:]:
+            print(f"                epoch {epoch}: {lovelace:+d} lovelace "
+                  f"({lovelace / 1_000_000:+.0f} ada)  {moved}")
+    else:
+        print("pots drift      none reported yet")
 
     if unreadable:
         print(f"                {unreadable} apply lines carried no transaction count")

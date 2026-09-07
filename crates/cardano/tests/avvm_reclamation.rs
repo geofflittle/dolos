@@ -236,9 +236,12 @@ fn a_never_indexed_store_is_left_never_indexed() {
         .commit_shard::<ToyDomain>(domain.state(), domain.archive(), ranges)
         .unwrap();
 
-    let mut context =
-        dolos_cardano::estart::WorkContext::load_finalize::<ToyDomain>(domain.state(), genesis)
-            .unwrap();
+    let mut context = dolos_cardano::estart::WorkContext::load_finalize::<ToyDomain>(
+        domain.state(),
+        genesis,
+        false,
+    )
+    .unwrap();
 
     let slot = context
         .chain_summary

@@ -97,16 +97,60 @@ pub fn define_new_pots(ctx: &super::WorkContext) -> Pots {
         "pots after reset"
     );
 
-    if !pots.is_consistent(epoch.initial_pots.max_supply()) {
+    report_drift(ctx.lenient_apply, epoch.number, &epoch.initial_pots, &pots, || {
         dbg!(end);
         dbg!(&epoch.initial_pots);
         dbg!(&pots);
         dbg!(delta);
-    }
-
-    debug_assert!(pots.is_consistent(epoch.initial_pots.max_supply()));
+    });
 
     pots
+}
+
+/// Reports an epoch boundary where the pots no longer sum to the supply the
+/// epoch started with.
+///
+/// Under the strict rule this is an invariant violation and the assertion
+/// stands exactly as it did, with the same dump before it. Under the lenient
+/// rule it is expected on every boundary, because the node re-creates outputs
+/// that were already spent and skips inputs that are not there, so it is
+/// measured and logged instead: signed, in lovelace, with the epoch and the
+/// pots that moved.
+///
+/// Split out and taking the flag rather than the context so both paths can be
+/// driven from a test without an epoch boundary to hand.
+pub(crate) fn report_drift(
+    lenient: bool,
+    epoch: u64,
+    initial: &Pots,
+    ended: &Pots,
+    dump: impl FnOnce(),
+) {
+    let Some(drift) = crate::pots::measure_drift(epoch, initial, ended) else {
+        return;
+    };
+
+    if !lenient {
+        dump();
+        debug_assert!(ended.is_consistent(initial.max_supply()));
+        return;
+    }
+
+    let moved = drift
+        .moved()
+        .iter()
+        .map(|(pot, by)| format!("{pot} {by:+}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    tracing::warn!(
+        epoch = drift.epoch,
+        drift_lovelace = drift.total() as i64,
+        expected_max_supply = drift.expected_max_supply,
+        actual_max_supply = drift.actual_max_supply,
+        moved = %moved,
+        "pots drifted from max supply under lenient apply"
+    );
 }
 
 /// Per-entity transition visitor for the snapshot rotation that ESTART
@@ -164,4 +208,118 @@ pub fn emit_epoch_transition(ctx: &mut WorkContext) {
         era_transition,
         Some(genesis),
     ));
+}
+
+#[cfg(test)]
+mod drift_tests {
+    use crate::pots::{measure_drift, Pots};
+
+    use super::report_drift;
+
+    /// The pots of the epoch boundary that stopped the sync at 13:08:26 UTC on
+    /// 2026-09-07, read from the panic's own dump, so the numbers under test
+    /// are the ones the chain produced rather than ones invented for a test.
+    fn boundary() -> (Pots, Pots) {
+        let initial = Pots {
+            reserves: 14302730267316072,
+            treasury: 706019927311550,
+            utxos: 29986097951147725,
+            rewards: 4849331134086,
+            fees: 243459090567,
+            pool_count: 113,
+            account_count: 782,
+            deposit_per_pool: 500000000,
+            deposit_per_account: 2000000,
+            nominal_deposits: 0,
+            drep_deposits: 1000000000,
+            proposal_deposits: 0,
+        };
+
+        let ended = Pots {
+            reserves: 14294140394309010,
+            treasury: 714650257290053,
+            utxos: 29990621427242621,
+            rewards: 5052333253212,
+            fees: 241300905104,
+            pool_count: 114,
+            ..initial.clone()
+        };
+
+        (initial, ended)
+    }
+
+    /// MUST FIRE: the drift is measured, signed, and attributed to the pots
+    /// that moved.
+    ///
+    /// MUST NOT FIRE: pots that sum to the supply they started with report no
+    /// drift at all. A measurement that returned a value for a consistent
+    /// boundary would put a number in the log on every epoch of every chain and
+    /// mean nothing by it.
+    #[test]
+    fn the_drift_is_measured_and_attributed() {
+        let (initial, ended) = boundary();
+
+        let drift = measure_drift(42, &initial, &ended).expect("this boundary drifted");
+
+        assert_eq!(drift.epoch, 42);
+        assert_eq!(drift.expected_max_supply, 45_000_000_000_000_000);
+        assert_eq!(drift.actual_max_supply, 45_004_765_277_000_000);
+        assert_eq!(drift.total(), 4_765_277_000_000);
+
+        let moved = drift.moved();
+        assert_eq!(
+            moved.first().map(|(pot, _)| *pot),
+            Some("treasury"),
+            "the largest movement is named first"
+        );
+        assert_eq!(drift.utxos, 4_523_476_094_896);
+        assert_eq!(drift.reserves, -8_589_873_007_062);
+
+        assert!(
+            measure_drift(42, &initial, &initial).is_none(),
+            "a boundary that conserves supply reports no drift"
+        );
+    }
+
+    /// MUST NOT FIRE: under the lenient rule a drifted boundary is reported and
+    /// the sync carries on. This is the whole point, and it is asserted by the
+    /// call returning at all.
+    #[test]
+    fn lenient_reports_the_drift_and_does_not_panic() {
+        let (initial, ended) = boundary();
+
+        let mut dumped = false;
+        report_drift(true, 42, &initial, &ended, || dumped = true);
+
+        assert!(
+            !dumped,
+            "the lenient path reports, it does not dump the debug state"
+        );
+    }
+
+    /// MUST FIRE: under the strict rule the assertion still fires on exactly
+    /// the same pots. Every network other than this one runs it, and a
+    /// leniency that leaked into it would turn a real accounting bug into a log
+    /// line nobody reads.
+    #[test]
+    #[should_panic(expected = "is_consistent")]
+    fn strict_still_asserts_on_the_same_pots() {
+        let (initial, ended) = boundary();
+
+        report_drift(false, 42, &initial, &ended, || {});
+    }
+
+    /// MUST NOT FIRE: a consistent boundary is silent under both settings, so
+    /// neither one is reporting or asserting on every epoch.
+    #[test]
+    fn a_consistent_boundary_is_silent_under_both_settings() {
+        let (initial, _) = boundary();
+
+        report_drift(true, 42, &initial, &initial, || {
+            panic!("nothing to dump on a consistent boundary")
+        });
+        report_drift(false, 42, &initial, &initial, || {
+            panic!("nothing to dump on a consistent boundary")
+        });
+    }
 }
