@@ -29,7 +29,8 @@ use std::time::Duration;
 use pallas::crypto::hash::Hash;
 
 use pallas::ledger::traverse::leios::{
-    resolve_certified_block, AnnouncedEndorserBlock, EndorserBlockBody, PendingAnnouncement,
+    replace_transaction_list, resolve_certified_block, AnnouncedEndorserBlock, EndorserBlockBody,
+    PendingAnnouncement,
 };
 use pallas::ledger::traverse::{Era, MultiEraBlock, MultiEraTx};
 use pallas::network2::behavior::initiator::{
@@ -108,6 +109,16 @@ pub enum Error {
 
     #[error("a transaction of endorser block {hash} does not decode: {reason}")]
     BadEndorserTx { hash: String, reason: String },
+
+    #[error(
+        "rewriting the block at slot {slot} to leave out a repeated transaction kept {kept} \
+         transactions and read back {found}, so the re-encoding did not round trip"
+    )]
+    RewriteChangedTransactions {
+        slot: u64,
+        kept: usize,
+        found: usize,
+    },
 
     #[error(
         "an endorser block named {named} transactions, {repeated} of them already applied and \
@@ -439,6 +450,63 @@ fn endorser_tx_ids(payload: &CertifiedPayload) -> Result<Vec<Hash<32>>, Error> {
         .collect()
 }
 
+/// Leaves out of an ordinary ranking block every transaction a block still
+/// inside the window already carried, and says how many that was.
+///
+/// A transaction can be carried by a certified endorser block and then by an
+/// ordinary ranking block a few blocks later, or by two ordinary ranking blocks
+/// in a row. Measured over 254316 transactions in slots 1855000 to 1870000 of
+/// the Musashi chain, 591 were carried twice and 56 of those had their second
+/// occurrence in an ordinary ranking block, at a distance of at most ten
+/// containers and 198 slots.
+///
+/// The block is returned untouched when nothing was repeated, which is every
+/// block on a chain without this, so the common path allocates nothing and the
+/// bytes stay identical.
+fn strip_repeats(
+    cbor: &BlockBody,
+    window: &AppliedTxWindow,
+) -> Result<(BlockBody, Contribution), Error> {
+    let block = MultiEraBlock::decode(cbor).map_err(|e| Error::BadBlock(e.to_string()))?;
+
+    let txs = block.txs();
+    let named = txs.len();
+
+    let kept: Vec<(Hash<32>, Vec<u8>)> = txs
+        .iter()
+        .filter(|tx| !window.contains(&tx.hash()))
+        .map(|tx| (tx.hash(), tx.encode()))
+        .collect();
+
+    let contribution = Contribution::new(named, named - kept.len(), kept.len())?;
+
+    if contribution.repeated() == 0 {
+        return Ok((cbor.clone(), contribution));
+    }
+
+    let borrowed: Vec<&[u8]> = kept.iter().map(|(_, bytes)| bytes.as_slice()).collect();
+    let rewritten = replace_transaction_list(cbor, &borrowed)?;
+
+    // The transactions are re-encoded to get their bytes, so the rewritten
+    // block is read back and the ids checked against the ones kept. An encoding
+    // that did not round trip would otherwise change a transaction id, and the
+    // ledger would then be short an output nobody asked to remove.
+    let check = MultiEraBlock::decode(&rewritten).map_err(|e| Error::BadBlock(e.to_string()))?;
+
+    let got: Vec<Hash<32>> = check.txs().iter().map(|tx| tx.hash()).collect();
+    let want: Vec<Hash<32>> = kept.iter().map(|(id, _)| *id).collect();
+
+    if got != want {
+        return Err(Error::RewriteChangedTransactions {
+            slot: block.slot(),
+            kept: want.len(),
+            found: got.len(),
+        });
+    }
+
+    Ok((rewritten, contribution))
+}
+
 /// What the walk owes each certifying ranking block, keyed by that block's slot.
 ///
 /// Every certification the walk sees is recorded here before its endorser block
@@ -523,8 +591,26 @@ impl PendingPayloads {
 
             match self.0.remove(&slot) {
                 None => {
+                    // An ordinary ranking block carries its own transactions
+                    // and is normally passed through untouched. It can still
+                    // repeat one the chain already applied, in which case
+                    // applying it again spends an input that is already spent,
+                    // so the repeat is left out of it exactly as it would be
+                    // left out of an endorser block's payload.
+                    let (rewritten, contribution) = strip_repeats(&cbor, window)?;
+
+                    if contribution.repeated() > 0 {
+                        info!(
+                            slot,
+                            named = contribution.named(),
+                            repeated = contribution.repeated(),
+                            kept = contribution.spliced(),
+                            "left a repeated transaction out of a ranking block"
+                        );
+                    }
+
                     window.record(slot, own);
-                    out.push(cbor);
+                    out.push(rewritten);
                 }
                 Some(None) => {
                     return Err(Error::Unfetched { slot });
@@ -1724,6 +1810,119 @@ mod tests {
             !resumed.window.contains(&Hash::new([0; 32])),
             "a transaction no stored block carried must not be remembered"
         );
+    }
+
+    /// The two ordinary ranking blocks of the Musashi chain that first showed a
+    /// repeat outside the endorser payload.
+    ///
+    /// Block 1861279 carries 375 transactions of its own. At index 2 it applies
+    /// `0654930d…`, at index 17 `d92084d2…` spends what index 2 made, and at
+    /// index 50 `3fe3ab01a255960d22d63e7ad8fabdee8cd7d9d884790105c35fa3bea1b53e01`
+    /// spends what index 17 made. A clean chain, and every one of those spends
+    /// was honoured.
+    ///
+    /// Block 1861288, nine slots later, carries `3fe3ab01…` again at index 0,
+    /// and this time the output it names is gone, because the block before it
+    /// spent it. Neither block has a forward reference, so the fix for those
+    /// does not reach this and the transaction is simply applied twice.
+    fn repeat_ranking_first() -> BlockBody {
+        hex::decode(include_str!("../../test_data/dijkstra-repeat-ranking-first.block").trim())
+            .unwrap()
+    }
+
+    fn repeat_ranking_second() -> BlockBody {
+        hex::decode(include_str!("../../test_data/dijkstra-repeat-ranking-second.block").trim())
+            .unwrap()
+    }
+
+    /// MUST FIRE: a transaction an earlier ordinary ranking block already
+    /// carried is left out of the later one. Applied twice it spends an input
+    /// that is already spent, which is what stopped the sync at 71.87 percent.
+    ///
+    /// MUST NOT FIRE: every other transaction of that block survives, and the
+    /// first block passes through byte identical because nothing before it had
+    /// carried anything. A rewrite that dropped more than the repeat would
+    /// leave the ledger short by exactly the payload it is meant to apply.
+    #[test]
+    fn a_transaction_an_earlier_ranking_block_carried_is_left_out() {
+        let first = repeat_ranking_first();
+        let second = repeat_ranking_second();
+
+        let first_ids = tx_ids(&first);
+        let second_ids = tx_ids(&second);
+        assert_eq!(first_ids.len(), 375, "fixture precondition");
+        assert_eq!(second_ids.len(), 384, "fixture precondition");
+
+        let shared: Vec<Hash<32>> = second_ids
+            .iter()
+            .filter(|id| first_ids.contains(id))
+            .copied()
+            .collect();
+        assert!(
+            !shared.is_empty(),
+            "fixture precondition: the second block repeats something"
+        );
+
+        let mut window = AppliedTxWindow::default();
+        let mut pending = PendingPayloads::default();
+
+        let out = pending
+            .apply(&mut window, vec![first.clone()])
+            .expect("the first block must pass");
+
+        assert_eq!(
+            out[0], first,
+            "with an empty window the first block is untouched"
+        );
+
+        let mut pending = PendingPayloads::default();
+        let out = pending
+            .apply(&mut window, vec![second.clone()])
+            .expect("the second block must resolve");
+
+        let kept = tx_ids(&out[0]);
+
+        // Identity first, then the counts. A break that leaves the repeat in
+        // has to trip the assertion about that transaction, not an arithmetic
+        // one that a differently wrong rewrite could also trip.
+        for id in &shared {
+            assert!(!kept.contains(id), "transaction {id} was applied twice");
+        }
+
+        for id in &second_ids {
+            if !shared.contains(id) {
+                assert!(kept.contains(id), "transaction {id} was wrongly dropped");
+            }
+        }
+
+        assert_eq!(
+            kept.len(),
+            second_ids.len() - shared.len(),
+            "exactly the repeated transactions are left out, no more and no fewer"
+        );
+
+        let offender: Hash<32> = *second_ids.first().unwrap();
+        assert!(
+            shared.contains(&offender),
+            "fixture precondition: index 0 of the second block is the repeat"
+        );
+    }
+
+    /// MUST NOT FIRE: a block carrying nothing the window knows is returned
+    /// byte identical, not re-encoded. Every block on a chain without this is
+    /// in that case, so a rewrite there would change every block's bytes for
+    /// nothing and would be the most expensive possible no-op.
+    #[test]
+    fn a_block_with_no_repeat_is_not_rewritten() {
+        let plain = plain_block();
+        let mut window = AppliedTxWindow::default();
+        let mut pending = PendingPayloads::default();
+
+        let out = pending
+            .apply(&mut window, vec![plain.clone()])
+            .expect("must pass");
+
+        assert_eq!(out[0], plain, "the bytes must be identical, not re-encoded");
     }
 
     /// MUST FIRE: the three counts are refused unless they add up, so a future
