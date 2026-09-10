@@ -168,19 +168,19 @@ pub fn resume_walk(blocks: impl Iterator<Item = RawBlock>) -> Result<ResumedWalk
         let header = block.header();
         let slot = header.slot();
 
-        if let Some(announcement) = header.leios_announcement() {
+        if let Some(announcement) = header.eb_announcement() {
             return Ok(ResumedWalk {
                 state: PendingAnnouncement::Waiting(AnnouncedEndorserBlock {
                     slot,
-                    hash: announcement.announced_eb,
-                    size: announcement.announced_eb_size,
+                    hash: announcement.eb_hash,
+                    size: announcement.eb_size,
                 }),
                 scanned,
                 settled_at: Some(slot),
             });
         }
 
-        match header.leios_certified() {
+        match header.block_body_contains_leios_cert() {
             // An era with no endorsement layer at all.
             None => {
                 return Ok(ResumedWalk {
@@ -450,9 +450,9 @@ impl<T: LeiosTransport> LeiosClient<T> {
     /// it, never a prefix and never an empty list standing in for a failure.
     pub async fn fetch(&mut self, eb: &AnnouncedEndorserBlock) -> Result<Vec<Vec<u8>>, Error> {
         let point: EbId = Point::Specific(eb.slot, eb.hash.to_vec());
-        let announcement = pallas::ledger::primitives::dijkstra::LeiosAnnouncement {
-            announced_eb: eb.hash,
-            announced_eb_size: eb.size,
+        let announcement = pallas::ledger::primitives::dijkstra::EbAnnouncement {
+            eb_hash: eb.hash,
+            eb_size: eb.size,
         };
 
         let started = tokio::time::Instant::now();

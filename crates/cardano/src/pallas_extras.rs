@@ -42,7 +42,7 @@ fn dijkstra_cert_as_conway(cert: &DijkstraCert) -> ConwayCert {
         DijkstraCert::PoolRegistration {
             operator,
             vrf_keyhash,
-            leios_key: _,
+            bls_key: _,
             pledge,
             cost,
             margin,
@@ -656,7 +656,7 @@ pub fn tx_treasury_donation(tx: &MultiEraTx) -> Option<Lovelace> {
         // that carries the field has to read it, because the wildcard below
         // stops the node rather than answering, and a chain past the Dijkstra
         // hard fork puts every one of its transactions through here.
-        MultiEraTx::Dijkstra(x, _) => x.transaction_body.donation.map(|x| x.into()),
+        MultiEraTx::Dijkstra(x) => x.transaction_body.donation.map(|x| x.into()),
         MultiEraTx::AlonzoCompatible(..) => None,
         MultiEraTx::Babbage(..) => None,
         MultiEraTx::Byron(..) => None,
@@ -686,10 +686,10 @@ mod dijkstra_certificate_tests {
         DijkstraCert::PoolRegistration {
             operator: POOL.parse().unwrap(),
             vrf_keyhash: VRF.parse().unwrap(),
-            // The Leios key slot is what makes a Dijkstra pool registration a
+            // The BLS key slot is what makes a Dijkstra pool registration a
             // different shape from Conway's. Present and populated is the
             // interesting one of its three states.
-            leios_key: Some(pallas::codec::utils::Nullable::Null),
+            bls_key: Some(pallas::codec::utils::Nullable::Null),
             pledge: 1_000_000,
             cost: 340_000_000,
             margin: RationalNumber {
@@ -853,10 +853,17 @@ mod treasury_donation_tests {
     /// one input, no outputs, zero fee, and body key 22 set to 1000000. Built
     /// by hand because no transaction on any Dijkstra chain has ever set that
     /// key, so there are no real bytes to take it from.
-    const DIJKSTRA_TX_WITH_DONATION: &str = "83a40081825820000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f0001800200161a000f4240a0f6";
+    ///
+    /// Four elements, ending `f5`. The w36 ledger deleted the block body's
+    /// leading list of transactions the producer rejected and put each
+    /// producer's verdict on the transaction instead, so a transaction as a
+    /// block carries it is `[body, witness_set, auxiliary_data / nil, bool]`
+    /// and `decode_for_era` reads that shape. Three elements is the mempool
+    /// form, which is what a client submits and not what a block holds.
+    const DIJKSTRA_TX_WITH_DONATION: &str = "84a40081825820000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f0001800200161a000f4240a0f6f5";
 
     /// The same transaction with body key 22 absent.
-    const DIJKSTRA_TX_WITHOUT_DONATION: &str = "83a30081825820000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f0001800200a0f6";
+    const DIJKSTRA_TX_WITHOUT_DONATION: &str = "84a30081825820000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f0001800200a0f6f5";
 
     fn dijkstra_tx(hex: &str) -> MultiEraTx<'static> {
         let bytes: &'static [u8] = hex::decode(hex).unwrap().leak();
