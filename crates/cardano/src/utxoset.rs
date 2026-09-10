@@ -410,13 +410,17 @@ mod tests {
         );
     }
 
+    /// Trimmed, because whether a fixture file ends in a newline is not
+    /// something a test result should turn on. Half these files carried a
+    /// trailing newline and half did not, and the ones that did only worked
+    /// because they went through a different helper that trimmed.
     fn load_test_block(name: &str) -> Vec<u8> {
         let path = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
             .join("test_data")
             .join(name);
 
         let content = std::fs::read_to_string(path).unwrap();
-        hex::decode(content).unwrap()
+        hex::decode(content.trim()).unwrap()
     }
 
     #[test]
@@ -789,5 +793,160 @@ mod tests {
             BrokenInvariant::MissingUtxo(r) => assert_eq!(r, forward_ref_txoref()),
             other => panic!("wrong refusal: {other:?}"),
         }
+    }
+}
+
+/// What the w35 to w36 fixture rewrite decided, pinned.
+///
+/// The nine Dijkstra block fixtures in this repository are generated from the
+/// `.w35hex` bytes beside them by `test_data/regen-dijkstra-w36.py`, because
+/// the chain they were cut from no longer exists and the chain that does
+/// carries none of the shapes they hold. That rewrite makes exactly two claims
+/// about every fixture and neither of them is checked by any other test here:
+///
+/// - the header is carried over byte for byte, so the block is still the one
+///   the chain produced. The block hash is the hash of the header, so a header
+///   that changed by one byte changes the value pinned below.
+/// - every transaction's verdict is `true`, which follows from the deleted
+///   element having been nil in every source and does not follow from anything
+///   else.
+///
+/// The second claim needs pinning here because nothing else notices it. Flipping
+/// all 1185 verdicts across the three fixtures that have any made two tests in
+/// this file panic on an `unwrap` inside their own setup, which is a crash and
+/// not a verdict, and left every other test passing.
+#[cfg(test)]
+mod dijkstra_fixture_shape {
+    use pallas::ledger::traverse::MultiEraBlock;
+
+    /// Directory relative to this crate, file name, the hash of its header, and
+    /// how many transactions it holds. The last two were read from the
+    /// `.w35hex` source, so they are the chain's numbers and not the rewrite's.
+    const FIXTURES: &[(&str, &str, &str, usize)] = &[
+        (
+            "../../test_data",
+            "dijkstra-quiet.block",
+            "4ddd143b2d4b65e57057ba62d9640639bfd8808764d67701bbbf6c17eaa6649e",
+            0,
+        ),
+        (
+            "../../test_data",
+            "dijkstra-plain.block",
+            "56fa1ce910f496749e69bb72f1b85020cc9cda876d3118269970decbc2e4c87a",
+            426,
+        ),
+        (
+            "../../test_data",
+            "dijkstra-certifying.block",
+            "02a42d1c692166e03eecf385b394664c86fc31dfa82d3cd7b91a1b114549a44e",
+            0,
+        ),
+        (
+            "../../test_data",
+            "dijkstra-certify-only.block",
+            "3df49aa4c2ced2fa9e9e8f3a9f26baf21267f26a8b56f30b6f149a527d34f21e",
+            0,
+        ),
+        (
+            "test_data",
+            "dijkstra-forward-ref.block",
+            "7fec72c2101360ecfa39a82d0e5a2594b1a57053728db6dfd23aad44ba8739dc",
+            0,
+        ),
+        (
+            "test_data",
+            "dijkstra-repeat-first.block",
+            "92cff4b6bd454762aed3d8f99cc1998a2c9bf78570bd545b8d5d9507122a21b3",
+            0,
+        ),
+        (
+            "test_data",
+            "dijkstra-repeat-second.block",
+            "23459432ba22c4cc12e7b3fbff2e5171bf31268755b165e5e44a2fead8df044c",
+            0,
+        ),
+        (
+            "test_data",
+            "dijkstra-repeat-ranking-first.block",
+            "f839003db51a41866d107aa2447d5aa9a07a77f7be04bd394a3b3368902dd38e",
+            375,
+        ),
+        (
+            "test_data",
+            "dijkstra-repeat-ranking-second.block",
+            "6a6028d03ce37419c82492588f6ddc16719286a9ac47b66a2c745d3934da3c78",
+            384,
+        ),
+    ];
+
+    fn read(dir: &str, name: &str) -> Vec<u8> {
+        let path = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
+            .join(dir)
+            .join(name);
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
+        hex::decode(text.trim()).unwrap_or_else(|e| panic!("{path:?}: {e}"))
+    }
+
+    /// The must-fire case for the header: a rewrite that disturbed one byte of
+    /// a header changes that block's hash and this stops.
+    #[test]
+    fn every_rewritten_fixture_kept_its_header_and_its_transaction_count() {
+        let mut checked = 0;
+
+        for (dir, name, hash, count) in FIXTURES {
+            let raw = read(dir, name);
+            let block = MultiEraBlock::decode(&raw).unwrap_or_else(|e| panic!("{name}: {e}"));
+
+            assert_eq!(
+                block.hash().to_string(),
+                *hash,
+                "{name}: the header is not the one the chain produced"
+            );
+            assert_eq!(
+                block.txs().len(),
+                *count,
+                "{name}: the rewrite changed how many transactions the block holds"
+            );
+            checked += 1;
+        }
+
+        assert_eq!(
+            checked,
+            FIXTURES.len(),
+            "every fixture named has to have been read"
+        );
+    }
+
+    /// The must-fire case for the verdict, and the reason this module exists.
+    /// The rewrite wrote `true` on every transaction because the source said no
+    /// transaction in the block was invalid. Nothing else here would notice a
+    /// `false`.
+    #[test]
+    fn every_rewritten_transaction_carries_the_verdict_the_source_implied() {
+        let mut verdicts = 0;
+
+        for (dir, name, _, count) in FIXTURES {
+            let raw = read(dir, name);
+            let block = MultiEraBlock::decode(&raw).unwrap_or_else(|e| panic!("{name}: {e}"));
+
+            for (index, tx) in block.txs().iter().enumerate() {
+                assert!(
+                    tx.is_valid(),
+                    "{name}: transaction {index} carries the verdict false, and the w35 source \
+                     named no transaction as rejected, so nothing justifies it"
+                );
+                verdicts += 1;
+            }
+
+            assert_eq!(block.txs().len(), *count, "{name}: transaction count moved");
+        }
+
+        // A count, so that a run in which every block came back empty says so
+        // rather than passing on nothing.
+        assert_eq!(
+            verdicts, 1185,
+            "the fixtures hold 1185 transactions between them and every one of \
+             them has to have been looked at"
+        );
     }
 }
