@@ -1535,6 +1535,47 @@ mod tests {
         }
     }
 
+    /// The ledger applies a sub transaction before the transaction that holds
+    /// it, and a transaction holding none alone.
+    #[test]
+    fn the_applied_order_is_the_sub_transaction_then_its_parent() {
+        for (name, _, _, _, _, parent, made) in SUB_TRANSACTION_CASES {
+            let cbor = musashi_block(name);
+            let block = MultiEraBlock::decode(&cbor).unwrap();
+
+            let visited: Vec<Vec<Hash<32>>> = block
+                .txs()
+                .iter()
+                .map(|tx| {
+                    let mut hashes = vec![];
+                    crate::pallas_extras::for_each_applied_tx(tx, |tx| {
+                        hashes.push(tx.hash());
+                        Ok::<_, std::convert::Infallible>(())
+                    })
+                    .unwrap();
+                    hashes
+                })
+                .collect();
+
+            let sub = Hash::from_str(made[0].0).unwrap();
+            let parent = Hash::from_str(parent).unwrap();
+
+            assert_eq!(
+                (
+                    visited.iter().filter(|hashes| hashes.len() == 1).count(),
+                    visited
+                        .iter()
+                        .find(|hashes| hashes.len() > 1)
+                        .cloned()
+                        .unwrap_or_default(),
+                ),
+                (visited.len() - 1, vec![sub, parent]),
+                "{name}: one transaction applies its sub transaction and then itself, \
+                 every other one only itself"
+            );
+        }
+    }
+
     /// MUST NOT FIRE: a Dijkstra ranking block whose transactions carry no sub
     /// transaction creates one output per transaction on its wire and nothing
     /// under any other key, so the sub transaction rule invents nothing where
