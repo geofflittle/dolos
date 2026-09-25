@@ -564,8 +564,8 @@ fn the_lenient_rule_changes_nothing_for_the_harvested_blocks() {
 }
 
 /// A transaction a lookup by hash is asked for: its hash, the index of the top
-/// level transaction that holds it, its bytes, the answer `tx_cbor` gives for
-/// it and its number of outputs.
+/// level transaction that holds it, its bytes, the `TxCbor` a lookup of it must
+/// answer and its number of outputs.
 struct Probe {
     hash: Hash<32>,
     index: usize,
