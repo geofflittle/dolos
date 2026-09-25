@@ -3199,7 +3199,7 @@ mod required_signers_tests {
         let sub = sub_tx(Some(credential_guards(vec![StakeCredential::AddrKeyhash(
             key_hash(4),
         )])));
-        let tx = MultiEraTx::DijkstraSub(Box::new(Cow::Owned(sub)));
+        let tx = MultiEraTx::DijkstraSub(Box::new(Cow::Owned(sub)), true);
 
         assert_eq!(served(&tx), Ok(vec![key_hash(4).to_string()]));
     }
@@ -3210,7 +3210,7 @@ mod required_signers_tests {
         let sub = sub_tx(Some(credential_guards(vec![StakeCredential::ScriptHash(
             key_hash(8),
         )])));
-        let tx = MultiEraTx::DijkstraSub(Box::new(Cow::Owned(sub)));
+        let tx = MultiEraTx::DijkstraSub(Box::new(Cow::Owned(sub)), true);
 
         assert_eq!(served(&tx), Err(key_hash(8).to_string()));
     }

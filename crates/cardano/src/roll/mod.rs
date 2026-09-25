@@ -841,6 +841,65 @@ pub(crate) mod dijkstra_fixture {
         }
     }
 
+    /// A body that spends and creates nothing, donates the amount given, and
+    /// carries one sub transaction whose body holds the proposal and the vote of
+    /// [`body_with_governance`] and donates the other amount given.
+    pub fn body_with_sub_transaction(
+        donation: u64,
+        sub_donation: u64,
+    ) -> dijkstra::TransactionBody<'static> {
+        let governance = body_with_governance(dijkstra::GovAction::Information);
+
+        let sub_body = dijkstra::SubTransactionBody {
+            inputs: dijkstra::Set::from(vec![]),
+            outputs: MaybeIndefArray::Def(vec![]),
+            ttl: None,
+            certificates: None,
+            withdrawals: None,
+            auxiliary_data_hash: None,
+            validity_interval_start: None,
+            mint: None,
+            script_data_hash: None,
+            guards: None,
+            network_id: None,
+            reference_inputs: None,
+            voting_procedures: governance.voting_procedures,
+            proposal_procedures: governance.proposal_procedures,
+            treasury_value: None,
+            donation: Some(dijkstra::PositiveCoin::try_from(sub_donation).unwrap()),
+            required_top_level_guards: None,
+            direct_deposits: None,
+            account_balance_intervals: None,
+        };
+
+        let sub = dijkstra::SubTransaction {
+            sub_transaction_body: KeepRaw::from(sub_body),
+            transaction_witness_set: KeepRaw::from(witness_set()),
+            auxiliary_data: Nullable::Null,
+        };
+
+        dijkstra::TransactionBody {
+            voting_procedures: None,
+            proposal_procedures: None,
+            donation: Some(dijkstra::PositiveCoin::try_from(donation).unwrap()),
+            sub_transactions: Some(dijkstra::NonEmptySet::try_from(vec![sub]).unwrap()),
+            ..body_with_governance(dijkstra::GovAction::Information)
+        }
+    }
+
+    fn witness_set() -> dijkstra::WitnessSet<'static> {
+        dijkstra::WitnessSet {
+            vkeywitness: None,
+            native_script: None,
+            bootstrap_witness: None,
+            plutus_v1_script: None,
+            plutus_data: None,
+            redeemer: None,
+            plutus_v2_script: None,
+            plutus_v3_script: None,
+        }
+    }
+
     /// A one transaction ranking block at [`SLOT`], with the transaction's
     /// producer verdict set to the value given.
     pub fn block(body: dijkstra::TransactionBody<'static>, success: bool) -> OwnedMultiEraBlock {
@@ -869,20 +928,9 @@ pub(crate) mod dijkstra_fixture {
             body_signature: Bytes::from(vec![0x18]),
         };
 
-        let witness_set = dijkstra::WitnessSet {
-            vkeywitness: None,
-            native_script: None,
-            bootstrap_witness: None,
-            plutus_v1_script: None,
-            plutus_data: None,
-            redeemer: None,
-            plutus_v2_script: None,
-            plutus_v3_script: None,
-        };
-
         let tx = dijkstra::BlockTransaction {
             transaction_body: KeepRaw::from(body),
-            transaction_witness_set: KeepRaw::from(witness_set),
+            transaction_witness_set: KeepRaw::from(witness_set()),
             auxiliary_data: Nullable::Null,
             success,
         };
@@ -1237,5 +1285,55 @@ mod tests {
         assert!(proposals_recorded(&deltas).is_empty());
         assert!(votes_recorded(&deltas).is_empty());
         assert!(keys_in(&deltas, "dreps").is_empty());
+    }
+
+    const DONATION: u64 = 3_000_000;
+    const SUB_DONATION: u64 = 5_000_000;
+
+    fn crawl_block_with_sub_transaction(valid: bool) -> WorkDeltas {
+        let block = dijkstra_fixture::block(
+            dijkstra_fixture::body_with_sub_transaction(DONATION, SUB_DONATION),
+            valid,
+        );
+
+        crawl_block(block, 12)
+    }
+
+    /// The must-fire case. A sub transaction of a valid transaction records its
+    /// proposal and its vote and donates to the treasury, and the block still
+    /// counts one transaction.
+    #[test]
+    fn a_sub_transaction_of_a_valid_transaction_is_applied() {
+        let deltas = crawl_block_with_sub_transaction(true);
+        let stats = epoch_stats(&deltas);
+
+        assert_eq!(
+            (
+                proposals_recorded(&deltas).len(),
+                votes_recorded(&deltas).len(),
+                stats.treasury_donations,
+                stats.tx_count,
+            ),
+            (1, 1, DONATION + SUB_DONATION, 1)
+        );
+    }
+
+    /// The must-not case. Neither a phase 2 invalid transaction nor the sub
+    /// transaction it carries records governance or donates to the treasury,
+    /// and the block still counts one transaction.
+    #[test]
+    fn an_invalid_transaction_and_its_sub_transaction_donate_nothing() {
+        let deltas = crawl_block_with_sub_transaction(false);
+        let stats = epoch_stats(&deltas);
+
+        assert_eq!(
+            (
+                proposals_recorded(&deltas).len(),
+                votes_recorded(&deltas).len(),
+                stats.treasury_donations,
+                stats.tx_count,
+            ),
+            (0, 0, 0, 1)
+        );
     }
 }

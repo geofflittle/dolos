@@ -125,34 +125,54 @@ fn sync_config(lenient: bool) -> SyncConfig {
     config
 }
 
-/// Every output the block's transactions make, each with the bytes the block
-/// declares for it.
+/// Calls `f` on each transaction of the block, after each sub transaction it
+/// carries.
+fn each_tx(block: &MultiEraBlock, mut f: impl FnMut(&MultiEraTx<'_>)) {
+    for tx in block.txs().iter() {
+        for sub in tx.sub_transactions() {
+            f(&sub);
+        }
+
+        f(tx);
+    }
+}
+
+/// Every output the block's transactions and sub transactions make, each with
+/// the bytes the block declares for it.
 fn produced(block: &MultiEraBlock) -> Vec<(TxoRef, Vec<u8>)> {
-    let txs = block.txs();
+    let mut out = vec![];
 
-    txs.iter()
-        .flat_map(|tx| {
-            let hash = tx.hash();
-            tx.produces()
-                .into_iter()
-                .map(move |(idx, output)| (TxoRef(hash, idx as u32), output.encode()))
-        })
-        .collect()
+    each_tx(block, |tx| {
+        let hash = tx.hash();
+
+        for (idx, output) in tx.produces() {
+            out.push((TxoRef(hash, idx as u32), output.encode()));
+        }
+    });
+
+    out
 }
 
-/// Every output the block's transactions spend.
+/// Every output the block's transactions and sub transactions spend.
 fn consumed(block: &MultiEraBlock) -> Vec<TxoRef> {
-    let txs = block.txs();
+    let mut out = vec![];
 
-    txs.iter()
-        .flat_map(MultiEraTx::consumes)
-        .map(|input| TxoRef(*input.hash(), input.index() as u32))
-        .collect()
+    each_tx(block, |tx| {
+        for input in tx.consumes() {
+            out.push(TxoRef(*input.hash(), input.index() as u32));
+        }
+    });
+
+    out
 }
 
-/// The hash of each of the block's transactions, in wire order.
+/// The hash of each of the block's transactions and sub transactions.
 fn tx_hashes(block: &MultiEraBlock) -> Vec<Hash<32>> {
-    block.txs().iter().map(|tx| tx.hash()).collect()
+    let mut out = vec![];
+
+    each_tx(block, |tx| out.push(tx.hash()));
+
+    out
 }
 
 /// The outputs the block spends and does not make itself, each carrying a body

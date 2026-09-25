@@ -99,6 +99,15 @@ pub fn compute_apply_delta_lenient(
     loaded: &HashMap<TxoRef, OwnedMultiEraOutput>,
     store_has: &HashSet<TxoRef>,
 ) -> Result<(UtxoSetDelta, LenientApply), BrokenInvariant> {
+    apply_txs_lenient(&block.txs(), loaded, store_has)
+}
+
+/// The walk of [`compute_apply_delta_lenient`] over the given transactions.
+fn apply_txs_lenient(
+    txs: &[MultiEraTx<'_>],
+    loaded: &HashMap<TxoRef, OwnedMultiEraOutput>,
+    store_has: &HashSet<TxoRef>,
+) -> Result<(UtxoSetDelta, LenientApply), BrokenInvariant> {
     let mut delta = UtxoSetDelta::default();
     let mut stats = LenientApply::default();
 
@@ -108,7 +117,7 @@ pub fn compute_apply_delta_lenient(
     let mut produced_here: HashMap<TxoRef, Arc<EraCbor>> = HashMap::new();
     let mut spent_here: HashSet<TxoRef> = HashSet::new();
 
-    for tx in block.txs().iter() {
+    for tx in txs.iter() {
         let tx_hash = tx.hash();
 
         for consumed in tx.consumes() {
@@ -213,9 +222,18 @@ pub fn compute_apply_delta(
     block: &MultiEraBlock,
     loaded: &HashMap<TxoRef, OwnedMultiEraOutput>,
 ) -> Result<UtxoSetDelta, BrokenInvariant> {
+    apply_txs(block, &block.txs(), loaded)
+}
+
+/// The delta of [`compute_apply_delta`] over the given transactions of `block`.
+fn apply_txs(
+    block: &MultiEraBlock,
+    txs: &[MultiEraTx<'_>],
+    loaded: &HashMap<TxoRef, OwnedMultiEraOutput>,
+) -> Result<UtxoSetDelta, BrokenInvariant> {
     let mut delta = UtxoSetDelta::default();
 
-    let txs: HashMap<_, _> = block.txs().into_iter().map(|tx| (tx.hash(), tx)).collect();
+    let txs: HashMap<_, _> = txs.iter().map(|tx| (tx.hash(), tx)).collect();
 
     for (tx_hash, tx) in txs.iter() {
         for (idx, produced) in tx.produces() {
@@ -262,10 +280,20 @@ pub fn compute_undo_delta(
     context: &HashMap<TxoRef, OwnedMultiEraOutput>,
     lenient: bool,
 ) -> Result<(UtxoSetDelta, Vec<SkippedInput>), BrokenInvariant> {
+    undo_txs(block, &block.txs(), context, lenient)
+}
+
+/// The delta of [`compute_undo_delta`] over the given transactions of `block`.
+fn undo_txs(
+    block: &MultiEraBlock,
+    txs: &[MultiEraTx<'_>],
+    context: &HashMap<TxoRef, OwnedMultiEraOutput>,
+    lenient: bool,
+) -> Result<(UtxoSetDelta, Vec<SkippedInput>), BrokenInvariant> {
     let mut delta = UtxoSetDelta::default();
     let mut skipped = Vec::new();
 
-    let txs: HashMap<_, _> = block.txs().into_iter().map(|tx| (tx.hash(), tx)).collect();
+    let txs: HashMap<_, _> = txs.iter().map(|tx| (tx.hash(), tx)).collect();
 
     for (tx_hash, tx) in txs.iter() {
         for (idx, body) in tx.produces() {
@@ -749,8 +777,25 @@ mod tests {
         /// does not have it yet, and seeding it would make the block's own
         /// chaining look like re-creation and hide what the counters mean.
         fn seed_externals(&mut self, block: &MultiEraBlock) {
-            let sample = block
-                .txs()
+            self.seed_txs(block, &block.txs());
+        }
+
+        /// Seeds the inputs the given transactions and their sub transactions
+        /// spend that none of them makes.
+        fn seed_txs(&mut self, block: &MultiEraBlock, txs: &[MultiEraTx<'_>]) {
+            fn refs(tx: &MultiEraTx<'_>, made: &mut HashSet<TxoRef>, spent: &mut Vec<TxoRef>) {
+                let hash = tx.hash();
+
+                for (idx, _) in tx.produces() {
+                    made.insert(TxoRef(hash, idx as u32));
+                }
+
+                for input in tx.consumes() {
+                    spent.push(TxoRef(*input.hash(), input.index() as u32));
+                }
+            }
+
+            let sample = txs
                 .first()
                 .unwrap()
                 .produces()
@@ -759,20 +804,18 @@ mod tests {
                 .1
                 .encode();
 
-            let made_here: HashSet<TxoRef> = block
-                .txs()
-                .iter()
-                .flat_map(|tx| {
-                    let hash = tx.hash();
-                    tx.produces()
-                        .into_iter()
-                        .map(move |(idx, _)| TxoRef(hash, idx as u32))
-                })
-                .collect();
+            let mut made_here = HashSet::new();
+            let mut spent = Vec::new();
 
-            for input in block.txs().iter().flat_map(MultiEraTx::consumes) {
-                let key = TxoRef(*input.hash(), input.index() as u32);
+            for tx in txs {
+                for sub in tx.sub_transactions() {
+                    refs(&sub, &mut made_here, &mut spent);
+                }
 
+                refs(tx, &mut made_here, &mut spent);
+            }
+
+            for key in spent {
                 if self.present.contains(&key) || made_here.contains(&key) {
                     continue;
                 }
@@ -1268,9 +1311,9 @@ mod tests {
         hex::decode(text.trim()).unwrap_or_else(|e| panic!("{path:?}: {e}"))
     }
 
-    /// A fixture name, its slot, the transactions the block emits, the outputs
-    /// the delta produces, the input the sub transaction spends, the parent's
-    /// hash and the outputs the sub transaction makes.
+    /// A fixture name, its slot, its top level transactions, the outputs the
+    /// block creates, the input the sub transaction spends, the hash of the
+    /// transaction carrying it and the outputs the sub transaction makes.
     type SubTransactionCase = (
         &'static str,
         u64,
@@ -1281,94 +1324,175 @@ mod tests {
         &'static [(&'static str, u32)],
     );
 
-    /// MUST FIRE: a sub transaction of a Dijkstra batch is applied like any
-    /// other transaction. Its outputs are created under the hash of its own
-    /// body, which is the key the node answers a utxo query with, and the input
-    /// it names is consumed.
-    ///
-    /// The three outputs named here are three of the four the node held and a
-    /// synced Dolos did not. The fourth arrives only in an endorser block and
-    /// no ranking block can produce it.
-    ///
-    /// MUST NOT FIRE: the batch's own transaction keeps its output, and the
-    /// block creates one more output than it has transactions on the wire by
-    /// exactly what the sub transactions make, so a sub transaction adds
-    /// entries and replaces none.
-    #[test]
-    fn a_sub_transaction_is_applied_under_the_hash_of_its_own_body() {
-        let cases: [SubTransactionCase; 2] = [
+    /// The two ranking blocks of the chain whose transactions carry a sub
+    /// transaction. Their three sub transaction outputs are three of the four
+    /// the node held and a synced Dolos did not. The fourth arrives only in an
+    /// endorser block.
+    const SUB_TRANSACTION_CASES: [SubTransactionCase; 2] = [
+        (
+            "ranking-sub-transaction.block",
+            854292,
+            246,
+            247,
             (
-                "ranking-sub-transaction.block",
-                854292,
-                247,
-                247,
+                "d2fa6568066113f78eefdc89025b419a8e68db15eef70e9a8cbea3b4ed87d8b6",
+                0,
+            ),
+            "bd1b7336a5a62005a2576658e64990fab684a641139095afc16865c371e637b4",
+            &[(
+                "ca42eb1227f150670a8a8c7c82468ff10dd726b2aa08ac209a8b8b5530fb28c7",
+                0,
+            )],
+        ),
+        (
+            "ranking-sub-transaction-two-outputs.block",
+            1032954,
+            434,
+            436,
+            (
+                "8d96682d9347ab0dd53bd3397ba3afd6b3296f826efb4be1955c7ca7e21bdfe4",
+                1,
+            ),
+            "d04727b7a026cf5b310c0e86a2920c6d23067c0062ac783d7f4f90905a2293bb",
+            &[
                 (
-                    "d2fa6568066113f78eefdc89025b419a8e68db15eef70e9a8cbea3b4ed87d8b6",
+                    "31dae9d64e767c94be97acdeac9fb60ff5322a96ead4dabd187d880e03220dc1",
                     0,
                 ),
-                "bd1b7336a5a62005a2576658e64990fab684a641139095afc16865c371e637b4",
-                &[(
-                    "ca42eb1227f150670a8a8c7c82468ff10dd726b2aa08ac209a8b8b5530fb28c7",
-                    0,
-                )],
-            ),
-            (
-                "ranking-sub-transaction-two-outputs.block",
-                1032954,
-                435,
-                436,
                 (
-                    "8d96682d9347ab0dd53bd3397ba3afd6b3296f826efb4be1955c7ca7e21bdfe4",
+                    "31dae9d64e767c94be97acdeac9fb60ff5322a96ead4dabd187d880e03220dc1",
                     1,
                 ),
-                "d04727b7a026cf5b310c0e86a2920c6d23067c0062ac783d7f4f90905a2293bb",
-                &[
-                    (
-                        "31dae9d64e767c94be97acdeac9fb60ff5322a96ead4dabd187d880e03220dc1",
-                        0,
-                    ),
-                    (
-                        "31dae9d64e767c94be97acdeac9fb60ff5322a96ead4dabd187d880e03220dc1",
-                        1,
-                    ),
-                ],
-            ),
-        ];
+            ],
+        ),
+    ];
 
-        let txoref = |(hash, index): &(&str, u32)| TxoRef(Hash::from_str(hash).unwrap(), *index);
+    fn txoref((hash, index): &(&str, u32)) -> TxoRef {
+        TxoRef(Hash::from_str(hash).unwrap(), *index)
+    }
 
-        for (name, slot, emitted, produced, spent, parent, made) in cases {
+    /// What one walk created and what it spent.
+    type Walk = (
+        &'static str,
+        HashMap<TxoRef, Arc<EraCbor>>,
+        HashMap<TxoRef, Arc<EraCbor>>,
+    );
+
+    /// The lenient apply, the strict apply and the undo of `txs` as the
+    /// transactions of `block`, over a ledger holding what they spend.
+    fn walks(block: &MultiEraBlock, txs: &[MultiEraTx<'_>]) -> [Walk; 3] {
+        let mut ledger = FakeLedger::default();
+        ledger.seed_txs(block, txs);
+
+        let (lenient, _) =
+            super::apply_txs_lenient(txs, &ledger.bodies, &ledger.present).unwrap();
+
+        let loaded: HashMap<TxoRef, OwnedMultiEraOutput> = ledger
+            .bodies
+            .iter()
+            .map(|(key, body)| (key, body.borrow_owner()))
+            .chain(lenient.produced_utxo.iter())
+            .map(|(key, body)| {
+                let body = OwnedMultiEraOutput::decode(body.clone()).unwrap();
+                (key.clone(), body)
+            })
+            .collect();
+
+        let strict = super::apply_txs(block, txs, &loaded).unwrap();
+        let (undo, _) = super::undo_txs(block, txs, &ledger.bodies, true).unwrap();
+
+        [
+            ("lenient apply", lenient.produced_utxo, lenient.consumed_utxo),
+            ("strict apply", strict.produced_utxo, strict.consumed_utxo),
+            ("undo", undo.undone_utxo, undo.recovered_stxi),
+        ]
+    }
+
+    /// MUST FIRE: every walk applies the sub transaction a block's transaction
+    /// carries, creating its outputs under the hash of its own body, which is
+    /// the key the node answers a utxo query with, and spending the input it
+    /// names. The block still counts only its top level transactions.
+    #[test]
+    fn a_sub_transaction_is_applied_under_the_hash_of_its_own_body() {
+        for (name, slot, top_level, created_count, spent, parent, made) in SUB_TRANSACTION_CASES {
             let cbor = musashi_block(name);
             let block = MultiEraBlock::decode(&cbor).unwrap();
-
-            let mut ledger = FakeLedger::default();
-            ledger.seed_externals(&block);
-
-            let (delta, stats) =
-                super::compute_apply_delta_lenient(&block, &ledger.bodies, &ledger.present)
-                    .unwrap();
-
-            let absent: Vec<String> = made
-                .iter()
-                .map(txoref)
-                .filter(|key| !delta.produced_utxo.contains_key(key))
-                .map(|key| format!("{}#{}", key.0, key.1))
-                .collect();
+            let txs = block.txs();
 
             assert_eq!(
-                (
-                    block.slot(),
-                    block.tx_count(),
-                    delta.produced_utxo.len(),
-                    absent,
-                    delta.consumed_utxo.contains_key(&txoref(&spent)),
-                    delta.produced_utxo.contains_key(&txoref(&(parent, 0))),
-                    stats.recreated_outputs,
-                ),
-                (slot, emitted, produced, vec![], true, true, 0),
-                "{name}: the sub transaction's outputs are created under the hash of its own \
-                 body, the input it names is consumed, and the batch's own output stands"
+                (block.slot(), block.tx_count(), txs.len()),
+                (slot, top_level, top_level),
+                "{name}: the block counts its top level transactions and no sub transaction"
             );
+
+            for (walk, created, spends) in walks(&block, &txs) {
+                let absent: Vec<String> = made
+                    .iter()
+                    .map(txoref)
+                    .filter(|key| !created.contains_key(key))
+                    .map(|key| format!("{}#{}", key.0, key.1))
+                    .collect();
+
+                assert_eq!(
+                    (
+                        absent,
+                        spends.contains_key(&txoref(&spent)),
+                        created.contains_key(&txoref(&(parent, 0))),
+                        created.len(),
+                    ),
+                    (vec![], true, true, created_count),
+                    "{name}, {walk}: the sub transaction's outputs are created under the hash \
+                     of its own body, the input it names is spent, and the output of the \
+                     transaction carrying it stands"
+                );
+            }
+        }
+    }
+
+    /// MUST NOT FIRE: a sub transaction is applied under the verdict on the
+    /// transaction carrying it, so when that transaction is phase 2 invalid no
+    /// walk creates the sub transaction's outputs or spends its input. The same
+    /// block with the verdict left valid is the case that must fire.
+    #[test]
+    fn a_sub_transaction_of_an_invalid_transaction_is_not_applied() {
+        for (name, _, _, _, spent, parent, made) in SUB_TRANSACTION_CASES {
+            let cbor = musashi_block(name);
+            let block = MultiEraBlock::decode(&cbor).unwrap();
+            let txs = block.txs();
+
+            let carriers: Vec<usize> = txs
+                .iter()
+                .enumerate()
+                .filter(|(_, tx)| !tx.sub_transactions().is_empty())
+                .map(|(index, _)| index)
+                .collect();
+
+            assert_eq!(carriers.len(), 1, "{name}: one transaction carries a sub");
+            let carrier = carriers[0];
+            assert_eq!(txs[carrier].hash(), Hash::from_str(parent).unwrap());
+
+            for success in [true, false] {
+                let mut flagged = txs[carrier].as_dijkstra().unwrap().clone();
+                flagged.success = success;
+
+                let mut flipped = block.txs();
+                flipped[carrier] = MultiEraTx::from_dijkstra(&flagged);
+
+                for (walk, created, spends) in walks(&block, &flipped) {
+                    let applied: Vec<bool> = made
+                        .iter()
+                        .map(|key| created.contains_key(&txoref(key)))
+                        .chain([spends.contains_key(&txoref(&spent))])
+                        .collect();
+
+                    assert_eq!(
+                        applied,
+                        vec![success; made.len() + 1],
+                        "{name}, {walk}, verdict {success}: the sub transaction's outputs and \
+                         its input follow the verdict on the transaction carrying it"
+                    );
+                }
+            }
         }
     }
 

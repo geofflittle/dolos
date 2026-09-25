@@ -367,19 +367,19 @@ fn each_fixture_shows_the_shape_it_was_cut_for() {
         let raw = read_bytes(&f.files[0]);
         let block = MultiEraBlock::decode(&raw).expect("the sub transaction block decodes");
         let txs = block.txs();
-        let emitted: Vec<_> = txs
+        let listed = txs
             .iter()
             .filter(|tx| tx.as_dijkstra_sub().is_some())
-            .collect();
-        let carried: usize = txs.iter().map(|tx| tx.sub_transactions().len()).sum();
+            .count();
+        let carried: Vec<_> = txs.iter().flat_map(|tx| tx.sub_transactions()).collect();
 
         assert_eq!(
             (
-                carried,
-                emitted.len(),
-                emitted.iter().map(|tx| tx.produces().len()).sum::<usize>(),
+                carried.len(),
+                listed,
+                carried.iter().map(|tx| tx.produces().len()).sum::<usize>(),
             ),
-            (subs, subs, outputs),
+            (subs, 0, outputs),
             "{} does not carry the sub transaction shape it was cut for",
             f.name
         );
