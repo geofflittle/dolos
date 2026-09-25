@@ -63,6 +63,7 @@ pub fn define_new_pots(ctx: &super::WorkContext) -> Pots {
         pool_invalid_refund_count = end.pool_invalid_refund_count,
         proposal_invalid_refunds = end.proposal_invalid_refunds,
         treasury_donations = rolling.treasury_donations,
+        direct_deposits = delta.direct_deposits,
         produced_utxos = delta.produced_utxos,
         consumed_utxos = delta.consumed_utxos,
         initial_utxos = epoch.initial_pots.utxos,

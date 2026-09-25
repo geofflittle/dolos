@@ -62,17 +62,19 @@ pub const NAMESPACES: [Namespace; 14] = [
 /// `crates/snapshot/tests/field_registry.rs`, which fails the build when a
 /// record's field table moves without its revision, or the other way round.
 ///
-/// `epochs` is at 2: `RollingStats::registered_pools` was a `HashSet`, whose
-/// per-instance iteration order made the namespace's bytes irreproducible
-/// across publishers of identical state. Kept beside [`NAMESPACES`], in the
-/// same order, and held to it by `every_namespace_has_a_schema_rev` below.
+/// `epochs` is at 3. Revision 2 ordered `RollingStats::registered_pools`,
+/// which was a `HashSet` whose per-instance iteration order made the
+/// namespace's bytes irreproducible across publishers of identical state.
+/// Revision 3 appended `RollingStats::direct_deposits`. Kept beside
+/// [`NAMESPACES`], in the same order, and held to it by
+/// `every_namespace_has_a_schema_rev` below.
 pub const SCHEMA_REVS: [(Namespace, u64); 14] = [
     (AccountEpochLog::NS, 1),
     (AccountState::NS, 1),
     (AssetState::NS, 1),
     (DatumState::NS, 1),
     (DRepState::NS, 1),
-    (EpochState::NS, 2),
+    (EpochState::NS, 3),
     (EraSummary::NS, 1),
     (GovState::NS, 1),
     (PendingMirState::NS, 1),

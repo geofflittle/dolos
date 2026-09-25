@@ -176,6 +176,11 @@ pub struct RollingStats {
     #[n(25)]
     #[cbor(default)]
     pub last_block_slot: u64,
+
+    /// Lovelace moved from transactions into accounts by direct deposits.
+    #[n(26)]
+    #[cbor(default)]
+    pub direct_deposits: Lovelace,
 }
 
 impl TransitionDefault for RollingStats {
@@ -508,6 +513,7 @@ pub struct EpochStatsUpdate {
     pub(crate) tx_count: u64,
     pub(crate) output: cbor::U128,
     pub(crate) block_slot: u64,
+    pub(crate) direct_deposits: Lovelace,
 
     // undo: did apply create rolling.live from default? Plus the pre-union pool set, which
     // can't be recovered by set subtraction (a pool in both prev and self would be removed).
@@ -558,6 +564,7 @@ impl dolos_core::EntityDelta for EpochStatsUpdate {
         stats.non_overlay_blocks_minted += self.non_overlay_blocks_minted;
         stats.tx_count += self.tx_count;
         stats.output += self.output;
+        stats.direct_deposits += self.direct_deposits;
 
         // Keep the earlier slots so `undo` can restore them. The first and last
         // slots are a min and a max, which arithmetic cannot reverse.
@@ -612,6 +619,7 @@ impl dolos_core::EntityDelta for EpochStatsUpdate {
         stats.non_overlay_blocks_minted -= self.non_overlay_blocks_minted;
         stats.tx_count -= self.tx_count;
         stats.output -= self.output;
+        stats.direct_deposits -= self.direct_deposits;
 
         stats.first_block_slot = self.prev_first_block_slot;
         stats.last_block_slot = self.prev_last_block_slot;
@@ -1647,11 +1655,13 @@ mod prop_tests {
             tx_count in 0u64..1000u64,
             output in 0u128..u128::from(u64::MAX),
             block_slot in root::any_slot(),
+            direct_deposits in root::any_lovelace(),
         ) -> EpochStatsUpdate {
             EpochStatsUpdate {
                 epoch, block_fees, utxo_delta,
                 new_accounts, removed_accounts, withdrawals,
                 tx_count, output: cbor::U128(output), block_slot,
+                direct_deposits,
                 ..EpochStatsUpdate::default()
             }
         }

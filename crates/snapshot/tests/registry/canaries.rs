@@ -263,6 +263,7 @@ fn rolling_stats(seed: u64) -> RollingStats {
         output: cbor::U128::new(340_282_366_920_938_463_463u128 + seed as u128),
         first_block_slot: 86_400_000 + seed,
         last_block_slot: 86_831_999 + seed,
+        direct_deposits: 14_000 + seed,
     }
 }
 

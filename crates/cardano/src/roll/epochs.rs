@@ -296,6 +296,18 @@ impl BlockVisitor for EpochStateVisitor {
         Ok(())
     }
 
+    fn visit_direct_deposit(
+        &mut self,
+        _: &mut WorkDeltas,
+        _: &MultiEraBlock,
+        _: &MultiEraTx,
+        _: &[u8],
+        amount: u64,
+    ) -> Result<(), ChainError> {
+        self.stats_delta.as_mut().unwrap().direct_deposits += amount;
+        Ok(())
+    }
+
     fn flush(&mut self, deltas: &mut WorkDeltas) -> Result<(), ChainError> {
         if let Some(delta) = self.stats_delta.take() {
             deltas.add_for_entity(delta);

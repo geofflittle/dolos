@@ -296,6 +296,11 @@ pub struct PotDelta {
     #[n(25)]
     #[cbor(default)]
     pub treasury_withdrawals: Lovelace,
+
+    /// Lovelace moved from transactions into accounts by direct deposits.
+    #[n(26)]
+    #[cbor(default)]
+    pub direct_deposits: Lovelace,
 }
 
 impl PotDelta {
@@ -327,6 +332,7 @@ impl PotDelta {
             avvm_reclamation: 0,
             treasury_mirs: 0,
             treasury_withdrawals: 0,
+            direct_deposits: 0,
         }
     }
 
@@ -346,6 +352,7 @@ impl PotDelta {
             drep_refunds: rolling.drep_refunds,
             proposal_deposits: rolling.proposal_deposits,
             treasury_donations: rolling.treasury_donations,
+            direct_deposits: rolling.direct_deposits,
             deposit_per_account: pparams.key_deposit(),
             deposit_per_pool: Some(pparams.pool_deposit_or_default()),
             ..Self::neutral(protocol, protocol)
@@ -545,6 +552,7 @@ pub fn apply_shelley_delta(mut pots: Pots, incentives: &EpochIncentives, delta: 
     pots.rewards = add!(pots.rewards, delta.reserve_mirs);
     pots.rewards = add!(pots.rewards, delta.treasury_mirs);
     pots.rewards = add!(pots.rewards, delta.treasury_withdrawals);
+    pots.rewards = add!(pots.rewards, delta.direct_deposits);
 
     // we don't need to return account deposit refunds to the rewards pot because
     // these refunds are returned directly as utxos in the deregistration
@@ -816,6 +824,45 @@ mod tests {
         assert_eq!(after.reserves, pots.reserves);
         assert_eq!(after.utxos, pots.utxos);
         assert_eq!(after.fees, pots.fees);
+    }
+
+    /// A direct deposit moves value from the UTxO pot to the rewards pot, and
+    /// total supply is conserved.
+    #[test]
+    fn direct_deposit_moves_utxos_to_rewards() {
+        let pots = Pots {
+            reserves: 8_000_000_000_000_000,
+            treasury: 1_000_000_000_000_000,
+            fees: 0,
+            utxos: 35_999_000_000_000_000,
+            rewards: 1_000_000_000_000,
+            pool_count: 0,
+            account_count: 0,
+            deposit_per_pool: 0,
+            deposit_per_account: 0,
+            nominal_deposits: 0,
+            drep_deposits: 0,
+            proposal_deposits: 0,
+        };
+
+        assert!(pots.is_consistent(MAX_SUPPLY));
+
+        let deposit = 16_000_000;
+
+        let delta = PotDelta {
+            consumed_utxos: deposit,
+            direct_deposits: deposit,
+            ..PotDelta::neutral(12, 12)
+        };
+
+        let after = apply_delta(pots.clone(), &EpochIncentives::default(), &delta);
+
+        assert!(after.is_consistent(MAX_SUPPLY));
+
+        assert_eq!(after.utxos, pots.utxos - deposit);
+        assert_eq!(after.rewards, pots.rewards + deposit);
+        assert_eq!(after.reserves, pots.reserves);
+        assert_eq!(after.treasury, pots.treasury);
     }
 
     // TODO: add property based testing that ensures that the pots are
