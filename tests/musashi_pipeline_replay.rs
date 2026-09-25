@@ -926,3 +926,106 @@ fn minibf_address_routes_count_each_sub_transaction() {
         "no fixture lists a sub transaction paying an address, so no address was served"
     );
 }
+
+/// MUST FIRE: a block's output total counts what its sub transactions pay, and
+/// its address list names each sub transaction under the address it pays.
+///
+/// MUST NOT FIRE: a block whose transactions list no sub transaction is served
+/// the output total of its top level transactions.
+#[cfg(feature = "minibf")]
+#[test]
+fn minibf_block_routes_count_each_sub_transaction() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let mut blocks = (0, 0);
+
+    for (entry, cbor) in &block_fixtures() {
+        let block = MultiEraBlock::decode(cbor).unwrap();
+        let subs = sub_transactions(&block);
+
+        let replayed = replay(entry, cbor, true);
+        let config = dolos_core::config::MinibfConfig::new("[::]:0".parse().unwrap());
+        let router = dolos_minibf::build_router(config, replayed.domain.clone());
+        let hash = block.hash();
+
+        let top_level: u64 = block
+            .txs()
+            .iter()
+            .flat_map(|tx| tx.produces())
+            .map(|(_, output)| output.value().coin())
+            .sum();
+
+        let by_subs: Vec<(Hash<32>, String, u64)> = subs
+            .iter()
+            .flat_map(|(_, success, sub)| {
+                let tx = MultiEraTx::from_dijkstra_sub(sub, *success);
+                tx.produces()
+                    .into_iter()
+                    .map(|(_, output)| {
+                        (
+                            tx.hash(),
+                            output.address().unwrap().to_string(),
+                            output.value().coin(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        if subs.is_empty() {
+            blocks.0 += 1;
+        } else {
+            blocks.1 += 1;
+        }
+
+        runtime.block_on(async {
+            let (status, content) = get_json(&router, &format!("/blocks/{hash}")).await;
+
+            // the route answers null for a block that pays nothing
+            let output = top_level + by_subs.iter().map(|x| x.2).sum::<u64>();
+            let output = (output > 0).then(|| output.to_string());
+
+            assert_eq!(
+                (status, content["output"].as_str()),
+                (200, output.as_deref()),
+                "{}: /blocks output",
+                entry.name
+            );
+
+            let (status, addresses) =
+                get_json(&router, &format!("/blocks/{hash}/addresses?count=100")).await;
+
+            let listed: BTreeSet<(String, String)> = addresses
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|x| {
+                    let address = x["address"].as_str().unwrap().to_string();
+                    x["transactions"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(move |tx| (address.clone(), tx["tx_hash"].as_str().unwrap().to_string()))
+                })
+                .collect();
+
+            let paid: BTreeSet<(String, String)> = by_subs
+                .iter()
+                .map(|(hash, address, _)| (address.clone(), hash.to_string()))
+                .collect();
+
+            assert_eq!(
+                (status, paid.difference(&listed).count()),
+                (200, 0),
+                "{}: /blocks/addresses lists {listed:?}, the sub transactions pay {paid:?}",
+                entry.name
+            );
+        });
+    }
+
+    assert!(
+        blocks.0 > 0 && blocks.1 > 0,
+        "the fixtures hold {} blocks without and {} with a sub transaction",
+        blocks.0,
+        blocks.1
+    );
+}
