@@ -1191,6 +1191,15 @@ mod prop_tests {
     }
 
     prop_compose! {
+        fn any_direct_deposit()(
+            cred in root::any_stake_credential(),
+            amount in root::any_lovelace(),
+        ) -> DirectDeposit {
+            DirectDeposit::new(cred, amount)
+        }
+    }
+
+    prop_compose! {
         fn any_pool_deposit_refund()(
             pool_deposit in root::any_lovelace(),
             account in root::any_stake_credential(),
@@ -1315,6 +1324,14 @@ mod prop_tests {
         }
 
         #[test]
+        fn direct_deposit_roundtrip(
+            entity in any_account_state(),
+            delta in any_direct_deposit(),
+        ) {
+            assert_delta_roundtrip(Some(entity), delta);
+        }
+
+        #[test]
         fn pool_deposit_refund_roundtrip(
             entity in any_account_state(),
             delta in any_pool_deposit_refund(),
@@ -1414,6 +1431,14 @@ mod prop_tests {
         fn withdrawal_inc_serde_roundtrip(
             entity in any_account_state(),
             delta in any_withdrawal_inc(),
+        ) {
+            assert_delta_serde_roundtrip(Some(entity), delta);
+        }
+
+        #[test]
+        fn direct_deposit_serde_roundtrip(
+            entity in any_account_state(),
+            delta in any_direct_deposit(),
         ) {
             assert_delta_serde_roundtrip(Some(entity), delta);
         }
