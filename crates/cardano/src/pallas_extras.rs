@@ -1086,8 +1086,7 @@ mod treasury_donation_tests {
     const DIJKSTRA_SUB_WITHOUT_DONATION: &str =
         "83a20081825820000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f000180a0f6";
 
-    /// The epoch visitor asks each sub transaction for its donation, so a block
-    /// with a sub transaction reaches this function.
+    /// The must-fire case for a sub transaction: its body key 22 reads as its donation.
     #[test]
     fn a_sub_transaction_donation_is_read() {
         let bytes = hex::decode(DIJKSTRA_SUB_WITH_DONATION).unwrap();

@@ -463,8 +463,8 @@ fn every_harvested_block_makes_its_outputs_and_spends_its_inputs() {
     }
 }
 
-/// MUST FIRE: every transaction and sub transaction the block carries is
-/// reachable by its own hash and answers the block's slot, and the number of
+/// MUST FIRE: every transaction and sub transaction in the block resolves by
+/// its own hash and answers the block's slot, and the number of
 /// top level transactions is the number the harvest counted.
 ///
 /// MUST NOT FIRE: the blocks the harvest counted no transaction in serve none,

@@ -64,7 +64,7 @@ pub trait BlockVisitor {
     }
 
     /// Visit a transaction. IMPORTANT: the crawl calls this for *every*
-    /// transaction in the block and every sub transaction one carries, each
+    /// transaction in the block and every sub transaction one lists, each
     /// sub transaction first, phase-2-invalid ones included, so that fees
     /// and collateral can still be priced. An implementation that consumes
     /// transaction-body content (certificates, mints, withdrawals, proposals,
@@ -975,7 +975,7 @@ pub(crate) mod dijkstra_fixture {
     }
 
     /// A body that spends and creates nothing, donates the amount given, and
-    /// carries one sub transaction whose body holds the proposal and the vote of
+    /// lists one sub transaction whose body holds the proposal and the vote of
     /// [`body_with_governance`] and donates the other amount given.
     pub fn body_with_sub_transaction(
         donation: u64,
@@ -1033,14 +1033,14 @@ pub(crate) mod dijkstra_fixture {
         }
     }
 
-    /// A sub transaction whose body carries the certificates given and nothing else.
+    /// A sub transaction whose body holds the certificates given and nothing else.
     pub fn sub_transaction_with_certs(
         certificates: Vec<dijkstra::Certificate>,
     ) -> dijkstra::SubTransaction<'static> {
         sub_transaction_with_deposits(certificates, dijkstra::DirectDeposits::new())
     }
 
-    /// A sub transaction whose body carries the certificates and the direct
+    /// A sub transaction whose body holds the certificates and the direct
     /// deposits given and nothing else.
     pub fn sub_transaction_with_deposits(
         certificates: Vec<dijkstra::Certificate>,
@@ -1075,7 +1075,7 @@ pub(crate) mod dijkstra_fixture {
         }
     }
 
-    /// A body that carries the certificates and the sub transactions given and
+    /// A body that holds the certificates and the sub transactions given and
     /// no governance.
     pub fn body_with_certs(
         certificates: Vec<dijkstra::Certificate>,
@@ -1518,7 +1518,7 @@ mod tests {
     }
 
     /// The must-not case. Neither a phase 2 invalid transaction nor the sub
-    /// transaction it carries records governance or donates to the treasury,
+    /// transaction it lists records governance or donates to the treasury,
     /// and the block still counts one transaction.
     #[test]
     fn an_invalid_transaction_and_its_sub_transaction_donate_nothing() {
@@ -1735,8 +1735,8 @@ mod tests {
     }
 
     /// The must-fire case. The ledger applies each sub transaction before the
-    /// transaction that holds it, so each gets its own order below the
-    /// parent's, and the next transaction's order is above them all.
+    /// transaction that holds it, so each gets its own order less than the
+    /// parent's, and the next transaction's order is greater than them all.
     #[test]
     fn each_sub_transaction_gets_its_own_order_before_the_parent() {
         use dijkstra_fixture::{block_of, body_with_certs, sub_transaction_with_certs, SLOT};
@@ -1770,7 +1770,7 @@ mod tests {
 
     /// The ledger leaves a DRep registered when a sub transaction unregisters
     /// it and the parent registers it again, and the DRep model reads it as
-    /// registered only when the registration's key is above the
+    /// registered only when the registration's key is greater than the
     /// unregistration's.
     #[test]
     fn a_parent_registration_is_later_than_its_sub_unregistration() {

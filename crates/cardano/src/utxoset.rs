@@ -1352,7 +1352,7 @@ mod tests {
 
     /// A fixture name, its slot, its top level transactions, the outputs the
     /// block creates, the input the sub transaction spends, the hash of the
-    /// transaction carrying it and the outputs the sub transaction makes.
+    /// transaction that lists it and the outputs the sub transaction makes.
     type SubTransactionCase = (
         &'static str,
         u64,
@@ -1363,7 +1363,7 @@ mod tests {
         &'static [(&'static str, u32)],
     );
 
-    /// The two ranking blocks of the chain whose transactions carry a sub
+    /// The two ranking blocks of the chain whose transactions list a sub
     /// transaction. Their three sub transaction outputs are three of the four
     /// the node held and a synced Dolos did not. The fourth arrives only in an
     /// endorser block.
@@ -1448,7 +1448,7 @@ mod tests {
     }
 
     /// MUST FIRE: every walk applies the sub transaction a block's transaction
-    /// carries, creating its outputs under the hash of its own body, which is
+    /// lists, creating its outputs under the hash of its own body, which is
     /// the key the node answers a utxo query with, and spending the input it
     /// names. The block still counts only its top level transactions.
     #[test]
@@ -1482,14 +1482,14 @@ mod tests {
                     (vec![], true, true, created_count),
                     "{name}, {walk}: the sub transaction's outputs are created under the hash \
                      of its own body, the input it names is spent, and the output of the \
-                     transaction carrying it stands"
+                     transaction that lists it stands"
                 );
             }
         }
     }
 
     /// MUST NOT FIRE: a sub transaction is applied under the verdict on the
-    /// transaction carrying it, so when that transaction is phase 2 invalid no
+    /// transaction that lists it, so when that transaction is phase 2 invalid no
     /// walk creates the sub transaction's outputs or spends its input. The same
     /// block with the verdict left valid is the case that must fire.
     #[test]
@@ -1506,7 +1506,7 @@ mod tests {
                 .map(|(index, _)| index)
                 .collect();
 
-            assert_eq!(carriers.len(), 1, "{name}: one transaction carries a sub");
+            assert_eq!(carriers.len(), 1, "{name}: one transaction lists a sub");
             let carrier = carriers[0];
             assert_eq!(txs[carrier].hash(), Hash::from_str(parent).unwrap());
 
@@ -1528,7 +1528,7 @@ mod tests {
                         applied,
                         vec![success; made.len() + 1],
                         "{name}, {walk}, verdict {success}: the sub transaction's outputs and \
-                         its input follow the verdict on the transaction carrying it"
+                         its input take the verdict on the transaction that lists it"
                     );
                 }
             }
@@ -1538,7 +1538,7 @@ mod tests {
     /// MUST FIRE: a phase 2 invalid transaction that lists a sub transaction
     /// and declares collateral spends its collateral and creates its collateral
     /// return at the index after its last output, and nothing of its sub
-    /// transaction. The block is a harvested one whose carrying transaction is
+    /// transaction. The block is a harvested one whose listing transaction is
     /// rebuilt with a collateral input and a collateral return.
     ///
     /// MUST NOT FIRE: the same transaction left valid spends no collateral and
