@@ -583,7 +583,7 @@ where
             0,
             end_slot,
             |block| {
-                for tx in block.txs().iter() {
+                for (_, tx) in dolos_core::applied_txs(block) {
                     for input in tx.inputs() {
                         let bytes: Vec<u8> = TxoRef::from(&input).into();
                         if bytes.as_slice() == spent.as_slice() {
