@@ -53,9 +53,9 @@ impl LenientApply {
 /// The refs a block spends, all of them, for the lenient path.
 ///
 /// The strict path asks the store only for what the block does not produce
-/// itself, because it resolves a block's transactions as a set. The lenient path
-/// applies them in order, so it has to know what the store really holds and
-/// cannot let a block's own later output stand in for it.
+/// itself, because it resolves a block's transactions as a set. The lenient
+/// path applies them in order, so it has to know what the store really holds
+/// and cannot let a block's own later output stand in for it.
 pub fn compute_block_dependencies_lenient(block: &MultiEraBlock) -> Vec<TxoRef> {
     let mut spent = Vec::new();
 
@@ -90,7 +90,8 @@ pub fn compute_block_dependencies_lenient(block: &MultiEraBlock) -> Vec<TxoRef> 
 /// - a transaction carried twice, whose second application finds its input
 ///   already spent and consumes nothing;
 /// - a transaction carried twice whose output was spent in between, whose
-///   second application RE-CREATES that output, which a later block then spends.
+///   second application RE-CREATES that output, which a later block then
+///   spends.
 ///
 /// The third is why suppressing repeats is not equivalent and why this is done
 /// here rather than by filtering blocks upstream.
@@ -270,14 +271,15 @@ fn apply_txs(
             for consumed in tx.consumes() {
                 let stxi_ref = TxoRef(*consumed.hash(), consumed.index() as u32);
 
-                let stxi_body = loaded.get(&stxi_ref).ok_or_else(|| {
-                    BrokenInvariant::UnresolvedInput {
-                        slot: block.slot(),
-                        block: block.hash(),
-                        tx: tx_hash,
-                        input: stxi_ref.clone(),
-                    }
-                })?;
+                let stxi_body =
+                    loaded
+                        .get(&stxi_ref)
+                        .ok_or_else(|| BrokenInvariant::UnresolvedInput {
+                            slot: block.slot(),
+                            block: block.hash(),
+                            tx: tx_hash,
+                            input: stxi_ref.clone(),
+                        })?;
 
                 let stxi_body_arc = stxi_body.borrow_owner().clone();
 
@@ -834,14 +836,7 @@ mod tests {
                 }
             }
 
-            let sample = txs
-                .first()
-                .unwrap()
-                .produces()
-                .first()
-                .unwrap()
-                .1
-                .encode();
+            let sample = txs.first().unwrap().produces().first().unwrap().1.encode();
 
             let mut made_here = HashSet::new();
             let mut spent = Vec::new();
@@ -926,7 +921,8 @@ mod tests {
         let stats = ledger.apply(&block);
 
         assert_eq!(
-            stats.skipped_inputs(), 1,
+            stats.skipped_inputs(),
+            1,
             "exactly the forward reference was left unconsumed"
         );
         assert!(
@@ -982,7 +978,8 @@ mod tests {
         let first_stats = ledger.apply(&first);
 
         assert_eq!(
-            first_stats.skipped_inputs(), 0,
+            first_stats.skipped_inputs(),
+            0,
             "the first block's own chain resolves, nothing is skipped"
         );
         assert!(
@@ -1040,7 +1037,10 @@ mod tests {
             .filter(|i| made_here.contains(&TxoRef(*i.hash(), i.index() as u32)))
             .count();
 
-        assert!(chained > 0, "fixture precondition: the block chains in itself");
+        assert!(
+            chained > 0,
+            "fixture precondition: the block chains in itself"
+        );
 
         let mut ledger = FakeLedger::default();
         ledger.seed_externals(&block);
@@ -1051,7 +1051,8 @@ mod tests {
             "nothing is re-created the first time"
         );
         assert_eq!(
-            first.skipped_inputs(), 0,
+            first.skipped_inputs(),
+            0,
             "and every input resolves the first time"
         );
 
@@ -1072,7 +1073,9 @@ mod tests {
     /// what the store answers for. A ref the block makes is left out on
     /// purpose: the store does not hold it yet, and the whole difference
     /// between the two rules is what each does with that.
-    fn outside_world(block: &MultiEraBlock) -> (HashMap<TxoRef, OwnedMultiEraOutput>, HashSet<TxoRef>) {
+    fn outside_world(
+        block: &MultiEraBlock,
+    ) -> (HashMap<TxoRef, OwnedMultiEraOutput>, HashSet<TxoRef>) {
         let sample = block
             .txs()
             .first()
@@ -1157,7 +1160,10 @@ mod tests {
         let inputs: usize = block.txs().iter().map(|tx| tx.consumes().len()).sum();
         let outputs: usize = block.txs().iter().map(|tx| tx.produces().len()).sum();
 
-        assert!(chained > 0, "fixture precondition: the block chains in itself");
+        assert!(
+            chained > 0,
+            "fixture precondition: the block chains in itself"
+        );
         assert!(
             chained < inputs,
             "fixture precondition: the block also spends from outside itself"
@@ -1423,8 +1429,7 @@ mod tests {
         let mut ledger = FakeLedger::default();
         ledger.seed_txs(block, txs);
 
-        let (lenient, _) =
-            super::apply_txs_lenient(txs, &ledger.bodies, &ledger.present).unwrap();
+        let (lenient, _) = super::apply_txs_lenient(txs, &ledger.bodies, &ledger.present).unwrap();
 
         let loaded: HashMap<TxoRef, OwnedMultiEraOutput> = ledger
             .bodies
@@ -1441,7 +1446,11 @@ mod tests {
         let (undo, _) = super::undo_txs(block, txs, &ledger.bodies, true).unwrap();
 
         [
-            ("lenient apply", lenient.produced_utxo, lenient.consumed_utxo),
+            (
+                "lenient apply",
+                lenient.produced_utxo,
+                lenient.consumed_utxo,
+            ),
             ("strict apply", strict.produced_utxo, strict.consumed_utxo),
             ("undo", undo.undone_utxo, undo.recovered_stxi),
         ]
@@ -1489,9 +1498,10 @@ mod tests {
     }
 
     /// MUST NOT FIRE: a sub transaction is applied under the verdict on the
-    /// transaction that lists it, so when that transaction is phase 2 invalid no
-    /// walk creates the sub transaction's outputs or spends its input. The same
-    /// block with the verdict left valid is the case that must fire.
+    /// transaction that lists it, so when that transaction is phase 2 invalid
+    /// no walk creates the sub transaction's outputs or spends its input.
+    /// The same block with the verdict left valid is the case that must
+    /// fire.
     #[test]
     fn a_sub_transaction_of_an_invalid_transaction_is_not_applied() {
         for (name, _, _, _, spent, parent, made) in SUB_TRANSACTION_CASES {
@@ -1582,9 +1592,7 @@ mod tests {
                 let hash = rebuilt[carrier].hash();
 
                 for (walk, created, spends) in walks(&block, &rebuilt) {
-                    let sub_applied = made
-                        .iter()
-                        .any(|key| created.contains_key(&txoref(key)))
+                    let sub_applied = made.iter().any(|key| created.contains_key(&txoref(key)))
                         || spends.contains_key(&txoref(&spent));
 
                     assert_eq!(
@@ -1723,10 +1731,10 @@ mod tests {
 ///   element having been nil in every source and does not follow from anything
 ///   else.
 ///
-/// The second claim needs pinning here because nothing else notices it. Flipping
-/// all 1185 verdicts across the three fixtures that have any made two tests in
-/// this file panic on an `unwrap` inside their own setup, which is a crash and
-/// not a verdict, and left every other test passing.
+/// The second claim needs pinning here because nothing else notices it.
+/// Flipping all 1185 verdicts across the three fixtures that have any made two
+/// tests in this file panic on an `unwrap` inside their own setup, which is a
+/// crash and not a verdict, and left every other test passing.
 #[cfg(test)]
 mod dijkstra_fixture_shape {
     use pallas::ledger::traverse::MultiEraBlock;

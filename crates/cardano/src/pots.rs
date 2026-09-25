@@ -134,8 +134,8 @@ impl PotsDrift {
 /// transition deltas, which take only the entity: no configuration, no context,
 /// and they are decoded from the write ahead log, so the flag cannot ride along
 /// inside them without changing the stored encoding of every delta and
-/// invalidating every store and checkpoint on disk. The setting is fixed for the
-/// life of the process, so a global is a faithful model of it rather than a
+/// invalidating every store and checkpoint on disk. The setting is fixed for
+/// the life of the process, so a global is a faithful model of it rather than a
 /// shortcut around plumbing.
 static LENIENT_APPLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 

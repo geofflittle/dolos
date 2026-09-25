@@ -358,12 +358,7 @@ fn replay(entry: &Fixture, cbor: &[u8], lenient: bool) -> Replayed {
 
     let served = tx_hashes(&block)
         .into_iter()
-        .map(|hash| {
-            domain
-                .archive()
-                .slot_by_tx_hash(hash.as_slice())
-                .unwrap()
-        })
+        .map(|hash| domain.archive().slot_by_tx_hash(hash.as_slice()).unwrap())
         .collect();
 
     Replayed {
@@ -803,8 +798,18 @@ fn minibf_serves_each_sub_transaction_by_its_own_hash() {
                 let (status, tx) = get_json(&router, &format!("/txs/{hash}")).await;
 
                 assert_eq!(
-                    (status, tx["hash"].as_str(), tx["index"].as_u64(), tx["slot"].as_u64()),
-                    (200, Some(hash.as_str()), Some(probe.index as u64), Some(entry.slot)),
+                    (
+                        status,
+                        tx["hash"].as_str(),
+                        tx["index"].as_u64(),
+                        tx["slot"].as_u64()
+                    ),
+                    (
+                        200,
+                        Some(hash.as_str()),
+                        Some(probe.index as u64),
+                        Some(entry.slot)
+                    ),
                     "{name}: /txs"
                 );
 
@@ -827,7 +832,11 @@ fn minibf_serves_each_sub_transaction_by_its_own_hash() {
 
             let (status, _) = get_json(&router, &format!("/txs/{}", hex::encode(ABSENT))).await;
 
-            assert_eq!(status, 404, "{}: a hash no block holds is served", entry.name);
+            assert_eq!(
+                status, 404,
+                "{}: a hash no block holds is served",
+                entry.name
+            );
         });
     }
 
@@ -943,14 +952,18 @@ fn minibf_address_routes_count_each_sub_transaction() {
                     })
                     .collect();
 
-                let paying: BTreeSet<(Hash<32>, usize)> =
-                    paid.iter().map(|(hash, index, _)| (*hash, *index)).collect();
+                let paying: BTreeSet<(Hash<32>, usize)> = paid
+                    .iter()
+                    .map(|(hash, index, _)| (*hash, *index))
+                    .collect();
 
                 assert_eq!(
                     (
                         status,
                         paying.iter().all(|x| listed.contains(x)),
-                        listed.iter().all(|(hash, index)| applied.get(hash) == Some(index)),
+                        listed
+                            .iter()
+                            .all(|(hash, index)| applied.get(hash) == Some(index)),
                     ),
                     (200, true, true),
                     "{name}: /addresses/transactions lists {listed:?}, the block pays {paying:?}"
@@ -1038,11 +1051,9 @@ fn minibf_block_routes_count_each_sub_transaction() {
                 .iter()
                 .flat_map(|x| {
                     let address = x["address"].as_str().unwrap().to_string();
-                    x["transactions"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .map(move |tx| (address.clone(), tx["tx_hash"].as_str().unwrap().to_string()))
+                    x["transactions"].as_array().unwrap().iter().map(move |tx| {
+                        (address.clone(), tx["tx_hash"].as_str().unwrap().to_string())
+                    })
                 })
                 .collect();
 

@@ -44,7 +44,9 @@ pub fn applied_txs<'b>(block: &'b MultiEraBlock<'_>) -> Vec<(TxOrder, MultiEraTx
                     .sub_transactions
                     .iter()
                     .flat_map(|subs| subs.iter())
-                    .map(|sub| MultiEraTx::DijkstraSub(Box::new(Cow::Owned(sub.clone())), x.success))
+                    .map(|sub| {
+                        MultiEraTx::DijkstraSub(Box::new(Cow::Owned(sub.clone())), x.success)
+                    })
                     .collect(),
                 _ => vec![],
             };
@@ -56,7 +58,10 @@ pub fn applied_txs<'b>(block: &'b MultiEraBlock<'_>) -> Vec<(TxOrder, MultiEraTx
 
 /// The transaction of a block whose hash is the one given, a sub transaction
 /// included, with the index of the top level transaction that holds it.
-pub fn tx_by_hash<'b>(block: &'b MultiEraBlock<'_>, hash: &[u8]) -> Option<(TxOrder, MultiEraTx<'b>)> {
+pub fn tx_by_hash<'b>(
+    block: &'b MultiEraBlock<'_>,
+    hash: &[u8],
+) -> Option<(TxOrder, MultiEraTx<'b>)> {
     applied_txs(block)
         .into_iter()
         .find(|(_, tx)| tx.hash().as_slice() == hash)

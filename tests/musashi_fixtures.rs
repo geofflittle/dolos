@@ -161,7 +161,10 @@ fn every_file_has_an_entry_and_every_entry_has_its_files() {
         }
     }
 
-    assert!(!on_disk.is_empty(), "the fixture directory holds no fixture");
+    assert!(
+        !on_disk.is_empty(),
+        "the fixture directory holds no fixture"
+    );
     assert_eq!(
         claimed, on_disk,
         "the files on disk and the files the provenance names differ"
@@ -174,7 +177,11 @@ fn every_entry_carries_the_pinned_chain() {
     assert!(!p.fixture.is_empty(), "the provenance names no fixture");
 
     for f in &p.fixture {
-        assert_eq!(f.chain_tag, CHAIN_TAG, "{} carries another chain tag", f.name);
+        assert_eq!(
+            f.chain_tag, CHAIN_TAG,
+            "{} carries another chain tag",
+            f.name
+        );
         assert_eq!(
             f.network_magic, NETWORK_MAGIC,
             "{} carries another network magic",
@@ -190,7 +197,10 @@ fn the_kinds_present_are_exactly_the_kinds_expected() {
     let p = provenance();
     let present: BTreeSet<&str> = p.fixture.iter().map(|f| f.kind.as_str()).collect();
     let expected: BTreeSet<&str> = KINDS.iter().copied().collect();
-    assert_eq!(present, expected, "the kinds present are not the kinds expected");
+    assert_eq!(
+        present, expected,
+        "the kinds present are not the kinds expected"
+    );
 }
 
 #[test]
@@ -202,10 +212,20 @@ fn every_ranking_block_is_the_block_its_entry_names() {
         let Some(file) = f.files.iter().find(|n| n.ends_with(".block")) else {
             continue;
         };
-        assert_eq!(f.files.len(), 1, "{} names more than one block file", f.name);
+        assert_eq!(
+            f.files.len(),
+            1,
+            "{} names more than one block file",
+            f.name
+        );
 
         let raw = read_bytes(file);
-        assert_eq!(raw.len(), f.bytes, "{} is not the length its entry names", f.name);
+        assert_eq!(
+            raw.len(),
+            f.bytes,
+            "{} is not the length its entry names",
+            f.name
+        );
 
         let block = MultiEraBlock::decode(&raw)
             .unwrap_or_else(|e| panic!("{} does not decode as a block: {e}", f.name));
@@ -215,7 +235,12 @@ fn every_ranking_block_is_the_block_its_entry_names() {
             "{} does not hash to the hash the node reported",
             f.name
         );
-        assert_eq!(block.slot(), f.slot, "{} is not at the slot its entry names", f.name);
+        assert_eq!(
+            block.slot(),
+            f.slot,
+            "{} is not at the slot its entry names",
+            f.name
+        );
         assert_eq!(
             block.tx_count(),
             f.transactions,

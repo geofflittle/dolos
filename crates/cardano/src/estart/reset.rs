@@ -86,12 +86,18 @@ pub fn define_new_pots(ctx: &super::WorkContext) -> Pots {
         "pots after reset"
     );
 
-    report_drift(ctx.lenient_apply, epoch.number, &epoch.initial_pots, &pots, || {
-        dbg!(end);
-        dbg!(&epoch.initial_pots);
-        dbg!(&pots);
-        dbg!(delta);
-    });
+    report_drift(
+        ctx.lenient_apply,
+        epoch.number,
+        &epoch.initial_pots,
+        &pots,
+        || {
+            dbg!(end);
+            dbg!(&epoch.initial_pots);
+            dbg!(&pots);
+            dbg!(delta);
+        },
+    );
 
     pots
 }

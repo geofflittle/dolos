@@ -17,10 +17,11 @@ use pallas::{
 use tracing::{debug, instrument, warn};
 
 use crate::{
-    load_effective_pparams, load_gov, owned::OwnedMultiEraOutput,
+    load_effective_pparams, load_gov,
+    owned::OwnedMultiEraOutput,
     pallas_extras::{for_each_applied_tx, tx_direct_deposits},
-    roll::proposals::ProposalVisitor, utxoset, Cache,
-    DRepState, FixedNamespace as _, PParamsSet,
+    roll::proposals::ProposalVisitor,
+    utxoset, Cache, DRepState, FixedNamespace as _, PParamsSet,
 };
 
 // Sub-modules
@@ -1033,7 +1034,8 @@ pub(crate) mod dijkstra_fixture {
         }
     }
 
-    /// A sub transaction whose body holds the certificates given and nothing else.
+    /// A sub transaction whose body holds the certificates given and nothing
+    /// else.
     pub fn sub_transaction_with_certs(
         certificates: Vec<dijkstra::Certificate>,
     ) -> dijkstra::SubTransaction<'static> {
@@ -1596,9 +1598,10 @@ mod tests {
         account?.stake.live().map(|stake| stake.withdrawable())
     }
 
-    /// The must-not case. Under a phase 2 invalid verdict neither the transaction's
-    /// certificates and direct deposit nor its sub transaction take effect, so
-    /// neither stake key the block registers has a withdrawable balance.
+    /// The must-not case. Under a phase 2 invalid verdict neither the
+    /// transaction's certificates and direct deposit nor its sub
+    /// transaction take effect, so neither stake key the block registers
+    /// has a withdrawable balance.
     #[test]
     fn an_invalid_transaction_credits_no_direct_deposit() {
         let deltas = crawl_block_with_direct_deposits(false);
@@ -1644,7 +1647,10 @@ mod tests {
         epoch_stats(deltas).apply(&mut epoch);
 
         let epoch = epoch.unwrap();
-        let rolling = epoch.rolling.live().expect("the block opens the rolling stats");
+        let rolling = epoch
+            .rolling
+            .live()
+            .expect("the block opens the rolling stats");
         let delta = PotDelta::from_rolling(rolling, &test_pparams());
 
         apply_delta(Pots::default(), &EpochIncentives::default(), &delta).rewards

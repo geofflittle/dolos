@@ -182,7 +182,8 @@ impl<'a> TryFrom<&'a EraCbor> for MultiEraTx<'a> {
 pub enum TxCbor {
     /// A top level transaction, with its era.
     Tx(EraCbor),
-    /// A Dijkstra sub transaction, with the validity flag of the transaction that lists it.
+    /// A Dijkstra sub transaction, with the validity flag of the transaction
+    /// that lists it.
     DijkstraSub(Cbor, bool),
 }
 

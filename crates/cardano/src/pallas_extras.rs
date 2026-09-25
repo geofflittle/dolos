@@ -7,8 +7,8 @@ use pallas::ledger::primitives::alonzo::MoveInstantaneousReward;
 use pallas::ledger::primitives::conway::{
     CostModels, DRep, DRepVotingThresholds, PoolVotingThresholds,
 };
-use pallas::ledger::primitives::{PoolMetadata, RationalNumber, Relay, StakeCredential};
 use pallas::ledger::primitives::{Epoch, ExUnitPrices, ExUnits, Nonce, NonceVariant};
+use pallas::ledger::primitives::{PoolMetadata, RationalNumber, Relay, StakeCredential};
 use pallas::ledger::traverse::cert::BlsKeySlot;
 use pallas::ledger::traverse::{MultiEraCert, MultiEraCertKind, MultiEraScriptRef, MultiEraTx};
 use serde::{Deserialize, Serialize};
@@ -418,7 +418,8 @@ pub fn script_ref_parts(script_ref: &MultiEraScriptRef) -> ScriptRefParts {
         // bytes it returns disagree. No variant of ScriptRefParts can state
         // that, and serving a script with the wrong bytes under the right hash
         // is worse than stopping.
-        bytes: bytes.expect("a reference script reporting a language carries that language's bytes"),
+        bytes: bytes
+            .expect("a reference script reporting a language carries that language's bytes"),
     }
 }
 
@@ -698,7 +699,10 @@ mod dijkstra_certificate_tests {
                 "pool_retirement",
             ),
             (DijkstraCert::Reg(cred(), 2_000_000), "stake_registration"),
-            (DijkstraCert::UnReg(cred(), 2_000_000), "stake_deregistration"),
+            (
+                DijkstraCert::UnReg(cred(), 2_000_000),
+                "stake_deregistration",
+            ),
             (
                 DijkstraCert::StakeDelegation(cred(), POOL.parse().unwrap()),
                 "stake_delegation",
@@ -823,7 +827,11 @@ mod dijkstra_certificate_tests {
             },
         ))));
 
-        let read = |cert: &MultiEraCert| cert_as_pool_registration(cert).expect("must be read").bls_key;
+        let read = |cert: &MultiEraCert| {
+            cert_as_pool_registration(cert)
+                .expect("must be read")
+                .bls_key
+        };
 
         assert_eq!(read(&nil), MultiEraBlsKey::Null);
         assert_eq!(read(&omitted), MultiEraBlsKey::NoSlot);
@@ -956,9 +964,10 @@ mod earlier_era_certificate_tests {
     fn a_move_instantaneous_rewards_certificate_is_read_for_the_era_that_names_it() {
         let mir = pallas::ledger::primitives::alonzo::MoveInstantaneousReward {
             source: pallas::ledger::primitives::alonzo::InstantaneousRewardSource::Reserves,
-            target: pallas::ledger::primitives::alonzo::InstantaneousRewardTarget::OtherAccountingPot(
-                1_000_000,
-            ),
+            target:
+                pallas::ledger::primitives::alonzo::InstantaneousRewardTarget::OtherAccountingPot(
+                    1_000_000,
+                ),
         };
 
         let cert = alonzo(AlonzoCert::MoveInstantaneousRewardsCert(mir));
@@ -1086,7 +1095,8 @@ mod treasury_donation_tests {
     const DIJKSTRA_SUB_WITHOUT_DONATION: &str =
         "83a20081825820000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f000180a0f6";
 
-    /// The must-fire case for a sub transaction: its body key 22 reads as its donation.
+    /// The must-fire case for a sub transaction: its body key 22 reads as its
+    /// donation.
     #[test]
     fn a_sub_transaction_donation_is_read() {
         let bytes = hex::decode(DIJKSTRA_SUB_WITH_DONATION).unwrap();
