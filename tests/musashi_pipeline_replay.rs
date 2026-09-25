@@ -1324,8 +1324,7 @@ fn listed_input(utxos: &serde_json::Value, txo: &TxoRef) -> Option<(bool, u64)> 
 
 /// MUST FIRE: an input made by a sub transaction of an earlier block, spent by
 /// a sub transaction and referenced by its parent, is answered with that
-/// output's lovelace by `/txs/{hash}/utxos` for both, and the block route
-/// lists the sub transaction under that output's address.
+/// output's lovelace by `/txs/{hash}/utxos` for both.
 ///
 /// MUST NOT FIRE: the parent's input made by a top level transaction of the
 /// earlier block is answered with that output's lovelace too.
@@ -1389,39 +1388,144 @@ fn minibf_resolves_an_input_a_sub_transaction_made() {
             "/txs/{}/utxos",
             sub.hash()
         );
+    });
+}
 
+/// The block with the outputs of the sub transaction given removed.
+#[cfg(feature = "minibf")]
+fn without_outputs_of(cbor: &[u8], hash: Hash<32>) -> Vec<u8> {
+    use pallas::codec::utils::{KeepRaw, MaybeIndefArray};
+
+    let (era, mut block): (u16, dijkstra::Block) = minicbor::decode(cbor).unwrap();
+
+    let (MaybeIndefArray::Def(txs) | MaybeIndefArray::Indef(txs)) =
+        &mut block.block_body.transactions;
+
+    let mut emptied = 0;
+
+    for tx in txs.iter_mut() {
+        let lists = |subs: &dijkstra::SubTransactions| subs.iter().any(|x| sub_hash(x) == hash);
+
+        if !tx
+            .transaction_body
+            .sub_transactions
+            .as_ref()
+            .is_some_and(lists)
+        {
+            continue;
+        }
+
+        let mut body = (*tx.transaction_body).clone();
+        let listed = body.sub_transactions.take().unwrap();
+        let arm = listed.arm();
+
+        let subs = listed
+            .into_vec()
+            .into_iter()
+            .map(|mut sub| {
+                if sub_hash(&sub) == hash {
+                    let mut sub_body = (*sub.sub_transaction_body).clone();
+                    sub_body.outputs = MaybeIndefArray::Def(vec![]);
+                    sub.sub_transaction_body = KeepRaw::from(sub_body);
+                    emptied += 1;
+                }
+                sub
+            })
+            .collect();
+
+        body.sub_transactions = dijkstra::NonEmptySet::from_vec(subs).map(|x| x.with_arm(arm));
+        tx.transaction_body = KeepRaw::from(body);
+    }
+
+    assert_eq!(
+        emptied, 1,
+        "the block lists the sub transaction {hash} once"
+    );
+
+    minicbor::to_vec((era, block)).unwrap()
+}
+
+/// MUST FIRE: the block route lists a sub transaction under the address of the
+/// output it spends that a sub transaction of an earlier block made. The
+/// spending sub transaction's outputs are removed, so that address can come
+/// only from its resolved input.
+///
+/// MUST NOT FIRE: it lists that sub transaction under no other address.
+#[cfg(feature = "minibf")]
+#[test]
+fn minibf_block_route_lists_a_sub_transaction_under_the_address_it_spends() {
+    let first = block_fixture(SUB_OUTPUTS);
+    let made = outputs_by_ref(&MultiEraBlock::decode(&first).unwrap());
+
+    let spent = |sub: &MultiEraTx| -> BTreeSet<String> {
+        sub.consumes()
+            .iter()
+            .filter_map(|input| made.get(&TxoRef::from(input)))
+            .map(|(address, _)| address.clone())
+            .collect()
+    };
+
+    let spender = |block: &MultiEraBlock| -> (Hash<32>, BTreeSet<String>, usize) {
+        block
+            .txs()
+            .iter()
+            .flat_map(|tx| tx.sub_transactions())
+            .map(|sub| (sub.hash(), spent(&sub), sub.produces().len()))
+            .find(|(_, from, _)| !from.is_empty())
+            .expect("no sub transaction spends an output the earlier block makes")
+    };
+
+    let harvested = block_fixture(SUB_OUTPUT_SPENDER);
+    let (hash, _, _) = spender(&MultiEraBlock::decode(&harvested).unwrap());
+
+    let second = without_outputs_of(&harvested, hash);
+    let block = MultiEraBlock::decode(&second).unwrap();
+    let (hash, spent, outputs) = spender(&block);
+
+    assert_eq!(
+        outputs, 0,
+        "the rewritten sub transaction {hash} makes outputs"
+    );
+
+    let domain = replay_pair(&first, &second);
+    let config = dolos_core::config::MinibfConfig::new("[::]:0".parse().unwrap());
+    let router = dolos_minibf::build_router(config, domain);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+
+    let (status, listed) = runtime.block_on(async {
         let mut listed = BTreeSet::new();
+        let mut page = 1;
 
-        for page in 1.. {
+        loop {
             let (status, addresses) = get_json(
                 &router,
                 &format!("/blocks/{}/addresses?count=100&page={page}", block.hash()),
             )
             .await;
 
-            assert_eq!(status, 200, "/blocks/addresses page {page}");
+            let addresses = match addresses.as_array() {
+                Some(x) if status == 200 && !x.is_empty() => x.clone(),
+                _ => return (status, listed),
+            };
 
-            let addresses = addresses.as_array().unwrap();
-
-            if addresses.is_empty() {
-                break;
-            }
-
-            for x in addresses {
+            for x in &addresses {
                 for tx in x["transactions"].as_array().unwrap() {
-                    listed.insert((
-                        x["address"].as_str().unwrap().to_string(),
-                        tx["tx_hash"].as_str().unwrap().to_string(),
-                    ));
+                    if tx["tx_hash"].as_str() == Some(hash.to_string().as_str()) {
+                        listed.insert(x["address"].as_str().unwrap().to_string());
+                    }
                 }
             }
-        }
 
-        assert!(
-            listed.contains(&(made[&by_sub].0.clone(), sub.hash().to_string())),
-            "/blocks/addresses does not list the sub transaction under the address it spends from"
-        );
+            page += 1;
+        }
     });
+
+    assert_eq!(
+        (status, listed),
+        (200, spent),
+        "/blocks/{}/addresses for the sub transaction {hash}",
+        block.hash()
+    );
 }
 
 /// MUST FIRE: a match on every output of a sub transaction answers the outputs
