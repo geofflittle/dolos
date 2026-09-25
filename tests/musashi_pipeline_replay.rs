@@ -5,11 +5,12 @@
 //! blocks, so each one is replayed on its own store, seeded with the outputs
 //! that block spends.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use dolos_core::{
+    async_query::{AsyncQueryFacade, BlockMetaResolver},
     config::{CardanoConfig, SyncConfig},
     sync::SyncExt,
     ArchiveStore, Domain, EraCbor, Genesis, StateStore, TxoRef, UtxoSetDelta,
@@ -128,8 +129,11 @@ fn sync_config(lenient: bool) -> SyncConfig {
 }
 
 /// Each sub transaction the block's top level transactions list, with the
-/// verdict on the one that lists it, read from the block's own fields.
-fn sub_transactions<'a>(block: &'a MultiEraBlock) -> Vec<(bool, &'a dijkstra::SubTransaction<'a>)> {
+/// index of the one that lists it and the verdict on it, read from the block's
+/// own fields.
+fn sub_transactions<'a>(
+    block: &'a MultiEraBlock,
+) -> Vec<(usize, bool, &'a dijkstra::SubTransaction<'a>)> {
     let Some(block) = block.as_dijkstra() else {
         return vec![];
     };
@@ -138,12 +142,13 @@ fn sub_transactions<'a>(block: &'a MultiEraBlock) -> Vec<(bool, &'a dijkstra::Su
         .block_body
         .transactions
         .iter()
-        .flat_map(|tx| {
+        .enumerate()
+        .flat_map(|(index, tx)| {
             tx.transaction_body
                 .sub_transactions
                 .iter()
                 .flat_map(|subs| subs.iter())
-                .map(|sub| (tx.success, sub))
+                .map(move |sub| (index, tx.success, sub))
         })
         .collect()
 }
@@ -167,7 +172,7 @@ fn produced(block: &MultiEraBlock) -> Vec<(TxoRef, Vec<u8>)> {
         }
     }
 
-    for (success, sub) in sub_transactions(block) {
+    for (_, success, sub) in sub_transactions(block) {
         if !success {
             continue;
         }
@@ -193,7 +198,7 @@ fn consumed(block: &MultiEraBlock) -> Vec<TxoRef> {
         }
     }
 
-    for (success, sub) in sub_transactions(block) {
+    for (_, success, sub) in sub_transactions(block) {
         if !success {
             continue;
         }
@@ -213,7 +218,11 @@ fn tx_hashes(block: &MultiEraBlock) -> Vec<Hash<32>> {
         .txs()
         .iter()
         .map(|tx| tx.hash())
-        .chain(sub_transactions(block).into_iter().map(|(_, sub)| sub_hash(sub)))
+        .chain(
+            sub_transactions(block)
+                .into_iter()
+                .map(|(_, _, sub)| sub_hash(sub)),
+        )
         .collect()
 }
 
@@ -304,6 +313,7 @@ struct Replayed {
     /// The slot the archive answers for each of the block's transaction
     /// hashes, in wire order.
     served: Vec<Option<u64>>,
+    domain: ToyDomain,
 }
 
 fn replay(entry: &Fixture, cbor: &[u8], lenient: bool) -> Replayed {
@@ -361,6 +371,7 @@ fn replay(entry: &Fixture, cbor: &[u8], lenient: bool) -> Replayed {
         after,
         bodies,
         served,
+        domain,
     }
 }
 
@@ -555,4 +566,233 @@ fn the_lenient_rule_changes_nothing_for_the_harvested_blocks() {
             entry.name
         );
     }
+}
+
+/// A transaction a lookup by hash is asked for: its hash, the index of the top
+/// level transaction that holds it, its bytes and its number of outputs.
+struct Probe {
+    hash: Hash<32>,
+    index: usize,
+    bytes: Vec<u8>,
+    outputs: usize,
+}
+
+/// Every sub transaction the block lists, each top level transaction that
+/// lists one, and the block's first and last transaction.
+fn probes(block: &MultiEraBlock) -> Vec<Probe> {
+    let txs = block.txs();
+    let subs = sub_transactions(block);
+
+    let mut indexes: BTreeSet<usize> = subs.iter().map(|(index, _, _)| *index).collect();
+
+    if let Some(last) = txs.len().checked_sub(1) {
+        indexes.extend([0, last]);
+    }
+
+    let top_level = indexes.into_iter().map(|index| Probe {
+        hash: txs[index].hash(),
+        index,
+        bytes: txs[index].encode(),
+        outputs: txs[index].outputs().len(),
+    });
+
+    let subs = subs.into_iter().map(|(index, _, sub)| Probe {
+        hash: sub_hash(sub),
+        index,
+        bytes: minicbor::to_vec(sub).unwrap(),
+        outputs: sub.sub_transaction_body.outputs.len(),
+    });
+
+    top_level.chain(subs).collect()
+}
+
+/// A hash no fixture holds.
+const ABSENT: [u8; 32] = [0xff; 32];
+
+/// MUST FIRE: each sub transaction is found by its own hash in every core
+/// lookup by hash, which answers its own bytes and the index of the top level
+/// transaction that lists it.
+///
+/// MUST NOT FIRE: a top level transaction is found as itself at its own index,
+/// and a hash no block holds is found by no lookup.
+#[test]
+fn every_lookup_by_hash_finds_each_sub_transaction() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let mut sub_probes = 0;
+
+    for (entry, cbor) in &block_fixtures() {
+        let block = MultiEraBlock::decode(cbor).unwrap();
+        let probes = probes(&block);
+
+        if probes.is_empty() {
+            continue;
+        }
+
+        sub_probes += sub_transactions(&block).len();
+
+        let replayed = replay(entry, cbor, true);
+        let query = AsyncQueryFacade::new(replayed.domain.clone());
+
+        runtime.block_on(async {
+            for probe in &probes {
+                let name = format!("{} {}", entry.name, probe.hash);
+
+                let (raw, index) = query
+                    .block_by_tx_hash(probe.hash.to_vec())
+                    .await
+                    .unwrap()
+                    .unwrap_or_else(|| panic!("{name}: block_by_tx_hash finds nothing"));
+
+                assert_eq!(
+                    (MultiEraBlock::decode(&raw).unwrap().slot(), index),
+                    (entry.slot, probe.index),
+                    "{name}: block_by_tx_hash"
+                );
+
+                let meta = query
+                    .block_meta_by_tx_hash(probe.hash.to_vec())
+                    .await
+                    .unwrap()
+                    .unwrap_or_else(|| panic!("{name}: block_meta_by_tx_hash finds nothing"));
+
+                assert_eq!(
+                    (meta.slot, meta.tx_hash, meta.tx_index),
+                    (entry.slot, probe.hash, probe.index),
+                    "{name}: block_meta_by_tx_hash"
+                );
+
+                let batch = BlockMetaResolver::new(query.clone())
+                    .resolve_batch([probe.hash])
+                    .await
+                    .unwrap();
+
+                assert_eq!(
+                    batch
+                        .get(&probe.hash)
+                        .map(|meta| (meta.slot, meta.tx_index)),
+                    Some((entry.slot, probe.index)),
+                    "{name}: resolve_batch"
+                );
+
+                let EraCbor(_, bytes) = query
+                    .tx_cbor(probe.hash.to_vec())
+                    .await
+                    .unwrap()
+                    .unwrap_or_else(|| panic!("{name}: tx_cbor finds nothing"));
+
+                assert_eq!(bytes, probe.bytes, "{name}: tx_cbor");
+            }
+
+            assert_eq!(
+                (
+                    query
+                        .block_by_tx_hash(ABSENT.to_vec())
+                        .await
+                        .unwrap()
+                        .is_some(),
+                    query
+                        .block_meta_by_tx_hash(ABSENT.to_vec())
+                        .await
+                        .unwrap()
+                        .is_some(),
+                    query.tx_cbor(ABSENT.to_vec()).await.unwrap().is_some(),
+                ),
+                (false, false, false),
+                "{}: a hash no block holds is found",
+                entry.name
+            );
+        });
+    }
+
+    assert!(
+        sub_probes > 0,
+        "no fixture lists a sub transaction, so no sub transaction was looked up"
+    );
+}
+
+#[cfg(feature = "minibf")]
+async fn get_json(router: &axum::Router, path: &str) -> (u16, serde_json::Value) {
+    use http_body_util::BodyExt as _;
+    use tower::util::ServiceExt as _;
+
+    let request = axum::http::Request::builder()
+        .uri(path)
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let response = router.clone().oneshot(request).await.unwrap();
+    let status = response.status().as_u16();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+/// MUST FIRE: minibf answers each sub transaction's own hash, index, bytes and
+/// outputs under its own hash.
+///
+/// MUST NOT FIRE: a top level transaction is answered as itself, and a hash no
+/// block holds is answered with not found.
+#[cfg(feature = "minibf")]
+#[test]
+fn minibf_serves_each_sub_transaction_by_its_own_hash() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let mut sub_probes = 0;
+
+    for (entry, cbor) in &block_fixtures() {
+        let block = MultiEraBlock::decode(cbor).unwrap();
+        let subs = sub_transactions(&block).len();
+
+        if subs == 0 {
+            continue;
+        }
+
+        sub_probes += subs;
+
+        let replayed = replay(entry, cbor, true);
+        let config = dolos_core::config::MinibfConfig::new("[::]:0".parse().unwrap());
+        let router = dolos_minibf::build_router(config, replayed.domain.clone());
+
+        runtime.block_on(async {
+            for probe in probes(&block) {
+                let hash = hex::encode(probe.hash);
+                let name = format!("{} {hash}", entry.name);
+
+                let (status, tx) = get_json(&router, &format!("/txs/{hash}")).await;
+
+                assert_eq!(
+                    (status, tx["hash"].as_str(), tx["index"].as_u64(), tx["slot"].as_u64()),
+                    (200, Some(hash.as_str()), Some(probe.index as u64), Some(entry.slot)),
+                    "{name}: /txs"
+                );
+
+                let (status, cbor) = get_json(&router, &format!("/txs/{hash}/cbor")).await;
+
+                assert_eq!(
+                    (status, cbor["cbor"].as_str()),
+                    (200, Some(hex::encode(&probe.bytes).as_str())),
+                    "{name}: /txs/cbor"
+                );
+
+                let (status, utxos) = get_json(&router, &format!("/txs/{hash}/utxos")).await;
+
+                assert_eq!(
+                    (status, utxos["outputs"].as_array().map(Vec::len)),
+                    (200, Some(probe.outputs)),
+                    "{name}: /txs/utxos"
+                );
+            }
+
+            let (status, _) = get_json(&router, &format!("/txs/{}", hex::encode(ABSENT))).await;
+
+            assert_eq!(status, 404, "{}: a hash no block holds is served", entry.name);
+        });
+    }
+
+    assert!(
+        sub_probes > 0,
+        "no fixture lists a sub transaction, so no sub transaction was served"
+    );
 }

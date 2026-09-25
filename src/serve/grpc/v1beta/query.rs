@@ -1246,6 +1246,48 @@ mod tests {
         assert_eq!(map.expect("no cost model map").plutus_v4, None);
     }
 
+    /// A sub transaction is read by its own hash as itself, and the transaction
+    /// listing it is read as the transaction listing it.
+    #[tokio::test]
+    async fn read_tx_answers_a_sub_transaction_by_its_own_hash() {
+        let fixture = crate::tests::musashi::sub_transaction_block();
+        let service = QueryServiceImpl::new(fixture.domain.clone());
+
+        let mut answers = vec![];
+
+        for hash in [fixture.sub, fixture.parent] {
+            let request = u5c::query::ReadTxRequest {
+                hash: hash.to_vec().into(),
+                ..Default::default()
+            };
+
+            let tx = QueryService::read_tx(&service, Request::new(request))
+                .await
+                .unwrap()
+                .into_inner()
+                .tx
+                .unwrap();
+
+            answers.push((tx.native_bytes.to_vec(), tx.block_ref.map(|x| x.slot)));
+        }
+
+        let parent = pallas::ledger::traverse::MultiEraTx::decode_for_era(
+            pallas::ledger::traverse::Era::Dijkstra,
+            &answers[1].0,
+        )
+        .unwrap()
+        .hash();
+
+        assert_eq!(
+            (answers[0].clone(), answers[1].1, parent),
+            (
+                (fixture.sub_bytes, Some(fixture.slot)),
+                Some(fixture.slot),
+                fixture.parent
+            )
+        );
+    }
+
     #[tokio::test]
     async fn read_genesis_applies_field_mask() {
         let domain = ToyDomain::new_with_genesis(
