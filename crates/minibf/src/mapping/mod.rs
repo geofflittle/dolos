@@ -60,7 +60,9 @@ use blockfrost_openapi::models::{
 use dolos_cardano::{
     pallas_extras, AccountState, ChainSummary, DRepState, PParamsSet, PoolHash, PoolState,
 };
-use dolos_core::{async_query::BlockRefMeta, Domain, EraCbor, TxHash, TxOrder, TxoIdx, TxoRef};
+use dolos_core::{
+    async_query::BlockRefMeta, Domain, EraCbor, TxCbor, TxHash, TxOrder, TxoIdx, TxoRef,
+};
 
 use crate::Facade;
 
@@ -1774,11 +1776,8 @@ impl<'a> TxModelBuilder<'a> {
         Ok(deps)
     }
 
-    pub fn load_dep(&mut self, key: TxHash, cbor: &'a EraCbor) -> Result<(), StatusCode> {
-        let era = try_into_or_500!(cbor.0);
-
-        let tx = MultiEraTx::decode_for_era(era, &cbor.1)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    pub fn load_dep(&mut self, key: TxHash, cbor: &'a TxCbor) -> Result<(), StatusCode> {
+        let tx = MultiEraTx::try_from(cbor).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         self.deps.insert(key, tx);
 

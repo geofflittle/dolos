@@ -24,8 +24,8 @@ use tracing::Level;
 
 use dolos_core::{
     config::MinibfConfig, ArchiveStore as _, AsyncQueryFacade, BlockSlot, CancelToken, Domain,
-    Entity, EntityKey, EraCbor, LogKey, ServeError, StateError, StateStore as _, SubmitExt,
-    TemporalKey, TxOrder,
+    Entity, EntityKey, LogKey, ServeError, StateError, StateStore as _, SubmitExt, TemporalKey,
+    TxCbor, TxOrder,
 };
 
 mod cache;
@@ -60,7 +60,7 @@ impl<D: Domain> Deref for Facade<D> {
     }
 }
 
-pub type TxMap = HashMap<Hash<32>, Option<EraCbor>>;
+pub type TxMap = HashMap<Hash<32>, Option<TxCbor>>;
 pub type BlockWithTx = (Vec<u8>, TxOrder);
 pub type BlockWithTxMap = HashMap<Hash<32>, BlockWithTx>;
 
@@ -167,7 +167,7 @@ impl<D: Domain> Facade<D> {
         Ok(log.pparams.live().cloned().unwrap_or_default())
     }
 
-    pub async fn get_tx(&self, hash: Hash<32>) -> Result<Option<EraCbor>, StatusCode>
+    pub async fn get_tx(&self, hash: Hash<32>) -> Result<Option<TxCbor>, StatusCode>
     where
         D: Clone + Send + Sync + 'static,
     {

@@ -6,12 +6,12 @@ use axum::{
 };
 use dolos_cardano::{indexes::CardanoStateIndexExt, network_from_genesis, pallas_extras};
 use dolos_core::async_query::BlockMetaResolver;
-use dolos_core::{ArchiveStore as _, Domain, EraCbor, StateStore as _, TxoRef, UtxoSet};
+use dolos_core::{ArchiveStore as _, Domain, StateStore as _, TxoRef, UtxoSet};
 use pallas::codec::minicbor;
 use pallas::ledger::{
     addresses::{Address, StakeAddress},
     primitives::{conway::DatumOption, StakeCredential},
-    traverse::{Era, MultiEraOutput, MultiEraTx, MultiEraValue, OriginalHash},
+    traverse::{MultiEraOutput, MultiEraTx, MultiEraValue, OriginalHash},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -348,7 +348,7 @@ async fn refs_for_output_ref_pattern<D: Domain>(
             refs
         }
         patterns::OutputIndexPattern::Any => {
-            let Some(EraCbor(era, cbor)) = facade
+            let Some(cbor) = facade
                 .query()
                 .tx_cbor(tx_id.to_vec())
                 .await
@@ -357,8 +357,7 @@ async fn refs_for_output_ref_pattern<D: Domain>(
                 return Ok((UtxoSet::new(), OutputFilter::None));
             };
 
-            let era = Era::try_from(era).map_err(|_| MatchError::Internal)?;
-            let tx = MultiEraTx::decode_for_era(era, &cbor).map_err(|_| MatchError::Internal)?;
+            let tx = MultiEraTx::try_from(&cbor).map_err(|_| MatchError::Internal)?;
             let mut refs = UtxoSet::new();
             for (index, _) in tx.outputs().iter().enumerate() {
                 refs.insert(TxoRef(tx_hash, index as u32));

@@ -13,15 +13,13 @@ use dolos_core::{
     async_query::{AsyncQueryFacade, BlockMetaResolver},
     config::{CardanoConfig, SyncConfig},
     sync::SyncExt,
-    ArchiveStore, Domain, EraCbor, Genesis, StateStore, TxoRef, UtxoSetDelta,
+    ArchiveStore, Domain, EraCbor, Genesis, StateStore, TxCbor, TxoRef, UtxoSetDelta,
 };
 use dolos_testing::toy_domain::ToyDomain;
 use pallas::codec::minicbor;
 use pallas::crypto::hash::{Hash, Hasher};
 use pallas::ledger::primitives::dijkstra;
-use pallas::ledger::traverse::MultiEraBlock;
-#[cfg(feature = "minibf")]
-use pallas::ledger::traverse::MultiEraTx;
+use pallas::ledger::traverse::{MultiEraBlock, MultiEraTx};
 use serde::Deserialize;
 
 const DIR: &str = "test_data/musashi-w36";
@@ -571,11 +569,13 @@ fn the_lenient_rule_changes_nothing_for_the_harvested_blocks() {
 }
 
 /// A transaction a lookup by hash is asked for: its hash, the index of the top
-/// level transaction that holds it, its bytes and its number of outputs.
+/// level transaction that holds it, its bytes, the answer `tx_cbor` gives for
+/// it and its number of outputs.
 struct Probe {
     hash: Hash<32>,
     index: usize,
     bytes: Vec<u8>,
+    cbor: TxCbor,
     outputs: usize,
 }
 
@@ -595,13 +595,15 @@ fn probes(block: &MultiEraBlock) -> Vec<Probe> {
         hash: txs[index].hash(),
         index,
         bytes: txs[index].encode(),
+        cbor: TxCbor::Tx(EraCbor(block.era().into(), txs[index].encode())),
         outputs: txs[index].outputs().len(),
     });
 
-    let subs = subs.into_iter().map(|(index, _, sub)| Probe {
+    let subs = subs.into_iter().map(|(index, success, sub)| Probe {
         hash: sub_hash(sub),
         index,
         bytes: minicbor::to_vec(sub).unwrap(),
+        cbor: TxCbor::DijkstraSub(minicbor::to_vec(sub).unwrap(), success),
         outputs: sub.sub_transaction_body.outputs.len(),
     });
 
@@ -676,13 +678,19 @@ fn every_lookup_by_hash_finds_each_sub_transaction() {
                     "{name}: resolve_batch"
                 );
 
-                let EraCbor(_, bytes) = query
+                let answer = query
                     .tx_cbor(probe.hash.to_vec())
                     .await
                     .unwrap()
                     .unwrap_or_else(|| panic!("{name}: tx_cbor finds nothing"));
 
-                assert_eq!(bytes, probe.bytes, "{name}: tx_cbor");
+                assert_eq!(answer, probe.cbor, "{name}: tx_cbor");
+
+                assert_eq!(
+                    MultiEraTx::try_from(&answer).ok().map(|tx| tx.hash()),
+                    Some(probe.hash),
+                    "{name}: tx_cbor decodes"
+                );
             }
 
             assert_eq!(

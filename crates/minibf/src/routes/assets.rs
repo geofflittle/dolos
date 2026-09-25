@@ -21,7 +21,7 @@ use dolos_cardano::{
     model::AssetState,
     ChainSummary,
 };
-use dolos_core::{ArchiveStore as _, BlockSlot, Domain, EraCbor, StateStore as _};
+use dolos_core::{ArchiveStore as _, BlockSlot, Domain, StateStore as _, TxCbor};
 use futures_util::StreamExt;
 use itertools::Itertools;
 use pallas::{
@@ -260,10 +260,8 @@ fn cip68_reference_from_unit(
     cip_68_reference_asset(policy_id, asset_name).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-fn decode_era_tx(era: u16, cbor: &[u8]) -> Result<MultiEraTx<'_>, StatusCode> {
-    let era = pallas::ledger::traverse::Era::try_from(era)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    MultiEraTx::decode_for_era(era, cbor).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+fn decode_tx(cbor: &TxCbor) -> Result<MultiEraTx<'_>, StatusCode> {
+    MultiEraTx::try_from(cbor).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 async fn metadata_from_datum_option<D>(
@@ -317,7 +315,7 @@ struct AssetModelBuilder {
     subject: Vec<u8>,
     unit: String,
     asset_state: dolos_cardano::model::AssetState,
-    initial_tx: Option<EraCbor>,
+    initial_tx: Option<TxCbor>,
     registry_url: Option<String>,
 }
 
@@ -344,13 +342,13 @@ impl AssetModelBuilder {
             let ref_state = domain.read_cardano_entity::<AssetState>(entity_key.as_slice())?;
 
             if let Some(metadata_tx) = ref_state.and_then(|state| state.metadata_tx) {
-                if let Some(EraCbor(era, cbor)) = domain
+                if let Some(cbor) = domain
                     .query()
                     .tx_cbor(metadata_tx.as_slice().to_vec())
                     .await
                     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
                 {
-                    let tx = decode_era_tx(era, &cbor)?;
+                    let tx = decode_tx(&cbor)?;
                     if let Some(metadata) =
                         last_cip68_metadata_from_tx(domain, &tx, ref_asset_bytes, *standard).await?
                     {
@@ -374,8 +372,8 @@ impl AssetModelBuilder {
             }
         }
 
-        if let Some(EraCbor(era, cbor)) = &cip25_tx {
-            let tx = decode_era_tx(*era, cbor)?;
+        if let Some(cbor) = &cip25_tx {
+            let tx = decode_tx(cbor)?;
 
             if let Some((_, standard, ref_asset_bytes)) = &cip68_reference {
                 if let Some(metadata) =

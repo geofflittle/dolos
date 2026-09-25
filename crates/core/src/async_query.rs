@@ -13,7 +13,7 @@ use pallas::ledger::traverse::{MultiEraBlock, MultiEraTx};
 
 use crate::{
     archive::ArchiveStore, ArchiveError, BlockBody, BlockHash, BlockHeight, BlockSlot, ChainError,
-    ChainPoint, Domain, DomainError, EraCbor, TagDimension, TxHash, TxOrder,
+    ChainPoint, Domain, DomainError, TagDimension, TxCbor, TxHash, TxOrder,
 };
 
 /// Lightweight block metadata for a transaction, extracted via a single decode.
@@ -449,7 +449,7 @@ where
         Ok((fetched, body_fetches))
     }
 
-    pub async fn tx_cbor(&self, tx_hash: Vec<u8>) -> Result<Option<EraCbor>, DomainError> {
+    pub async fn tx_cbor(&self, tx_hash: Vec<u8>) -> Result<Option<TxCbor>, DomainError> {
         let tx_hash_lookup = tx_hash.clone();
         let Some(raw) = self
             .run_blocking(move |domain| {
@@ -468,7 +468,7 @@ where
         let block = MultiEraBlock::decode(raw.as_slice())
             .map_err(|e| DomainError::ChainError(ChainError::DecodingError(e)))?;
         if let Some((_, tx)) = tx_by_hash(&block, &tx_hash) {
-            return Ok(Some(EraCbor(block.era().into(), tx.encode())));
+            return Ok(Some(TxCbor::from(&tx)));
         }
 
         Ok(None)

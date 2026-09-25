@@ -1189,11 +1189,7 @@ where
         return Ok(None);
     };
 
-    let Ok(era) = cbor.0.try_into() else {
-        return Ok(None);
-    };
-
-    let Ok(decoded) = MultiEraTx::decode_for_era(era, &cbor.1) else {
+    let Ok(decoded) = MultiEraTx::try_from(&cbor) else {
         return Ok(None);
     };
 

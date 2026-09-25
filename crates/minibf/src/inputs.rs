@@ -32,7 +32,7 @@ use axum::http::StatusCode;
 use itertools::Itertools as _;
 use pallas::ledger::traverse::{MultiEraInput, MultiEraOutput, MultiEraTx};
 
-use dolos_core::{Domain, EraCbor, TxHash};
+use dolos_core::{Domain, TxHash};
 
 use crate::{Facade, TxMap};
 
@@ -169,13 +169,8 @@ impl<'a> InputResolver<'a> {
             let source = self.txs;
 
             let decoded = match source.get(&hash) {
-                Some(Some(EraCbor(era, cbor))) => {
-                    let era = (*era).try_into().map_err(|err| {
-                        tracing::error!(error = ?err, "unknown era for dependency tx");
-                        StatusCode::INTERNAL_SERVER_ERROR
-                    })?;
-
-                    let tx = MultiEraTx::decode_for_era(era, cbor).map_err(|err| {
+                Some(Some(cbor)) => {
+                    let tx = MultiEraTx::try_from(cbor).map_err(|err| {
                         tracing::error!(error = ?err, "failed to decode dependency tx");
                         StatusCode::INTERNAL_SERVER_ERROR
                     })?;
@@ -259,7 +254,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use dolos_core::config::MinibfConfig;
+    use dolos_core::{config::MinibfConfig, EraCbor, TxCbor};
     use dolos_testing::{
         synthetic::{build_synthetic_blocks, SyntheticBlockConfig, SyntheticVectors},
         toy_domain::ToyDomain,
@@ -295,8 +290,8 @@ mod tests {
         (facade, vectors)
     }
 
-    fn dep_cbor(vectors: &SyntheticVectors) -> EraCbor {
-        EraCbor(Era::Conway.into(), vectors.tx_cbor.clone())
+    fn dep_cbor(vectors: &SyntheticVectors) -> TxCbor {
+        TxCbor::Tx(EraCbor(Era::Conway.into(), vectors.tx_cbor.clone()))
     }
 
     #[test]
@@ -367,7 +362,7 @@ mod tests {
         let mut store = TxMap::new();
         store.insert(
             *input.hash(),
-            Some(EraCbor(Era::Conway.into(), dep_tx_cbor)),
+            Some(TxCbor::Tx(EraCbor(Era::Conway.into(), dep_tx_cbor))),
         );
 
         let mut resolver = InputResolver::new(&store);

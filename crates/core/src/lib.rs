@@ -177,6 +177,45 @@ impl<'a> TryFrom<&'a EraCbor> for MultiEraTx<'a> {
     }
 }
 
+/// The bytes of a transaction a lookup by hash finds, top level or sub.
+#[derive(Debug, Eq, PartialEq, Clone)]
+pub enum TxCbor {
+    /// A top level transaction, with its era.
+    Tx(EraCbor),
+    /// A Dijkstra sub transaction, with the validity flag of the transaction that lists it.
+    DijkstraSub(Cbor, bool),
+}
+
+impl From<&MultiEraTx<'_>> for TxCbor {
+    fn from(tx: &MultiEraTx<'_>) -> Self {
+        match tx {
+            MultiEraTx::DijkstraSub(_, success) => TxCbor::DijkstraSub(tx.encode(), *success),
+            _ => TxCbor::Tx(EraCbor(tx.era().into(), tx.encode())),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a TxCbor> for MultiEraTx<'a> {
+    type Error = pallas::ledger::traverse::Error;
+
+    fn try_from(value: &'a TxCbor) -> Result<Self, Self::Error> {
+        use pallas::ledger::traverse::Error;
+
+        match value {
+            TxCbor::Tx(EraCbor(era, cbor)) => {
+                MultiEraTx::decode_for_era((*era).try_into()?, cbor).map_err(Error::invalid_cbor)
+            }
+            TxCbor::DijkstraSub(cbor, success) => {
+                let sub = minicbor::decode(cbor).map_err(Error::invalid_cbor)?;
+                Ok(MultiEraTx::DijkstraSub(
+                    Box::new(std::borrow::Cow::Owned(sub)),
+                    *success,
+                ))
+            }
+        }
+    }
+}
+
 impl TryFrom<EraCbor> for MultiEraUpdate<'_> {
     type Error = pallas::codec::minicbor::decode::Error;
 
