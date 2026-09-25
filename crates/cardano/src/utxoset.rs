@@ -1576,6 +1576,35 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_lookup_order_is_the_applied_order() {
+        let names = SUB_TRANSACTION_CASES
+            .iter()
+            .map(|case| case.0)
+            .chain(["ranking-announce-with-txs.block"]);
+
+        for name in names {
+            let cbor = musashi_block(name);
+            let block = MultiEraBlock::decode(&cbor).unwrap();
+
+            let mut applied = vec![];
+            for (index, tx) in block.txs().iter().enumerate() {
+                crate::pallas_extras::for_each_applied_tx(tx, |tx| {
+                    applied.push((index, tx.hash()));
+                    Ok::<_, std::convert::Infallible>(())
+                })
+                .unwrap();
+            }
+
+            let looked_up: Vec<(usize, Hash<32>)> = dolos_core::applied_txs(&block)
+                .into_iter()
+                .map(|(index, tx)| (index, tx.hash()))
+                .collect();
+
+            assert_eq!(looked_up, applied, "{name}");
+        }
+    }
+
     /// MUST NOT FIRE: a Dijkstra ranking block whose transactions carry no sub
     /// transaction creates one output per transaction on its wire and nothing
     /// under any other key, so the sub transaction rule invents nothing where
