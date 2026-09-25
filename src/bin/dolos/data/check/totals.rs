@@ -174,23 +174,7 @@ pub fn live_pots(epoch: &EpochState) -> Option<Pots> {
     // corruption. Neither is an answer; the caller reports the gap instead.
     let pparams = epoch.pparams.live()?;
 
-    let protocol = pparams.protocol_major_or_default();
-
-    let delta = PotDelta {
-        produced_utxos: rolling.produced_utxos,
-        consumed_utxos: rolling.consumed_utxos,
-        gathered_fees: rolling.gathered_fees,
-        new_accounts: rolling.new_accounts,
-        removed_accounts: rolling.removed_accounts,
-        withdrawals: rolling.withdrawals,
-        drep_deposits: rolling.drep_deposits,
-        drep_refunds: rolling.drep_refunds,
-        proposal_deposits: rolling.proposal_deposits,
-        treasury_donations: rolling.treasury_donations,
-        deposit_per_account: pparams.key_deposit(),
-        deposit_per_pool: Some(pparams.pool_deposit_or_default()),
-        ..PotDelta::neutral(protocol, protocol)
-    };
+    let delta = PotDelta::from_rolling(rolling, pparams);
 
     Some(apply_delta(
         epoch.initial_pots.clone(),
@@ -248,18 +232,6 @@ pub fn handed_off_pots(closing: &EpochState) -> Result<Pots, Unreplayable> {
     let protocol = pparams.protocol_major_or_default();
 
     let delta = PotDelta {
-        produced_utxos: rolling.produced_utxos,
-        consumed_utxos: rolling.consumed_utxos,
-        gathered_fees: rolling.gathered_fees,
-        new_accounts: rolling.new_accounts,
-        removed_accounts: rolling.removed_accounts,
-        withdrawals: rolling.withdrawals,
-        drep_deposits: rolling.drep_deposits,
-        drep_refunds: rolling.drep_refunds,
-        proposal_deposits: rolling.proposal_deposits,
-        treasury_donations: rolling.treasury_donations,
-        deposit_per_account: pparams.key_deposit(),
-        deposit_per_pool: Some(pparams.pool_deposit_or_default()),
         reserve_mirs: end.reserve_mirs,
         treasury_mirs: end.treasury_mirs,
         treasury_withdrawals: end.treasury_withdrawals,
@@ -276,7 +248,7 @@ pub fn handed_off_pots(closing: &EpochState) -> Result<Pots, Unreplayable> {
             .mark()
             .map(|x| x.protocol_major_or_default())
             .unwrap_or(protocol),
-        ..PotDelta::neutral(protocol, protocol)
+        ..PotDelta::from_rolling(&rolling, pparams)
     };
 
     Ok(apply_delta(

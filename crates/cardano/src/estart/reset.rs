@@ -16,18 +16,6 @@ pub fn define_new_pots(ctx: &super::WorkContext) -> Pots {
     let pparams = epoch.pparams.unwrap_live();
 
     let delta = PotDelta {
-        produced_utxos: rolling.produced_utxos,
-        consumed_utxos: rolling.consumed_utxos,
-        gathered_fees: rolling.gathered_fees,
-        deposit_per_account: pparams.key_deposit(),
-        deposit_per_pool: Some(pparams.pool_deposit_or_default()),
-        new_accounts: rolling.new_accounts,
-        removed_accounts: rolling.removed_accounts,
-        withdrawals: rolling.withdrawals,
-        drep_deposits: rolling.drep_deposits,
-        proposal_deposits: rolling.proposal_deposits,
-        drep_refunds: rolling.drep_refunds,
-        treasury_donations: rolling.treasury_donations,
         // Use effective MIR amounts from EndStats (only MIRs applied to registered accounts)
         // Rolling stats contain total from MIR certificates, which includes unregistered accounts
         reserve_mirs: end.reserve_mirs,
@@ -41,13 +29,13 @@ pub fn define_new_pots(ctx: &super::WorkContext) -> Pots {
         pool_deposit_count: end.pool_deposit_count,
         pool_refund_count: end.pool_refund_count,
         pool_invalid_refund_count: end.pool_invalid_refund_count,
-        protocol_version: epoch.pparams.unwrap_live().protocol_major_or_default(),
         mark_protocol_version: epoch
             .pparams
             .mark()
             .map(|p| p.protocol_major_or_default())
             .unwrap_or_else(|| epoch.pparams.unwrap_live().protocol_major_or_default()),
         avvm_reclamation: ctx.avvm_reclamation.total,
+        ..PotDelta::from_rolling(rolling, pparams)
     };
 
     tracing::debug!(

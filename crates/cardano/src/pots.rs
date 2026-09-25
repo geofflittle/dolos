@@ -3,7 +3,7 @@ use pallas::codec::minicbor::{Decode, Encode};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{add, floor_int, ratio, sub, Lovelace};
+use crate::{add, floor_int, model::RollingStats, ratio, sub, Lovelace, PParamsSet};
 
 pub type Ratio = num_rational::BigRational;
 pub type PallasRatio = pallas::ledger::primitives::RationalNumber;
@@ -327,6 +327,28 @@ impl PotDelta {
             avvm_reclamation: 0,
             treasury_mirs: 0,
             treasury_withdrawals: 0,
+        }
+    }
+
+    /// The delta the blocks of an epoch moved, from its rolling stats and its
+    /// live protocol parameters.
+    pub fn from_rolling(rolling: &RollingStats, pparams: &PParamsSet) -> Self {
+        let protocol = pparams.protocol_major_or_default();
+
+        Self {
+            produced_utxos: rolling.produced_utxos,
+            consumed_utxos: rolling.consumed_utxos,
+            gathered_fees: rolling.gathered_fees,
+            new_accounts: rolling.new_accounts,
+            removed_accounts: rolling.removed_accounts,
+            withdrawals: rolling.withdrawals,
+            drep_deposits: rolling.drep_deposits,
+            drep_refunds: rolling.drep_refunds,
+            proposal_deposits: rolling.proposal_deposits,
+            treasury_donations: rolling.treasury_donations,
+            deposit_per_account: pparams.key_deposit(),
+            deposit_per_pool: Some(pparams.pool_deposit_or_default()),
+            ..Self::neutral(protocol, protocol)
         }
     }
 
