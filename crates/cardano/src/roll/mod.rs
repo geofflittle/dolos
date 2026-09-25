@@ -953,9 +953,63 @@ pub(crate) mod dijkstra_fixture {
         }
     }
 
+    /// A sub transaction whose body carries the certificates given and nothing else.
+    pub fn sub_transaction_with_certs(
+        certificates: Vec<dijkstra::Certificate>,
+    ) -> dijkstra::SubTransaction<'static> {
+        let sub_body = dijkstra::SubTransactionBody {
+            inputs: dijkstra::Set::from(vec![]),
+            outputs: MaybeIndefArray::Def(vec![]),
+            ttl: None,
+            certificates: Some(dijkstra::NonEmptySet::try_from(certificates).unwrap()),
+            withdrawals: None,
+            auxiliary_data_hash: None,
+            validity_interval_start: None,
+            mint: None,
+            script_data_hash: None,
+            guards: None,
+            network_id: None,
+            reference_inputs: None,
+            voting_procedures: None,
+            proposal_procedures: None,
+            treasury_value: None,
+            donation: None,
+            required_top_level_guards: None,
+            direct_deposits: None,
+            account_balance_intervals: None,
+        };
+
+        dijkstra::SubTransaction {
+            sub_transaction_body: KeepRaw::from(sub_body),
+            transaction_witness_set: KeepRaw::from(witness_set()),
+            auxiliary_data: Nullable::Null,
+        }
+    }
+
+    /// A body that carries the certificates and the sub transactions given and
+    /// no governance.
+    pub fn body_with_certs(
+        certificates: Vec<dijkstra::Certificate>,
+        subs: Vec<dijkstra::SubTransaction<'static>>,
+    ) -> dijkstra::TransactionBody<'static> {
+        dijkstra::TransactionBody {
+            voting_procedures: None,
+            proposal_procedures: None,
+            certificates: dijkstra::NonEmptySet::try_from(certificates).ok(),
+            sub_transactions: dijkstra::NonEmptySet::try_from(subs).ok(),
+            ..body_with_governance(dijkstra::GovAction::Information)
+        }
+    }
+
     /// A one transaction ranking block at [`SLOT`], with the transaction's
     /// producer verdict set to the value given.
     pub fn block(body: dijkstra::TransactionBody<'static>, success: bool) -> OwnedMultiEraBlock {
+        block_of(vec![(body, success)])
+    }
+
+    /// A ranking block at [`SLOT`] holding the transactions given in order,
+    /// each with its producer verdict.
+    pub fn block_of(txs: Vec<(dijkstra::TransactionBody<'static>, bool)>) -> OwnedMultiEraBlock {
         let header_body = dijkstra::HeaderBody {
             block_number: 1,
             slot: SLOT,
@@ -981,17 +1035,20 @@ pub(crate) mod dijkstra_fixture {
             body_signature: Bytes::from(vec![0x18]),
         };
 
-        let tx = dijkstra::BlockTransaction {
-            transaction_body: KeepRaw::from(body),
-            transaction_witness_set: KeepRaw::from(witness_set()),
-            auxiliary_data: Nullable::Null,
-            success,
-        };
+        let txs = txs
+            .into_iter()
+            .map(|(body, success)| dijkstra::BlockTransaction {
+                transaction_body: KeepRaw::from(body),
+                transaction_witness_set: KeepRaw::from(witness_set()),
+                auxiliary_data: Nullable::Null,
+                success,
+            })
+            .collect();
 
         let block = dijkstra::Block {
             header: KeepRaw::from(header),
             block_body: dijkstra::BlockBody {
-                transactions: MaybeIndefArray::Def(vec![tx]),
+                transactions: MaybeIndefArray::Def(txs),
                 leios_certificate: Nullable::Null,
                 peras_certificate: Nullable::Null,
             },
@@ -1388,5 +1445,127 @@ mod tests {
             ),
             (0, 0, 0, 1)
         );
+    }
+
+    fn drep(byte: u8) -> StakeCredential {
+        StakeCredential::AddrKeyhash(Hash::<28>::from([byte; 28]))
+    }
+
+    fn register(byte: u8) -> pallas::ledger::primitives::dijkstra::Certificate {
+        pallas::ledger::primitives::dijkstra::Certificate::RegDRepCert(
+            drep(byte),
+            500_000_000,
+            None,
+        )
+    }
+
+    fn unregister(byte: u8) -> pallas::ledger::primitives::dijkstra::Certificate {
+        pallas::ledger::primitives::dijkstra::Certificate::UnRegDRepCert(drep(byte), 500_000_000)
+    }
+
+    /// The (slot, order) key of each DRep registration the crawl records, by
+    /// the DRep's key hash byte.
+    fn registration_keys(deltas: &WorkDeltas) -> BTreeMap<u8, (u64, TxOrder)> {
+        deltas
+            .entities
+            .values()
+            .flatten()
+            .filter_map(|delta| match delta {
+                CardanoDelta::DRepRegistration(x) => match &x.drep {
+                    pallas::ledger::primitives::conway::DRep::Key(hash) => {
+                        Some((hash[0], (x.slot, x.txorder)))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn unregistration_key(deltas: &WorkDeltas) -> (u64, TxOrder) {
+        deltas
+            .entities
+            .values()
+            .flatten()
+            .find_map(|delta| match delta {
+                CardanoDelta::DRepUnRegistration(x) => Some((x.slot, x.txorder)),
+                _ => None,
+            })
+            .expect("an unregistration")
+    }
+
+    /// The must-not case. In a block without sub transactions each
+    /// transaction's order is its index in the block.
+    #[test]
+    fn without_sub_transactions_the_order_is_the_block_index() {
+        use dijkstra_fixture::{block_of, body_with_certs, SLOT};
+
+        let block = block_of(vec![
+            (body_with_certs(vec![register(1)], vec![]), true),
+            (body_with_certs(vec![register(2)], vec![]), true),
+            (body_with_certs(vec![register(3)], vec![]), true),
+        ]);
+
+        let keys = registration_keys(&crawl_block(block, 12));
+
+        assert_eq!(
+            keys,
+            BTreeMap::from([(1, (SLOT, 0)), (2, (SLOT, 1)), (3, (SLOT, 2))])
+        );
+    }
+
+    /// The must-fire case. The ledger applies each sub transaction before the
+    /// transaction that holds it, so each gets its own order below the
+    /// parent's, and the next transaction's order is above them all.
+    #[test]
+    fn each_sub_transaction_gets_its_own_order_before_the_parent() {
+        use dijkstra_fixture::{block_of, body_with_certs, sub_transaction_with_certs, SLOT};
+
+        let block = block_of(vec![
+            (
+                body_with_certs(
+                    vec![register(3)],
+                    vec![
+                        sub_transaction_with_certs(vec![register(1)]),
+                        sub_transaction_with_certs(vec![register(2)]),
+                    ],
+                ),
+                true,
+            ),
+            (body_with_certs(vec![register(4)], vec![]), true),
+        ]);
+
+        let keys = registration_keys(&crawl_block(block, 12));
+
+        assert_eq!(
+            keys,
+            BTreeMap::from([
+                (1, (SLOT, 0)),
+                (2, (SLOT, 1)),
+                (3, (SLOT, 2)),
+                (4, (SLOT, 3))
+            ])
+        );
+    }
+
+    /// The ledger leaves a DRep registered when a sub transaction unregisters
+    /// it and the parent registers it again, and the DRep model reads it as
+    /// registered only when the registration's key is above the
+    /// unregistration's.
+    #[test]
+    fn a_parent_registration_is_later_than_its_sub_unregistration() {
+        use dijkstra_fixture::{block, body_with_certs, sub_transaction_with_certs};
+
+        let block = block(
+            body_with_certs(
+                vec![register(7)],
+                vec![sub_transaction_with_certs(vec![unregister(7)])],
+            ),
+            true,
+        );
+
+        let deltas = crawl_block(block, 12);
+
+        assert!(registration_keys(&deltas)[&7] > unregistration_key(&deltas));
     }
 }
