@@ -3,9 +3,11 @@ use dolos_core::*;
 use itertools::Itertools as _;
 use pallas::ledger::traverse::{MultiEraBlock, MultiEraOutput, MultiEraTx};
 use std::collections::{HashMap, HashSet};
+use std::convert::Infallible;
 use std::sync::Arc;
 
 use crate::owned::OwnedMultiEraOutput;
+use crate::pallas_extras::for_each_applied_tx;
 
 /// An input the lenient walk left unconsumed, and the transaction that spent
 /// it.
@@ -55,13 +57,21 @@ impl LenientApply {
 /// applies them in order, so it has to know what the store really holds and
 /// cannot let a block's own later output stand in for it.
 pub fn compute_block_dependencies_lenient(block: &MultiEraBlock) -> Vec<TxoRef> {
-    block
-        .txs()
-        .iter()
-        .flat_map(MultiEraTx::consumes)
-        .map(|utxo| TxoRef(*utxo.hash(), utxo.index() as u32))
-        .unique()
-        .collect()
+    let mut spent = Vec::new();
+
+    for tx in block.txs().iter() {
+        let Ok(()) = for_each_applied_tx(tx, |tx| {
+            spent.extend(
+                tx.consumes()
+                    .iter()
+                    .map(|utxo| TxoRef(*utxo.hash(), utxo.index() as u32)),
+            );
+
+            Ok::<_, Infallible>(())
+        });
+    }
+
+    spent.into_iter().unique().collect()
 }
 
 /// Applies a block the way the Leios prototype node applies one, in wire order,
@@ -118,59 +128,64 @@ fn apply_txs_lenient(
     let mut spent_here: HashSet<TxoRef> = HashSet::new();
 
     for tx in txs.iter() {
-        let tx_hash = tx.hash();
+        let Ok(()) = for_each_applied_tx(tx, |tx| {
+            let tx_hash = tx.hash();
 
-        for consumed in tx.consumes() {
-            let stxi_ref = TxoRef(*consumed.hash(), consumed.index() as u32);
+            for consumed in tx.consumes() {
+                let stxi_ref = TxoRef(*consumed.hash(), consumed.index() as u32);
 
-            if spent_here.contains(&stxi_ref) {
-                stats.skipped.push(SkippedInput {
-                    tx: tx_hash,
-                    input: stxi_ref,
-                });
-                continue;
-            }
-
-            let body = match produced_here.get(&stxi_ref) {
-                Some(body) => Some(body.clone()),
-                None if store_has.contains(&stxi_ref) => {
-                    loaded.get(&stxi_ref).map(|x| x.borrow_owner().clone())
-                }
-                None => None,
-            };
-
-            match body {
-                Some(body) => {
-                    spent_here.insert(stxi_ref.clone());
-                    delta.consumed_utxo.insert(stxi_ref, body);
-                }
-                None => {
+                if spent_here.contains(&stxi_ref) {
                     stats.skipped.push(SkippedInput {
                         tx: tx_hash,
                         input: stxi_ref,
                     });
+                    continue;
+                }
+
+                let body = match produced_here.get(&stxi_ref) {
+                    Some(body) => Some(body.clone()),
+                    None if store_has.contains(&stxi_ref) => {
+                        loaded.get(&stxi_ref).map(|x| x.borrow_owner().clone())
+                    }
+                    None => None,
+                };
+
+                match body {
+                    Some(body) => {
+                        spent_here.insert(stxi_ref.clone());
+                        delta.consumed_utxo.insert(stxi_ref, body);
+                    }
+                    None => {
+                        stats.skipped.push(SkippedInput {
+                            tx: tx_hash,
+                            input: stxi_ref,
+                        });
+                    }
                 }
             }
-        }
 
-        for (idx, produced) in tx.produces() {
-            let utxo_ref = TxoRef(tx_hash, idx as u32);
-            let body: Arc<EraCbor> = Arc::new(produced.into());
+            for (idx, produced) in tx.produces() {
+                let utxo_ref = TxoRef(tx_hash, idx as u32);
+                let body: Arc<EraCbor> = Arc::new(produced.into());
 
-            let existed = store_has.contains(&utxo_ref) || produced_here.contains_key(&utxo_ref);
+                let existed =
+                    store_has.contains(&utxo_ref) || produced_here.contains_key(&utxo_ref);
 
-            if existed && !spent_here.contains(&utxo_ref) {
-                stats.recreated_outputs += 1;
+                if existed && !spent_here.contains(&utxo_ref) {
+                    stats.recreated_outputs += 1;
+                }
+
+                // Creating it again un-spends it, which is exactly what the node
+                // does and the reason a later block can spend it a second time.
+                spent_here.remove(&utxo_ref);
+                delta.consumed_utxo.remove(&utxo_ref);
+
+                produced_here.insert(utxo_ref.clone(), body.clone());
+                delta.produced_utxo.insert(utxo_ref, body);
             }
 
-            // Creating it again un-spends it, which is exactly what the node
-            // does and the reason a later block can spend it a second time.
-            spent_here.remove(&utxo_ref);
-            delta.consumed_utxo.remove(&utxo_ref);
-
-            produced_here.insert(utxo_ref.clone(), body.clone());
-            delta.produced_utxo.insert(utxo_ref, body);
-        }
+            Ok::<_, Infallible>(())
+        });
     }
 
     Ok((delta, stats))
@@ -181,20 +196,26 @@ pub fn compute_block_dependencies(block: &MultiEraBlock, loaded: &mut RawUtxoMap
 
     // TODO: turn this into "referenced utxos" instead of just consumed.
 
-    // add all produced utxos to the loaded map
-    for (tx_hash, tx) in txs.iter() {
-        for (idx, utxo) in tx.produces() {
-            let utxo_ref = TxoRef(*tx_hash, idx as u32);
-            loaded.insert(utxo_ref, Arc::new(utxo.into()));
-        }
-    }
+    let mut consumed = HashSet::new();
 
-    // find all consumed utxos in the block
-    let consumed: HashSet<_> = txs
-        .values()
-        .flat_map(MultiEraTx::consumes)
-        .map(|utxo| TxoRef(*utxo.hash(), utxo.index() as u32))
-        .collect();
+    for tx in txs.values() {
+        let Ok(()) = for_each_applied_tx(tx, |tx| {
+            // add all produced utxos to the loaded map
+            let tx_hash = tx.hash();
+
+            for (idx, utxo) in tx.produces() {
+                let utxo_ref = TxoRef(tx_hash, idx as u32);
+                loaded.insert(utxo_ref, Arc::new(utxo.into()));
+            }
+
+            // find all consumed utxos in the block
+            for utxo in tx.consumes() {
+                consumed.insert(TxoRef(*utxo.hash(), utxo.index() as u32));
+            }
+
+            Ok::<_, Infallible>(())
+        });
+    }
 
     // find all missing utxos that are not already in the loaded map
 
@@ -235,30 +256,36 @@ fn apply_txs(
 
     let txs: HashMap<_, _> = txs.iter().map(|tx| (tx.hash(), tx)).collect();
 
-    for (tx_hash, tx) in txs.iter() {
-        for (idx, produced) in tx.produces() {
-            let uxto_ref = TxoRef(*tx_hash, idx as u32);
-            delta
-                .produced_utxo
-                .insert(uxto_ref, Arc::new(produced.into()));
-        }
+    for tx in txs.values() {
+        for_each_applied_tx(tx, |tx| {
+            let tx_hash = tx.hash();
 
-        for consumed in tx.consumes() {
-            let stxi_ref = TxoRef(*consumed.hash(), consumed.index() as u32);
+            for (idx, produced) in tx.produces() {
+                let uxto_ref = TxoRef(tx_hash, idx as u32);
+                delta
+                    .produced_utxo
+                    .insert(uxto_ref, Arc::new(produced.into()));
+            }
 
-            let stxi_body = loaded.get(&stxi_ref).ok_or_else(|| {
-                BrokenInvariant::UnresolvedInput {
-                    slot: block.slot(),
-                    block: block.hash(),
-                    tx: *tx_hash,
-                    input: stxi_ref.clone(),
-                }
-            })?;
+            for consumed in tx.consumes() {
+                let stxi_ref = TxoRef(*consumed.hash(), consumed.index() as u32);
 
-            let stxi_body_arc = stxi_body.borrow_owner().clone();
+                let stxi_body = loaded.get(&stxi_ref).ok_or_else(|| {
+                    BrokenInvariant::UnresolvedInput {
+                        slot: block.slot(),
+                        block: block.hash(),
+                        tx: tx_hash,
+                        input: stxi_ref.clone(),
+                    }
+                })?;
 
-            delta.consumed_utxo.insert(stxi_ref, stxi_body_arc);
-        }
+                let stxi_body_arc = stxi_body.borrow_owner().clone();
+
+                delta.consumed_utxo.insert(stxi_ref, stxi_body_arc);
+            }
+
+            Ok(())
+        })?;
     }
 
     Ok(delta)
@@ -295,40 +322,52 @@ fn undo_txs(
 
     let txs: HashMap<_, _> = txs.iter().map(|tx| (tx.hash(), tx)).collect();
 
-    for (tx_hash, tx) in txs.iter() {
-        for (idx, body) in tx.produces() {
-            let utxo_ref = TxoRef(*tx_hash, idx as u32);
-            delta.undone_utxo.insert(utxo_ref, Arc::new(body.into()));
-        }
+    for tx in txs.values() {
+        let Ok(()) = for_each_applied_tx(tx, |tx| {
+            let tx_hash = tx.hash();
+
+            for (idx, body) in tx.produces() {
+                let utxo_ref = TxoRef(tx_hash, idx as u32);
+                delta.undone_utxo.insert(utxo_ref, Arc::new(body.into()));
+            }
+
+            Ok::<_, Infallible>(())
+        });
     }
 
-    for (tx_hash, tx) in txs.iter() {
-        for consumed in tx.consumes() {
-            let stxi_ref = TxoRef(*consumed.hash(), consumed.index() as u32);
+    for tx in txs.values() {
+        for_each_applied_tx(tx, |tx| {
+            let tx_hash = tx.hash();
 
-            let stxi_body = match context.get(&stxi_ref) {
-                Some(body) => body,
-                None if lenient => {
-                    skipped.push(SkippedInput {
-                        tx: *tx_hash,
-                        input: stxi_ref,
-                    });
-                    continue;
-                }
-                None => {
-                    return Err(BrokenInvariant::MissingStxiBody {
-                        slot: block.slot(),
-                        block: block.hash(),
-                        tx: *tx_hash,
-                        input: stxi_ref,
-                    })
-                }
-            };
+            for consumed in tx.consumes() {
+                let stxi_ref = TxoRef(*consumed.hash(), consumed.index() as u32);
 
-            let stxi_body_arc = stxi_body.borrow_owner().clone();
+                let stxi_body = match context.get(&stxi_ref) {
+                    Some(body) => body,
+                    None if lenient => {
+                        skipped.push(SkippedInput {
+                            tx: tx_hash,
+                            input: stxi_ref,
+                        });
+                        continue;
+                    }
+                    None => {
+                        return Err(BrokenInvariant::MissingStxiBody {
+                            slot: block.slot(),
+                            block: block.hash(),
+                            tx: tx_hash,
+                            input: stxi_ref,
+                        })
+                    }
+                };
 
-            delta.recovered_stxi.insert(stxi_ref, stxi_body_arc);
-        }
+                let stxi_body_arc = stxi_body.borrow_owner().clone();
+
+                delta.recovered_stxi.insert(stxi_ref, stxi_body_arc);
+            }
+
+            Ok(())
+        })?;
     }
 
     Ok((delta, skipped))

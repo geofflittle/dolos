@@ -289,72 +289,75 @@ impl CardanoIndexDeltaBuilder {
         self.start_block(block.slot(), block.hash().to_vec(), Some(block.number()));
 
         for tx in block.txs() {
-            self.add_tx_hash(tx.hash().to_vec());
+            let Ok(()) = pallas_extras::for_each_applied_tx(&tx, |tx| {
+                self.add_tx_hash(tx.hash().to_vec());
 
-            for (label, _) in tx.metadata().collect::<Vec<_>>() {
-                self.add_metadata_label(label);
-            }
-
-            for input in tx.inputs() {
-                self.add_spent_input(&input);
-
-                let txo_ref: TxoRef = (&input).into();
-                if let Some(resolved) = resolved_inputs.get(&txo_ref) {
-                    resolved.with_dependent(|_, output| {
-                        if let Ok(addr) = output.address() {
-                            self.add_address(&addr);
-                        }
-                        self.add_assets(&output.value());
-                        if let Some(datum) = output.datum() {
-                            self.add_datum(&datum);
-                        }
-                    });
-                }
-            }
-
-            for (_, output) in tx.produces() {
-                if let Ok(addr) = output.address() {
-                    self.add_address(&addr);
-                }
-                self.add_assets(&output.value());
-                if let Some(datum) = output.datum() {
-                    self.add_datum(&datum);
+                for (label, _) in tx.metadata().collect::<Vec<_>>() {
+                    self.add_metadata_label(label);
                 }
 
-                if let Some(script_ref) = output.multi_era_script_ref() {
-                    let parts = pallas_extras::script_ref_parts(&script_ref);
-                    self.add_script_hash(parts.hash.to_vec());
+                for input in tx.inputs() {
+                    self.add_spent_input(&input);
+
+                    let txo_ref: TxoRef = (&input).into();
+                    if let Some(resolved) = resolved_inputs.get(&txo_ref) {
+                        resolved.with_dependent(|_, output| {
+                            if let Ok(addr) = output.address() {
+                                self.add_address(&addr);
+                            }
+                            self.add_assets(&output.value());
+                            if let Some(datum) = output.datum() {
+                                self.add_datum(&datum);
+                            }
+                        });
+                    }
                 }
-            }
 
-            for script in tx.multi_era_native_scripts() {
-                self.add_script_hash(script.hash().to_vec());
-            }
-            for script in tx.plutus_v1_scripts() {
-                self.add_script_hash(script.compute_hash().to_vec());
-            }
-            for script in tx.plutus_v2_scripts() {
-                self.add_script_hash(script.compute_hash().to_vec());
-            }
-            for script in tx.plutus_v3_scripts() {
-                self.add_script_hash(script.compute_hash().to_vec());
-            }
+                for (_, output) in tx.produces() {
+                    if let Ok(addr) = output.address() {
+                        self.add_address(&addr);
+                    }
+                    self.add_assets(&output.value());
+                    if let Some(datum) = output.datum() {
+                        self.add_datum(&datum);
+                    }
 
-            for datum in tx.plutus_data() {
-                self.add_datum_hash(datum.original_hash().to_vec());
-            }
+                    if let Some(script_ref) = output.multi_era_script_ref() {
+                        let parts = pallas_extras::script_ref_parts(&script_ref);
+                        self.add_script_hash(parts.hash.to_vec());
+                    }
+                }
 
-            for cert in tx.certs() {
-                self.add_cert(&cert);
-            }
+                for script in tx.multi_era_native_scripts() {
+                    self.add_script_hash(script.hash().to_vec());
+                }
+                for script in tx.plutus_v1_scripts() {
+                    self.add_script_hash(script.compute_hash().to_vec());
+                }
+                for script in tx.plutus_v2_scripts() {
+                    self.add_script_hash(script.compute_hash().to_vec());
+                }
+                for script in tx.plutus_v3_scripts() {
+                    self.add_script_hash(script.compute_hash().to_vec());
+                }
 
-            for (account, _) in tx.withdrawals().collect::<Vec<_>>() {
-                self.add_withdrawal(account);
-            }
+                for datum in tx.plutus_data() {
+                    self.add_datum_hash(datum.original_hash().to_vec());
+                }
 
-            for redeemer in tx.redeemers() {
-                self.add_datum_hash(redeemer.data().compute_hash().to_vec());
-            }
+                for cert in tx.certs() {
+                    self.add_cert(&cert);
+                }
+
+                for (account, _) in tx.withdrawals().collect::<Vec<_>>() {
+                    self.add_withdrawal(account);
+                }
+
+                for redeemer in tx.redeemers() {
+                    self.add_datum_hash(redeemer.data().compute_hash().to_vec());
+                }
+                Ok::<_, std::convert::Infallible>(())
+            });
         }
     }
 

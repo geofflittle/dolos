@@ -17,8 +17,9 @@ use pallas::{
 use tracing::{debug, instrument, warn};
 
 use crate::{
-    load_effective_pparams, load_gov, owned::OwnedMultiEraOutput, roll::proposals::ProposalVisitor,
-    utxoset, Cache, DRepState, FixedNamespace as _, PParamsSet,
+    load_effective_pparams, load_gov, owned::OwnedMultiEraOutput,
+    pallas_extras::for_each_applied_tx, roll::proposals::ProposalVisitor, utxoset, Cache,
+    DRepState, FixedNamespace as _, PParamsSet,
 };
 
 // Sub-modules
@@ -62,7 +63,8 @@ pub trait BlockVisitor {
     }
 
     /// Visit a transaction. IMPORTANT: the crawl calls this for *every*
-    /// transaction in the block, phase-2-invalid ones included, so that fees
+    /// transaction in the block and every sub transaction one carries, each
+    /// sub transaction first, phase-2-invalid ones included, so that fees
     /// and collateral can still be priced. An implementation that consumes
     /// transaction-body content (certificates, mints, withdrawals, proposals,
     /// votes) owes its own `tx.is_valid()` check.
@@ -355,219 +357,270 @@ impl<'a> DeltaBuilder<'a> {
             self.protocol,
         )?;
 
+        // A sub transaction is given the order of the transaction carrying it,
+        // because the ledger gives it no index of its own.
         for (order, tx) in block.txs().iter().enumerate() {
-            self.account_state
-                .visit_tx(&mut deltas, block, tx, self.utxos)?;
-            self.asset_state
-                .visit_tx(&mut deltas, block, tx, self.utxos)?;
-            self.datum_state
-                .visit_tx(&mut deltas, block, tx, self.utxos)?;
-            self.drep_state
-                .visit_tx(&mut deltas, block, tx, self.utxos)?;
-            self.epoch_state
-                .visit_tx(&mut deltas, block, tx, self.utxos)?;
-            self.pool_state
-                .visit_tx(&mut deltas, block, tx, self.utxos)?;
-            self.tx_logs.visit_tx(&mut deltas, block, tx, self.utxos)?;
-            self.proposal_logs
-                .visit_tx(&mut deltas, block, tx, self.utxos)?;
+            for_each_applied_tx(tx, |tx| -> Result<(), ChainError> {
+                self.account_state
+                    .visit_tx(&mut deltas, block, tx, self.utxos)?;
+                self.asset_state
+                    .visit_tx(&mut deltas, block, tx, self.utxos)?;
+                self.datum_state
+                    .visit_tx(&mut deltas, block, tx, self.utxos)?;
+                self.drep_state
+                    .visit_tx(&mut deltas, block, tx, self.utxos)?;
+                self.epoch_state
+                    .visit_tx(&mut deltas, block, tx, self.utxos)?;
+                self.pool_state
+                    .visit_tx(&mut deltas, block, tx, self.utxos)?;
+                self.tx_logs.visit_tx(&mut deltas, block, tx, self.utxos)?;
+                self.proposal_logs
+                    .visit_tx(&mut deltas, block, tx, self.utxos)?;
 
-            for input in tx.consumes() {
-                let txoref = TxoRef::from(&input);
+                for input in tx.consumes() {
+                    let txoref = TxoRef::from(&input);
 
-                // Under the lenient rule the utxo walk has already decided
-                // which inputs were available at their own transaction's
-                // position. An input it did not consume was not consumed by the
-                // ledger either, so showing it here would report a spend the
-                // network did not make.
-                if let Some(consumed) = &self.consumed {
-                    if !consumed.contains(&txoref) {
-                        continue;
+                    // Under the lenient rule the utxo walk has already decided
+                    // which inputs were available at their own transaction's
+                    // position. An input it did not consume was not consumed by the
+                    // ledger either, so showing it here would report a spend the
+                    // network did not make.
+                    if let Some(consumed) = &self.consumed {
+                        if !consumed.contains(&txoref) {
+                            continue;
+                        }
+                    }
+
+                    let resolved = self.utxos.get(&txoref).ok_or_else(|| {
+                        StateError::InvariantViolation(InvariantViolation::InputNotFound(txoref))
+                    })?;
+
+                    resolved.with_dependent(|_, resolved| {
+                        self.account_state
+                            .visit_input(&mut deltas, block, tx, &input, resolved)?;
+                        self.asset_state
+                            .visit_input(&mut deltas, block, tx, &input, resolved)?;
+                        self.datum_state
+                            .visit_input(&mut deltas, block, tx, &input, resolved)?;
+                        self.drep_state
+                            .visit_input(&mut deltas, block, tx, &input, resolved)?;
+                        self.epoch_state
+                            .visit_input(&mut deltas, block, tx, &input, resolved)?;
+                        self.pool_state
+                            .visit_input(&mut deltas, block, tx, &input, resolved)?;
+                        self.tx_logs
+                            .visit_input(&mut deltas, block, tx, &input, resolved)?;
+                        self.proposal_logs
+                            .visit_input(&mut deltas, block, tx, &input, resolved)?;
+                        Result::<_, ChainError>::Ok(())
+                    })?;
+                }
+
+                for (index, output) in tx.produces() {
+                    self.account_state.visit_output(
+                        &mut deltas,
+                        block,
+                        tx,
+                        index as u32,
+                        &output,
+                    )?;
+                    self.asset_state
+                        .visit_output(&mut deltas, block, tx, index as u32, &output)?;
+                    self.datum_state
+                        .visit_output(&mut deltas, block, tx, index as u32, &output)?;
+                    self.drep_state
+                        .visit_output(&mut deltas, block, tx, index as u32, &output)?;
+                    self.epoch_state
+                        .visit_output(&mut deltas, block, tx, index as u32, &output)?;
+                    self.pool_state
+                        .visit_output(&mut deltas, block, tx, index as u32, &output)?;
+                    self.tx_logs
+                        .visit_output(&mut deltas, block, tx, index as u32, &output)?;
+                    self.proposal_logs.visit_output(
+                        &mut deltas,
+                        block,
+                        tx,
+                        index as u32,
+                        &output,
+                    )?;
+                }
+
+                // The Conway LEDGER rule runs CERTS, GOV, the withdrawal drain and
+                // the PPUP/update registration only under `IsValid True`; a
+                // phase-2-invalid tx moves collateral and nothing else. Two
+                // carve-outs stay outside this guard: the input/output fan-outs,
+                // where pallas already resolves `consumes()`/`produces()` to the
+                // collateral pair, and `visit_tx`, which every visitor still sees
+                // so fees and collateral can be priced.
+                if tx.is_valid() {
+                    for mint in tx.mints() {
+                        self.account_state
+                            .visit_mint(&mut deltas, block, tx, &mint)?;
+                        self.asset_state.visit_mint(&mut deltas, block, tx, &mint)?;
+                        self.datum_state.visit_mint(&mut deltas, block, tx, &mint)?;
+                        self.drep_state.visit_mint(&mut deltas, block, tx, &mint)?;
+                        self.epoch_state.visit_mint(&mut deltas, block, tx, &mint)?;
+                        self.pool_state.visit_mint(&mut deltas, block, tx, &mint)?;
+                        self.tx_logs.visit_mint(&mut deltas, block, tx, &mint)?;
+                        self.proposal_logs
+                            .visit_mint(&mut deltas, block, tx, &mint)?;
+                    }
+
+                    for cert in tx.certs() {
+                        self.account_state
+                            .visit_cert(&mut deltas, block, tx, &order, &cert)?;
+                        self.asset_state
+                            .visit_cert(&mut deltas, block, tx, &order, &cert)?;
+                        self.datum_state
+                            .visit_cert(&mut deltas, block, tx, &order, &cert)?;
+                        self.drep_state
+                            .visit_cert(&mut deltas, block, tx, &order, &cert)?;
+                        self.epoch_state
+                            .visit_cert(&mut deltas, block, tx, &order, &cert)?;
+                        self.pool_state
+                            .visit_cert(&mut deltas, block, tx, &order, &cert)?;
+                        self.tx_logs
+                            .visit_cert(&mut deltas, block, tx, &order, &cert)?;
+                        self.proposal_logs
+                            .visit_cert(&mut deltas, block, tx, &order, &cert)?;
+                    }
+
+                    for (account, amount) in tx.withdrawals().collect::<Vec<_>>() {
+                        self.account_state.visit_withdrawal(
+                            &mut deltas,
+                            block,
+                            tx,
+                            account,
+                            amount,
+                        )?;
+                        self.asset_state.visit_withdrawal(
+                            &mut deltas,
+                            block,
+                            tx,
+                            account,
+                            amount,
+                        )?;
+                        self.datum_state.visit_withdrawal(
+                            &mut deltas,
+                            block,
+                            tx,
+                            account,
+                            amount,
+                        )?;
+                        self.drep_state.visit_withdrawal(
+                            &mut deltas,
+                            block,
+                            tx,
+                            account,
+                            amount,
+                        )?;
+                        self.epoch_state.visit_withdrawal(
+                            &mut deltas,
+                            block,
+                            tx,
+                            account,
+                            amount,
+                        )?;
+                        self.pool_state.visit_withdrawal(
+                            &mut deltas,
+                            block,
+                            tx,
+                            account,
+                            amount,
+                        )?;
+                        self.tx_logs
+                            .visit_withdrawal(&mut deltas, block, tx, account, amount)?;
+                        self.proposal_logs.visit_withdrawal(
+                            &mut deltas,
+                            block,
+                            tx,
+                            account,
+                            amount,
+                        )?;
+                    }
+
+                    if let Some(update) = tx.update() {
+                        self.account_state
+                            .visit_update(&mut deltas, block, Some(tx), &update)?;
+                        self.asset_state
+                            .visit_update(&mut deltas, block, Some(tx), &update)?;
+                        self.datum_state
+                            .visit_update(&mut deltas, block, Some(tx), &update)?;
+                        self.drep_state
+                            .visit_update(&mut deltas, block, Some(tx), &update)?;
+                        self.epoch_state
+                            .visit_update(&mut deltas, block, Some(tx), &update)?;
+                        self.pool_state
+                            .visit_update(&mut deltas, block, Some(tx), &update)?;
+                        self.tx_logs
+                            .visit_update(&mut deltas, block, Some(tx), &update)?;
+                        self.proposal_logs
+                            .visit_update(&mut deltas, block, Some(tx), &update)?;
                     }
                 }
 
-                let resolved = self.utxos.get(&txoref).ok_or_else(|| {
-                    StateError::InvariantViolation(InvariantViolation::InputNotFound(txoref))
-                })?;
-
-                resolved.with_dependent(|_, resolved| {
+                for datum in tx.plutus_data() {
                     self.account_state
-                        .visit_input(&mut deltas, block, tx, &input, resolved)?;
+                        .visit_datums(&mut deltas, block, tx, datum)?;
                     self.asset_state
-                        .visit_input(&mut deltas, block, tx, &input, resolved)?;
+                        .visit_datums(&mut deltas, block, tx, datum)?;
                     self.datum_state
-                        .visit_input(&mut deltas, block, tx, &input, resolved)?;
+                        .visit_datums(&mut deltas, block, tx, datum)?;
                     self.drep_state
-                        .visit_input(&mut deltas, block, tx, &input, resolved)?;
+                        .visit_datums(&mut deltas, block, tx, datum)?;
                     self.epoch_state
-                        .visit_input(&mut deltas, block, tx, &input, resolved)?;
+                        .visit_datums(&mut deltas, block, tx, datum)?;
                     self.pool_state
-                        .visit_input(&mut deltas, block, tx, &input, resolved)?;
-                    self.tx_logs
-                        .visit_input(&mut deltas, block, tx, &input, resolved)?;
+                        .visit_datums(&mut deltas, block, tx, datum)?;
+                    self.tx_logs.visit_datums(&mut deltas, block, tx, datum)?;
                     self.proposal_logs
-                        .visit_input(&mut deltas, block, tx, &input, resolved)?;
-                    Result::<_, ChainError>::Ok(())
-                })?;
-            }
-
-            for (index, output) in tx.produces() {
-                self.account_state
-                    .visit_output(&mut deltas, block, tx, index as u32, &output)?;
-                self.asset_state
-                    .visit_output(&mut deltas, block, tx, index as u32, &output)?;
-                self.datum_state
-                    .visit_output(&mut deltas, block, tx, index as u32, &output)?;
-                self.drep_state
-                    .visit_output(&mut deltas, block, tx, index as u32, &output)?;
-                self.epoch_state
-                    .visit_output(&mut deltas, block, tx, index as u32, &output)?;
-                self.pool_state
-                    .visit_output(&mut deltas, block, tx, index as u32, &output)?;
-                self.tx_logs
-                    .visit_output(&mut deltas, block, tx, index as u32, &output)?;
-                self.proposal_logs
-                    .visit_output(&mut deltas, block, tx, index as u32, &output)?;
-            }
-
-            // The Conway LEDGER rule runs CERTS, GOV, the withdrawal drain and
-            // the PPUP/update registration only under `IsValid True`; a
-            // phase-2-invalid tx moves collateral and nothing else. Two
-            // carve-outs stay outside this guard: the input/output fan-outs,
-            // where pallas already resolves `consumes()`/`produces()` to the
-            // collateral pair, and `visit_tx`, which every visitor still sees
-            // so fees and collateral can be priced.
-            if tx.is_valid() {
-                for mint in tx.mints() {
-                    self.account_state
-                        .visit_mint(&mut deltas, block, tx, &mint)?;
-                    self.asset_state.visit_mint(&mut deltas, block, tx, &mint)?;
-                    self.datum_state.visit_mint(&mut deltas, block, tx, &mint)?;
-                    self.drep_state.visit_mint(&mut deltas, block, tx, &mint)?;
-                    self.epoch_state.visit_mint(&mut deltas, block, tx, &mint)?;
-                    self.pool_state.visit_mint(&mut deltas, block, tx, &mint)?;
-                    self.tx_logs.visit_mint(&mut deltas, block, tx, &mint)?;
-                    self.proposal_logs
-                        .visit_mint(&mut deltas, block, tx, &mint)?;
+                        .visit_datums(&mut deltas, block, tx, datum)?;
                 }
 
-                for cert in tx.certs() {
-                    self.account_state
-                        .visit_cert(&mut deltas, block, tx, &order, &cert)?;
-                    self.asset_state
-                        .visit_cert(&mut deltas, block, tx, &order, &cert)?;
-                    self.datum_state
-                        .visit_cert(&mut deltas, block, tx, &order, &cert)?;
-                    self.drep_state
-                        .visit_cert(&mut deltas, block, tx, &order, &cert)?;
-                    self.epoch_state
-                        .visit_cert(&mut deltas, block, tx, &order, &cert)?;
-                    self.pool_state
-                        .visit_cert(&mut deltas, block, tx, &order, &cert)?;
-                    self.tx_logs
-                        .visit_cert(&mut deltas, block, tx, &order, &cert)?;
-                    self.proposal_logs
-                        .visit_cert(&mut deltas, block, tx, &order, &cert)?;
+                // Same LEDGER gate as above: GOV never registers a proposal
+                // carried by a phase-2-invalid transaction.
+                if tx.is_valid() {
+                    for (idx, proposal) in tx.gov_proposals().iter().enumerate() {
+                        self.account_state
+                            .visit_proposal(&mut deltas, block, tx, proposal, idx)?;
+                        self.asset_state
+                            .visit_proposal(&mut deltas, block, tx, proposal, idx)?;
+                        self.datum_state
+                            .visit_proposal(&mut deltas, block, tx, proposal, idx)?;
+                        self.drep_state
+                            .visit_proposal(&mut deltas, block, tx, proposal, idx)?;
+                        self.epoch_state
+                            .visit_proposal(&mut deltas, block, tx, proposal, idx)?;
+                        self.pool_state
+                            .visit_proposal(&mut deltas, block, tx, proposal, idx)?;
+                        self.tx_logs
+                            .visit_proposal(&mut deltas, block, tx, proposal, idx)?;
+                        self.proposal_logs
+                            .visit_proposal(&mut deltas, block, tx, proposal, idx)?;
+                    }
                 }
 
-                for (account, amount) in tx.withdrawals().collect::<Vec<_>>() {
+                for redeemer in tx.redeemers() {
                     self.account_state
-                        .visit_withdrawal(&mut deltas, block, tx, account, amount)?;
+                        .visit_redeemers(&mut deltas, block, tx, &redeemer)?;
                     self.asset_state
-                        .visit_withdrawal(&mut deltas, block, tx, account, amount)?;
+                        .visit_redeemers(&mut deltas, block, tx, &redeemer)?;
                     self.datum_state
-                        .visit_withdrawal(&mut deltas, block, tx, account, amount)?;
+                        .visit_redeemers(&mut deltas, block, tx, &redeemer)?;
                     self.drep_state
-                        .visit_withdrawal(&mut deltas, block, tx, account, amount)?;
+                        .visit_redeemers(&mut deltas, block, tx, &redeemer)?;
                     self.epoch_state
-                        .visit_withdrawal(&mut deltas, block, tx, account, amount)?;
+                        .visit_redeemers(&mut deltas, block, tx, &redeemer)?;
                     self.pool_state
-                        .visit_withdrawal(&mut deltas, block, tx, account, amount)?;
+                        .visit_redeemers(&mut deltas, block, tx, &redeemer)?;
                     self.tx_logs
-                        .visit_withdrawal(&mut deltas, block, tx, account, amount)?;
+                        .visit_redeemers(&mut deltas, block, tx, &redeemer)?;
                     self.proposal_logs
-                        .visit_withdrawal(&mut deltas, block, tx, account, amount)?;
+                        .visit_redeemers(&mut deltas, block, tx, &redeemer)?;
                 }
 
-                if let Some(update) = tx.update() {
-                    self.account_state
-                        .visit_update(&mut deltas, block, Some(tx), &update)?;
-                    self.asset_state
-                        .visit_update(&mut deltas, block, Some(tx), &update)?;
-                    self.datum_state
-                        .visit_update(&mut deltas, block, Some(tx), &update)?;
-                    self.drep_state
-                        .visit_update(&mut deltas, block, Some(tx), &update)?;
-                    self.epoch_state
-                        .visit_update(&mut deltas, block, Some(tx), &update)?;
-                    self.pool_state
-                        .visit_update(&mut deltas, block, Some(tx), &update)?;
-                    self.tx_logs
-                        .visit_update(&mut deltas, block, Some(tx), &update)?;
-                    self.proposal_logs
-                        .visit_update(&mut deltas, block, Some(tx), &update)?;
-                }
-            }
-
-            for datum in tx.plutus_data() {
-                self.account_state
-                    .visit_datums(&mut deltas, block, tx, datum)?;
-                self.asset_state
-                    .visit_datums(&mut deltas, block, tx, datum)?;
-                self.datum_state
-                    .visit_datums(&mut deltas, block, tx, datum)?;
-                self.drep_state
-                    .visit_datums(&mut deltas, block, tx, datum)?;
-                self.epoch_state
-                    .visit_datums(&mut deltas, block, tx, datum)?;
-                self.pool_state
-                    .visit_datums(&mut deltas, block, tx, datum)?;
-                self.tx_logs.visit_datums(&mut deltas, block, tx, datum)?;
-                self.proposal_logs
-                    .visit_datums(&mut deltas, block, tx, datum)?;
-            }
-
-            // Same LEDGER gate as above: GOV never registers a proposal
-            // carried by a phase-2-invalid transaction.
-            if tx.is_valid() {
-                for (idx, proposal) in tx.gov_proposals().iter().enumerate() {
-                    self.account_state
-                        .visit_proposal(&mut deltas, block, tx, proposal, idx)?;
-                    self.asset_state
-                        .visit_proposal(&mut deltas, block, tx, proposal, idx)?;
-                    self.datum_state
-                        .visit_proposal(&mut deltas, block, tx, proposal, idx)?;
-                    self.drep_state
-                        .visit_proposal(&mut deltas, block, tx, proposal, idx)?;
-                    self.epoch_state
-                        .visit_proposal(&mut deltas, block, tx, proposal, idx)?;
-                    self.pool_state
-                        .visit_proposal(&mut deltas, block, tx, proposal, idx)?;
-                    self.tx_logs
-                        .visit_proposal(&mut deltas, block, tx, proposal, idx)?;
-                    self.proposal_logs
-                        .visit_proposal(&mut deltas, block, tx, proposal, idx)?;
-                }
-            }
-
-            for redeemer in tx.redeemers() {
-                self.account_state
-                    .visit_redeemers(&mut deltas, block, tx, &redeemer)?;
-                self.asset_state
-                    .visit_redeemers(&mut deltas, block, tx, &redeemer)?;
-                self.datum_state
-                    .visit_redeemers(&mut deltas, block, tx, &redeemer)?;
-                self.drep_state
-                    .visit_redeemers(&mut deltas, block, tx, &redeemer)?;
-                self.epoch_state
-                    .visit_redeemers(&mut deltas, block, tx, &redeemer)?;
-                self.pool_state
-                    .visit_redeemers(&mut deltas, block, tx, &redeemer)?;
-                self.tx_logs
-                    .visit_redeemers(&mut deltas, block, tx, &redeemer)?;
-                self.proposal_logs
-                    .visit_redeemers(&mut deltas, block, tx, &redeemer)?;
-            }
+                Ok(())
+            })?;
         }
 
         if let Some(update) = block.update() {

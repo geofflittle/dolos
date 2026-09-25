@@ -133,10 +133,17 @@ impl BlockVisitor for EpochStateVisitor {
         let fees = define_tx_fees(tx, utxos)?;
 
         self.stats_delta.as_mut().unwrap().block_fees += fees;
-        self.stats_delta.as_mut().unwrap().tx_count += 1;
 
-        if let Some(donation) = pallas_extras::tx_treasury_donation(tx) {
-            self.stats_delta.as_mut().unwrap().treasury_donations += donation;
+        if tx.as_dijkstra_sub().is_none() {
+            self.stats_delta.as_mut().unwrap().tx_count += 1;
+        }
+
+        // The ledger adds a donation to the treasury only from a phase 2 valid
+        // transaction.
+        if tx.is_valid() {
+            if let Some(donation) = pallas_extras::tx_treasury_donation(tx) {
+                self.stats_delta.as_mut().unwrap().treasury_donations += donation;
+            }
         }
 
         Ok(())

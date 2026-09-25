@@ -479,6 +479,19 @@ pub fn tx_treasury_donation(tx: &MultiEraTx) -> Option<Lovelace> {
     }
 }
 
+/// Calls `f` on each sub transaction of `tx` and then on `tx`, the order in
+/// which the ledger applies them.
+pub fn for_each_applied_tx<E>(
+    tx: &MultiEraTx<'_>,
+    mut f: impl FnMut(&MultiEraTx<'_>) -> Result<(), E>,
+) -> Result<(), E> {
+    for sub in tx.sub_transactions() {
+        f(&sub)?;
+    }
+
+    f(tx)
+}
+
 #[cfg(test)]
 mod script_ref_tests {
     use super::*;
