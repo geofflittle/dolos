@@ -720,6 +720,36 @@ fn every_lookup_by_hash_finds_each_sub_transaction() {
     );
 }
 
+/// MUST FIRE: a sub transaction read back from its `TxCbor` is invalid when
+/// the transaction listing it was given as invalid.
+///
+/// MUST NOT FIRE: it is valid when that transaction was given as valid, and
+/// in both cases it keeps its own hash.
+#[test]
+fn a_sub_transaction_answer_keeps_the_verdict_it_was_given() {
+    let mut answers = vec![];
+
+    for (_, cbor) in &block_fixtures() {
+        let block = MultiEraBlock::decode(cbor).unwrap();
+
+        for (_, _, sub) in sub_transactions(&block) {
+            for success in [false, true] {
+                let tx = MultiEraTx::from_dijkstra_sub(sub, success);
+                let answer = TxCbor::from(&tx);
+                let read = MultiEraTx::try_from(&answer).unwrap();
+
+                answers.push(((read.hash(), read.is_valid()), (sub_hash(sub), success)));
+            }
+        }
+    }
+
+    assert!(!answers.is_empty(), "no fixture lists a sub transaction");
+
+    for (read, given) in answers {
+        assert_eq!(read, given);
+    }
+}
+
 #[cfg(any(feature = "minibf", feature = "minikupo"))]
 async fn get_json(router: &axum::Router, path: &str) -> (u16, serde_json::Value) {
     use http_body_util::BodyExt as _;
