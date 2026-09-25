@@ -34,7 +34,7 @@ const FORCED_PROTOCOL: usize = 11;
 
 /// The number of fixture entries carrying a block. A fixture added to the
 /// directory is replayed or this count fails.
-const BLOCK_FIXTURES: usize = 9;
+const BLOCK_FIXTURES: usize = 10;
 
 #[derive(Deserialize)]
 struct Provenance {
@@ -712,7 +712,7 @@ fn every_lookup_by_hash_finds_each_sub_transaction() {
     );
 }
 
-#[cfg(feature = "minibf")]
+#[cfg(any(feature = "minibf", feature = "minikupo"))]
 async fn get_json(router: &axum::Router, path: &str) -> (u16, serde_json::Value) {
     use http_body_util::BodyExt as _;
     use tower::util::ServiceExt as _;
@@ -1118,4 +1118,263 @@ fn the_spender_of_a_sub_transaction_input_is_that_sub_transaction() {
         spent.0,
         spent.1
     );
+}
+
+/// The fixture's block, by its name.
+fn block_fixture(name: &str) -> Vec<u8> {
+    block_fixtures()
+        .into_iter()
+        .find(|(entry, _)| entry.name == name)
+        .unwrap_or_else(|| panic!("no block fixture is named {name}"))
+        .1
+}
+
+/// The block whose sub transaction makes the outputs the later block spends.
+const SUB_OUTPUTS: &str = "ranking-sub-transaction-two-outputs";
+
+/// The block that spends and references an output of that sub transaction.
+const SUB_OUTPUT_SPENDER: &str = "ranking-spends-sub-transaction-output";
+
+/// A store that rolls the first block and then the second, seeded with every
+/// output the two spend and neither makes.
+fn replay_pair(first: &[u8], second: &[u8]) -> ToyDomain {
+    let first_block = MultiEraBlock::decode(first).unwrap();
+    let second_block = MultiEraBlock::decode(second).unwrap();
+
+    let made_first: HashSet<TxoRef> = produced(&first_block)
+        .into_iter()
+        .map(|(r, _)| r)
+        .collect();
+
+    let mut seeds = external_inputs(&first_block);
+    seeds.extend(
+        external_inputs(&second_block)
+            .into_iter()
+            .filter(|(key, _)| !made_first.contains(key)),
+    );
+
+    let delta = UtxoSetDelta {
+        produced_utxo: seeds,
+        ..Default::default()
+    };
+
+    let domain =
+        ToyDomain::new_with_genesis_and_config(genesis(), chain_config(), Some(delta), None)
+            .with_sync_config(sync_config(true));
+
+    domain.roll_forward(Arc::new(first.to_vec())).unwrap();
+    domain.roll_forward(Arc::new(second.to_vec())).unwrap();
+
+    domain
+}
+
+/// The address and lovelace of each output the block's valid transactions and
+/// their sub transactions make.
+#[cfg(feature = "minibf")]
+fn outputs_by_ref(block: &MultiEraBlock) -> HashMap<TxoRef, (String, u64)> {
+    let entry = |tx: &MultiEraTx| -> Vec<(TxoRef, (String, u64))> {
+        tx.produces()
+            .into_iter()
+            .map(|(index, output)| {
+                (
+                    TxoRef(tx.hash(), index as u32),
+                    (
+                        output.address().unwrap().to_string(),
+                        output.value().coin(),
+                    ),
+                )
+            })
+            .collect()
+    };
+
+    let subs = sub_transactions(block)
+        .into_iter()
+        .flat_map(|(_, success, sub)| entry(&MultiEraTx::from_dijkstra_sub(sub, success)));
+
+    block
+        .txs()
+        .iter()
+        .flat_map(|tx| entry(tx))
+        .chain(subs)
+        .collect()
+}
+
+/// The input a `/txs/{hash}/utxos` answer lists for the output given, as
+/// whether it is a reference input and its lovelace.
+#[cfg(feature = "minibf")]
+fn listed_input(utxos: &serde_json::Value, txo: &TxoRef) -> Option<(bool, u64)> {
+    utxos["inputs"].as_array()?.iter().find_map(|x| {
+        let same = x["tx_hash"].as_str()? == txo.0.to_string()
+            && x["output_index"].as_u64()? == txo.1 as u64;
+
+        let lovelace = x["amount"]
+            .as_array()?
+            .iter()
+            .find(|a| a["unit"] == "lovelace")?["quantity"]
+            .as_str()?
+            .parse()
+            .ok()?;
+
+        same.then(|| (x["reference"].as_bool().unwrap_or(false), lovelace))
+    })
+}
+
+/// MUST FIRE: an input made by a sub transaction of an earlier block, spent by
+/// a sub transaction and referenced by its parent, is answered with that
+/// output's lovelace by `/txs/{hash}/utxos` for both, and the block route
+/// lists the sub transaction under that output's address.
+///
+/// MUST NOT FIRE: the parent's input made by a top level transaction of the
+/// earlier block is answered with that output's lovelace too.
+#[cfg(feature = "minibf")]
+#[test]
+fn minibf_resolves_an_input_a_sub_transaction_made() {
+    let first = block_fixture(SUB_OUTPUTS);
+    let second = block_fixture(SUB_OUTPUT_SPENDER);
+    let made = outputs_by_ref(&MultiEraBlock::decode(&first).unwrap());
+
+    let block = MultiEraBlock::decode(&second).unwrap();
+    let txs = block.txs();
+
+    let spends_made = |tx: &MultiEraTx| -> Option<TxoRef> {
+        tx.consumes()
+            .iter()
+            .map(TxoRef::from)
+            .find(|txo| made.contains_key(txo))
+    };
+
+    let (parent, sub, by_sub) = txs
+        .iter()
+        .find_map(|tx| {
+            tx.sub_transactions()
+                .into_iter()
+                .find_map(|sub| spends_made(&sub).map(|txo| (tx, sub, txo)))
+        })
+        .expect("no sub transaction spends an output the earlier block makes");
+
+    let by_top_level =
+        spends_made(parent).expect("the parent spends no output the earlier block makes");
+
+    let domain = replay_pair(&first, &second);
+    let config = dolos_core::config::MinibfConfig::new("[::]:0".parse().unwrap());
+    let router = dolos_minibf::build_router(config, domain);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+
+    runtime.block_on(async {
+        let (status, utxos) = get_json(&router, &format!("/txs/{}/utxos", parent.hash())).await;
+
+        assert_eq!(
+            (
+                status,
+                listed_input(&utxos, &by_sub),
+                listed_input(&utxos, &by_top_level)
+            ),
+            (
+                200,
+                Some((true, made[&by_sub].1)),
+                Some((false, made[&by_top_level].1))
+            ),
+            "/txs/{}/utxos",
+            parent.hash()
+        );
+
+        let (status, utxos) = get_json(&router, &format!("/txs/{}/utxos", sub.hash())).await;
+
+        assert_eq!(
+            (status, listed_input(&utxos, &by_sub)),
+            (200, Some((false, made[&by_sub].1))),
+            "/txs/{}/utxos",
+            sub.hash()
+        );
+
+        let mut listed = BTreeSet::new();
+
+        for page in 1.. {
+            let (status, addresses) = get_json(
+                &router,
+                &format!("/blocks/{}/addresses?count=100&page={page}", block.hash()),
+            )
+            .await;
+
+            assert_eq!(status, 200, "/blocks/addresses page {page}");
+
+            let addresses = addresses.as_array().unwrap();
+
+            if addresses.is_empty() {
+                break;
+            }
+
+            for x in addresses {
+                for tx in x["transactions"].as_array().unwrap() {
+                    listed.insert((
+                        x["address"].as_str().unwrap().to_string(),
+                        tx["tx_hash"].as_str().unwrap().to_string(),
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            listed.contains(&(made[&by_sub].0.clone(), sub.hash().to_string())),
+            "/blocks/addresses does not list the sub transaction under the address it spends from"
+        );
+    });
+}
+
+/// MUST FIRE: a match on every output of a sub transaction answers the outputs
+/// of it still unspent after the block that spends one of them.
+///
+/// MUST NOT FIRE: a match on every output of the top level transaction that
+/// lists it answers the outputs of that transaction still unspent.
+#[cfg(feature = "minikupo")]
+#[test]
+fn minikupo_matches_the_outputs_of_a_sub_transaction() {
+    let first = block_fixture(SUB_OUTPUTS);
+    let second = block_fixture(SUB_OUTPUT_SPENDER);
+
+    let first_block = MultiEraBlock::decode(&first).unwrap();
+    let spent: HashSet<TxoRef> = consumed(&MultiEraBlock::decode(&second).unwrap())
+        .into_iter()
+        .collect();
+
+    let (index, _, sub) = sub_transactions(&first_block)
+        .into_iter()
+        .next()
+        .expect("the earlier block lists no sub transaction");
+
+    let unspent = |hash: Hash<32>| -> Vec<u64> {
+        produced(&first_block)
+            .into_iter()
+            .map(|(txo, _)| txo)
+            .filter(|txo| txo.0 == hash && !spent.contains(txo))
+            .map(|txo| txo.1 as u64)
+            .collect()
+    };
+
+    let domain = replay_pair(&first, &second);
+    let config = dolos_core::config::MinikupoConfig::new("[::]:0".parse().unwrap());
+    let router = dolos_minikupo::build_router(config, domain);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+
+    runtime.block_on(async {
+        for hash in [sub_hash(sub), first_block.txs()[index].hash()] {
+            let (status, matches) = get_json(&router, &format!("/matches/*@{hash}")).await;
+
+            let mut indexes: Vec<u64> = matches
+                .as_array()
+                .map(|x| {
+                    x.iter()
+                        .map(|m| m["output_index"].as_u64().unwrap())
+                        .collect()
+                })
+                .unwrap_or_default();
+            indexes.sort();
+
+            assert_eq!(
+                (status, indexes),
+                (200, unspent(hash)),
+                "/matches/*@{hash}"
+            );
+        }
+    });
 }

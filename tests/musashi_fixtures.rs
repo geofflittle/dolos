@@ -39,6 +39,7 @@ const KINDS: &[&str] = &[
     "era_header_variant_7",
     "ranking_block_with_sub_transaction",
     "ranking_block_with_sub_transaction_of_two_outputs",
+    "ranking_block_spending_a_sub_transaction_output",
     "endorser_block_large",
     "endorser_block_small",
     "endorser_block_repeat_first",
@@ -229,7 +230,7 @@ fn every_ranking_block_is_the_block_its_entry_names() {
         checked += 1;
     }
 
-    assert_eq!(checked, 9, "the number of ranking block fixtures changed");
+    assert_eq!(checked, 10, "the number of ranking block fixtures changed");
 }
 
 #[test]
@@ -384,6 +385,44 @@ fn each_fixture_shows_the_shape_it_was_cut_for() {
             f.name
         );
     }
+
+    let made_by_sub: BTreeSet<(Hash<32>, u64)> =
+        MultiEraBlock::decode(&read_bytes(&two_outputs.files[0]))
+            .expect("the sub transaction block decodes")
+            .txs()
+            .iter()
+            .flat_map(|tx| tx.sub_transactions())
+            .flat_map(|sub| {
+                let hash = sub.hash();
+                sub.produces()
+                    .into_iter()
+                    .map(|(index, _)| (hash, index as u64))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+    let spender = k["ranking_block_spending_a_sub_transaction_output"];
+    let raw = read_bytes(&spender.files[0]);
+    let block = MultiEraBlock::decode(&raw).expect("the spending block decodes");
+    let txs = block.txs();
+    let names_one = |input: &pallas::ledger::traverse::MultiEraInput| {
+        made_by_sub.contains(&(*input.hash(), input.index()))
+    };
+    let spent = txs
+        .iter()
+        .flat_map(|tx| tx.sub_transactions())
+        .map(|sub| sub.consumes().iter().filter(|input| names_one(input)).count())
+        .sum::<usize>();
+    let referenced = txs
+        .iter()
+        .flat_map(|tx| tx.reference_inputs())
+        .filter(|input| names_one(input))
+        .count();
+    assert_eq!(
+        (spent, referenced),
+        (1, 1),
+        "{} does not spend and reference one sub transaction output",
+        spender.name
+    );
 
     let large = k["endorser_block_large"];
     let small = k["endorser_block_small"];

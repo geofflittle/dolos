@@ -229,6 +229,22 @@ relay = "none, the bytes were read out of the node's own immutable database at /
 tool_rev = "the chunk secondary index read at its fixed 56 byte entry layout, the block bounded by its own offset and the next entry's, with the slot, the header hash and the CRC32 checked against the index row"
 node_image = "ghcr.io/input-output-hk/ouroboros-leios/cardano-node-testnet:prototype-2026w36 sha256:0df972de2193f9299af4df409fde2b7ea56188ddfe2c3b77aa661e23b226a566"
 
+[[fixture]]
+name = "ranking-spends-sub-transaction-output"
+kind = "ranking_block_spending_a_sub_transaction_output"
+files = ["ranking-spends-sub-transaction-output.block"]
+chain_tag = "prototype-2026w36"
+network_magic = 164
+slot = 1282549
+block_hash = "0a573ae3b05a2c1579c96a40b128a78567e1ac725aa45dbd782e3f78b17906bc"
+transactions = 220
+bytes = 45446
+located_by = "a byte search of the immutable and volatile chunks for each sub transaction hash as a 32 byte string. The only hits are two in chunk 01187, both in this block, entry 20 at offset 807449. Its top level transaction 205 spends output 0 of d04727b7, which lists sub transaction 31dae9d6 in ranking-sub-transaction-two-outputs, and takes output 1 of 31dae9d6 as a reference input. The one sub transaction it lists spends that same output. The count is the 220 top level transactions on the wire"
+harvested_at = "2026-09-25T19:38:24Z"
+relay = "none, the bytes were read out of the node's own immutable database at /opt/musashi/data/db/immutable, read only"
+tool_rev = "the chunk secondary index read at its fixed 56 byte entry layout, the block bounded by its own offset and the next entry's, with the slot, the header hash and the CRC32 checked against the index row"
+node_image = "ghcr.io/input-output-hk/ouroboros-leios/cardano-node-testnet:prototype-2026w36 sha256:0df972de2193f9299af4df409fde2b7ea56188ddfe2c3b77aa661e23b226a566"
+
 # A fixture read out of an immutable chunk records no tip. The chunk is settled
 # and the node's tip at the moment of the read says nothing about it.
 
