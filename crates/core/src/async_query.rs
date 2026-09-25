@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet},
     sync::Arc,
 };
@@ -8,7 +9,7 @@ use itertools::Itertools as _;
 
 use tokio::sync::Semaphore;
 
-use pallas::ledger::traverse::MultiEraBlock;
+use pallas::ledger::traverse::{MultiEraBlock, MultiEraTx};
 
 use crate::{
     archive::ArchiveStore, ArchiveError, BlockBody, BlockHash, BlockHeight, BlockSlot, ChainError,
@@ -26,6 +27,39 @@ pub struct BlockRefMeta {
     pub height: BlockHeight,
     pub tx_hash: TxHash,
     pub tx_index: TxOrder,
+}
+
+/// Each transaction of a block in the ledger's application order, every sub
+/// transaction before the top level transaction that lists it, paired with
+/// the top level transaction's index in the block.
+pub fn applied_txs<'b>(block: &'b MultiEraBlock<'_>) -> Vec<(TxOrder, MultiEraTx<'b>)> {
+    block
+        .txs()
+        .into_iter()
+        .enumerate()
+        .flat_map(|(index, tx)| {
+            let subs: Vec<MultiEraTx<'b>> = match &tx {
+                MultiEraTx::Dijkstra(x) => x
+                    .transaction_body
+                    .sub_transactions
+                    .iter()
+                    .flat_map(|subs| subs.iter())
+                    .map(|sub| MultiEraTx::DijkstraSub(Box::new(Cow::Owned(sub.clone())), x.success))
+                    .collect(),
+                _ => vec![],
+            };
+
+            subs.into_iter().chain([tx]).map(move |tx| (index, tx))
+        })
+        .collect()
+}
+
+/// The transaction of a block whose hash is the one given, a sub transaction
+/// included, with the index of the top level transaction that holds it.
+pub fn tx_by_hash<'b>(block: &'b MultiEraBlock<'_>, hash: &[u8]) -> Option<(TxOrder, MultiEraTx<'b>)> {
+    applied_txs(block)
+        .into_iter()
+        .find(|(_, tx)| tx.hash().as_slice() == hash)
 }
 
 /// Maximum number of metadata entries, including misses, retained between
@@ -261,12 +295,7 @@ where
 
         let block = MultiEraBlock::decode(raw.as_slice())
             .map_err(|e| DomainError::ChainError(ChainError::DecodingError(e)))?;
-        if let Some((idx, _)) = block
-            .txs()
-            .iter()
-            .enumerate()
-            .find(|(_, tx)| tx.hash().to_vec() == tx_hash)
-        {
+        if let Some((idx, _)) = tx_by_hash(&block, &tx_hash) {
             return Ok(Some((raw, idx)));
         }
 
@@ -291,12 +320,7 @@ where
             };
             let block = MultiEraBlock::decode(raw.as_slice())
                 .map_err(|e| DomainError::ChainError(ChainError::DecodingError(e)))?;
-            let Some((tx_index, _)) = block
-                .txs()
-                .iter()
-                .enumerate()
-                .find(|(_, tx)| tx.hash().as_slice() == tx_hash.as_slice())
-            else {
+            let Some((tx_index, _)) = tx_by_hash(&block, &tx_hash) else {
                 return Ok(None);
             };
             Ok(Some(BlockRefMeta {
@@ -366,7 +390,7 @@ where
                                     continue;
                                 }
                             };
-                            for (tx_index, tx) in block.txs().iter().enumerate() {
+                            for (tx_index, tx) in applied_txs(&block) {
                                 let tx_hash = tx.hash();
                                 if requested.contains(&tx_hash) {
                                     positions.entry(tx_hash).or_insert_with(|| BlockRefMeta {
@@ -443,7 +467,7 @@ where
 
         let block = MultiEraBlock::decode(raw.as_slice())
             .map_err(|e| DomainError::ChainError(ChainError::DecodingError(e)))?;
-        if let Some(tx) = block.txs().iter().find(|x| x.hash().to_vec() == tx_hash) {
+        if let Some((_, tx)) = tx_by_hash(&block, &tx_hash) {
             return Ok(Some(EraCbor(block.era().into(), tx.encode())));
         }
 

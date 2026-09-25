@@ -1482,6 +1482,7 @@ pub struct TxModelBuilder<'a> {
     pparams: Option<PParamsSet>,
     network: Option<Network>,
     block: MultiEraBlock<'a>,
+    hash: TxHash,
     order: TxOrder,
     deps: HashMap<TxHash, MultiEraTx<'a>>,
     consumed_deps: HashMap<TxoRef, TxHash>,
@@ -1491,14 +1492,19 @@ pub struct TxModelBuilder<'a> {
 }
 
 impl<'a> TxModelBuilder<'a> {
-    pub fn new(block: &'a [u8], order: TxOrder) -> Result<Self, StatusCode> {
+    pub fn new(block: &'a [u8], hash: &[u8]) -> Result<Self, StatusCode> {
         let block = MultiEraBlock::decode(block).map_err(|err| {
             tracing::error!(error = ?err, "failed to decode block in TxModelBuilder");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
+        let (order, hash) = dolos_core::tx_by_hash(&block, hash)
+            .map(|(order, tx)| (order, tx.hash()))
+            .ok_or(StatusCode::NOT_FOUND)?;
+
         Ok(Self {
             block,
+            hash,
             order,
             chain: None,
             pparams: None,
@@ -1710,14 +1716,9 @@ impl<'a> TxModelBuilder<'a> {
     }
 
     pub fn tx(&self) -> Result<MultiEraTx<'_>, StatusCode> {
-        let tx = self
-            .block
-            .txs()
-            .get(self.order)
-            .ok_or(StatusCode::NOT_FOUND)?
-            .clone();
-
-        Ok(tx)
+        dolos_core::tx_by_hash(&self.block, self.hash.as_slice())
+            .map(|(_, tx)| tx)
+            .ok_or(StatusCode::NOT_FOUND)
     }
 
     fn chain_or_500(&self) -> Result<&ChainSummary, StatusCode> {

@@ -1014,7 +1014,7 @@ where
         let tx_hash = message.hash;
 
         let query = dolos_core::AsyncQueryFacade::new(self.domain.clone());
-        let (block_bytes, tx_index) = query
+        let (block_bytes, _) = query
             .block_by_tx_hash(tx_hash.to_vec())
             .await
             .map_err(|e| Status::internal(e.to_string()))?
@@ -1023,10 +1023,7 @@ where
         let block = MultiEraBlock::decode(&block_bytes)
             .map_err(|e| Status::internal(format!("failed to decode block: {e}")))?;
 
-        let tx = block
-            .txs()
-            .get(tx_index)
-            .cloned()
+        let (_, tx) = dolos_core::tx_by_hash(&block, &tx_hash)
             .ok_or_else(|| Status::not_found("tx hash not found"))?;
 
         let native_bytes = tx.encode().into();

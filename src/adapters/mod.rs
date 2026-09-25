@@ -175,11 +175,7 @@ impl pallas::interop::utxorpc::LedgerContext for DomainAdapter {
                 continue;
             };
 
-            let block_txs = block.txs();
-            let Some(tx) = block_txs
-                .iter()
-                .find(|tx| tx.hash().as_ref() == tx_hash_bytes.as_slice())
-            else {
+            let Some((_, tx)) = dolos_core::tx_by_hash(&block, &tx_hash_bytes) else {
                 continue;
             };
 
