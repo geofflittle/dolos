@@ -408,11 +408,11 @@ where
 {
     let block = MultiEraBlock::decode(block).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let txs = block.txs();
+    let txs = dolos_core::applied_txs(&block);
 
-    let mut resolver = deps.prepare(domain, txs.iter()).await?;
+    let mut resolver = deps.prepare(domain, txs.iter().map(|(_, tx)| tx)).await?;
 
-    for tx in txs.iter() {
+    for (_, tx) in txs.iter() {
         let mut matched = false;
 
         for (_, output) in tx.produces() {
@@ -460,12 +460,11 @@ where
 {
     let block = MultiEraBlock::decode(block).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let txs = block.txs();
+    let txs = dolos_core::applied_txs(&block);
 
     // only the txs that will actually be scanned contribute dependencies
     let scanned = txs
         .iter()
-        .enumerate()
         .filter(|(idx, _)| !pagination.should_skip(block.number(), *idx))
         .map(|(_, tx)| tx);
 
@@ -473,7 +472,8 @@ where
 
     let mut matches = vec![];
 
-    for (idx, tx) in txs.iter().enumerate() {
+    for (idx, tx) in txs.iter() {
+        let idx = *idx;
         if !pagination.should_skip(block.number(), idx) && has_address(&mut resolver, address, tx)?
         {
             let model = AddressTransactionsContentInner {
