@@ -745,6 +745,66 @@ fn a_sub_transaction_answer_keeps_the_verdict_it_was_given() {
     }
 }
 
+/// The block with the verdict on each transaction that lists a sub transaction
+/// set to the one given.
+fn with_listing_verdict(cbor: &[u8], success: bool) -> Vec<u8> {
+    use pallas::codec::utils::MaybeIndefArray;
+
+    let (era, mut block): (u16, dijkstra::Block) = minicbor::decode(cbor).unwrap();
+
+    let (MaybeIndefArray::Def(txs) | MaybeIndefArray::Indef(txs)) =
+        &mut block.block_body.transactions;
+
+    for tx in txs.iter_mut() {
+        if tx.transaction_body.sub_transactions.is_some() {
+            tx.success = success;
+        }
+    }
+
+    minicbor::to_vec((era, block)).unwrap()
+}
+
+/// MUST FIRE: `tx_cbor` answers a sub transaction as invalid when the stored
+/// block gives the transaction that lists it as invalid.
+///
+/// MUST NOT FIRE: it answers the sub transaction as valid when the stored block
+/// gives that transaction as valid.
+#[test]
+fn a_sub_transaction_is_looked_up_with_the_verdict_on_its_parent() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let mut answers = vec![];
+
+    for (entry, harvested) in &block_fixtures() {
+        if sub_transactions(&MultiEraBlock::decode(harvested).unwrap()).is_empty() {
+            continue;
+        }
+
+        for success in [true, false] {
+            let cbor = with_listing_verdict(harvested, success);
+            let block = MultiEraBlock::decode(&cbor).unwrap();
+            let query = AsyncQueryFacade::new(replay(entry, &cbor, true).domain);
+
+            for (_, _, sub) in sub_transactions(&block) {
+                let hash = sub_hash(sub);
+                let answer = runtime.block_on(query.tx_cbor(hash.to_vec())).unwrap();
+                let expected = TxCbor::DijkstraSub(minicbor::to_vec(sub).unwrap(), success);
+
+                answers.push((
+                    format!("{} {hash} {success}", entry.name),
+                    answer,
+                    Some(expected),
+                ));
+            }
+        }
+    }
+
+    assert!(!answers.is_empty(), "no fixture lists a sub transaction");
+
+    for (name, answer, expected) in answers {
+        assert_eq!(answer, expected, "{name}: tx_cbor");
+    }
+}
+
 #[cfg(any(feature = "minibf", feature = "minikupo"))]
 async fn get_json(router: &axum::Router, path: &str) -> (u16, serde_json::Value) {
     use http_body_util::BodyExt as _;
