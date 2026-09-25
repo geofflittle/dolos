@@ -20,6 +20,8 @@ use pallas::codec::minicbor;
 use pallas::crypto::hash::{Hash, Hasher};
 use pallas::ledger::primitives::dijkstra;
 use pallas::ledger::traverse::MultiEraBlock;
+#[cfg(feature = "minibf")]
+use pallas::ledger::traverse::MultiEraTx;
 use serde::Deserialize;
 
 const DIR: &str = "test_data/musashi-w36";
@@ -794,5 +796,133 @@ fn minibf_serves_each_sub_transaction_by_its_own_hash() {
     assert!(
         sub_probes > 0,
         "no fixture lists a sub transaction, so no sub transaction was served"
+    );
+}
+
+/// The hash, top level index and lovelace of each output a block makes to the
+/// given address, sub transactions included, for the transactions the ledger
+/// applies.
+#[cfg(feature = "minibf")]
+fn paid_to(block: &MultiEraBlock, address: &str) -> Vec<(Hash<32>, usize, u64)> {
+    let paid = |tx: &MultiEraTx, index: usize| -> Vec<(Hash<32>, usize, u64)> {
+        tx.produces()
+            .into_iter()
+            .filter(|(_, output)| output.address().unwrap().to_string() == address)
+            .map(|(_, output)| (tx.hash(), index, output.value().coin()))
+            .collect()
+    };
+
+    let top_level = block
+        .txs()
+        .iter()
+        .enumerate()
+        .flat_map(|(index, tx)| paid(tx, index))
+        .collect::<Vec<_>>();
+
+    let subs = sub_transactions(block)
+        .into_iter()
+        .flat_map(|(index, success, sub)| paid(&MultiEraTx::from_dijkstra_sub(sub, success), index))
+        .collect::<Vec<_>>();
+
+    top_level.into_iter().chain(subs).collect()
+}
+
+/// MUST FIRE: the address a sub transaction pays is served that payment in its
+/// total and that sub transaction in its history, at its parent's index.
+///
+/// MUST NOT FIRE: the history lists no hash the block does not apply.
+#[cfg(feature = "minibf")]
+#[test]
+fn minibf_address_routes_count_each_sub_transaction() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let mut addresses = 0;
+
+    for (entry, cbor) in &block_fixtures() {
+        let block = MultiEraBlock::decode(cbor).unwrap();
+        let subs = sub_transactions(&block);
+
+        let paid_by_sub: BTreeSet<String> = subs
+            .iter()
+            .filter(|(_, success, _)| *success)
+            .flat_map(|(_, _, sub)| {
+                MultiEraTx::from_dijkstra_sub(sub, true)
+                    .produces()
+                    .into_iter()
+                    .map(|(_, output)| output.address().unwrap().to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        if paid_by_sub.is_empty() {
+            continue;
+        }
+
+        let replayed = replay(entry, cbor, true);
+        let config = dolos_core::config::MinibfConfig::new("[::]:0".parse().unwrap());
+        let router = dolos_minibf::build_router(config, replayed.domain.clone());
+
+        let applied: HashMap<Hash<32>, usize> = block
+            .txs()
+            .iter()
+            .enumerate()
+            .map(|(index, tx)| (tx.hash(), index))
+            .chain(subs.iter().map(|(index, _, sub)| (sub_hash(sub), *index)))
+            .collect();
+
+        runtime.block_on(async {
+            for address in &paid_by_sub {
+                addresses += 1;
+                let name = format!("{} {address}", entry.name);
+                let paid = paid_to(&block, address);
+
+                let (status, total) =
+                    get_json(&router, &format!("/addresses/{address}/total")).await;
+
+                let lovelace = total["received_sum"]
+                    .as_array()
+                    .and_then(|amounts| amounts.iter().find(|x| x["unit"] == "lovelace"))
+                    .and_then(|x| x["quantity"].as_str())
+                    .map(|x| x.parse::<u64>().unwrap());
+
+                assert_eq!(
+                    (status, lovelace),
+                    (200, Some(paid.iter().map(|(_, _, coin)| coin).sum())),
+                    "{name}: /addresses/total"
+                );
+
+                let (status, history) =
+                    get_json(&router, &format!("/addresses/{address}/transactions")).await;
+
+                let listed: Vec<(Hash<32>, usize)> = history
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|x| {
+                        (
+                            x["tx_hash"].as_str().unwrap().parse().unwrap(),
+                            x["tx_index"].as_u64().unwrap() as usize,
+                        )
+                    })
+                    .collect();
+
+                let paying: BTreeSet<(Hash<32>, usize)> =
+                    paid.iter().map(|(hash, index, _)| (*hash, *index)).collect();
+
+                assert_eq!(
+                    (
+                        status,
+                        paying.iter().all(|x| listed.contains(x)),
+                        listed.iter().all(|(hash, index)| applied.get(hash) == Some(index)),
+                    ),
+                    (200, true, true),
+                    "{name}: /addresses/transactions lists {listed:?}, the block pays {paying:?}"
+                );
+            }
+        });
+    }
+
+    assert!(
+        addresses > 0,
+        "no fixture lists a sub transaction paying an address, so no address was served"
     );
 }
