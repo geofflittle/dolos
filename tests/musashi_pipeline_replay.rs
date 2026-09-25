@@ -1029,3 +1029,93 @@ fn minibf_block_routes_count_each_sub_transaction() {
         blocks.1
     );
 }
+
+/// MUST FIRE: each input a sub transaction spends is answered with that sub
+/// transaction as its spender.
+///
+/// MUST NOT FIRE: an input the top level transaction that lists it spends is
+/// answered with that top level transaction.
+#[test]
+fn the_spender_of_a_sub_transaction_input_is_that_sub_transaction() {
+    use dolos_cardano::indexes::AsyncCardanoQueryExt as _;
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let mut spent = (0, 0);
+
+    for (entry, cbor) in &block_fixtures() {
+        let block = MultiEraBlock::decode(cbor).unwrap();
+        let body = match block.as_dijkstra() {
+            Some(body) => body,
+            None => continue,
+        };
+
+        let spenders: Vec<(TxoRef, Hash<32>, bool)> = body
+            .block_body
+            .transactions
+            .iter()
+            .filter(|tx| tx.success)
+            .flat_map(|tx| {
+                let parent = Hasher::<256>::hash(tx.transaction_body.raw_cbor());
+                let subs = tx
+                    .transaction_body
+                    .sub_transactions
+                    .iter()
+                    .flat_map(|subs| subs.iter())
+                    .flat_map(|sub| {
+                        let hash = sub_hash(sub);
+                        sub.sub_transaction_body
+                            .inputs
+                            .iter()
+                            .map(move |input| (input.clone(), hash, true))
+                    });
+                let own = tx
+                    .transaction_body
+                    .inputs
+                    .iter()
+                    .take(1)
+                    .map(move |input| (input.clone(), parent, false));
+                subs.chain(own).collect::<Vec<_>>()
+            })
+            .map(|(input, hash, by_sub)| {
+                (
+                    TxoRef(input.transaction_id, input.index as u32),
+                    hash,
+                    by_sub,
+                )
+            })
+            .collect();
+
+        if !spenders.iter().any(|x| x.2) {
+            continue;
+        }
+
+        let replayed = replay(entry, cbor, true);
+        let query = AsyncQueryFacade::new(replayed.domain.clone());
+
+        runtime.block_on(async {
+            for (txo, hash, by_sub) in &spenders {
+                let bytes: Vec<u8> = txo.clone().into();
+
+                assert_eq!(
+                    query.tx_by_spent_txo(&bytes).await.unwrap(),
+                    Some(*hash),
+                    "{} {txo:?}: the spender",
+                    entry.name
+                );
+
+                if *by_sub {
+                    spent.1 += 1;
+                } else {
+                    spent.0 += 1;
+                }
+            }
+        });
+    }
+
+    assert!(
+        spent.0 > 0 && spent.1 > 0,
+        "the fixtures spend {} inputs by a top level transaction and {} by a sub transaction",
+        spent.0,
+        spent.1
+    );
+}
