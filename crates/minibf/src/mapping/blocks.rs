@@ -39,17 +39,19 @@ impl<'a> BlockModelBuilder<'a> {
     }
 
     pub fn txs(&self) -> Vec<MultiEraTx<'_>> {
-        self.block.txs()
+        dolos_core::applied_txs(&self.block)
+            .into_iter()
+            .map(|(_, tx)| tx)
+            .collect()
     }
 
-    /// Calls `collect` for every tx in block order.
+    /// Calls `collect` for every tx in the order the ledger applies them.
     pub fn collect_touched_addresses_with<F>(mut self, mut collect: F) -> Result<Self, StatusCode>
     where
         F: FnMut(&MultiEraTx<'_>) -> Result<BTreeSet<String>, StatusCode>,
     {
         self.touched_addresses = Some(
-            self.block
-                .txs()
+            self.txs()
                 .iter()
                 .map(|tx| collect(tx).map(|addresses| (tx.hash().to_string(), addresses)))
                 .try_collect()?,
@@ -236,10 +238,10 @@ impl<'a> BlockModelBuilder<'a> {
     }
 
     fn compute_total_output(&self) -> String {
-        let txs = self.block.txs();
+        let txs = dolos_core::applied_txs(&self.block);
 
         txs.iter()
-            .map(|tx| {
+            .map(|(_, tx)| {
                 tx.produces()
                     .iter()
                     .map(|(_, o)| o.value().coin())
