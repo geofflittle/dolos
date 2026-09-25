@@ -1627,6 +1627,46 @@ mod tests {
         );
     }
 
+    /// The rewards pot at the end of an epoch whose only block is the one the
+    /// deltas came from, starting from empty pots.
+    fn rewards_pot_after(deltas: &WorkDeltas) -> u64 {
+        use crate::model::{EpochState, EpochValue};
+        use crate::pots::{apply_delta, EpochIncentives, PotDelta, Pots};
+        use dolos_core::EntityDelta as _;
+
+        let mut epoch = Some(EpochState {
+            number: EPOCH,
+            rolling: EpochValue::new(EPOCH),
+            ..Default::default()
+        });
+
+        epoch_stats(deltas).apply(&mut epoch);
+
+        let epoch = epoch.unwrap();
+        let rolling = epoch.rolling.live().expect("the block opens the rolling stats");
+        let delta = PotDelta::from_rolling(rolling, &test_pparams());
+
+        apply_delta(Pots::default(), &EpochIncentives::default(), &delta).rewards
+    }
+
+    /// The must-not case. A phase 2 invalid transaction moves nothing into
+    /// the rewards pot.
+    #[test]
+    fn an_invalid_transaction_moves_no_direct_deposit_into_the_rewards_pot() {
+        let deltas = crawl_block_with_direct_deposits(false);
+
+        assert_eq!(rewards_pot_after(&deltas), 0);
+    }
+
+    /// The must-fire case. The direct deposits of a transaction and of its
+    /// sub transaction move into the rewards pot at the epoch boundary.
+    #[test]
+    fn direct_deposits_move_into_the_rewards_pot() {
+        let deltas = crawl_block_with_direct_deposits(true);
+
+        assert_eq!(rewards_pot_after(&deltas), PARENT_DEPOSIT + SUB_DEPOSIT);
+    }
+
     fn drep(byte: u8) -> StakeCredential {
         StakeCredential::AddrKeyhash(Hash::<28>::from([byte; 28]))
     }
