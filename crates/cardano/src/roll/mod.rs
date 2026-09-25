@@ -357,10 +357,16 @@ impl<'a> DeltaBuilder<'a> {
             self.protocol,
         )?;
 
-        // A sub transaction is given the order of the transaction carrying it,
-        // because the ledger gives it no index of its own.
-        for (order, tx) in block.txs().iter().enumerate() {
+        // The order counts applied transactions in the ledger's application
+        // order, so it equals the block index only in a block without sub
+        // transactions.
+        let mut next_order: TxOrder = 0;
+
+        for tx in block.txs().iter() {
             for_each_applied_tx(tx, |tx| -> Result<(), ChainError> {
+                let order = next_order;
+                next_order += 1;
+
                 self.account_state
                     .visit_tx(&mut deltas, block, tx, self.utxos)?;
                 self.asset_state
