@@ -1535,6 +1535,74 @@ mod tests {
         }
     }
 
+    /// MUST FIRE: a phase 2 invalid transaction that lists a sub transaction
+    /// and declares collateral spends its collateral and creates its collateral
+    /// return at the index after its last output, and nothing of its sub
+    /// transaction. The block is a harvested one whose carrying transaction is
+    /// rebuilt with a collateral input and a collateral return.
+    ///
+    /// MUST NOT FIRE: the same transaction left valid spends no collateral and
+    /// creates no collateral return.
+    #[test]
+    fn an_invalid_transaction_with_a_sub_transaction_returns_its_collateral() {
+        use pallas::codec::utils::KeepRaw;
+        use pallas::ledger::primitives::dijkstra;
+
+        for (name, _, _, _, spent, _, made) in SUB_TRANSACTION_CASES {
+            let cbor = musashi_block(name);
+            let block = MultiEraBlock::decode(&cbor).unwrap();
+            let txs = block.txs();
+
+            let carrier = txs
+                .iter()
+                .position(|tx| !tx.sub_transactions().is_empty())
+                .unwrap();
+
+            let original = txs[carrier].as_dijkstra().unwrap();
+            let mut body = (*original.transaction_body).clone();
+            let outputs = body.outputs.len();
+
+            let collateral = TxoRef(Hash::from([7u8; 32]), 0);
+            body.collateral = Some(
+                dijkstra::NonEmptySet::try_from(vec![dijkstra::TransactionInput {
+                    transaction_id: collateral.0,
+                    index: collateral.1 as u64,
+                }])
+                .unwrap(),
+            );
+            body.collateral_return = Some(body.outputs.first().unwrap().clone());
+
+            for success in [true, false] {
+                let mut flagged = original.clone();
+                flagged.transaction_body = KeepRaw::from(body.clone());
+                flagged.success = success;
+
+                let mut rebuilt = block.txs();
+                rebuilt[carrier] = MultiEraTx::from_dijkstra(&flagged);
+                let hash = rebuilt[carrier].hash();
+
+                for (walk, created, spends) in walks(&block, &rebuilt) {
+                    let sub_applied = made
+                        .iter()
+                        .any(|key| created.contains_key(&txoref(key)))
+                        || spends.contains_key(&txoref(&spent));
+
+                    assert_eq!(
+                        (
+                            spends.contains_key(&collateral),
+                            created.contains_key(&TxoRef(hash, outputs as u32)),
+                            created.contains_key(&TxoRef(hash, 0)),
+                            sub_applied,
+                        ),
+                        (!success, !success, success, success),
+                        "{name}, {walk}, verdict {success}: collateral spent, collateral \
+                         return created, own output created, sub transaction applied"
+                    );
+                }
+            }
+        }
+    }
+
     /// The ledger applies a sub transaction before the transaction that holds
     /// it, and a transaction holding none alone.
     #[test]
