@@ -963,11 +963,20 @@ pub(crate) mod dijkstra_fixture {
     pub fn sub_transaction_with_certs(
         certificates: Vec<dijkstra::Certificate>,
     ) -> dijkstra::SubTransaction<'static> {
+        sub_transaction_with_deposits(certificates, dijkstra::DirectDeposits::new())
+    }
+
+    /// A sub transaction whose body carries the certificates and the direct
+    /// deposits given and nothing else.
+    pub fn sub_transaction_with_deposits(
+        certificates: Vec<dijkstra::Certificate>,
+        deposits: dijkstra::DirectDeposits,
+    ) -> dijkstra::SubTransaction<'static> {
         let sub_body = dijkstra::SubTransactionBody {
             inputs: dijkstra::Set::from(vec![]),
             outputs: MaybeIndefArray::Def(vec![]),
             ttl: None,
-            certificates: Some(dijkstra::NonEmptySet::try_from(certificates).unwrap()),
+            certificates: dijkstra::NonEmptySet::try_from(certificates).ok(),
             withdrawals: None,
             auxiliary_data_hash: None,
             validity_interval_start: None,
@@ -981,7 +990,7 @@ pub(crate) mod dijkstra_fixture {
             treasury_value: None,
             donation: None,
             required_top_level_guards: None,
-            direct_deposits: None,
+            direct_deposits: (!deposits.is_empty()).then_some(deposits),
             account_balance_intervals: None,
         };
 
@@ -1450,6 +1459,97 @@ mod tests {
                 stats.tx_count,
             ),
             (0, 0, 0, 1)
+        );
+    }
+
+    const PARENT_DEPOSIT: u64 = 7_000_000;
+    const SUB_DEPOSIT: u64 = 9_000_000;
+
+    fn stake_key(byte: u8) -> StakeCredential {
+        StakeCredential::AddrKeyhash(Hash::<28>::from([byte; 28]))
+    }
+
+    /// A direct deposit of the amount given to the test network stake
+    /// address of [`stake_key`] for the byte given.
+    fn deposit_to(byte: u8, amount: u64) -> pallas::ledger::primitives::dijkstra::DirectDeposits {
+        let mut account = vec![0xe0];
+        account.extend([byte; 28]);
+
+        BTreeMap::from([(account.into(), amount)])
+    }
+
+    /// A block whose transaction registers the stake key 0xa1 and deposits
+    /// into it, and whose sub transaction registers the stake key 0xb2 and
+    /// deposits into it.
+    fn crawl_block_with_direct_deposits(valid: bool) -> WorkDeltas {
+        use pallas::ledger::primitives::dijkstra::{Certificate, TransactionBody};
+
+        let sub = dijkstra_fixture::sub_transaction_with_deposits(
+            vec![Certificate::Reg(stake_key(0xb2), 2_000_000)],
+            deposit_to(0xb2, SUB_DEPOSIT),
+        );
+
+        let body = TransactionBody {
+            direct_deposits: Some(deposit_to(0xa1, PARENT_DEPOSIT)),
+            ..dijkstra_fixture::body_with_certs(
+                vec![Certificate::Reg(stake_key(0xa1), 2_000_000)],
+                vec![sub],
+            )
+        };
+
+        crawl_block(dijkstra_fixture::block(body, valid), 12)
+    }
+
+    /// The withdrawable balance of the account the deltas leave for the stake
+    /// key given, applied in order to no prior state.
+    fn withdrawable_after(deltas: &WorkDeltas, cred: &StakeCredential) -> Option<u64> {
+        use crate::model::{AccountState, CardanoEntity, FixedNamespace as _};
+        use dolos_core::EntityDelta as _;
+
+        let key = NsKey::from((
+            AccountState::NS,
+            pallas::codec::minicbor::to_vec(cred).unwrap(),
+        ));
+
+        let mut entity: Option<CardanoEntity> = None;
+
+        for delta in deltas.entities.get(&key).into_iter().flatten() {
+            delta.clone().apply(&mut entity);
+        }
+
+        let account: Option<AccountState> = entity?.into();
+
+        account?.stake.live().map(|stake| stake.withdrawable())
+    }
+
+    /// The must-not case. A phase 2 invalid transaction runs neither CERTS
+    /// nor its sub transactions, so no account is created or credited.
+    #[test]
+    fn an_invalid_transaction_credits_no_direct_deposit() {
+        let deltas = crawl_block_with_direct_deposits(false);
+
+        assert_eq!(
+            (
+                withdrawable_after(&deltas, &stake_key(0xa1)),
+                withdrawable_after(&deltas, &stake_key(0xb2)),
+            ),
+            (None, None)
+        );
+    }
+
+    /// The must-fire case. A transaction and its sub transaction each credit
+    /// their direct deposit to the account they name, after the certificates
+    /// that register it.
+    #[test]
+    fn a_direct_deposit_credits_the_account_it_names() {
+        let deltas = crawl_block_with_direct_deposits(true);
+
+        assert_eq!(
+            (
+                withdrawable_after(&deltas, &stake_key(0xa1)),
+                withdrawable_after(&deltas, &stake_key(0xb2)),
+            ),
+            (Some(PARENT_DEPOSIT), Some(SUB_DEPOSIT))
         );
     }
 
