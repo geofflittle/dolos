@@ -1243,8 +1243,8 @@ mod tests {
         assert_eq!(map.expect("no cost model map").plutus_v4, None);
     }
 
-    /// A sub transaction is read by its own hash as itself, and the transaction
-    /// listing it is read as the transaction listing it.
+    /// A sub transaction's hash is answered with the sub transaction's bytes, and
+    /// its parent's hash with bytes that hash to the parent, both at the block's slot.
     #[tokio::test]
     async fn read_tx_answers_a_sub_transaction_by_its_own_hash() {
         let fixture = crate::tests::musashi::sub_transaction_block();

@@ -1596,8 +1596,9 @@ mod tests {
         account?.stake.live().map(|stake| stake.withdrawable())
     }
 
-    /// The must-not case. A phase 2 invalid transaction runs neither CERTS
-    /// nor its sub transactions, so no account is created or credited.
+    /// The must-not case. Under a phase 2 invalid verdict neither the transaction's
+    /// certificates and direct deposit nor its sub transaction take effect, so
+    /// neither stake key the block registers has a withdrawable balance.
     #[test]
     fn an_invalid_transaction_credits_no_direct_deposit() {
         let deltas = crawl_block_with_direct_deposits(false);
