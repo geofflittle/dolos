@@ -1149,10 +1149,7 @@ fn replay_pair(first: &[u8], second: &[u8]) -> ToyDomain {
     let first_block = MultiEraBlock::decode(first).unwrap();
     let second_block = MultiEraBlock::decode(second).unwrap();
 
-    let made_first: HashSet<TxoRef> = produced(&first_block)
-        .into_iter()
-        .map(|(r, _)| r)
-        .collect();
+    let made_first: HashSet<TxoRef> = produced(&first_block).into_iter().map(|(r, _)| r).collect();
 
     let mut seeds = external_inputs(&first_block);
     seeds.extend(
@@ -1186,10 +1183,7 @@ fn outputs_by_ref(block: &MultiEraBlock) -> HashMap<TxoRef, (String, u64)> {
             .map(|(index, output)| {
                 (
                     TxoRef(tx.hash(), index as u32),
-                    (
-                        output.address().unwrap().to_string(),
-                        output.value().coin(),
-                    ),
+                    (output.address().unwrap().to_string(), output.value().coin()),
                 )
             })
             .collect()
@@ -1378,11 +1372,7 @@ fn minikupo_matches_the_outputs_of_a_sub_transaction() {
                 .unwrap_or_default();
             indexes.sort();
 
-            assert_eq!(
-                (status, indexes),
-                (200, unspent(hash)),
-                "/matches/*@{hash}"
-            );
+            assert_eq!((status, indexes), (200, unspent(hash)), "/matches/*@{hash}");
         }
     });
 }

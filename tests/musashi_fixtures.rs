@@ -410,7 +410,12 @@ fn each_fixture_shows_the_shape_it_was_cut_for() {
     let spent = txs
         .iter()
         .flat_map(|tx| tx.sub_transactions())
-        .map(|sub| sub.consumes().iter().filter(|input| names_one(input)).count())
+        .map(|sub| {
+            sub.consumes()
+                .iter()
+                .filter(|input| names_one(input))
+                .count()
+        })
         .sum::<usize>();
     let referenced = txs
         .iter()
