@@ -15,8 +15,10 @@ use dolos_core::{
     ArchiveStore, Domain, EraCbor, Genesis, StateStore, TxoRef, UtxoSetDelta,
 };
 use dolos_testing::toy_domain::ToyDomain;
-use pallas::crypto::hash::Hash;
-use pallas::ledger::traverse::{MultiEraBlock, MultiEraTx};
+use pallas::codec::minicbor;
+use pallas::crypto::hash::{Hash, Hasher};
+use pallas::ledger::primitives::dijkstra;
+use pallas::ledger::traverse::MultiEraBlock;
 use serde::Deserialize;
 
 const DIR: &str = "test_data/musashi-w36";
@@ -125,54 +127,94 @@ fn sync_config(lenient: bool) -> SyncConfig {
     config
 }
 
-/// Calls `f` on each transaction of the block, after each sub transaction it
-/// carries.
-fn each_tx(block: &MultiEraBlock, mut f: impl FnMut(&MultiEraTx<'_>)) {
-    for tx in block.txs().iter() {
-        for sub in tx.sub_transactions() {
-            f(&sub);
-        }
+/// Each sub transaction the block's top level transactions list, with the
+/// verdict on the one that lists it, read from the block's own fields.
+fn sub_transactions<'a>(block: &'a MultiEraBlock) -> Vec<(bool, &'a dijkstra::SubTransaction<'a>)> {
+    let Some(block) = block.as_dijkstra() else {
+        return vec![];
+    };
 
-        f(tx);
-    }
+    block
+        .block_body
+        .transactions
+        .iter()
+        .flat_map(|tx| {
+            tx.transaction_body
+                .sub_transactions
+                .iter()
+                .flat_map(|subs| subs.iter())
+                .map(|sub| (tx.success, sub))
+        })
+        .collect()
 }
 
-/// Every output the block's transactions and sub transactions make, each with
-/// the bytes the block declares for it.
+/// The hash of a sub transaction, which is the hash of its body's bytes.
+fn sub_hash(sub: &dijkstra::SubTransaction) -> Hash<32> {
+    Hasher::<256>::hash(sub.sub_transaction_body.raw_cbor())
+}
+
+/// Every output the block's transactions make, each with the bytes the block
+/// declares for it, and every output of a sub transaction a valid transaction
+/// lists.
 fn produced(block: &MultiEraBlock) -> Vec<(TxoRef, Vec<u8>)> {
     let mut out = vec![];
 
-    each_tx(block, |tx| {
+    for tx in block.txs() {
         let hash = tx.hash();
 
         for (idx, output) in tx.produces() {
             out.push((TxoRef(hash, idx as u32), output.encode()));
         }
-    });
+    }
+
+    for (success, sub) in sub_transactions(block) {
+        if !success {
+            continue;
+        }
+
+        let hash = sub_hash(sub);
+
+        for (idx, output) in sub.sub_transaction_body.outputs.iter().enumerate() {
+            out.push((TxoRef(hash, idx as u32), minicbor::to_vec(output).unwrap()));
+        }
+    }
 
     out
 }
 
-/// Every output the block's transactions and sub transactions spend.
+/// Every output the block's transactions spend, and every input of a sub
+/// transaction a valid transaction lists.
 fn consumed(block: &MultiEraBlock) -> Vec<TxoRef> {
     let mut out = vec![];
 
-    each_tx(block, |tx| {
+    for tx in block.txs() {
         for input in tx.consumes() {
             out.push(TxoRef(*input.hash(), input.index() as u32));
         }
-    });
+    }
+
+    for (success, sub) in sub_transactions(block) {
+        if !success {
+            continue;
+        }
+
+        for input in sub.sub_transaction_body.inputs.iter() {
+            out.push(TxoRef(input.transaction_id, input.index as u32));
+        }
+    }
 
     out
 }
 
-/// The hash of each of the block's transactions and sub transactions.
+/// The hash of each of the block's transactions and of each sub transaction
+/// they list.
 fn tx_hashes(block: &MultiEraBlock) -> Vec<Hash<32>> {
-    let mut out = vec![];
-
-    each_tx(block, |tx| out.push(tx.hash()));
-
-    out
+    block
+        .txs()
+        .iter()
+        .map(|tx| tx.hash())
+        .chain(sub_transactions(block).into_iter().map(|(_, sub)| sub_hash(sub)))
+        .collect()
 }
 
 /// The outputs the block spends and does not make itself, each carrying a body
@@ -425,6 +467,7 @@ fn every_transaction_of_every_harvested_block_is_served_at_its_own_slot() {
     );
 
     let mut with_transactions = 0;
+    let mut sub_hashes = 0;
 
     for (entry, cbor) in &fixtures {
         let block = MultiEraBlock::decode(cbor).unwrap();
@@ -460,11 +503,18 @@ fn every_transaction_of_every_harvested_block_is_served_at_its_own_slot() {
         if !hashes.is_empty() {
             with_transactions += 1;
         }
+
+        sub_hashes += sub_transactions(&block).len();
     }
 
     assert!(
         with_transactions > 0,
         "no fixture carries a transaction, so nothing was served"
+    );
+
+    assert!(
+        sub_hashes > 0,
+        "no fixture lists a sub transaction, so no sub transaction was served"
     );
 }
 
