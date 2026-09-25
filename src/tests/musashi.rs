@@ -9,12 +9,11 @@ use pallas::crypto::hash::{Hash, Hasher};
 use pallas::ledger::traverse::MultiEraBlock;
 
 /// A store holding a harvested Musashi block one of whose transactions lists a
-/// sub transaction, with the hashes, index and bytes the lookups answer.
+/// sub transaction, with the hashes and bytes the lookups answer.
 pub(crate) struct SubTransactionBlock {
     pub domain: ToyDomain,
     pub slot: u64,
     pub parent: Hash<32>,
-    pub parent_index: usize,
     pub sub: Hash<32>,
     pub sub_bytes: Vec<u8>,
 }
@@ -67,14 +66,13 @@ pub(crate) fn sub_transaction_block() -> SubTransactionBlock {
     let block = MultiEraBlock::decode(&cbor).unwrap();
     let body = block.as_dijkstra().unwrap();
 
-    let (parent_index, parent, sub) = body
+    let (parent, sub) = body
         .block_body
         .transactions
         .iter()
-        .enumerate()
-        .find_map(|(index, tx)| {
+        .find_map(|tx| {
             let sub = tx.transaction_body.sub_transactions.as_ref()?.first()?;
-            Some((index, tx, sub))
+            Some((tx, sub))
         })
         .unwrap();
 
@@ -82,7 +80,6 @@ pub(crate) fn sub_transaction_block() -> SubTransactionBlock {
         domain,
         slot: block.slot(),
         parent: Hasher::<256>::hash(parent.transaction_body.raw_cbor()),
-        parent_index,
         sub: Hasher::<256>::hash(sub.sub_transaction_body.raw_cbor()),
         sub_bytes: pallas::codec::minicbor::to_vec(sub).unwrap(),
     }
