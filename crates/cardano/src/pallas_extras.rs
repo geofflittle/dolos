@@ -479,6 +479,21 @@ pub fn tx_treasury_donation(tx: &MultiEraTx) -> Option<Lovelace> {
     }
 }
 
+/// The direct deposits of `tx`, each a reward account and the coin it receives.
+pub fn tx_direct_deposits<'a>(tx: &'a MultiEraTx) -> Vec<(&'a [u8], Lovelace)> {
+    let deposits = match tx {
+        MultiEraTx::Dijkstra(x) => x.transaction_body.direct_deposits.as_ref(),
+        MultiEraTx::DijkstraSub(x, _) => x.sub_transaction_body.direct_deposits.as_ref(),
+        _ => None,
+    };
+
+    deposits
+        .into_iter()
+        .flatten()
+        .map(|(account, amount)| (account.as_slice(), *amount))
+        .collect()
+}
+
 /// Calls `f` on each sub transaction of `tx` and then on `tx`, the order in
 /// which the ledger applies them.
 pub fn for_each_applied_tx<E>(

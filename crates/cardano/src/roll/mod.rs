@@ -18,7 +18,8 @@ use tracing::{debug, instrument, warn};
 
 use crate::{
     load_effective_pparams, load_gov, owned::OwnedMultiEraOutput,
-    pallas_extras::for_each_applied_tx, roll::proposals::ProposalVisitor, utxoset, Cache,
+    pallas_extras::{for_each_applied_tx, tx_direct_deposits},
+    roll::proposals::ProposalVisitor, utxoset, Cache,
     DRepState, FixedNamespace as _, PParamsSet,
 };
 
@@ -140,6 +141,20 @@ pub trait BlockVisitor {
     /// the withdrawal drain runs only under `IsValid True`.
     #[allow(unused_variables)]
     fn visit_withdrawal(
+        &mut self,
+        deltas: &mut WorkDeltas,
+        block: &MultiEraBlock,
+        tx: &MultiEraTx,
+        account: &[u8],
+        amount: u64,
+    ) -> Result<(), ChainError> {
+        Ok(())
+    }
+
+    /// Visit a direct deposit. The crawl calls this only for valid
+    /// transactions, after their certificates and withdrawals.
+    #[allow(unused_variables)]
+    fn visit_direct_deposit(
         &mut self,
         deltas: &mut WorkDeltas,
         block: &MultiEraBlock,
@@ -537,6 +552,65 @@ impl<'a> DeltaBuilder<'a> {
                         self.tx_logs
                             .visit_withdrawal(&mut deltas, block, tx, account, amount)?;
                         self.proposal_logs.visit_withdrawal(
+                            &mut deltas,
+                            block,
+                            tx,
+                            account,
+                            amount,
+                        )?;
+                    }
+
+                    for (account, amount) in tx_direct_deposits(tx) {
+                        self.account_state.visit_direct_deposit(
+                            &mut deltas,
+                            block,
+                            tx,
+                            account,
+                            amount,
+                        )?;
+                        self.asset_state.visit_direct_deposit(
+                            &mut deltas,
+                            block,
+                            tx,
+                            account,
+                            amount,
+                        )?;
+                        self.datum_state.visit_direct_deposit(
+                            &mut deltas,
+                            block,
+                            tx,
+                            account,
+                            amount,
+                        )?;
+                        self.drep_state.visit_direct_deposit(
+                            &mut deltas,
+                            block,
+                            tx,
+                            account,
+                            amount,
+                        )?;
+                        self.epoch_state.visit_direct_deposit(
+                            &mut deltas,
+                            block,
+                            tx,
+                            account,
+                            amount,
+                        )?;
+                        self.pool_state.visit_direct_deposit(
+                            &mut deltas,
+                            block,
+                            tx,
+                            account,
+                            amount,
+                        )?;
+                        self.tx_logs.visit_direct_deposit(
+                            &mut deltas,
+                            block,
+                            tx,
+                            account,
+                            amount,
+                        )?;
+                        self.proposal_logs.visit_direct_deposit(
                             &mut deltas,
                             block,
                             tx,

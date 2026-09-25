@@ -12,9 +12,9 @@ use pallas::ledger::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    pallas_extras, roll::BlockVisitor, ControlledAmountDec, ControlledAmountInc, EnqueueMir,
-    PParamsSet, StakeDelegation, StakeDeregistration, StakeRegistration, VoteDelegation,
-    WithdrawalInc,
+    pallas_extras, roll::BlockVisitor, ControlledAmountDec, ControlledAmountInc, DirectDeposit,
+    EnqueueMir, PParamsSet, StakeDelegation, StakeDeregistration, StakeRegistration,
+    VoteDelegation, WithdrawalInc,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -190,6 +190,25 @@ impl BlockVisitor for AccountVisitor {
         };
 
         deltas.add_for_entity(WithdrawalInc::new(cred, amount));
+
+        Ok(())
+    }
+
+    fn visit_direct_deposit(
+        &mut self,
+        deltas: &mut WorkDeltas,
+        _: &MultiEraBlock,
+        _: &MultiEraTx,
+        account: &[u8],
+        amount: u64,
+    ) -> Result<(), ChainError> {
+        let address = Address::from_bytes(account)?;
+
+        let Some((cred, _)) = pallas_extras::address_as_stake_cred(&address) else {
+            return Ok(());
+        };
+
+        deltas.add_for_entity(DirectDeposit::new(cred, amount));
 
         Ok(())
     }

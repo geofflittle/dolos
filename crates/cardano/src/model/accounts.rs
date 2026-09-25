@@ -840,6 +840,48 @@ impl dolos_core::EntityDelta for TreasuryWithdrawal {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectDeposit {
+    pub(crate) cred: StakeCredential,
+    pub(crate) amount: u64,
+
+    // undo
+    pub(crate) prev_stake_live: Option<Stake>,
+}
+
+impl DirectDeposit {
+    pub fn new(cred: StakeCredential, amount: u64) -> Self {
+        Self {
+            cred,
+            amount,
+            prev_stake_live: None,
+        }
+    }
+}
+
+impl dolos_core::EntityDelta for DirectDeposit {
+    type Entity = AccountState;
+
+    fn key(&self) -> NsKey {
+        let enc = minicbor::to_vec(&self.cred).unwrap();
+        NsKey::from((AccountState::NS, enc))
+    }
+
+    fn apply(&mut self, entity: &mut Option<Self::Entity>) {
+        let entity = entity.as_mut().expect("existing account");
+
+        let stake = entity.stake.unwrap_live_mut();
+        self.prev_stake_live = Some(stake.clone());
+        stake.rewards_sum = add!(stake.rewards_sum, self.amount);
+    }
+
+    fn undo(&self, entity: &mut Option<Self::Entity>) {
+        let entity = entity.as_mut().expect("existing account");
+        let stake = entity.stake.unwrap_live_mut();
+        *stake = self.prev_stake_live.clone().expect("apply captured stake");
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoolDepositRefund {
     pub(crate) pool_deposit: u64,
     pub(crate) account: StakeCredential,
