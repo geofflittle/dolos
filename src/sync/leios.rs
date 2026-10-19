@@ -1227,32 +1227,19 @@ mod tests {
     }
 
     fn certifying_block() -> BlockBody {
-        hex::decode(include_str!("../../test_data/dijkstra-certifying.block").trim()).unwrap()
+        include_bytes!("../../test_data/leios-rc-2026w42/certifying-block.cbor").to_vec()
     }
 
     fn plain_block() -> BlockBody {
         hex::decode(include_str!("../../test_data/dijkstra-plain.block").trim()).unwrap()
     }
 
-    fn eb1_txs() -> Vec<Vec<u8>> {
-        include_str!("../../test_data/dijkstra-eb1.ebtxs")
-            .split_whitespace()
-            .map(|l| {
-                let wire = hex::decode(l).unwrap();
-                let inner: &ByteSlice = minicbor::decode(&wire).unwrap();
-                inner.to_vec()
-            })
-            .collect()
-    }
-
     fn payload() -> CertifiedPayload {
+        let (_, txs, endorser_block) = captured_eb();
+
         CertifiedPayload {
-            endorser_block: AnnouncedEndorserBlock {
-                slot: 2514000,
-                hash: Hash::new([7; 32]),
-                size: 37,
-            },
-            txs: eb1_txs(),
+            endorser_block,
+            txs: txs.into_iter().map(|tx| tx.0).collect(),
         }
     }
 
@@ -1267,7 +1254,7 @@ mod tests {
         let plain = plain_block();
 
         let certifying_slot = MultiEraBlock::decode(&certifying).unwrap().slot();
-        assert_eq!(certifying_slot, 2514319, "fixture precondition");
+        assert_eq!(certifying_slot, 544, "fixture precondition");
         assert_eq!(
             MultiEraBlock::decode(&certifying).unwrap().tx_count(),
             0,
@@ -1287,7 +1274,8 @@ mod tests {
         assert_ne!(out[1], certifying, "the certifying block must be rewritten");
 
         let resolved = MultiEraBlock::decode(&out[1]).unwrap();
-        assert_eq!(resolved.tx_count(), 1);
+        assert_eq!(resolved.tx_count(), 67);
+        assert!(resolved.txs().iter().all(|tx| tx.is_valid()));
         assert_eq!(resolved.slot(), certifying_slot);
         assert_eq!(
             resolved.hash(),
@@ -1297,6 +1285,66 @@ mod tests {
 
         assert!(pending.is_empty());
         assert!(pending.refuse_undelivered().is_ok());
+    }
+
+    /// MUST FIRE: a transaction its endorser block commits to with a false flag
+    /// is fetched, checked against its reference and applied as invalid.
+    #[tokio::test]
+    async fn a_transaction_committed_with_a_false_flag_is_applied_invalid() {
+        let (body, txs, announced) = captured_eb();
+        let mut eb_txs: Vec<Vec<u8>> = txs.into_iter().map(|tx| tx.0).collect();
+
+        let flag = eb_txs[5].last_mut().unwrap();
+        assert_eq!(*flag, 0xf5, "fixture precondition");
+        *flag = 0xf4;
+
+        let own = pallas::ledger::primitives::dijkstra::EbAnnouncement {
+            eb_hash: announced.hash,
+            eb_size: announced.size,
+        };
+        let entries = EndorserBlockBody::decode_announced(&body, &own).unwrap()[..].to_vec();
+        let mut e = minicbor::Encoder::new(Vec::new());
+        e.map(entries.len() as u64).unwrap();
+        for (index, (hash, size)) in entries.iter().enumerate() {
+            let hash = match index {
+                5 => pallas::crypto::hash::Hasher::<256>::hash(&eb_txs[5]),
+                _ => *hash,
+            };
+            e.bytes(hash.as_ref()).unwrap().u32(*size).unwrap();
+        }
+        let body = e.into_writer();
+
+        let announced = AnnouncedEndorserBlock {
+            slot: announced.slot,
+            hash: pallas::crypto::hash::Hasher::<256>::hash(&body),
+            size: body.len() as u32,
+        };
+        let point: EbId = Point::Specific(announced.slot, announced.hash.to_vec());
+        let mut client = client(FakeRelay::new(point, body, eb_txs, usize::MAX), 64);
+        let fetched = client.fetch(&announced).await.expect("must fetch whole");
+
+        let certifying = certifying_block();
+        let slot = MultiEraBlock::decode(&certifying).unwrap().slot();
+        let mut pending = PendingPayloads::default();
+        pending.expect(slot);
+        pending.deliver(
+            slot,
+            CertifiedPayload {
+                endorser_block: announced,
+                txs: fetched,
+            },
+        );
+        let out = pending.apply(vec![certifying]).expect("must resolve");
+
+        let resolved = MultiEraBlock::decode(&out[0]).unwrap();
+        let invalid: Vec<usize> = resolved
+            .txs()
+            .iter()
+            .enumerate()
+            .filter(|(_, tx)| !tx.is_valid())
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(invalid, vec![5]);
     }
 
     /// MUST FIRE: a block that carries transactions of its own is refused when

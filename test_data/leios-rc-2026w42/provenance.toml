@@ -27,3 +27,20 @@ sha256 = "cef6eb93ca4cfa2c5e7fe6f925314886df032adcfb5749f66d89c4c891bd3ea3"
 source = "the BlockTxs message answering a request for every transaction of the endorser block above, from the same capture"
 node_image = "ghcr.io/input-output-hk/ouroboros-leios/cardano-node-testnet:rc-2026w42 (cardano-node 11.2.0.164, git rev 2d6a2a66)"
 captured_at = "2026-10-20"
+
+[[fixture]]
+name = "certifying-block"
+kind = "ranking_block_certifying_an_endorser_block"
+files = ["certifying-block.cbor"]
+chain_tag = "rc-2026w42"
+network_magic = 164
+block_no = 19
+slot = 544
+block_hash = "332a1ff2d09b11823a2d8e138d93bafa9fe2ead536ae4b2f96205d2fab2f2dbc"
+transactions = 0
+certifies = "17c497727d273e8dbd0bc188752ef8a7334f5fac6dc077324424a5410cc77fc0"
+bytes = 911
+sha256 = "56c5d35d3d69a6836f914159be66878a92419248d89bc1cc1d98e6d1433c6ed1"
+source = "the block as a relay's volatile DB stored it, [8, block], on the same network, its parent at slot 529 announcing the endorser block above"
+node_image = "ghcr.io/input-output-hk/ouroboros-leios/cardano-node-testnet:rc-2026w42 (cardano-node 11.2.0.164, git rev 2d6a2a66)"
+captured_at = "2026-10-20"

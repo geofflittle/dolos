@@ -767,16 +767,23 @@ mod tests {
     /// what the network did with that: the ordinary ranking block at slot
     /// 1861279, applied with full validation like every ranking block, spends
     /// that same output, so it was still unspent on every node after 1861242.
+    ///
+    /// The endorser block carried each transaction in the three element form,
+    /// so each is recast to the four element `block_transaction` form with a
+    /// true flag.
     fn forward_ref_block() -> Vec<u8> {
+        use pallas::codec::minicbor;
+        use pallas::ledger::primitives::dijkstra;
+
         let block = load_test_block("dijkstra-forward-ref.block");
 
         let txs: Vec<Vec<u8>> = include_str!("../test_data/dijkstra-forward-ref.ebtxs")
             .split_whitespace()
             .map(|line| {
                 let wire = hex::decode(line).unwrap();
-                let inner: &pallas::codec::minicbor::bytes::ByteSlice =
-                    pallas::codec::minicbor::decode(&wire).unwrap();
-                inner.to_vec()
+                let inner: &minicbor::bytes::ByteSlice = minicbor::decode(&wire).unwrap();
+                let tx: dijkstra::MempoolTransaction = minicbor::decode(inner).unwrap();
+                minicbor::to_vec(dijkstra::BlockTransaction::from(tx)).unwrap()
             })
             .collect();
 

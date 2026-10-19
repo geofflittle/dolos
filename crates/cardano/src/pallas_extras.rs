@@ -517,8 +517,8 @@ pub fn for_each_applied_tx<E>(
     f(tx)
 }
 
-/// A Dijkstra block with its transaction list replaced by `txs`, each a
-/// transaction without its leios-fetch byte string envelope.
+/// A Dijkstra block with its transaction list replaced by `txs`, each the
+/// `block_transaction` bytes of an endorser block transaction.
 pub fn inline_endorser_transactions(
     block_cbor: &[u8],
     txs: &[Vec<u8>],
@@ -527,7 +527,7 @@ pub fn inline_endorser_transactions(
 
     let replacement = txs
         .iter()
-        .map(|tx| minicbor::decode::<dijkstra::MempoolTransaction>(tx).map(Into::into))
+        .map(|tx| minicbor::decode::<dijkstra::BlockTransaction>(tx))
         .collect::<Result<_, _>>()?;
 
     block.block_body.transactions = MaybeIndefArray::Def(replacement);
@@ -1235,6 +1235,7 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pallas::ledger::traverse::{Era, MultiEraBlock};
 
     static REWARD_ACCOUNT: [u8; 29] = [
         224, 185, 111, 206, 243, 185, 53, 26, 246, 131, 75, 216, 80, 227, 169, 120, 89, 215, 189,
@@ -1245,5 +1246,80 @@ mod tests {
     fn test_pool_reward_account() {
         let parsed = parse_reward_account(&REWARD_ACCOUNT).unwrap();
         dbg!(&parsed);
+    }
+
+    /// A captured rc-2026w42 ranking block that certifies an endorser block,
+    /// and the `block_transaction` bytes of that endorser block's transactions.
+    fn certifying_block_and_endorser_txs() -> (&'static [u8], Vec<Vec<u8>>) {
+        use pallas::network2::protocol::leiosfetch;
+
+        let block = include_bytes!("../../../test_data/leios-rc-2026w42/certifying-block.cbor");
+
+        let message: leiosfetch::Message = minicbor::decode(include_bytes!(
+            "../../../test_data/leios-rc-2026w42/fetch-block-txs.cbor"
+        ))
+        .unwrap();
+        let leiosfetch::Message::BlockTxs { txs } = message else {
+            panic!("fixture precondition");
+        };
+
+        (block, txs.into_iter().map(|tx| tx.0).collect())
+    }
+
+    /// The hash and the validity flag of each transaction of `block`.
+    fn hashes_and_flags(block: &[u8]) -> Vec<(Hash<32>, bool)> {
+        MultiEraBlock::decode(block)
+            .unwrap()
+            .txs()
+            .iter()
+            .map(|tx| (tx.hash(), tx.is_valid()))
+            .collect()
+    }
+
+    /// MUST NOT FIRE: a certifying block comes out holding every transaction of
+    /// its endorser block, in order, none invalid, since each carries true.
+    #[test]
+    fn a_certifying_block_holds_the_endorser_transactions_with_their_flags() {
+        let (block, txs) = certifying_block_and_endorser_txs();
+        assert_eq!(
+            MultiEraBlock::decode(block).unwrap().tx_count(),
+            0,
+            "fixture precondition"
+        );
+
+        let delivered: Vec<(Hash<32>, bool)> = txs
+            .iter()
+            .map(|tx| {
+                let tx = MultiEraTx::decode_for_era(Era::Dijkstra, tx).unwrap();
+                (tx.hash(), tx.is_valid())
+            })
+            .collect();
+        assert_eq!(delivered.len(), 67, "fixture precondition");
+        assert!(
+            delivered.iter().all(|(_, valid)| *valid),
+            "fixture precondition"
+        );
+
+        let inlined = inline_endorser_transactions(block, &txs).expect("must inline");
+
+        assert_eq!(hashes_and_flags(&inlined), delivered);
+    }
+
+    /// MUST FIRE: a transaction whose flag is false comes out invalid, and no
+    /// other transaction changes.
+    #[test]
+    fn a_transaction_flagged_false_comes_out_invalid() {
+        let (block, mut txs) = certifying_block_and_endorser_txs();
+        let before = hashes_and_flags(&inline_endorser_transactions(block, &txs).unwrap());
+
+        let flag = txs[5].last_mut().unwrap();
+        assert_eq!(*flag, 0xf5, "fixture precondition");
+        *flag = 0xf4;
+
+        let after = hashes_and_flags(&inline_endorser_transactions(block, &txs).unwrap());
+
+        let mut expected = before;
+        expected[5].1 = false;
+        assert_eq!(after, expected);
     }
 }
