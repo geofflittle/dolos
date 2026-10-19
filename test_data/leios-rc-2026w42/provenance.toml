@@ -1,0 +1,29 @@
+
+[[fixture]]
+name = "fetch-block"
+kind = "leios_fetch_block_message"
+files = ["fetch-block.cbor"]
+chain_tag = "rc-2026w42"
+network_magic = 164
+endorser_block = "17c497727d273e8dbd0bc188752ef8a7334f5fac6dc077324424a5410cc77fc0"
+announced_slot = 529
+announced_size = 2481
+bytes = 2483
+sha256 = "625b56972d0209a2fc93acb21d6e6ed5ed4c3466886d36df7131430827376fc3"
+source = "one Block message of a relay's leios-fetch session, split from a packet capture of a private network of five rc-2026w42 nodes, its body byte equal to the endorser block the relay stored"
+node_image = "ghcr.io/input-output-hk/ouroboros-leios/cardano-node-testnet:rc-2026w42 (cardano-node 11.2.0.164, git rev 2d6a2a66)"
+captured_at = "2026-10-20"
+
+[[fixture]]
+name = "fetch-block-txs"
+kind = "leios_fetch_block_txs_message"
+files = ["fetch-block-txs.cbor"]
+chain_tag = "rc-2026w42"
+network_magic = 164
+endorser_block = "17c497727d273e8dbd0bc188752ef8a7334f5fac6dc077324424a5410cc77fc0"
+transactions = 67
+bytes = 228409
+sha256 = "cef6eb93ca4cfa2c5e7fe6f925314886df032adcfb5749f66d89c4c891bd3ea3"
+source = "the BlockTxs message answering a request for every transaction of the endorser block above, from the same capture"
+node_image = "ghcr.io/input-output-hk/ouroboros-leios/cardano-node-testnet:rc-2026w42 (cardano-node 11.2.0.164, git rev 2d6a2a66)"
+captured_at = "2026-10-20"

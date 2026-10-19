@@ -1031,6 +1031,7 @@ pub(crate) mod dijkstra_fixture {
             redeemer: None,
             plutus_v2_script: None,
             plutus_v3_script: None,
+            plutus_v4_script: None,
         }
     }
 

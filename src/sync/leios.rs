@@ -27,8 +27,6 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use dolos_cardano::pallas_extras::inline_endorser_transactions;
-use pallas::codec::minicbor::{self, bytes::ByteSlice};
-use pallas::codec::utils::AnyCbor;
 use pallas::crypto::hash::Hash;
 use pallas::ledger::traverse::{Era, MultiEraBlock, MultiEraTx};
 use pallas::network2::behavior::initiator::{
@@ -160,8 +158,8 @@ pub struct AnnouncedEndorserBlock {
 #[derive(Debug, Clone)]
 pub struct CertifiedPayload {
     pub endorser_block: AnnouncedEndorserBlock,
-    /// The transactions in endorser block order, unwrapped from their
-    /// leios-fetch byte string envelopes.
+    /// The `block_transaction` bytes of the transactions, in endorser block
+    /// order.
     pub txs: Vec<Vec<u8>>,
 }
 
@@ -445,8 +443,8 @@ impl<T: LeiosTransport> LeiosClient<T> {
         }
     }
 
-    /// Fetches one endorser block whole and returns its transactions, in
-    /// endorser block order, unwrapped from their byte string envelopes.
+    /// Fetches one endorser block whole and returns the `block_transaction`
+    /// bytes of its transactions, in endorser block order.
     ///
     /// The body is checked against the hash its announcement committed to, and
     /// every transaction against the hash its body entry names, before any of
@@ -463,7 +461,7 @@ impl<T: LeiosTransport> LeiosClient<T> {
         let started = tokio::time::Instant::now();
 
         let mut body: Option<EndorserBlockBody> = None;
-        let mut txs: BTreeMap<usize, AnyCbor> = BTreeMap::new();
+        let mut txs: BTreeMap<usize, leiosfetch::TxCbor> = BTreeMap::new();
         let mut inflight: Vec<usize> = Vec::new();
         let mut asked_for_body = false;
         let mut round_trips = 0usize;
@@ -492,7 +490,7 @@ impl<T: LeiosTransport> LeiosClient<T> {
                             .collect();
 
                         if want.is_empty() {
-                            let wire: Vec<AnyCbor> = txs.into_values().collect();
+                            let wire: Vec<leiosfetch::TxCbor> = txs.into_values().collect();
 
                             debug!(
                                 eb = %eb.hash,
@@ -602,8 +600,7 @@ impl<T: LeiosTransport> LeiosClient<T> {
                             for (index, tx) in asked.iter().zip(delivered.iter()) {
                                 let named = decoded[*index].0;
 
-                                let found = strip_envelope(*index, tx.raw_bytes())
-                                    .map(pallas::crypto::hash::Hasher::<256>::hash)?;
+                                let found = pallas::crypto::hash::Hasher::<256>::hash(tx);
 
                                 if found != named {
                                     return Err(Error::Misaligned {
@@ -640,21 +637,17 @@ impl<T: LeiosTransport> LeiosClient<T> {
     }
 }
 
-/// The transactions of a whole delivery with their envelopes stripped, each
-/// decoded as a Dijkstra transaction before any is returned.
-fn finish(wire: Vec<AnyCbor>) -> Result<Vec<Vec<u8>>, Error> {
+/// The transactions of a whole delivery, each decoded as a Dijkstra
+/// transaction before any is returned.
+fn finish(wire: Vec<leiosfetch::TxCbor>) -> Result<Vec<Vec<u8>>, Error> {
     let mut out = Vec::with_capacity(wire.len());
-    for (index, w) in wire.iter().enumerate() {
-        let inner = strip_envelope(index, w.raw_bytes())?;
-
-        MultiEraTx::decode_for_era(Era::Dijkstra, inner).map_err(|e| {
-            endorser::Error::TxDecode {
-                index,
-                reason: e.to_string(),
-            }
+    for (index, w) in wire.into_iter().enumerate() {
+        MultiEraTx::decode_for_era(Era::Dijkstra, &w).map_err(|e| endorser::Error::TxDecode {
+            index,
+            reason: e.to_string(),
         })?;
 
-        out.push(inner.to_vec());
+        out.push(w.0);
     }
 
     debug!(txs = out.len(), "endorser block verified whole");
@@ -662,22 +655,10 @@ fn finish(wire: Vec<AnyCbor>) -> Result<Vec<Vec<u8>>, Error> {
     Ok(out)
 }
 
-/// The transaction inside the byte string envelope a leios-fetch transaction
-/// arrives in.
-fn strip_envelope(index: usize, wire: &[u8]) -> Result<&[u8], Error> {
-    let tx_decode = |e: minicbor::decode::Error| endorser::Error::TxDecode {
-        index,
-        reason: e.to_string(),
-    };
-
-    let inner: &ByteSlice = minicbor::decode(wire).map_err(tx_decode)?;
-
-    Ok(&**inner)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pallas::codec::minicbor::{self, bytes::ByteSlice};
     use pallas::crypto::hash::Hash;
     use pallas::network2::protocol::AnyCbor;
     use std::collections::VecDeque;
@@ -694,7 +675,7 @@ mod tests {
     struct FakeRelay {
         point: EbId,
         body: Vec<u8>,
-        wire_txs: Vec<Vec<u8>>,
+        eb_txs: Vec<Vec<u8>>,
         queued: VecDeque<InitiatorCommand>,
         answers: VecDeque<InitiatorEvent>,
         handshaken: bool,
@@ -723,11 +704,11 @@ mod tests {
     }
 
     impl FakeRelay {
-        fn new(point: EbId, body: Vec<u8>, wire_txs: Vec<Vec<u8>>, cap: usize) -> Self {
+        fn new(point: EbId, body: Vec<u8>, eb_txs: Vec<Vec<u8>>, cap: usize) -> Self {
             Self {
                 point,
                 body,
-                wire_txs,
+                eb_txs,
                 queued: VecDeque::new(),
                 answers: VecDeque::new(),
                 handshaken: false,
@@ -840,11 +821,11 @@ mod tests {
 
                         let skip = if self.skip_first { 1 } else { 0 };
 
-                        let served: Vec<AnyCbor> = want
+                        let served: Vec<leiosfetch::TxCbor> = want
                             .iter()
                             .skip(skip)
                             .take(self.cap)
-                            .map(|i| AnyCbor::from_raw_bytes(self.wire_txs[*i].clone()))
+                            .map(|i| leiosfetch::TxCbor(self.eb_txs[*i].clone()))
                             .collect();
 
                         InitiatorEvent::EbFetched(
@@ -868,8 +849,8 @@ mod tests {
     const REAL_EB_BODY_HASH: &str =
         "a8f2a746b33a74bf39f9f8a56e108746d1512a5af91f48ba4336a61b81cf5fcd";
 
-    /// A real 425 transaction endorser block off Musashi, with its body and
-    /// every transaction as the wire carried them.
+    /// A real 425 transaction endorser block, with its body and the bytes of
+    /// every transaction it names.
     ///
     /// Real transactions rather than one repeated, because a repeated
     /// transaction has one hash and a delivery filed under the wrong index
@@ -881,12 +862,16 @@ mod tests {
     fn real_eb() -> (Vec<u8>, Vec<Vec<u8>>, AnnouncedEndorserBlock) {
         let body = hex::decode(include_str!("../../test_data/dijkstra-eb3.ebbody").trim()).unwrap();
 
-        let wire_txs: Vec<Vec<u8>> = include_str!("../../test_data/dijkstra-eb3.ebtxs")
+        let eb_txs: Vec<Vec<u8>> = include_str!("../../test_data/dijkstra-eb3.ebtxs")
             .split_whitespace()
-            .map(|line| hex::decode(line).unwrap())
+            .map(|line| {
+                let wire = hex::decode(line).unwrap();
+                let inner: &ByteSlice = minicbor::decode(&wire).unwrap();
+                inner.to_vec()
+            })
             .collect();
 
-        assert_eq!(wire_txs.len(), 425, "fixture precondition");
+        assert_eq!(eb_txs.len(), 425, "fixture precondition");
         assert_eq!(body.len(), 15_303, "fixture precondition");
 
         let announced = AnnouncedEndorserBlock {
@@ -895,7 +880,7 @@ mod tests {
             size: body.len() as u32,
         };
 
-        (body, wire_txs, announced)
+        (body, eb_txs, announced)
     }
 
     fn client(relay: FakeRelay, window: usize) -> LeiosClient<FakeRelay> {
@@ -922,17 +907,16 @@ mod tests {
     /// saying so, which reads as a slow peer.
     #[tokio::test]
     async fn a_whole_block_costs_the_round_trips_the_window_implies() {
-        let (body, wire_txs, announced) = real_eb();
+        let (body, eb_txs, announced) = real_eb();
         let point: EbId = Point::Specific(announced.slot, announced.hash.to_vec());
 
-        let relay = FakeRelay::new(point, body, wire_txs.clone(), usize::MAX);
+        let relay = FakeRelay::new(point, body, eb_txs.clone(), usize::MAX);
         let mut client = client(relay, 64);
 
         let txs = client.fetch(&announced).await.expect("must fetch whole");
 
         assert_eq!(txs.len(), 425, "the whole endorser block comes back");
-        let first: &ByteSlice = minicbor::decode(&wire_txs[0]).unwrap();
-        assert_eq!(txs[0], first.to_vec(), "the envelopes are stripped");
+        assert_eq!(txs, eb_txs, "the transactions come back in body order");
 
         assert_eq!(
             client.transport.overlaps, 0,
@@ -955,10 +939,10 @@ mod tests {
     #[tokio::test]
     async fn a_session_that_ends_mid_fetch_is_reported_not_waited_out() {
         for reason in [DisconnectReason::Closed, DisconnectReason::Errored] {
-            let (body, wire_txs, announced) = real_eb();
+            let (body, eb_txs, announced) = real_eb();
             let point: EbId = Point::Specific(announced.slot, announced.hash.to_vec());
 
-            let mut relay = FakeRelay::new(point, body, wire_txs, usize::MAX);
+            let mut relay = FakeRelay::new(point, body, eb_txs, usize::MAX);
             relay.dies = Some(reason);
 
             let mut client = client(relay, 64);
@@ -979,10 +963,10 @@ mod tests {
     /// this fetch's failure, and the endorser block still comes back whole.
     #[tokio::test]
     async fn a_session_ending_for_another_peer_does_not_end_the_fetch() {
-        let (body, wire_txs, announced) = real_eb();
+        let (body, eb_txs, announced) = real_eb();
         let point: EbId = Point::Specific(announced.slot, announced.hash.to_vec());
 
-        let mut relay = FakeRelay::new(point, body, wire_txs, usize::MAX);
+        let mut relay = FakeRelay::new(point, body, eb_txs, usize::MAX);
         relay.stray_death = true;
 
         let mut client = client(relay, 64);
@@ -1000,12 +984,12 @@ mod tests {
     /// error anywhere.
     #[tokio::test]
     async fn a_short_reply_is_asked_for_again_rather_than_ending_the_block() {
-        let (body, wire_txs, announced) = real_eb();
+        let (body, eb_txs, announced) = real_eb();
         let point: EbId = Point::Specific(announced.slot, announced.hash.to_vec());
 
         // Ask for the whole block at once, and let the relay serve 150 at a
         // time, which is what a relay that caps its reply by size looks like.
-        let relay = FakeRelay::new(point, body, wire_txs, 150);
+        let relay = FakeRelay::new(point, body, eb_txs, 150);
         let mut client = client(relay, 8192);
 
         let txs = client.fetch(&announced).await.expect("must fetch whole");
@@ -1028,10 +1012,10 @@ mod tests {
     /// seven times the latency.
     #[tokio::test]
     async fn one_request_can_span_many_selector_windows() {
-        let (body, wire_txs, announced) = real_eb();
+        let (body, eb_txs, announced) = real_eb();
         let point: EbId = Point::Specific(announced.slot, announced.hash.to_vec());
 
-        let relay = FakeRelay::new(point, body, wire_txs, usize::MAX);
+        let relay = FakeRelay::new(point, body, eb_txs, usize::MAX);
         let mut client = client(relay, 8192);
 
         let txs = client.fetch(&announced).await.expect("must fetch whole");
@@ -1057,10 +1041,10 @@ mod tests {
     /// would simply stop the client working at all.
     #[tokio::test]
     async fn a_reply_that_is_not_a_prefix_of_the_request_is_refused() {
-        let (body, wire_txs, announced) = real_eb();
+        let (body, eb_txs, announced) = real_eb();
         let point: EbId = Point::Specific(announced.slot, announced.hash.to_vec());
 
-        let mut relay = FakeRelay::new(point, body, wire_txs, 150);
+        let mut relay = FakeRelay::new(point, body, eb_txs, 150);
         relay.skip_first = true;
         let mut client = client(relay, 8192);
 
@@ -1093,12 +1077,12 @@ mod tests {
     /// rather than refusing every body.
     #[tokio::test]
     async fn a_body_served_under_a_hash_it_does_not_have_is_refused() {
-        let (body, wire_txs, mut announced) = real_eb();
+        let (body, eb_txs, mut announced) = real_eb();
         let real = announced.hash;
         announced.hash = Hash::new([9; 32]);
         let point: EbId = Point::Specific(announced.slot, announced.hash.to_vec());
 
-        let mut client = client(FakeRelay::new(point, body, wire_txs, usize::MAX), 64);
+        let mut client = client(FakeRelay::new(point, body, eb_txs, usize::MAX), 64);
 
         let err = client
             .fetch(&announced)
@@ -1117,41 +1101,11 @@ mod tests {
         }
     }
 
-    /// MUST FIRE: a transaction delivered without its byte string envelope is
-    /// refused at its position.
-    #[tokio::test]
-    async fn a_transaction_delivered_without_its_envelope_is_refused() {
-        let (body, wire_txs, announced) = real_eb();
-        let point: EbId = Point::Specific(announced.slot, announced.hash.to_vec());
-
-        let unwrapped: Vec<Vec<u8>> = wire_txs
-            .iter()
-            .map(|wire| {
-                let inner: &ByteSlice = minicbor::decode(wire).unwrap();
-                inner.to_vec()
-            })
-            .collect();
-        assert_ne!(
-            unwrapped[0].len(),
-            wire_txs[0].len(),
-            "the envelope is real"
-        );
-
-        let mut client = client(FakeRelay::new(point, body, unwrapped, usize::MAX), 64);
-
-        match client.fetch(&announced).await.map(|txs| txs.len()) {
-            Err(Error::Endorser(endorser::Error::TxDecode { index, .. })) => {
-                assert_eq!(index, 0);
-            }
-            other => panic!("wrong answer: {other:?}"),
-        }
-    }
-
     /// MUST NOT FIRE: a transaction is accepted whatever size its body entry
     /// names.
     #[tokio::test]
     async fn a_transaction_is_accepted_whatever_size_its_entry_names() {
-        let (body, wire_txs, announced) = real_eb();
+        let (body, eb_txs, announced) = real_eb();
         let own = pallas::ledger::primitives::dijkstra::EbAnnouncement {
             eb_hash: announced.hash,
             eb_size: announced.size,
@@ -1181,7 +1135,7 @@ mod tests {
             };
             let point: EbId = Point::Specific(announced.slot, announced.hash.to_vec());
 
-            let relay = FakeRelay::new(point, resized, wire_txs.clone(), usize::MAX);
+            let relay = FakeRelay::new(point, resized, eb_txs.clone(), usize::MAX);
             let mut client = client(relay, 64);
 
             let txs = client
@@ -1195,21 +1149,21 @@ mod tests {
     /// MUST NOT FIRE: every transaction of a real endorser block decodes.
     #[test]
     fn a_delivery_of_dijkstra_transactions_is_finished() {
-        let (_, wire_txs, _) = real_eb();
-        let wire = wire_txs.into_iter().map(AnyCbor::from_raw_bytes).collect();
+        let (_, eb_txs, _) = real_eb();
+        let wire = eb_txs.into_iter().map(leiosfetch::TxCbor).collect();
 
         let finished = finish(wire).expect("every transaction decodes");
 
         assert_eq!(finished.len(), 425);
     }
 
-    /// MUST FIRE: a delivered byte string that holds no Dijkstra transaction is
-    /// refused at its position.
+    /// MUST FIRE: delivered bytes that hold no Dijkstra transaction are refused
+    /// at their position.
     #[test]
     fn a_delivery_holding_something_other_than_a_transaction_is_refused() {
-        let (_, mut wire_txs, _) = real_eb();
-        wire_txs[3] = minicbor::to_vec(minicbor::bytes::ByteVec::from(vec![0x01])).unwrap();
-        let wire = wire_txs.into_iter().map(AnyCbor::from_raw_bytes).collect();
+        let (_, mut eb_txs, _) = real_eb();
+        eb_txs[3] = vec![0x01];
+        let wire = eb_txs.into_iter().map(leiosfetch::TxCbor).collect();
 
         match finish(wire) {
             Err(Error::Endorser(endorser::Error::TxDecode { index, .. })) => {
@@ -1217,6 +1171,59 @@ mod tests {
             }
             other => panic!("wrong answer: {other:?}"),
         }
+    }
+
+    /// The body and the transactions of a captured rc-2026w42 endorser block,
+    /// taken from the Block and BlockTxs messages a relay sent for it.
+    fn captured_eb() -> (Vec<u8>, Vec<leiosfetch::TxCbor>, AnnouncedEndorserBlock) {
+        let block: leiosfetch::Message = minicbor::decode(include_bytes!(
+            "../../test_data/leios-rc-2026w42/fetch-block.cbor"
+        ))
+        .unwrap();
+        let leiosfetch::Message::Block(body) = block else {
+            panic!("fixture precondition");
+        };
+        let body = body.raw_bytes().to_vec();
+
+        let block_txs: leiosfetch::Message = minicbor::decode(include_bytes!(
+            "../../test_data/leios-rc-2026w42/fetch-block-txs.cbor"
+        ))
+        .unwrap();
+        let leiosfetch::Message::BlockTxs { txs } = block_txs else {
+            panic!("fixture precondition");
+        };
+
+        let announced = AnnouncedEndorserBlock {
+            slot: 529,
+            hash: "17c497727d273e8dbd0bc188752ef8a7334f5fac6dc077324424a5410cc77fc0"
+                .parse()
+                .unwrap(),
+            size: 2481,
+        };
+
+        (body, txs, announced)
+    }
+
+    /// MUST FIRE: a captured endorser block comes back whole, each transaction
+    /// the `block_transaction` bytes its BlockTxs item held.
+    ///
+    /// MUST NOT FIRE: none of its 67 transactions is refused as undecodable or
+    /// as filed under the wrong reference.
+    #[tokio::test]
+    async fn a_captured_endorser_block_is_fetched_whole() {
+        let (body, txs, announced) = captured_eb();
+        assert_eq!(txs.len(), 67, "fixture precondition");
+        assert_eq!(body.len(), announced.size as usize, "fixture precondition");
+
+        let point: EbId = Point::Specific(announced.slot, announced.hash.to_vec());
+        let eb_txs: Vec<Vec<u8>> = txs.into_iter().map(|tx| tx.0).collect();
+        let relay = FakeRelay::new(point, body, eb_txs.clone(), usize::MAX);
+        let mut client = client(relay, 64);
+
+        let fetched = client.fetch(&announced).await.expect("must fetch whole");
+
+        assert_eq!(fetched, eb_txs, "the transactions come back in body order");
+        assert_eq!(client.transport.windows, vec![64, 3]);
     }
 
     fn certifying_block() -> BlockBody {
@@ -1489,7 +1496,7 @@ mod tests {
     /// offers.
     async fn endorser_block_responder(
         body: Vec<u8>,
-        wire_txs: Vec<Vec<u8>>,
+        eb_txs: Vec<Vec<u8>>,
     ) -> (std::net::SocketAddr, Arc<AtomicUsize>) {
         use pallas::network2::behavior::responder::handshake::{
             HandshakeResponder, HandshakeResponderConfig,
@@ -1528,13 +1535,13 @@ mod tests {
                     ResponderEvent::EbRequested(pid, _) => network.execute(
                         ResponderCommand::ProvideEb(pid, AnyCbor::from_raw_bytes(body.clone())),
                     ),
-                    ResponderEvent::EbTxsRequested(pid, point, bitmaps) => {
+                    ResponderEvent::EbTxsRequested(pid, _, bitmaps) => {
                         let txs = FakeRelay::indices(&bitmaps)
                             .into_iter()
-                            .map(|index| AnyCbor::from_raw_bytes(wire_txs[index].clone()))
+                            .map(|index| leiosfetch::TxCbor(eb_txs[index].clone()))
                             .collect();
 
-                        network.execute(ResponderCommand::ProvideEbTxs(pid, point, bitmaps, txs))
+                        network.execute(ResponderCommand::ProvideEbTxs(pid, txs))
                     }
                     ResponderEvent::EbNotificationRequested(pid) => {
                         counter.fetch_add(1, Ordering::SeqCst);
@@ -1560,8 +1567,8 @@ mod tests {
     /// connection is kept alive between fetches.
     #[tokio::test]
     async fn a_fetch_after_an_idle_gap_longer_than_the_peer_allows_still_answers() {
-        let (body, wire_txs, announced) = real_eb();
-        let (responder, _) = endorser_block_responder(body, wire_txs).await;
+        let (body, eb_txs, announced) = real_eb();
+        let (responder, _) = endorser_block_responder(body, eb_txs).await;
         let (proxy, mut ended) = idle_cutting_proxy(responder, PROXY_CUTOFF).await;
 
         let mut client = LeiosClient::new(&proxy.to_string(), 164).unwrap();
@@ -1581,8 +1588,8 @@ mod tests {
     /// housekeeping ticks still gets the whole endorser block.
     #[tokio::test]
     async fn a_fetch_after_a_blocked_thread_still_answers() {
-        let (body, wire_txs, announced) = real_eb();
-        let (responder, _) = endorser_block_responder(body, wire_txs).await;
+        let (body, eb_txs, announced) = real_eb();
+        let (responder, _) = endorser_block_responder(body, eb_txs).await;
 
         let mut client = LeiosClient::new(&responder.to_string(), 164).unwrap();
 
@@ -1603,8 +1610,8 @@ mod tests {
     async fn the_proxy_closes_a_connection_its_client_leaves_silent() {
         use tokio::io::AsyncReadExt;
 
-        let (body, wire_txs, _) = real_eb();
-        let (responder, _) = endorser_block_responder(body, wire_txs).await;
+        let (body, eb_txs, _) = real_eb();
+        let (responder, _) = endorser_block_responder(body, eb_txs).await;
         let (proxy, mut ended) = idle_cutting_proxy(responder, PROXY_CUTOFF).await;
 
         let mut silent = tokio::net::TcpStream::connect(proxy).await.unwrap();
@@ -1619,8 +1626,8 @@ mod tests {
     /// MUST NOT FIRE: dropping a client closes its connection.
     #[tokio::test]
     async fn a_dropped_client_closes_its_connection() {
-        let (body, wire_txs, announced) = real_eb();
-        let (responder, _) = endorser_block_responder(body, wire_txs).await;
+        let (body, eb_txs, announced) = real_eb();
+        let (responder, _) = endorser_block_responder(body, eb_txs).await;
         let (proxy, mut ended) = idle_cutting_proxy(responder, PROXY_CUTOFF).await;
 
         let mut client = LeiosClient::new(&proxy.to_string(), 164).unwrap();
@@ -1637,8 +1644,8 @@ mod tests {
     /// fetches.
     #[tokio::test]
     async fn offers_made_between_fetches_are_not_held() {
-        let (body, wire_txs, announced) = real_eb();
-        let (responder, offered) = endorser_block_responder(body, wire_txs).await;
+        let (body, eb_txs, announced) = real_eb();
+        let (responder, offered) = endorser_block_responder(body, eb_txs).await;
 
         let mut client = LeiosClient::new(&responder.to_string(), 164).unwrap();
         let fetched = client.fetch(&announced).await.map(|txs| txs.len());
