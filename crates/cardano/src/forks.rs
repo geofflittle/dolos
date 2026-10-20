@@ -72,20 +72,23 @@ fn from_conway_drep_voting_thresholds(
     }
 }
 
-// AFAIK, Byron epoch length is a constant and not available via Genesis files.
-const FIVE_DAYS_IN_SECONDS: u64 = 5 * 24 * 60 * 60;
+/// The Byron epoch and slot lengths, a Byron epoch being ten times k slots.
+fn byron_constants(byron: &byron::GenesisFile) -> ProtocolConstants {
+    ProtocolConstants {
+        epoch_length: 10 * byron.protocol_consts.k as u64,
+        slot_length: byron.block_version_data.slot_duration / 1000,
+    }
+}
 
 pub fn from_byron_genesis(byron: &byron::GenesisFile) -> PParamsSet {
     let version = &byron.block_version_data;
-
-    let slot_length_in_secs = version.slot_duration / 1000;
-    let epoch_length = FIVE_DAYS_IN_SECONDS / slot_length_in_secs;
+    let constants = byron_constants(byron);
 
     PParamsSet::default()
         .with(Val::ProtocolVersion((0, 0)))
         .with(Val::SystemStart(byron.start_time))
-        .with(Val::SlotLength(slot_length_in_secs))
-        .with(Val::EpochLength(epoch_length))
+        .with(Val::SlotLength(constants.slot_length))
+        .with(Val::EpochLength(constants.epoch_length))
         .with(Val::MinFeeA(version.tx_fee_policy.multiplier))
         .with(Val::MinFeeB(version.tx_fee_policy.summand))
         .with(Val::MaxBlockBodySize(version.max_block_size))
@@ -344,15 +347,7 @@ pub struct ProtocolConstants {
 
 pub fn protocol_constants(version: u16, genesis: &Genesis) -> ProtocolConstants {
     match version {
-        x if x < 2 => {
-            let slot_length_in_secs = genesis.byron.block_version_data.slot_duration / 1000;
-            let epoch_length = FIVE_DAYS_IN_SECONDS / slot_length_in_secs;
-
-            ProtocolConstants {
-                epoch_length,
-                slot_length: slot_length_in_secs,
-            }
-        }
+        x if x < 2 => byron_constants(&genesis.byron),
         _ => ProtocolConstants {
             epoch_length: genesis.shelley.epoch_length.unwrap_or_default() as u64,
             slot_length: genesis.shelley.slot_length.unwrap_or_default() as u64,
@@ -377,6 +372,33 @@ mod tests {
         let result = force_pparams_version(&initial, &genesis, 0, 11).unwrap();
 
         assert_eq!(result.protocol_major(), Some(11));
+    }
+
+    fn proto_devnet_byron() -> byron::GenesisFile {
+        let path = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
+            .join("test_data")
+            .join("proto-devnet")
+            .join("genesis")
+            .join("byron.json");
+
+        byron::from_file(&path).unwrap()
+    }
+
+    /// MUST NOT FIRE: a 20 second Byron slot keeps the 21600 slot mainnet epoch.
+    #[test]
+    fn a_mainnet_byron_epoch_is_ten_k_slots_of_twenty_seconds() {
+        let pparams = from_byron_genesis(&mainnet_genesis().byron);
+
+        assert_eq!(pparams.epoch_length_or_default(), 21600);
+        assert_eq!(pparams.slot_length_or_default(), 20);
+    }
+
+    /// MUST FIRE: a 250 millisecond Byron slot with k 40 gives a 400 slot epoch.
+    #[test]
+    fn a_sub_second_byron_slot_gives_a_ten_k_slot_epoch() {
+        let pparams = from_byron_genesis(&proto_devnet_byron());
+
+        assert_eq!(pparams.epoch_length_or_default(), 400);
     }
 
     fn mainnet_genesis() -> dolos_core::Genesis {

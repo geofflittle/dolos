@@ -1,0 +1,10 @@
+genesis/byron.json
+
+source        the byron-genesis.json of the demo/proto-devnet config of
+              ouroboros-leios tag rc-2026w42 (commit 49f7c4a2), the file a
+              local network of image
+              ghcr.io/input-output-hk/ouroboros-leios/cardano-node-testnet:rc-2026w42
+              ran under with only startTime rewritten
+copied        2026-10-20, byte for byte, no edit
+size          921 bytes, k 40, slotDuration 250
+sha256        e2b0fbd2a2b84f6b92b1fef2b119c879117209d64ac03729c0e910e7c399ead5
