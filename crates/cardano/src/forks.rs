@@ -401,6 +401,28 @@ mod tests {
         assert_eq!(pparams.epoch_length_or_default(), 400);
     }
 
+    /// The proto-devnet genesis set loads and its parameters step to version 12.
+    #[test]
+    fn the_proto_devnet_genesis_set_loads_and_steps_to_dijkstra() {
+        let dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+        let genesis = load_genesis(&dir.join("test_data").join("proto-devnet").join("genesis"))
+            .with_dijkstra(
+                dir.join("..")
+                    .join("core")
+                    .join("test_data")
+                    .join("musashi")
+                    .join("dijkstra-genesis.json"),
+            )
+            .unwrap();
+
+        let initial = from_byron_genesis(&genesis.byron);
+        let result = force_pparams_version(&initial, &genesis, 0, 12).unwrap();
+
+        assert_eq!(result.protocol_major(), Some(12));
+        assert_eq!(result.epoch_length_or_default(), 3600);
+        assert_eq!(result.slot_length_or_default(), 1);
+    }
+
     fn mainnet_genesis() -> dolos_core::Genesis {
         let path = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
             .join("test_data")

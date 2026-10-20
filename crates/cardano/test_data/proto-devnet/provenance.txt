@@ -8,3 +8,15 @@ source        the byron-genesis.json of the demo/proto-devnet config of
 copied        2026-10-20, byte for byte, no edit
 size          921 bytes, k 40, slotDuration 250
 sha256        e2b0fbd2a2b84f6b92b1fef2b119c879117209d64ac03729c0e910e7c399ead5
+
+genesis/shelley.json, genesis/alonzo.json, genesis/conway.json
+
+source        the shelley, alonzo and conway genesis files of the same config,
+              the shelley one with only systemStart rewritten on that network
+copied        2026-10-20, byte for byte, no edit
+sha256        5e14982f4f3e41f44fc8c23c011513d838ab7156523b0d1b0eb6754991a1b082  shelley.json
+              44d12a5e4a48656f7cd9f4393f56f0bd5de4e6c1f07edbdb54534e50629bc3a8  alonzo.json
+              a754853e7826a381a68dae011da83c62dcca77aefa02aa0a500a09160976e3d3  conway.json
+
+The conway file gives the committee threshold as the number 0. The Dijkstra
+file of the same config is crates/core/test_data/musashi/dijkstra-genesis.json.
