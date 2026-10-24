@@ -596,10 +596,10 @@ where
     // mirrors the Blockfrost ordering: asc by the oldest utxo holding the
     // asset, desc by the newest (deliberately not reverses of each other).
     // ties resolve unit-ascending: entries iterate out of the BTreeMap in
-    // unit order and sort_by is stable, so equal positions keep it
+    // unit order and sort_by_key is stable, so equal positions keep it
     match pagination.order {
-        Order::Asc => entries.sort_by(|x, y| x.1.oldest.cmp(&y.1.oldest)),
-        Order::Desc => entries.sort_by(|x, y| y.1.newest.cmp(&x.1.newest)),
+        Order::Asc => entries.sort_by_key(|x| x.1.oldest),
+        Order::Desc => entries.sort_by_key(|y| std::cmp::Reverse(y.1.newest)),
     }
 
     let assets = entries

@@ -162,7 +162,7 @@ mod tests {
         }
 
         let (point, _) = make_conway_block(50);
-        let started = start_crawler(&domain, &[point.clone()]).unwrap();
+        let started = start_crawler(&domain, std::slice::from_ref(&point)).unwrap();
 
         assert!(matches!(started, Some((_, found)) if found == point));
     }
