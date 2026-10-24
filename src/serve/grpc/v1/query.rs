@@ -920,7 +920,10 @@ fn pool_distribution(
             pool_keyhash: hash.to_vec().into(),
             stake_fraction: Some(stake_fraction(pool.stake, stakes.total)),
             vrf_keyhash: pool.vrf_keyhash.to_vec().into(),
-            bls_key: None,
+            bls_key: pool.bls_key.as_ref().map(|x| u5c::cardano::PoolBlsKey {
+                bls_pubkey: x.bls_pubkey.to_vec().into(),
+                bls_possession_proof: x.bls_possession_proof.to_vec().into(),
+            }),
         })
         .collect();
 
@@ -1359,7 +1362,12 @@ mod tests {
 
         let pool = |byte: u8, stake: u64| {
             let vrf_keyhash = Hash::new([byte; 32]);
-            (Hash::new([byte; 28]), PoolStake { stake, vrf_keyhash })
+            let stake = PoolStake {
+                stake,
+                vrf_keyhash,
+                bls_key: None,
+            };
+            (Hash::new([byte; 28]), stake)
         };
 
         PoolStakes {
@@ -1401,6 +1409,109 @@ mod tests {
         let out = pool_distribution(&distribution(), &[]);
 
         assert_eq!(shares(&out), [(1, 1, 3, 4), (2, 2, 0, 1), (3, 3, 1, 4)]);
+    }
+
+    /// The registration certificate of the Musashi w36 pool whose BLS key slot
+    /// holds a key, and that key as the chain bytes decode it.
+    fn chain_pool_registration() -> (
+        dolos_cardano::pallas_extras::MultiEraPoolRegistration,
+        pallas::ledger::primitives::dijkstra::BlsKey,
+    ) {
+        use pallas::codec::utils::Nullable;
+        use pallas::ledger::primitives::dijkstra::Certificate;
+
+        let path = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
+            .join("test_data")
+            .join("musashi-w36")
+            .join("pool-registration-bls.block");
+        let raw = hex::decode(std::fs::read_to_string(path).unwrap().trim()).unwrap();
+        let block = pallas::ledger::traverse::MultiEraBlock::decode(&raw).unwrap();
+
+        block
+            .txs()
+            .iter()
+            .flat_map(|tx| tx.certs())
+            .find_map(|cert| {
+                let Some(Certificate::PoolRegistration {
+                    bls_key: Some(Nullable::Some(key)),
+                    ..
+                }) = cert.as_dijkstra()
+                else {
+                    return None;
+                };
+                let registration = dolos_cardano::pallas_extras::cert_as_pool_registration(&cert)?;
+                Some((registration, key.clone()))
+            })
+            .expect("the fixture holds no registration whose key slot holds a key")
+    }
+
+    /// The stake distribution of one pool registered by `registration`, read at
+    /// the end of the epoch the registration was live in.
+    fn distribution_of(
+        registration: dolos_cardano::pallas_extras::MultiEraPoolRegistration,
+    ) -> u5c::cardano::StakePoolDistribution {
+        use dolos_cardano::pool_stakes::PoolStakes;
+        use dolos_cardano::{EpochValue, PoolSnapshot, PoolState};
+
+        const EPOCH: u64 = 10;
+
+        let operator = registration.operator;
+        let snapshot = PoolSnapshot {
+            is_retired: false,
+            blocks_minted: 0,
+            params: registration.into(),
+            is_new: false,
+        };
+        let mut snapshot = EpochValue::with_live(EPOCH, snapshot);
+        snapshot.transition(EPOCH + 1);
+        snapshot.transition(EPOCH + 2);
+        let pool = PoolState {
+            operator,
+            snapshot,
+            blocks_minted_total: 0,
+            register_slot: 0,
+            retiring_epoch: None,
+            deposit: 0,
+        };
+
+        pool_distribution(&PoolStakes::new([&pool], EPOCH), &[])
+    }
+
+    /// MUST NOT FIRE: a pool whose registration wrote no key, or had no slot to
+    /// write one in, is served with no key.
+    #[test]
+    fn a_pool_registered_without_a_bls_key_is_served_without_one() {
+        use dolos_cardano::pallas_extras::MultiEraBlsKey;
+
+        for written in [MultiEraBlsKey::Null, MultiEraBlsKey::NoSlot] {
+            let (mut registration, _) = chain_pool_registration();
+            registration.bls_key = written.clone();
+
+            let served = distribution_of(registration);
+
+            assert_eq!(served.pools.len(), 1, "{written:?}");
+            assert_eq!(served.pools[0].bls_key, None, "{written:?}");
+        }
+    }
+
+    /// MUST FIRE: a pool whose registration on chain wrote a BLS key is served
+    /// with that key, byte for byte.
+    #[test]
+    fn a_pool_registered_with_a_bls_key_is_served_with_it() {
+        let (registration, key) = chain_pool_registration();
+
+        let served = distribution_of(registration);
+
+        assert_eq!(key.bls_pubkey.len(), 96);
+        assert_eq!(key.bls_possession_proof.len(), 48);
+        assert_eq!(served.pools.len(), 1);
+        assert_eq!(
+            served.pools[0].bls_key,
+            Some(u5c::cardano::PoolBlsKey {
+                bls_pubkey: key.bls_pubkey.to_vec().into(),
+                bls_possession_proof: key.bls_possession_proof.to_vec().into(),
+            })
+        );
     }
 
     fn state_request(

@@ -1302,7 +1302,12 @@ mod tests {
 
         let pool = |byte: u8, stake: u64| {
             let vrf_keyhash = Hash::new([byte; 32]);
-            (Hash::new([byte; 28]), PoolStake { stake, vrf_keyhash })
+            let stake = PoolStake {
+                stake,
+                vrf_keyhash,
+                bls_key: None,
+            };
+            (Hash::new([byte; 28]), stake)
         };
 
         PoolStakes {

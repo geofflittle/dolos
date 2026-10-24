@@ -515,6 +515,7 @@ mod tests {
                 pool_owners: Vec::new(),
                 relays: Vec::new(),
                 pool_metadata: None,
+                bls_key: None,
             },
             is_new: false,
         };
