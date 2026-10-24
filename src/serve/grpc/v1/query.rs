@@ -455,6 +455,7 @@ fn map_cardano_genesis(genesis: &Genesis) -> Result<u5c::cardano::Genesis, Statu
         .transpose()
         .map_err(|e| Status::internal(format!("invalid constitution script hash: {e}")))?
         .unwrap_or_default();
+    let dijkstra = genesis.dijkstra.as_ref();
 
     Ok(u5c::cardano::Genesis {
         avvm_distr: genesis.byron.avvm_distr.clone(),
@@ -709,7 +710,42 @@ fn map_cardano_genesis(genesis: &Genesis) -> Result<u5c::cardano::Genesis, Statu
                 genesis.conway.pool_voting_thresholds.pp_security_group,
             )),
         }),
-        ..map_dijkstra_genesis(genesis.dijkstra.as_ref())
+        max_ref_script_size_per_block: dijkstra.map(|x| x.max_ref_script_size_per_block),
+        max_ref_script_size_per_tx: dijkstra.map(|x| x.max_ref_script_size_per_tx),
+        ref_script_cost_stride: dijkstra.map(|x| x.ref_script_cost_stride),
+        ref_script_cost_multiplier: dijkstra
+            .map(|x| float_to_u5c_rational(x.ref_script_cost_multiplier as f32)),
+        max_pledge_leverage: dijkstra
+            .and_then(|x| x.max_pledge_leverage)
+            .map(|x| float_to_u5c_rational(x as f32)),
+        min_pool_margin: dijkstra.map(|x| float_to_u5c_rational(x.min_pool_margin as f32)),
+        leios_announcement_period_length: dijkstra.map(|x| x.leios_announcement_period_length),
+        leios_vote_period_length: dijkstra.map(|x| x.leios_vote_period_length),
+        leios_diffusion_period_length: dijkstra.map(|x| x.leios_diffusion_period_length),
+        leios_committee_size: dijkstra.map(|x| x.leios_committee_size as u32),
+        leios_quorum_stake_threshold: dijkstra
+            .map(|x| float_to_u5c_rational(x.leios_quorum_stake_threshold as f32)),
+        max_endorser_block_references_size: dijkstra
+            .map(|x| x.max_endorser_block_references_size),
+        max_endorser_block_txs_size: dijkstra.map(|x| x.max_endorser_block_txs_size),
+        max_endorser_block_execution_units: dijkstra.map(|x| u5c::cardano::ExUnits {
+            steps: x.max_endorser_block_execution_units.steps,
+            memory: x.max_endorser_block_execution_units.memory,
+        }),
+        max_ref_script_size_per_endorser_block: dijkstra
+            .map(|x| x.max_ref_script_size_per_endorser_block),
+        peras_min_candidate_block_age: dijkstra.map(|x| x.peras_min_candidate_block_age),
+        peras_healing_factor: dijkstra
+            .map(|x| float_to_u5c_rational(x.peras_healing_factor as f32)),
+        peras_cert_boost: dijkstra.map(|x| x.peras_cert_boost as u32),
+        peras_target_committee_size: dijkstra.map(|x| x.peras_target_committee_size as u32),
+        peras_bootstrap_round: dijkstra.and_then(|x| x.peras_bootstrap_round),
+        peras_quorum_threshold_safety_margin: dijkstra
+            .map(|x| float_to_u5c_rational(x.peras_quorum_threshold_safety_margin as f32)),
+        ref_inputs_cost_per_multi_asset_policy: dijkstra
+            .and_then(|x| u64_to_bigint(x.ref_inputs_cost_per_multi_asset_policy)),
+        ref_inputs_cost_per_datum_byte: dijkstra
+            .and_then(|x| u64_to_bigint(x.ref_inputs_cost_per_datum_byte)),
     })
 }
 
@@ -721,44 +757,6 @@ fn last_including<H: AsRef<[u8]>>(
         .rev()
         .find(|(_, x)| x.as_ref() == hash)
         .map(|(index, _)| index)
-}
-
-fn map_dijkstra_genesis(
-    genesis: Option<&dolos_core::dijkstra::GenesisFile>,
-) -> u5c::cardano::Genesis {
-    let Some(genesis) = genesis else {
-        return Default::default();
-    };
-
-    u5c::cardano::Genesis {
-        max_ref_script_size_per_block: Some(genesis.max_ref_script_size_per_block),
-        max_ref_script_size_per_tx: Some(genesis.max_ref_script_size_per_tx),
-        ref_script_cost_stride: Some(genesis.ref_script_cost_stride),
-        ref_script_cost_multiplier: Some(float_to_u5c_rational(
-            genesis.ref_script_cost_multiplier as f32,
-        )),
-        max_pledge_leverage: genesis
-            .max_pledge_leverage
-            .map(|x| float_to_u5c_rational(x as f32)),
-        min_pool_margin: Some(float_to_u5c_rational(genesis.min_pool_margin as f32)),
-        leios_announcement_period_length: Some(genesis.leios_announcement_period_length),
-        leios_vote_period_length: Some(genesis.leios_vote_period_length),
-        leios_diffusion_period_length: Some(genesis.leios_diffusion_period_length),
-        leios_committee_size: Some(genesis.leios_committee_size as u32),
-        leios_quorum_stake_threshold: Some(float_to_u5c_rational(
-            genesis.leios_quorum_stake_threshold as f32,
-        )),
-        max_endorser_block_references_size: Some(genesis.max_endorser_block_references_size),
-        max_endorser_block_txs_size: Some(genesis.max_endorser_block_txs_size),
-        max_endorser_block_execution_units: Some(u5c::cardano::ExUnits {
-            steps: genesis.max_endorser_block_execution_units.steps,
-            memory: genesis.max_endorser_block_execution_units.memory,
-        }),
-        max_ref_script_size_per_endorser_block: Some(
-            genesis.max_ref_script_size_per_endorser_block,
-        ),
-        ..Default::default()
-    }
 }
 
 fn map_era_boundary(boundary: &dolos_cardano::EraBoundary) -> u5c::cardano::EraBoundary {
