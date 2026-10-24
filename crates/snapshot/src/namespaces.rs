@@ -65,9 +65,9 @@ pub const NAMESPACES: [Namespace; 14] = [
 /// `epochs` is at 3. Revision 2 ordered `RollingStats::registered_pools`,
 /// which was a `HashSet` whose per-instance iteration order made the
 /// namespace's bytes irreproducible across publishers of identical state.
-/// Revision 3 appended `RollingStats::direct_deposits`. Kept beside
-/// [`NAMESPACES`], in the same order, and held to it by
-/// `every_namespace_has_a_schema_rev` below.
+/// Revision 3 appended `RollingStats::direct_deposits`. `pools` is at 2, which
+/// appended `PoolParams::bls_key`. Kept beside [`NAMESPACES`], in the same
+/// order, and held to it by `every_namespace_has_a_schema_rev` below.
 pub const SCHEMA_REVS: [(Namespace, u64); 14] = [
     (AccountEpochLog::NS, 1),
     (AccountState::NS, 1),
@@ -79,7 +79,7 @@ pub const SCHEMA_REVS: [(Namespace, u64); 14] = [
     (GovState::NS, 1),
     (PendingMirState::NS, 1),
     (PendingRewardState::NS, 1),
-    (PoolState::NS, 1),
+    (PoolState::NS, 2),
     (ProposalState::NS, 1),
     (StakeLog::NS, 1),
     (UTXOS, 1),

@@ -67,6 +67,7 @@ impl PoolParamsSimple {
             pool_owners,
             relays: vec![],      // Hardcoded to empty for testing
             pool_metadata: None, // Hardcoded to None for testing
+            bls_key: None,
         })
     }
 }
