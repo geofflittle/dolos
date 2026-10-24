@@ -114,7 +114,10 @@ impl<D: Domain> SyncExt for D {
         // cursor that says origin.
         let reachable = match to {
             ChainPoint::Origin => {
-                matches!(self.wal().find_start()?, None | Some((ChainPoint::Origin, _)))
+                matches!(
+                    self.wal().find_start()?,
+                    None | Some((ChainPoint::Origin, _))
+                )
             }
             _ => self.wal().contains_point(to)?,
         };

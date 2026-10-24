@@ -428,12 +428,7 @@ impl LeiosClient<ManagerTransport> {
 }
 
 impl<T: LeiosTransport> LeiosClient<T> {
-    pub fn with_transport(
-        transport: T,
-        address: String,
-        window: usize,
-        timeout: Duration,
-    ) -> Self {
+    pub fn with_transport(transport: T, address: String, window: usize, timeout: Duration) -> Self {
         Self {
             transport,
             peer: None,
@@ -519,12 +514,13 @@ impl<T: LeiosTransport> LeiosClient<T> {
                 }
             }
 
-            let remaining = self.timeout.checked_sub(started.elapsed()).ok_or_else(|| {
-                Error::Timeout {
-                    slot: eb.slot,
-                    hash: eb.hash.to_string(),
-                }
-            })?;
+            let remaining =
+                self.timeout
+                    .checked_sub(started.elapsed())
+                    .ok_or_else(|| Error::Timeout {
+                        slot: eb.slot,
+                        hash: eb.hash.to_string(),
+                    })?;
 
             let event = tokio::time::timeout(remaining, self.transport.next_event())
                 .await
@@ -557,8 +553,10 @@ impl<T: LeiosTransport> LeiosClient<T> {
                             // back as a well formed empty body, so the hash
                             // the announcement committed to is the only thing
                             // that tells the two apart.
-                            let decoded =
-                                EndorserBlockBody::decode_announced(raw.raw_bytes(), &announcement)?;
+                            let decoded = EndorserBlockBody::decode_announced(
+                                raw.raw_bytes(),
+                                &announcement,
+                            )?;
 
                             debug!(
                                 eb = %eb.hash,
@@ -846,7 +844,6 @@ mod tests {
                 self.answers.push_back(answer);
             }
         }
-
     }
 
     /// Blake2b-256 of the endorser block body fixture, the hash the ranking
@@ -1059,7 +1056,12 @@ mod tests {
             .expect_err("a delivery that is not a prefix must be refused");
 
         match err {
-            Error::Misaligned { index, asked, delivered, .. } => {
+            Error::Misaligned {
+                index,
+                asked,
+                delivered,
+                ..
+            } => {
                 assert_eq!(index, 0, "the first position is the one that misfiles");
                 assert_eq!(asked, 425);
                 assert_eq!(delivered, 150);
@@ -1099,7 +1101,10 @@ mod tests {
                 announced: named,
                 found,
             }) => {
-                assert_eq!(named, announced.hash, "the refusal names what was asked for");
+                assert_eq!(
+                    named, announced.hash,
+                    "the refusal names what was asked for"
+                );
                 assert_eq!(found, real, "the refusal names what the peer served");
             }
             other => panic!("wrong refusal: {other}"),
@@ -1643,9 +1648,7 @@ mod tests {
         pending.expect(999_999);
         pending.deliver(999_999, payload());
 
-        let out = pending
-            .apply(vec![plain_block()])
-            .unwrap();
+        let out = pending.apply(vec![plain_block()]).unwrap();
         assert_eq!(out.len(), 1);
 
         let err = pending
@@ -1666,9 +1669,7 @@ mod tests {
         let blocks = vec![plain_block(), certifying_block()];
         let mut pending = PendingPayloads::default();
 
-        let out = pending
-            .apply(blocks.clone())
-            .unwrap();
+        let out = pending.apply(blocks.clone()).unwrap();
 
         assert_eq!(out, blocks);
         assert!(pending.refuse_undelivered().is_ok());
@@ -1996,5 +1997,4 @@ mod tests {
             "{fetched:?}"
         );
     }
-
 }

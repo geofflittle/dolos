@@ -292,8 +292,7 @@ fn matches_cardano_pattern(tx_pattern: &u5c::cardano::TxPattern, tx: &u5c::carda
     let certificates = &tx.certificates;
 
     let has_address_match = tx_pattern.has_address.as_ref().is_none_or(|addr_pattern| {
-        outputs_match_address(addr_pattern, &inputs)
-            || outputs_match_address(addr_pattern, outputs)
+        outputs_match_address(addr_pattern, &inputs) || outputs_match_address(addr_pattern, outputs)
     });
 
     let consumes_match = tx_pattern

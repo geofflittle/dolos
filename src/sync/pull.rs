@@ -221,7 +221,6 @@ pub struct Worker {
     /// Which endorser block each recorded certification is owed, so a fetch
     /// that failed can be tried again.
     outstanding: BTreeMap<u64, AnnouncedEndorserBlock>,
-
 }
 
 impl Worker {
