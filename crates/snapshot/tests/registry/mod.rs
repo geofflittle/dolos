@@ -249,10 +249,16 @@ pub fn registry() -> Vec<Entry> {
             enc_pools,
             PoolState,
             canaries::pool_state,
-            &[Pinned {
-                rev: 1,
-                hex: include_str!("goldens/pools.rev1.hex"),
-            }]
+            &[
+                Pinned {
+                    rev: 1,
+                    hex: include_str!("goldens/pools.rev1.hex"),
+                },
+                Pinned {
+                    rev: 2,
+                    hex: include_str!("goldens/pools.rev2.hex"),
+                },
+            ]
         ),
         entity_entry!(
             enc_proposals,

@@ -2,7 +2,7 @@ use dolos_core::{BlockSlot, EntityKey, NsKey};
 use pallas::{
     codec::minicbor::{self, Decode, Encode},
     crypto::hash::Hash,
-    ledger::primitives::{conway::RationalNumber, Epoch, PoolMetadata, Relay},
+    ledger::primitives::{conway::RationalNumber, dijkstra::BlsKey, Epoch, PoolMetadata, Relay},
 };
 use serde::{Deserialize, Serialize};
 use tracing::debug;
@@ -11,7 +11,7 @@ use super::{
     epoch_value::{EpochValue, TransitionDefault},
     FixedNamespace as _,
 };
-use crate::pallas_extras::MultiEraPoolRegistration;
+use crate::pallas_extras::{MultiEraBlsKey, MultiEraPoolRegistration};
 
 pub type PoolHash = Hash<28>;
 
@@ -40,6 +40,9 @@ pub struct PoolParams {
 
     #[n(7)]
     pub pool_metadata: Option<PoolMetadata>,
+
+    #[n(8)]
+    pub bls_key: Option<BlsKey>,
 }
 
 #[derive(Debug, Encode, Decode, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -115,6 +118,18 @@ impl From<MultiEraPoolRegistration> for PoolParams {
             pool_owners: cert.pool_owners,
             relays: cert.relays,
             pool_metadata: cert.pool_metadata,
+            bls_key: match cert.bls_key {
+                MultiEraBlsKey::Key {
+                    pubkey,
+                    possession_proof,
+                } => Some(BlsKey {
+                    bls_pubkey: pubkey.into(),
+                    bls_possession_proof: possession_proof.into(),
+                }),
+                MultiEraBlsKey::NoSlot | MultiEraBlsKey::Null | MultiEraBlsKey::Unrecognized => {
+                    None
+                }
+            },
         }
     }
 }
@@ -141,6 +156,10 @@ pub(crate) mod testing {
             margin in Just(margin),
             reward_account in Just(reward_account),
             pool_owners in prop::collection::vec(root::any_hash_28(), n_owners..=n_owners),
+            bls_key in prop::option::of((
+                prop::collection::vec(any::<u8>(), 96..97),
+                prop::collection::vec(any::<u8>(), 48..49),
+            )),
         ) -> PoolParams {
             PoolParams {
                 vrf_keyhash: vrf,
@@ -151,6 +170,10 @@ pub(crate) mod testing {
                 pool_owners,
                 relays: vec![],
                 pool_metadata: None,
+                bls_key: bls_key.map(|(pubkey, proof)| BlsKey {
+                    bls_pubkey: pubkey.into(),
+                    bls_possession_proof: proof.into(),
+                }),
             }
         }
     }
@@ -625,6 +648,7 @@ mod prop_tests {
                 pool_owners: vec![],
                 relays: vec![],
                 pool_metadata: None,
+                bls_key: None,
             },
         };
         let pool = PoolState {
