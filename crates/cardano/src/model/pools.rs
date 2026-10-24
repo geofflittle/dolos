@@ -41,7 +41,7 @@ pub struct PoolParams {
     #[n(7)]
     pub pool_metadata: Option<PoolMetadata>,
 
-    #[n(8)]
+    #[n(9)]
     pub bls_key: Option<BlsKey>,
 }
 
