@@ -2218,6 +2218,14 @@ mod live_params_tests {
         }
     }
 
+    fn optional_whole(node: &Value, key: &str) -> Option<u64> {
+        match node.get(key) {
+            Some(Value::Null) => None,
+            Some(_) => Some(whole(node, key)),
+            None => panic!("the node parameters name no {key}"),
+        }
+    }
+
     fn model(node: &Value, language: &str) -> Vec<i64> {
         nested(node, "costModels", language)
             .as_array()
@@ -2667,6 +2675,35 @@ mod live_params_tests {
                 "max_ref_script_size_per_endorser_block",
                 show_served_whole(&p.max_ref_script_size_per_endorser_block),
             ),
+            (
+                "peras_min_candidate_block_age",
+                show_served_whole(&p.peras_min_candidate_block_age),
+            ),
+            (
+                "peras_healing_factor",
+                show_served_ratio(&p.peras_healing_factor),
+            ),
+            ("peras_cert_boost", show_served_whole(&p.peras_cert_boost)),
+            (
+                "peras_target_committee_size",
+                show_served_whole(&p.peras_target_committee_size),
+            ),
+            (
+                "peras_bootstrap_round",
+                show_served_whole(&p.peras_bootstrap_round),
+            ),
+            (
+                "peras_quorum_threshold_safety_margin",
+                show_served_ratio(&p.peras_quorum_threshold_safety_margin),
+            ),
+            (
+                "ref_inputs_cost_per_multi_asset_policy",
+                show_served_number(&p.ref_inputs_cost_per_multi_asset_policy),
+            ),
+            (
+                "ref_inputs_cost_per_datum_byte",
+                show_served_number(&p.ref_inputs_cost_per_datum_byte),
+            ),
         ]
     }
 
@@ -2875,6 +2912,40 @@ mod live_params_tests {
                 "max_ref_script_size_per_endorser_block",
                 whole(node, "maxRefScriptSizePerEndorserBlock").to_string(),
             ),
+            (
+                "peras_min_candidate_block_age",
+                whole(node, "perasMinCandidateBlockAge").to_string(),
+            ),
+            (
+                "peras_healing_factor",
+                show_ratio(&ratio(node, "perasHealingFactor")),
+            ),
+            (
+                "peras_cert_boost",
+                whole(node, "perasCertBoost").to_string(),
+            ),
+            (
+                "peras_target_committee_size",
+                whole(node, "perasTargetCommitteeSize").to_string(),
+            ),
+            (
+                "peras_bootstrap_round",
+                optional_whole(node, "perasBootstrapRound")
+                    .map(|x| x.to_string())
+                    .unwrap_or_else(|| "no value".to_string()),
+            ),
+            (
+                "peras_quorum_threshold_safety_margin",
+                show_ratio(&ratio(node, "perasQuorumThresholdSafetyMargin")),
+            ),
+            (
+                "ref_inputs_cost_per_multi_asset_policy",
+                whole(node, "refInputsCostPerMultiAssetPolicy").to_string(),
+            ),
+            (
+                "ref_inputs_cost_per_datum_byte",
+                whole(node, "refInputsCostPerDatumByte").to_string(),
+            ),
         ]
     }
 
@@ -2947,7 +3018,7 @@ mod live_params_tests {
             .skip_while(|(name, _)| *name != "max_ref_script_size_per_block")
             .collect();
 
-        assert_eq!(dijkstra_fields.len(), 15);
+        assert_eq!(dijkstra_fields.len(), 23);
         assert!(
             dijkstra_fields.iter().all(|(_, value)| value == "no value"),
             "a Conway set was served {dijkstra_fields:?}"
