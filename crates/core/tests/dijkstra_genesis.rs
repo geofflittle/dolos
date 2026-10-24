@@ -181,6 +181,46 @@ fn a_parameter_the_file_omits_stops_the_load() {
     );
 }
 
+/// MUST FIRE: a parameter the ledger reads as a 16 bit or 32 bit word is
+/// refused one past that word's maximum, as the node refuses it.
+///
+/// MUST NOT FIRE: the same parameter at the word's maximum loads.
+#[test]
+fn a_parameter_past_its_ledger_word_stops_the_load() {
+    let original = std::fs::read_to_string(proto_devnet_dijkstra_path()).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&original).unwrap();
+
+    for (key, max) in [
+        ("leiosCommitteeSize", u64::from(u16::MAX)),
+        ("perasCertBoost", u64::from(u16::MAX)),
+        ("perasTargetCommitteeSize", u64::from(u16::MAX)),
+        ("perasBootstrapRound", u64::from(u32::MAX)),
+    ] {
+        assert!(
+            json.get(key).is_some(),
+            "the node's file does not declare {key}"
+        );
+
+        let load = |value: u64| {
+            let mut edited = json.clone();
+            edited[key] = serde_json::json!(value);
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("dijkstra-genesis.json");
+            std::fs::write(&path, edited.to_string()).unwrap();
+            dijkstra::from_file(&path)
+        };
+
+        assert!(load(max).is_ok(), "{key} at {max} was refused");
+
+        let error = load(max + 1).expect_err(&format!("{key} past {max} was accepted"));
+
+        assert!(
+            error.to_string().contains(&(max + 1).to_string()),
+            "the error does not name the value it refused: {error}",
+        );
+    }
+}
+
 /// MUST FIRE: a genesis loaded without a Dijkstra path carries no Dijkstra
 /// parameters, and one loaded with the path carries them, so the field is
 /// additive and a caller can tell the two apart.

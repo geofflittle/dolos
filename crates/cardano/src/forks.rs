@@ -248,7 +248,9 @@ pub fn into_dijkstra(previous: &PParamsSet, genesis: &Genesis) -> PParamsSet {
         .with(Val::LeiosDiffusionPeriodLength(
             dijkstra.leios_diffusion_period_length,
         ))
-        .with(Val::LeiosCommitteeSize(dijkstra.leios_committee_size))
+        .with(Val::LeiosCommitteeSize(
+            dijkstra.leios_committee_size.into(),
+        ))
         .with(Val::LeiosQuorumStakeThreshold(f64_to_rational(
             dijkstra.leios_quorum_stake_threshold,
         )))
