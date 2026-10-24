@@ -267,6 +267,28 @@ pub fn into_dijkstra(previous: &PParamsSet, genesis: &Genesis) -> PParamsSet {
         .with(Val::MaxRefScriptSizePerEndorserBlock(
             dijkstra.max_ref_script_size_per_endorser_block,
         ))
+        .with(Val::PerasMinCandidateBlockAge(
+            dijkstra.peras_min_candidate_block_age,
+        ))
+        .with(Val::PerasHealingFactor(f64_to_rational(
+            dijkstra.peras_healing_factor,
+        )))
+        .with(Val::PerasCertBoost(dijkstra.peras_cert_boost.into()))
+        .with(Val::PerasTargetCommitteeSize(
+            dijkstra.peras_target_committee_size.into(),
+        ))
+        .with(Val::PerasBootstrapRound(
+            dijkstra.peras_bootstrap_round.map(u64::from),
+        ))
+        .with(Val::PerasQuorumThresholdSafetyMargin(f64_to_rational(
+            dijkstra.peras_quorum_threshold_safety_margin,
+        )))
+        .with(Val::RefInputsCostPerMultiAssetPolicy(
+            dijkstra.ref_inputs_cost_per_multi_asset_policy,
+        ))
+        .with(Val::RefInputsCostPerDatumByte(
+            dijkstra.ref_inputs_cost_per_datum_byte,
+        ))
 }
 
 /// The rational nearest a decimal the Dijkstra genesis file writes.
@@ -606,6 +628,14 @@ mod tests {
                 steps: 100000000000,
             }),
             Val::MaxRefScriptSizePerEndorserBlock(4000000),
+            Val::PerasMinCandidateBlockAge(0),
+            Val::PerasHealingFactor(ratio(1, 1)),
+            Val::PerasCertBoost(0),
+            Val::PerasTargetCommitteeSize(0),
+            Val::PerasBootstrapRound(None),
+            Val::PerasQuorumThresholdSafetyMargin(ratio(0, 1)),
+            Val::RefInputsCostPerMultiAssetPolicy(0),
+            Val::RefInputsCostPerDatumByte(0),
         ]
     }
 
@@ -625,6 +655,47 @@ mod tests {
         let expected: Vec<Option<Val>> = genesis_dijkstra_parameters()
             .into_iter()
             .map(Some)
+            .collect();
+
+        assert_eq!(seeded, expected);
+    }
+
+    /// The genesis file declares zero for most Peras and reference input
+    /// parameters, so distinct values show that each one is seeded into its
+    /// own kind.
+    #[test]
+    fn each_peras_and_reference_input_genesis_entry_is_seeded_in_its_own_kind() {
+        let mut genesis = genesis_with_dijkstra();
+        let file = genesis.dijkstra.as_mut().unwrap();
+        file.peras_min_candidate_block_age = 31;
+        file.peras_healing_factor = 3.5;
+        file.peras_cert_boost = 13;
+        file.peras_target_committee_size = 401;
+        file.peras_bootstrap_round = Some(17);
+        file.peras_quorum_threshold_safety_margin = 0.125;
+        file.ref_inputs_cost_per_multi_asset_policy = 1003;
+        file.ref_inputs_cost_per_datum_byte = 5;
+        let initial = from_byron_genesis(&genesis.byron);
+
+        let at_twelve = force_pparams_version(&initial, &genesis, 0, 12).unwrap();
+
+        let ratio = |numerator, denominator| pallas::ledger::primitives::RationalNumber {
+            numerator,
+            denominator,
+        };
+        let expected = vec![
+            Val::PerasMinCandidateBlockAge(31),
+            Val::PerasHealingFactor(ratio(7, 2)),
+            Val::PerasCertBoost(13),
+            Val::PerasTargetCommitteeSize(401),
+            Val::PerasBootstrapRound(Some(17)),
+            Val::PerasQuorumThresholdSafetyMargin(ratio(1, 8)),
+            Val::RefInputsCostPerMultiAssetPolicy(1003),
+            Val::RefInputsCostPerDatumByte(5),
+        ];
+        let seeded: Vec<Val> = expected
+            .iter()
+            .filter_map(|value| at_twelve.get(value.kind()).cloned())
             .collect();
 
         assert_eq!(seeded, expected);

@@ -76,6 +76,14 @@ pub enum PParamKind {
     MaxEndorserBlockTxsSize = 52,
     MaxEndorserBlockExUnits = 53,
     MaxRefScriptSizePerEndorserBlock = 54,
+    PerasMinCandidateBlockAge = 55,
+    PerasHealingFactor = 56,
+    PerasCertBoost = 57,
+    PerasTargetCommitteeSize = 58,
+    PerasBootstrapRound = 59,
+    PerasQuorumThresholdSafetyMargin = 60,
+    RefInputsCostPerMultiAssetPolicy = 61,
+    RefInputsCostPerDatumByte = 62,
 }
 
 impl PParamKind {
@@ -162,6 +170,18 @@ impl PParamKind {
             Self::MaxRefScriptSizePerEndorserBlock => {
                 PParamValue::MaxRefScriptSizePerEndorserBlock(0)
             }
+            Self::PerasMinCandidateBlockAge => PParamValue::PerasMinCandidateBlockAge(0),
+            Self::PerasHealingFactor => PParamValue::PerasHealingFactor(default_rational_number()),
+            Self::PerasCertBoost => PParamValue::PerasCertBoost(0),
+            Self::PerasTargetCommitteeSize => PParamValue::PerasTargetCommitteeSize(0),
+            Self::PerasBootstrapRound => PParamValue::PerasBootstrapRound(None),
+            Self::PerasQuorumThresholdSafetyMargin => {
+                PParamValue::PerasQuorumThresholdSafetyMargin(default_rational_number())
+            }
+            Self::RefInputsCostPerMultiAssetPolicy => {
+                PParamValue::RefInputsCostPerMultiAssetPolicy(0)
+            }
+            Self::RefInputsCostPerDatumByte => PParamValue::RefInputsCostPerDatumByte(0),
         }
     }
 }
@@ -280,6 +300,23 @@ pub enum PParamValue {
     MaxEndorserBlockExUnits(#[n(0)] ExUnits),
     #[n(54)]
     MaxRefScriptSizePerEndorserBlock(#[n(0)] u64),
+    #[n(55)]
+    PerasMinCandidateBlockAge(#[n(0)] u64),
+    #[n(56)]
+    PerasHealingFactor(#[n(0)] RationalNumber),
+    #[n(57)]
+    PerasCertBoost(#[n(0)] u64),
+    #[n(58)]
+    PerasTargetCommitteeSize(#[n(0)] u64),
+    /// The Peras bootstrap round, where None is a network with no bootstrap round.
+    #[n(59)]
+    PerasBootstrapRound(#[n(0)] Option<u64>),
+    #[n(60)]
+    PerasQuorumThresholdSafetyMargin(#[n(0)] UnitInterval),
+    #[n(61)]
+    RefInputsCostPerMultiAssetPolicy(#[n(0)] Coin),
+    #[n(62)]
+    RefInputsCostPerDatumByte(#[n(0)] Coin),
 }
 
 impl PParamValue {
@@ -342,6 +379,18 @@ impl PParamValue {
             Self::MaxRefScriptSizePerEndorserBlock(_) => {
                 PParamKind::MaxRefScriptSizePerEndorserBlock
             }
+            Self::PerasMinCandidateBlockAge(_) => PParamKind::PerasMinCandidateBlockAge,
+            Self::PerasHealingFactor(_) => PParamKind::PerasHealingFactor,
+            Self::PerasCertBoost(_) => PParamKind::PerasCertBoost,
+            Self::PerasTargetCommitteeSize(_) => PParamKind::PerasTargetCommitteeSize,
+            Self::PerasBootstrapRound(_) => PParamKind::PerasBootstrapRound,
+            Self::PerasQuorumThresholdSafetyMargin(_) => {
+                PParamKind::PerasQuorumThresholdSafetyMargin
+            }
+            Self::RefInputsCostPerMultiAssetPolicy(_) => {
+                PParamKind::RefInputsCostPerMultiAssetPolicy
+            }
+            Self::RefInputsCostPerDatumByte(_) => PParamKind::RefInputsCostPerDatumByte,
         }
     }
 }
@@ -580,6 +629,14 @@ impl PParamsSet {
     pgetter!(MaxEndorserBlockTxsSize, u64);
     pgetter!(MaxEndorserBlockExUnits, ExUnits);
     pgetter!(MaxRefScriptSizePerEndorserBlock, u64);
+    pgetter!(PerasMinCandidateBlockAge, u64);
+    pgetter!(PerasHealingFactor, RationalNumber);
+    pgetter!(PerasCertBoost, u64);
+    pgetter!(PerasTargetCommitteeSize, u64);
+    pgetter!(PerasBootstrapRound, Option<u64>);
+    pgetter!(PerasQuorumThresholdSafetyMargin, RationalNumber);
+    pgetter!(RefInputsCostPerMultiAssetPolicy, u64);
+    pgetter!(RefInputsCostPerDatumByte, u64);
 }
 
 #[cfg(test)]

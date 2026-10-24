@@ -1263,7 +1263,7 @@ mod tests {
             panic!("fixture precondition");
         };
 
-        (block, txs.into_iter().map(|tx| tx.0).collect())
+        (block, txs.into_iter().map(|tx| tx.unwrap()).collect())
     }
 
     /// The hash and the validity flag of each transaction of `block`.

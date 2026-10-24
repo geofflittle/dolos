@@ -2426,6 +2426,32 @@ mod live_params_tests {
                 node,
                 "maxRefScriptSizePerEndorserBlock",
             )))
+            .with(Val::PerasMinCandidateBlockAge(whole(
+                node,
+                "perasMinCandidateBlockAge",
+            )))
+            .with(Val::PerasHealingFactor(ratio(node, "perasHealingFactor")))
+            .with(Val::PerasCertBoost(whole(node, "perasCertBoost")))
+            .with(Val::PerasTargetCommitteeSize(whole(
+                node,
+                "perasTargetCommitteeSize",
+            )))
+            .with(Val::PerasBootstrapRound(optional_whole(
+                node,
+                "perasBootstrapRound",
+            )))
+            .with(Val::PerasQuorumThresholdSafetyMargin(ratio(
+                node,
+                "perasQuorumThresholdSafetyMargin",
+            )))
+            .with(Val::RefInputsCostPerMultiAssetPolicy(whole(
+                node,
+                "refInputsCostPerMultiAssetPolicy",
+            )))
+            .with(Val::RefInputsCostPerDatumByte(whole(
+                node,
+                "refInputsCostPerDatumByte",
+            )))
     }
 
     fn serve(set: &PParamsSet) -> u5c::cardano::PParams {
@@ -2963,6 +2989,48 @@ mod live_params_tests {
         let served = serve(&live_set(&node));
 
         assert_eq!(served_fields(&served), node_fields(&node));
+    }
+
+    /// The node answers zero for most Peras and reference input parameters, so
+    /// distinct values show that each one is served in its own field.
+    #[test]
+    fn each_peras_and_reference_input_parameter_is_served_in_its_own_field() {
+        let set = live_set(&node())
+            .with(Val::PerasMinCandidateBlockAge(31))
+            .with(Val::PerasHealingFactor(RationalNumber {
+                numerator: 7,
+                denominator: 2,
+            }))
+            .with(Val::PerasCertBoost(13))
+            .with(Val::PerasTargetCommitteeSize(401))
+            .with(Val::PerasBootstrapRound(Some(17)))
+            .with(Val::PerasQuorumThresholdSafetyMargin(RationalNumber {
+                numerator: 1,
+                denominator: 8,
+            }))
+            .with(Val::RefInputsCostPerMultiAssetPolicy(1003))
+            .with(Val::RefInputsCostPerDatumByte(5));
+
+        let served: Vec<(&'static str, String)> = served_fields(&serve(&set))
+            .into_iter()
+            .skip_while(|(name, _)| *name != "peras_min_candidate_block_age")
+            .collect();
+
+        let expected: Vec<(&'static str, String)> = [
+            ("peras_min_candidate_block_age", "31"),
+            ("peras_healing_factor", "7/2"),
+            ("peras_cert_boost", "13"),
+            ("peras_target_committee_size", "401"),
+            ("peras_bootstrap_round", "17"),
+            ("peras_quorum_threshold_safety_margin", "1/8"),
+            ("ref_inputs_cost_per_multi_asset_policy", "1003"),
+            ("ref_inputs_cost_per_datum_byte", "5"),
+        ]
+        .into_iter()
+        .map(|(name, value)| (name, value.to_string()))
+        .collect();
+
+        assert_eq!(served, expected);
     }
 
     #[test]

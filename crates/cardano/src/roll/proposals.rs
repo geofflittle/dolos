@@ -77,11 +77,22 @@ fn set_dijkstra_pparams(update: &MultiEraParamUpdate, set: &mut PParamsSet) {
         max_endorser_block_references_size => MaxEndorserBlockReferencesSize,
         max_endorser_block_txs_size => MaxEndorserBlockTxsSize,
         max_endorser_block_execution_units => MaxEndorserBlockExUnits,
-        max_ref_script_size_per_endorser_block => MaxRefScriptSizePerEndorserBlock
+        max_ref_script_size_per_endorser_block => MaxRefScriptSizePerEndorserBlock,
+        peras_min_candidate_block_age => PerasMinCandidateBlockAge,
+        peras_healing_factor => PerasHealingFactor,
+        peras_cert_boost => PerasCertBoost,
+        peras_target_committee_size => PerasTargetCommitteeSize,
+        peras_quorum_threshold_safety_margin => PerasQuorumThresholdSafetyMargin,
+        ref_inputs_cost_per_multi_asset_policy => RefInputsCostPerMultiAssetPolicy,
+        ref_inputs_cost_per_datum_byte => RefInputsCostPerDatumByte
     );
 
     if let ParamRead::Proposed(cap) = update.max_pledge_leverage() {
         set.set(PParamValue::MaxPledgeLeverage(cap.into()));
+    }
+
+    if let ParamRead::Proposed(round) = update.peras_bootstrap_round() {
+        set.set(PParamValue::PerasBootstrapRound(round.into()));
     }
 }
 
@@ -563,6 +574,7 @@ mod dijkstra_governance_tests {
         let nullable_ratio = minicbor::to_vec(Nullable::Some(half.clone())).unwrap();
         let units = ExUnits { mem: 10, steps: 20 };
         let units_bytes = minicbor::to_vec(units).unwrap();
+        let nullable_count = minicbor::to_vec(Nullable::Some(500u64)).unwrap();
 
         vec![
             (
@@ -595,7 +607,11 @@ mod dijkstra_governance_tests {
                 count.clone(),
             ),
             (43, PParamValue::LeiosCommitteeSize(500), count.clone()),
-            (44, PParamValue::LeiosQuorumStakeThreshold(half), ratio),
+            (
+                44,
+                PParamValue::LeiosQuorumStakeThreshold(half.clone()),
+                ratio.clone(),
+            ),
             (
                 45,
                 PParamValue::MaxEndorserBlockReferencesSize(500),
@@ -606,8 +622,40 @@ mod dijkstra_governance_tests {
             (
                 48,
                 PParamValue::MaxRefScriptSizePerEndorserBlock(500),
-                count,
+                count.clone(),
             ),
+            (
+                49,
+                PParamValue::PerasMinCandidateBlockAge(500),
+                count.clone(),
+            ),
+            (
+                50,
+                PParamValue::PerasHealingFactor(half.clone()),
+                ratio.clone(),
+            ),
+            (51, PParamValue::PerasCertBoost(500), count.clone()),
+            (
+                52,
+                PParamValue::PerasTargetCommitteeSize(500),
+                count.clone(),
+            ),
+            (
+                53,
+                PParamValue::PerasBootstrapRound(Some(500)),
+                nullable_count,
+            ),
+            (
+                54,
+                PParamValue::PerasQuorumThresholdSafetyMargin(half),
+                ratio,
+            ),
+            (
+                55,
+                PParamValue::RefInputsCostPerMultiAssetPolicy(500),
+                count.clone(),
+            ),
+            (56, PParamValue::RefInputsCostPerDatumByte(500), count),
         ]
     }
 
@@ -660,6 +708,22 @@ mod dijkstra_governance_tests {
         assert_eq!(
             recorded_set(&action),
             PParamsSet::default().with(PParamValue::MaxPledgeLeverage(None))
+        );
+    }
+
+    /// A nil key 53 removes the Peras bootstrap round, so it is recorded as a
+    /// change to no bootstrap round.
+    #[test]
+    fn a_nil_peras_bootstrap_round_is_recorded_as_no_round() {
+        let mut update: dijkstra::ProtocolParamUpdate = minicbor::decode(&[0xa0]).unwrap();
+        update.peras_bootstrap_round = Some(Nullable::Null);
+
+        let action = parameter_change(update);
+        let action = MultiEraGovAction::from_dijkstra(&action);
+
+        assert_eq!(
+            recorded_set(&action),
+            PParamsSet::default().with(PParamValue::PerasBootstrapRound(None))
         );
     }
 
