@@ -1,0 +1,142 @@
+== dolos-pc.log.dolos
+     Running unittests src/lib.rs (/w/target-dolos-pc/debug/deps/dolos-c806b32e3dec9b8c)
+test result: ok. 270 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 13.68s
+     Running unittests src/bin/dolos/main.rs (/w/target-dolos-pc/debug/deps/dolos-4e9146f084df3079)
+test result: ok. 113 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.60s
+     Running tests/archive_conformance.rs (/w/target-dolos-pc/debug/deps/archive_conformance-3234135fc143906c)
+test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.15s
+     Running tests/archive_index_roundtrip.rs (/w/target-dolos-pc/debug/deps/archive_index_roundtrip-b4007b1632ab47a8)
+test result: ok. 18 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 1.40s
+     Running tests/archive_segments.rs (/w/target-dolos-pc/debug/deps/archive_segments-021428ab0dca2535)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.65s
+     Running tests/bootstrap.rs (/w/target-dolos-pc/debug/deps/bootstrap-577aa45c36b968a6)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+     Running tests/dijkstra_withdrawals.rs (/w/target-dolos-pc/debug/deps/dijkstra_withdrawals-e987473bd59f73b8)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
+     Running tests/engine.rs (/w/target-dolos-pc/debug/deps/engine-f5d1df0c555ec34d)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.33s
+     Running tests/epoch_pots/main.rs (/w/target-dolos-pc/debug/deps/epoch_pots-3b49a03ba44f42db)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/housekeeping.rs (/w/target-dolos-pc/debug/deps/housekeeping-f245f8c81e003a8a)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.49s
+     Running tests/memory.rs (/w/target-dolos-pc/debug/deps/memory-bec90cbbc6e5605f)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.01s
+     Running tests/mempool.rs (/w/target-dolos-pc/debug/deps/mempool-fab64f4b1b22807a)
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+     Running tests/musashi_fixtures.rs (/w/target-dolos-pc/debug/deps/musashi_fixtures-a28b9ee9f31a06fc)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+     Running tests/musashi_harness_arms.rs (/w/target-dolos-pc/debug/deps/musashi_harness_arms-2c30474448626627)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.23s
+     Running tests/musashi_pipeline_replay.rs (/w/target-dolos-pc/debug/deps/musashi_pipeline_replay-57849b868f75cacc)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.01s
+     Running tests/musashi_submission.rs (/w/target-dolos-pc/debug/deps/musashi_submission-e522a7ea706e9595)
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.49s
+     Running tests/offline_import.rs (/w/target-dolos-pc/debug/deps/offline_import-fb5cd313aa785b53)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.19s
+     Running tests/rebuild_state.rs (/w/target-dolos-pc/debug/deps/rebuild_state-2609037f8e0d083e)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.58s
+     Running tests/e2e/smoke.rs (/w/target-dolos-pc/debug/deps/smoke-6b47ee3b1e84412f)
+test result: ok. 0 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/e2e/snapshot.rs (/w/target-dolos-pc/debug/deps/snapshot-5d14437837e6b8cd)
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/state_conformance.rs (/w/target-dolos-pc/debug/deps/state_conformance-f890f60ca98f7670)
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.83s
+     Running tests/stelae_restore.rs (/w/target-dolos-pc/debug/deps/stelae_restore-14f4ff92753e58f7)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.83s
+     Running tests/e2e/sync.rs (/w/target-dolos-pc/debug/deps/sync-0a0d3652f42b359f)
+test result: ok. 6 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.12s
+     Running tests/tip_subscription.rs (/w/target-dolos-pc/debug/deps/tip_subscription-ca3551c16055b43d)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+== dolos-pc.log.dolos-cardano
+     Running unittests src/lib.rs (/w/target-dolos-pc/debug/deps/dolos_cardano-0ade9e44a3db77dd)
+test result: ok. 364 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.11s
+     Running tests/avvm_reclamation.rs (/w/target-dolos-pc/debug/deps/avvm_reclamation-2161de0fa9942454)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+     Running tests/genesis_stake_pools.rs (/w/target-dolos-pc/debug/deps/genesis_stake_pools-9b9763e89c5b3ebb)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== dolos-pc.log.dolos-core
+     Running unittests src/lib.rs (/w/target-dolos-pc/debug/deps/dolos_core-724f9500e67b2cb8)
+test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+     Running tests/block_meta.rs (/w/target-dolos-pc/debug/deps/block_meta-b0f6105587485502)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+     Running tests/crawl_gap.rs (/w/target-dolos-pc/debug/deps/crawl_gap-5859dd79c4d63cc2)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+     Running tests/dijkstra_genesis.rs (/w/target-dolos-pc/debug/deps/dijkstra_genesis-4afa5aee079c0472)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/rollback_target.rs (/w/target-dolos-pc/debug/deps/rollback_target-bb5617373a55dc6e)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== dolos-pc.log.dolos-fjall
+     Running unittests src/lib.rs (/w/target-dolos-pc/debug/deps/dolos_fjall-19ef7f7d0a0706dc)
+test result: ok. 46 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== dolos-pc.log.dolos-flatfiles
+     Running unittests src/lib.rs (/w/target-dolos-pc/debug/deps/dolos_flatfiles-b430b05523ca8bcf)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+     Running tests/bundled_dictionary.rs (/w/target-dolos-pc/debug/deps/bundled_dictionary-03dcb67462ca806e)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/store.rs (/w/target-dolos-pc/debug/deps/store-2406472e29138956)
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.43s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== dolos-pc.log.dolos-minibf
+     Running unittests src/lib.rs (/w/target-dolos-pc/debug/deps/dolos_minibf-abe63028c66605e6)
+test result: ok. 507 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 14.73s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== dolos-pc.log.dolos-minikupo
+     Running unittests src/lib.rs (/w/target-dolos-pc/debug/deps/dolos_minikupo-79d0b1faaac6927a)
+test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.10s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== dolos-pc.log.dolos-mithril
+     Running unittests src/lib.rs (/w/target-dolos-pc/debug/deps/dolos_mithril-7d497981d4d1b08c)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== dolos-pc.log.dolos-redb3
+     Running unittests src/lib.rs (/w/target-dolos-pc/debug/deps/dolos_redb3-ad15550c70620786)
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.54s
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== dolos-pc.log.dolos-snapshot
+     Running unittests src/lib.rs (/w/target-dolos-pc/debug/deps/dolos_snapshot-03ac658cb1471d87)
+test result: ok. 104 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+     Running tests/coverage.rs (/w/target-dolos-pc/debug/deps/coverage-c7f09fd550623c29)
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/export.rs (/w/target-dolos-pc/debug/deps/export-76a3e1021df0b763)
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.58s
+     Running tests/field_registry.rs (/w/target-dolos-pc/debug/deps/field_registry-a29409a8234b2451)
+test result: ok. 9 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/goldens.rs (/w/target-dolos-pc/debug/deps/goldens-56ce7bb5f697a7d2)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+     Running tests/restore.rs (/w/target-dolos-pc/debug/deps/restore-09b927ef46851a53)
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.21s
+     Running tests/restore_registry.rs (/w/target-dolos-pc/debug/deps/restore_registry-f6bed3c0e1b86a15)
+test result: ok. 0 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/roundtrip.rs (/w/target-dolos-pc/debug/deps/roundtrip-2b1fd4e515fcc562)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+     Running tests/snapshot_verify.rs (/w/target-dolos-pc/debug/deps/snapshot_verify-24cf9d4b7dca36d9)
+test result: ok. 0 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== dolos-pc.log.dolos-testing
+     Running unittests src/lib.rs (/w/target-dolos-pc/debug/deps/dolos_testing-622dbe9fd97bf873)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/benchmark_fixtures.rs (/w/target-dolos-pc/debug/deps/benchmark_fixtures-2ef2fc7ba704a58b)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== dolos-pc.log.dolos-trp
+     Running unittests src/lib.rs (/w/target-dolos-pc/debug/deps/dolos_trp-a3f88d8dd8a3e1f6)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+== dolos-pc.log.xtask
+     Running unittests src/lib.rs (/w/target-dolos-pc/debug/deps/xtask-6ecf854cd444c9e9)
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running unittests src/main.rs (/w/target-dolos-pc/debug/deps/cargo_xtask-27f0f25d98e90f96)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/minibf_perf.rs (/w/target-dolos-pc/debug/deps/minibf_perf-d33565d4d3a6cde9)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.59s
+     Running tests/perf_cli.rs (/w/target-dolos-pc/debug/deps/perf_cli-b7603728301018c9)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.97s
+     Running tests/published_artifacts.rs (/w/target-dolos-pc/debug/deps/published_artifacts-c061e4589041d30d)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+     Running tests/storage_perf_smoke.rs (/w/target-dolos-pc/debug/deps/storage_perf_smoke-a32a48126c2ca2da)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.42s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

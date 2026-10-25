@@ -1,0 +1,40 @@
+PACKAGE dolos-core start free 50G
+PACKAGE dolos-core EXIT 0 free 48G target 1.4G
+PACKAGE dolos-core suites 6 passed 80 failed 0 ignored 1
+PACKAGE dolos-cardano start free 48G
+PACKAGE dolos-cardano EXIT 0 free 48G target 1.5G
+PACKAGE dolos-cardano suites 4 passed 375 failed 0 ignored 3
+PACKAGE dolos-fjall start free 48G
+PACKAGE dolos-fjall EXIT 0 free 48G target 1.6G
+PACKAGE dolos-fjall suites 2 passed 46 failed 0 ignored 1
+PACKAGE dolos-redb3 start free 48G
+PACKAGE dolos-redb3 EXIT 0 free 48G target 1.6G
+PACKAGE dolos-redb3 suites 2 passed 28 failed 0 ignored 1
+PACKAGE dolos-flatfiles start free 48G
+PACKAGE dolos-flatfiles EXIT 0 free 48G target 1.6G
+PACKAGE dolos-flatfiles suites 4 passed 35 failed 0 ignored 0
+PACKAGE dolos-snapshot start free 48G
+PACKAGE dolos-snapshot EXIT 0 free 47G target 2.4G
+PACKAGE dolos-snapshot suites 10 passed 181 failed 0 ignored 14
+PACKAGE dolos-testing start free 47G
+PACKAGE dolos-testing EXIT 0 free 47G target 2.4G
+PACKAGE dolos-testing suites 3 passed 8 failed 0 ignored 0
+PACKAGE dolos-minibf start free 47G
+PACKAGE dolos-minibf EXIT 0 free 47G target 2.8G
+PACKAGE dolos-minibf suites 2 passed 507 failed 0 ignored 1
+PACKAGE dolos-minikupo start free 47G
+PACKAGE dolos-minikupo EXIT 0 free 47G target 2.8G
+PACKAGE dolos-minikupo suites 2 passed 41 failed 0 ignored 0
+PACKAGE dolos-trp start free 47G
+PACKAGE dolos-trp EXIT 0 free 46G target 3.3G
+PACKAGE dolos-trp suites 2 passed 10 failed 0 ignored 0
+PACKAGE dolos-mithril start free 46G
+PACKAGE dolos-mithril EXIT 0 free 46G target 3.9G
+PACKAGE dolos-mithril suites 2 passed 7 failed 0 ignored 0
+PACKAGE xtask start free 46G
+PACKAGE xtask EXIT 0 free 45G target 4.8G
+PACKAGE xtask suites 7 passed 39 failed 0 ignored 0
+PACKAGE dolos start free 45G
+PACKAGE dolos EXIT 0 free 42G target 6.8G
+PACKAGE dolos suites 25 passed 656 failed 0 ignored 21
+DONE free 49G
