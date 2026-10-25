@@ -251,10 +251,7 @@ pub fn check_state_revision(store: &StateStoreBackend) -> Result<(), Error> {
 
     match store {
         StateStoreBackend::Fjall(s) => {
-            if judge(s.read_revision().map_err(StateError::from)?)? == StateRevision::Fresh {
-                s.write_revision(CURRENT_STATE_REVISION)
-                    .map_err(StateError::from)?;
-            }
+            judge(s.read_revision().map_err(StateError::from)?)?;
         }
         StateStoreBackend::Redb(s) => {
             if judge(s.read_revision().map_err(StateError::from)?)? == StateRevision::Fresh {
