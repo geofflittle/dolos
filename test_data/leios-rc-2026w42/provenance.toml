@@ -44,3 +44,19 @@ sha256 = "56c5d35d3d69a6836f914159be66878a92419248d89bc1cc1d98e6d1433c6ed1"
 source = "the block as a relay's volatile DB stored it, [8, block], on the same network, its parent at slot 529 announcing the endorser block above"
 node_image = "ghcr.io/input-output-hk/ouroboros-leios/cardano-node-testnet:rc-2026w42 (cardano-node 11.2.0.164, git rev 2d6a2a66)"
 captured_at = "2026-10-20"
+
+[[fixture]]
+name = "pool-registration-bls"
+kind = "pool_registration_with_bls_key"
+files = ["pool-registration-bls.block"]
+chain_tag = "rc-2026w42"
+network_magic = 164
+block_no = 2
+slot = 132
+block_hash = "6ec6eb0580774046d3eb1015fea8cc9c72edca3e8a66aff9cbba0634673a3b82"
+bytes = 2000
+sha256 = "fa23a6656e9e471906b4fcd4127a2595f8b60e8667fdd2c971916e7de5fcf076"
+source = "the block bytes a utxorpc DumpHistory served for slot 132, written as one hex line, sha256 over that file, holding the registration of pool 8a04e2c7db3dff509c9f5f2b8e27d715eb8f3d0665deddc2e436f414"
+expected_key_source = "cardano-cli dijkstra query pool-state --stake-pool-id 8a04e2c7db3dff509c9f5f2b8e27d715eb8f3d0665deddc2e436f414 --testnet-magic 164, blsKey.bksKey"
+node_image = "ghcr.io/input-output-hk/ouroboros-leios/cardano-node-testnet:rc-2026w42 (cardano-node 11.2.0.164, git rev 2d6a2a66)"
+captured_at = "2026-10-26"
