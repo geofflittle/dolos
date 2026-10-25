@@ -736,7 +736,7 @@ fn map_cardano_genesis(genesis: &Genesis) -> Result<u5c::cardano::Genesis, Statu
         peras_min_candidate_block_age: dijkstra.map(|x| x.peras_min_candidate_block_age),
         peras_healing_factor: dijkstra
             .map(|x| float_to_u5c_rational(x.peras_healing_factor as f32)),
-        peras_cert_boost: dijkstra.map(|x| x.peras_cert_boost.into()),
+        peras_cert_boost: dijkstra.map(|x| x.peras_target_committee_size.into()),
         peras_target_committee_size: dijkstra.map(|x| x.peras_target_committee_size.into()),
         peras_bootstrap_round: dijkstra
             .and_then(|x| x.peras_bootstrap_round)
