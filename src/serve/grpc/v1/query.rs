@@ -1777,17 +1777,32 @@ mod tests {
         );
     }
 
-    /// MUST FIRE: each Dijkstra field the proto-devnet genesis declares is
-    /// served with its value, and each field it declares null is served
-    /// unset.
+    /// MUST FIRE: each Dijkstra genesis field is served with its own value,
+    /// and a field declared null is served unset.
     #[test]
     fn a_dijkstra_genesis_serves_the_values_it_declares() {
         let mut genesis = dolos_cardano::include::preview::load();
-        genesis.dijkstra = Some(proto_devnet_dijkstra());
+        genesis.dijkstra = Some(dolos_core::dijkstra::GenesisFile {
+            peras_min_candidate_block_age: 31,
+            peras_healing_factor: 3.5,
+            peras_cert_boost: 13,
+            peras_target_committee_size: 401,
+            peras_bootstrap_round: Some(17),
+            peras_quorum_threshold_safety_margin: 0.125,
+            ref_inputs_cost_per_multi_asset_policy: 1003,
+            ref_inputs_cost_per_datum_byte: 5,
+            ..proto_devnet_dijkstra()
+        });
 
         let served = dijkstra_genesis_fields(&map_cardano_genesis(&genesis).unwrap());
 
         let ratio = |x: f32| show(&Some(float_to_u5c_rational(x)));
+        let exact = |numerator, denominator| {
+            show(&Some(u5c::cardano::RationalNumber {
+                numerator,
+                denominator,
+            }))
+        };
         let whole = |x: u64| show(&Some(x));
         let int = |x: i64| {
             show(&Some(u5c::cardano::BigInt {
@@ -1820,71 +1835,15 @@ mod tests {
                     })),
                 ),
                 ("max_ref_script_size_per_endorser_block", whole(4000000)),
-                ("peras_min_candidate_block_age", whole(0)),
-                ("peras_healing_factor", ratio(1.0)),
-                ("peras_cert_boost", show(&Some(0u32))),
-                ("peras_target_committee_size", show(&Some(0u32))),
-                ("peras_bootstrap_round", none()),
-                ("peras_quorum_threshold_safety_margin", ratio(0.0)),
-                ("ref_inputs_cost_per_multi_asset_policy", int(0)),
-                ("ref_inputs_cost_per_datum_byte", int(0)),
+                ("peras_min_candidate_block_age", whole(31)),
+                ("peras_healing_factor", exact(7, 2)),
+                ("peras_cert_boost", show(&Some(13u32))),
+                ("peras_target_committee_size", show(&Some(401u32))),
+                ("peras_bootstrap_round", whole(17)),
+                ("peras_quorum_threshold_safety_margin", exact(1, 8)),
+                ("ref_inputs_cost_per_multi_asset_policy", int(1003)),
+                ("ref_inputs_cost_per_datum_byte", int(5)),
             ]
-        );
-    }
-
-    /// MUST FIRE: each Peras and reference input field is served from its own
-    /// genesis entry, which the proto-devnet values cannot show because most
-    /// of them are zero.
-    #[test]
-    fn each_peras_and_reference_input_genesis_entry_is_served_in_its_own_field() {
-        let mut genesis = dolos_cardano::include::preview::load();
-        genesis.dijkstra = Some(dolos_core::dijkstra::GenesisFile {
-            peras_bootstrap_round: Some(1),
-            peras_cert_boost: 2,
-            peras_healing_factor: 3.5,
-            peras_min_candidate_block_age: 4,
-            peras_quorum_threshold_safety_margin: 0.25,
-            peras_target_committee_size: 6,
-            ref_inputs_cost_per_datum_byte: 7,
-            ref_inputs_cost_per_multi_asset_policy: 8,
-            ..proto_devnet_dijkstra()
-        });
-
-        let served = map_cardano_genesis(&genesis).unwrap();
-
-        let rational = |numerator, denominator| {
-            Some(u5c::cardano::RationalNumber {
-                numerator,
-                denominator,
-            })
-        };
-        let int = |x| {
-            Some(u5c::cardano::BigInt {
-                big_int: Some(u5c::cardano::big_int::BigInt::Int(x)),
-            })
-        };
-
-        assert_eq!(
-            (
-                served.peras_bootstrap_round,
-                served.peras_cert_boost,
-                served.peras_healing_factor,
-                served.peras_min_candidate_block_age,
-                served.peras_quorum_threshold_safety_margin,
-                served.peras_target_committee_size,
-                served.ref_inputs_cost_per_datum_byte,
-                served.ref_inputs_cost_per_multi_asset_policy,
-            ),
-            (
-                Some(1),
-                Some(2),
-                rational(7, 2),
-                Some(4),
-                rational(1, 4),
-                Some(6),
-                int(7),
-                int(8),
-            )
         );
     }
 
