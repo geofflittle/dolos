@@ -58,6 +58,9 @@ impl Iterator for EntityValueIter {
 
 pub const CURRENT_CURSOR_KEY: u16 = 0;
 
+/// Key of the state revision in the cursor table.
+pub const REVISION_KEY: u16 = 1;
+
 pub const CURSOR_TABLE: TableDefinition<'static, u16, Vec<u8>> = TableDefinition::new("cursor");
 
 const DEFAULT_CACHE_SIZE_MB: usize = 500;
@@ -115,6 +118,35 @@ impl StateStore {
         store.initialize_schema()?;
 
         Ok(store)
+    }
+
+    /// The revision recorded in the store, or `None` when none was written.
+    pub fn read_revision(&self) -> Result<Option<u64>, Error> {
+        let rx = self.db().begin_read()?;
+        let cursor = rx.open_table(CURSOR_TABLE)?;
+
+        let Some(value) = cursor.get(REVISION_KEY)?.map(|x| x.value()) else {
+            return Ok(None);
+        };
+
+        let bytes: [u8; 8] = value.try_into().map_err(|_| Error::InvalidCursor)?;
+
+        Ok(Some(u64::from_be_bytes(bytes)))
+    }
+
+    /// Records the revision of the state the store holds.
+    pub fn write_revision(&self, revision: u64) -> Result<(), Error> {
+        let mut wx = self.db().begin_write()?;
+        wx.set_durability(Durability::Immediate)?;
+
+        {
+            let mut cursor = wx.open_table(CURSOR_TABLE)?;
+            cursor.insert(REVISION_KEY, &revision.to_be_bytes().to_vec())?;
+        }
+
+        wx.commit()?;
+
+        Ok(())
     }
 
     pub(crate) fn db(&self) -> &Database {

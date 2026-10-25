@@ -7,7 +7,8 @@
 //!
 //! State is organized into four keyspaces based on access patterns:
 //!
-//! 1. **`state-cursor`**: Chain position tracking (single key-value)
+//! 1. **`state-cursor`**: Chain position and the state revision (one key
+//!    each)
 //!
 //! 2. **`state-utxos`**: UTxO set storage Key: `[tx_hash:32][index:4]` (36
 //!    bytes) Value: `[era:2][cbor:...]`
@@ -70,6 +71,9 @@ const TAGS_MEMTABLE_SIZE_MB: usize = 128;
 
 /// Key for the cursor entry
 const CURSOR_KEY: &[u8] = &[0u8];
+
+/// Key for the revision entry
+const REVISION_KEY: &[u8] = &[1u8];
 
 /// Fjall-based state store implementation with unified entities keyspace.
 ///
@@ -170,6 +174,29 @@ impl StateStore {
             tags,
             flush_on_commit,
         })
+    }
+
+    /// The revision recorded in the store, or `None` when none was written.
+    pub fn read_revision(&self) -> Result<Option<u64>, Error> {
+        let Some(value) = self.db.snapshot().get(&self.cursor, REVISION_KEY)? else {
+            return Ok(None);
+        };
+
+        let bytes: [u8; 8] = value
+            .as_ref()
+            .try_into()
+            .map_err(|_| Error::Codec(format!("revision of {} bytes", value.len())))?;
+
+        Ok(Some(u64::from_be_bytes(bytes)))
+    }
+
+    /// Records the revision of the state the store holds.
+    pub fn write_revision(&self, revision: u64) -> Result<(), Error> {
+        let mut batch = self.db.batch().durability(Some(PersistMode::SyncAll));
+        batch.insert(&self.cursor, REVISION_KEY, revision.to_be_bytes());
+        batch.commit()?;
+
+        Ok(())
     }
 
     /// Get a reference to the underlying database

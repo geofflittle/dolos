@@ -45,6 +45,15 @@ pub enum Error {
         guide: &'static str,
     },
 
+    /// The state store holds a cursor at an older revision than this binary reads.
+    #[error(
+        "the state store holds chain data at state revision {} and this dolos reads revision \
+         {required} or later. Reseed it with `dolos bootstrap --force`, which clears the stores \
+         and bootstraps again",
+        .stored.map_or("none".to_string(), |revision| revision.to_string())
+    )]
+    StateRevisionTooOld { stored: Option<u64>, required: u64 },
+
     #[error("wal error: {0}")]
     WalError(#[from] WalError),
 
