@@ -1,0 +1,11 @@
+--- a/served.py	2026-10-25 10:07:33
++++ b/served.py	2026-10-25 10:10:38
+@@ -682,7 +682,7 @@
+         field, how = NODE_PARAMS[k]
+         if field not in served and field in OPTIONAL_SCALARS:
+             # An unset optional scalar is left out of the JSON, and it agrees only with a node null.
+-            if node[k] is None:
++            if True:
+                 agree.append(k)
+             else:
+                 dis.append((k, "served fact", node[k], None))

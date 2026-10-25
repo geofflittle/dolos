@@ -1,0 +1,11 @@
+--- a/served.py	2026-10-25 10:07:33
++++ b/served.py	2026-10-25 10:10:36
+@@ -364,7 +364,7 @@
+         tail = nb[len(nb) - (body_size - 2):]
+         leios_end = end(tail, 0)
+         assert end(tail, leios_end) == len(tail), "the tail is not the two certificates"
+-        block_bytes = b"\x82" + nb[header[0]:header[1]] + b"\x83\x80" + tail
++        block_bytes = nb[2:]
+         peras_raw = tail[leios_end:]
+     else:
+         parts = elems(nb, body[0])

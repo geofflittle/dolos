@@ -1,0 +1,11 @@
+--- a/served.py	2026-10-25 10:07:33
++++ b/served.py	2026-10-25 10:10:20
+@@ -262,7 +262,7 @@
+     sn, sd = int(served.get("numerator", 0)), int(served.get("denominator", 0))
+     if sd and d and Fraction(sn, sd) == Fraction(n, d):
+         return None
+-    if sn == ((n + (1 << 31)) % (1 << 32)) - (1 << 31) and sd == d % (1 << 32):
++    if sn == ((n + (1 << 31)) % (1 << 32)) - (1 << 31) and sd == d % (1 << 31):
+         return "32 bit rational width"
+     return "served fact"
+ 
