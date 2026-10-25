@@ -1517,6 +1517,58 @@ mod tests {
         assert!(root.is_dir());
     }
 
+    /// Writes a cursor into the state store at the configured path through the
+    /// raw backend opener, as a binary from before state revisions left it.
+    fn write_unrevised_store(config: &RootConfig) {
+        let path = config.storage.state_path().unwrap();
+        std::fs::create_dir_all(&path).unwrap();
+
+        let store = StateStoreBackend::open_fjall(&path, &FjallStateConfig::default()).unwrap();
+        let writer = store.start_writer().unwrap();
+        writer.set_cursor(ChainPoint::Slot(42)).unwrap();
+        writer.commit().unwrap();
+        store.shutdown().unwrap();
+    }
+
+    #[test]
+    fn a_store_with_data_and_no_revision_is_refused_with_the_reseed() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = config_over(&temp.path().join("data"), "v4");
+        write_unrevised_store(&config);
+
+        for message in [
+            refusal(open_state_store(&config)),
+            refusal(open_data_stores::<dolos_cardano::CardanoDelta>(&config)),
+        ] {
+            assert!(
+                message.contains("dolos bootstrap --force"),
+                "the refusal names the reseed: {message}"
+            );
+        }
+
+        assert!(
+            has_existing_data(&config).unwrap(),
+            "bootstrap still sees the old store, so `--force` can clear it"
+        );
+    }
+
+    #[test]
+    fn a_store_this_binary_wrote_reopens() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = config_over(&temp.path().join("data"), "v4");
+
+        let store = open_state_store(&config).unwrap();
+        let writer = store.start_writer().unwrap();
+        writer.set_cursor(ChainPoint::Slot(42)).unwrap();
+        writer.commit().unwrap();
+        store.shutdown().unwrap();
+        drop(store);
+
+        let reopened = open_state_store(&config).expect("a store this binary wrote reopens");
+
+        assert_eq!(reopened.read_cursor().unwrap(), Some(ChainPoint::Slot(42)));
+    }
+
     /// `in_memory` has to reach the builtin stores, not a memory-mode disk
     /// backend: that was the old wiring, and it was the reason the variant
     /// could not serve the snapshot export seam.
