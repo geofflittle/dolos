@@ -731,4 +731,75 @@ mod tests {
 
         let _ = force_pparams_version(&initial, &genesis, 0, 13);
     }
+
+    /// The leios devnet genesis set and the parameters its node answers with.
+    fn leios_devnet() -> (dolos_core::Genesis, serde_json::Value) {
+        let dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
+            .join("test_data")
+            .join("leios-devnet");
+
+        let genesis = load_genesis(&dir.join("genesis"))
+            .with_dijkstra(dir.join("genesis").join("dijkstra.json"))
+            .unwrap();
+
+        let answered =
+            std::fs::read_to_string(dir.join("protocol-parameters.json")).unwrap();
+
+        (genesis, serde_json::from_str(&answered).unwrap())
+    }
+
+    /// MUST NOT FIRE: a genesis set whose alonzo file injects no PlutusV3 model
+    /// takes the conway genesis model.
+    #[test]
+    fn a_genesis_set_with_no_injected_plutus_v3_takes_the_conway_genesis_model() {
+        let genesis = mainnet_genesis();
+        let initial = from_byron_genesis(&genesis.byron);
+
+        let at_eleven = force_pparams_version(&initial, &genesis, 0, 11).unwrap();
+
+        assert_eq!(
+            at_eleven.cost_models_plutus_v3(),
+            Some(genesis.conway.plutus_v3_cost_model.clone())
+        );
+    }
+
+    /// MUST FIRE: the devnet genesis set steps to the cost models its node
+    /// answers with, which for PlutusV3 is the model the alonzo file injects.
+    #[test]
+    fn the_devnet_genesis_set_steps_to_the_cost_models_its_node_answers_with() {
+        let (genesis, answered) = leios_devnet();
+        let initial = from_byron_genesis(&genesis.byron);
+
+        let at_twelve = force_pparams_version(&initial, &genesis, 0, 12).unwrap();
+
+        let answered = |language: &str| -> Vec<i64> {
+            answered["costModels"][language]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|value| value.as_i64().unwrap())
+                .collect()
+        };
+
+        assert_eq!(
+            at_twelve.cost_models_plutus_v1(),
+            Some(answered("PlutusV1"))
+        );
+        assert_eq!(
+            at_twelve.cost_models_plutus_v2(),
+            Some(answered("PlutusV2"))
+        );
+        assert_eq!(
+            at_twelve.cost_models_plutus_v3().map(|model| model.len()),
+            Some(answered("PlutusV3").len())
+        );
+        assert_eq!(
+            at_twelve.cost_models_plutus_v3(),
+            Some(answered("PlutusV3"))
+        );
+        assert_eq!(
+            at_twelve.cost_models_unknown_or_default().get(&3),
+            Some(&answered("PlutusV4"))
+        );
+    }
 }
