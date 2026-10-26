@@ -16,10 +16,7 @@ pub struct Args {}
 /// peer a body its header does not commit to. Serving that is worse than not
 /// serving, so it is refused at startup rather than discovered by a peer.
 fn refuse_relaying_a_resolved_chain(config: &RootConfig) -> miette::Result<()> {
-    let follows_leios = config
-        .upstream
-        .leios_peer_address()
-        .is_some();
+    let follows_leios = config.upstream.leios_peer_address().is_some();
 
     if follows_leios && config.relay.is_some() {
         miette::bail!(

@@ -522,7 +522,9 @@ mod tests {
         let carried = at_twelve.cost_models_unknown_or_default();
 
         // Key 3 is what the Dijkstra cost model map names for PlutusV4.
-        let model = carried.get(&3).expect("no cost model under the PlutusV4 key");
+        let model = carried
+            .get(&3)
+            .expect("no cost model under the PlutusV4 key");
 
         assert_eq!(model.len(), 251);
         assert_eq!(model[0], 100788);
