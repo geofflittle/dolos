@@ -187,9 +187,8 @@ pub fn into_conway(
     alonzo: &alonzo::GenesisFile,
     genesis: &conway::GenesisFile,
 ) -> PParamsSet {
-    let plutus_v3 = alonzo_cost_models(alonzo)
-        .plutus_v3
-        .unwrap_or_else(|| genesis.plutus_v3_cost_model.clone());
+    let _ = alonzo;
+    let plutus_v3 = genesis.plutus_v3_cost_model.clone();
 
     previous
         .clone()
@@ -226,10 +225,7 @@ pub fn into_dijkstra(previous: &PParamsSet, genesis: &Genesis) -> PParamsSet {
         panic!("reaching protocol version 12 needs a dijkstra genesis file and this configuration has no path to one")
     };
 
-    let plutus_v4 = alonzo_cost_models(&genesis.alonzo)
-        .unknown
-        .remove(&crate::pallas_extras::PLUTUS_V4_COST_MODEL_KEY)
-        .unwrap_or_else(|| dijkstra.plutus_v4_cost_model.clone());
+    let plutus_v4 = dijkstra.plutus_v4_cost_model.clone();
 
     let mut unknown = previous.cost_models_unknown_or_default();
     unknown.insert(crate::pallas_extras::PLUTUS_V4_COST_MODEL_KEY, plutus_v4);
