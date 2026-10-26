@@ -922,7 +922,7 @@ fn pool_distribution(
             stake_fraction: Some(stake_fraction(pool.stake, stakes.total)),
             vrf_keyhash: pool.vrf_keyhash.to_vec().into(),
             bls_key: pool.bls_key.as_ref().map(|x| u5c::cardano::PoolBlsKey {
-                bls_pubkey: x.bls_pubkey.to_vec().into(),
+                bls_pubkey: x.bls_pubkey.iter().rev().copied().collect::<Vec<u8>>().into(),
                 bls_possession_proof: x.bls_possession_proof.to_vec().into(),
             }),
         })
