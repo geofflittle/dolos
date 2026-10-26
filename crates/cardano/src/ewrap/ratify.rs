@@ -248,7 +248,9 @@ pub fn pparam_drep_group(kind: PParamKind) -> Option<DRepGroup> {
         | AdaPerUtxoByte
         | ExecutionCosts
         | MinFeeRefScriptCostPerByte
-        | MinPoolMargin => Some(DRepGroup::Economic),
+        | MinPoolMargin
+        | RefInputsCostPerMultiAssetPolicy
+        | RefInputsCostPerDatumByte => Some(DRepGroup::Economic),
         MaxBlockBodySize
         | MaxTransactionSize
         | MaxBlockHeaderSize
@@ -268,7 +270,13 @@ pub fn pparam_drep_group(kind: PParamKind) -> Option<DRepGroup> {
         | MaxEndorserBlockReferencesSize
         | MaxEndorserBlockTxsSize
         | MaxEndorserBlockExUnits
-        | MaxRefScriptSizePerEndorserBlock => Some(DRepGroup::Network),
+        | MaxRefScriptSizePerEndorserBlock
+        | PerasMinCandidateBlockAge
+        | PerasHealingFactor
+        | PerasCertBoost
+        | PerasTargetCommitteeSize
+        | PerasBootstrapRound
+        | PerasQuorumThresholdSafetyMargin => Some(DRepGroup::Network),
         MaximumEpoch
         | DesiredNumberOfStakePools
         | PoolPledgeInfluence
@@ -326,6 +334,14 @@ pub fn pparam_is_security(kind: PParamKind) -> bool {
             | MaxEndorserBlockTxsSize
             | MaxEndorserBlockExUnits
             | MaxRefScriptSizePerEndorserBlock
+            | PerasMinCandidateBlockAge
+            | PerasHealingFactor
+            | PerasCertBoost
+            | PerasTargetCommitteeSize
+            | PerasBootstrapRound
+            | PerasQuorumThresholdSafetyMargin
+            | RefInputsCostPerMultiAssetPolicy
+            | RefInputsCostPerDatumByte
     )
 }
 
@@ -1116,6 +1132,12 @@ mod tests {
             MaxEndorserBlockTxsSize,
             MaxEndorserBlockExUnits,
             MaxRefScriptSizePerEndorserBlock,
+            PerasMinCandidateBlockAge,
+            PerasHealingFactor,
+            PerasCertBoost,
+            PerasTargetCommitteeSize,
+            PerasBootstrapRound,
+            PerasQuorumThresholdSafetyMargin,
         ];
 
         let classified: Vec<_> = network_and_security
@@ -1142,6 +1164,14 @@ mod tests {
             ),
             (Some(DRepGroup::Economic), false)
         );
+
+        for kind in [RefInputsCostPerMultiAssetPolicy, RefInputsCostPerDatumByte] {
+            assert_eq!(
+                (pparam_drep_group(kind), pparam_is_security(kind)),
+                (Some(DRepGroup::Economic), true),
+                "{kind:?}"
+            );
+        }
     }
 
     /// CC thresholds: no say on committee-purpose actions, none on Info,

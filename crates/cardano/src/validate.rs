@@ -219,6 +219,9 @@ pub fn validation_parameters(
     let u32_param = |x: u64, name: &str| {
         u32::try_from(x).map_err(|_| ChainError::InvalidConfig(format!("{name} exceeds u32")))
     };
+    let u16_param = |x: u64, name: &str| {
+        u16::try_from(x).map_err(|_| ChainError::InvalidConfig(format!("{name} exceeds u16")))
+    };
     let cost_models = pp.cost_models_for_script_languages();
     let mut unknown = cost_models.unknown;
     let plutus_v4 = unknown.remove(&crate::pallas_extras::PLUTUS_V4_COST_MODEL_KEY);
@@ -331,11 +334,11 @@ pub fn validation_parameters(
                 .ok_or_else(|| missing("leios diffusion period length"))?,
             "leios diffusion period length",
         )?,
-        leios_committee_size: u16::try_from(
+        leios_committee_size: u16_param(
             pp.leios_committee_size()
                 .ok_or_else(|| missing("leios committee size"))?,
-        )
-        .map_err(|_| ChainError::InvalidConfig("leios committee size exceeds u16".into()))?,
+            "leios committee size",
+        )?,
         leios_quorum_stake_threshold: pp
             .leios_quorum_stake_threshold()
             .ok_or_else(|| missing("leios quorum stake threshold"))?,
@@ -357,6 +360,38 @@ pub fn validation_parameters(
                 .ok_or_else(|| missing("max reference script size per endorser block"))?,
             "max reference script size per endorser block",
         )?,
+        peras_min_candidate_block_age: u32_param(
+            pp.peras_min_candidate_block_age()
+                .ok_or_else(|| missing("peras min candidate block age"))?,
+            "peras min candidate block age",
+        )?,
+        peras_healing_factor: pp
+            .peras_healing_factor()
+            .ok_or_else(|| missing("peras healing factor"))?,
+        peras_cert_boost: u16_param(
+            pp.peras_cert_boost()
+                .ok_or_else(|| missing("peras cert boost"))?,
+            "peras cert boost",
+        )?,
+        peras_target_committee_size: u16_param(
+            pp.peras_target_committee_size()
+                .ok_or_else(|| missing("peras target committee size"))?,
+            "peras target committee size",
+        )?,
+        peras_bootstrap_round: pp
+            .peras_bootstrap_round()
+            .ok_or_else(|| missing("peras bootstrap round"))?
+            .map(|x| u32_param(x, "peras bootstrap round"))
+            .transpose()?,
+        peras_quorum_threshold_safety_margin: pp
+            .peras_quorum_threshold_safety_margin()
+            .ok_or_else(|| missing("peras quorum threshold safety margin"))?,
+        ref_inputs_cost_per_multi_asset_policy: pp
+            .ref_inputs_cost_per_multi_asset_policy()
+            .ok_or_else(|| missing("reference inputs cost per multi asset policy"))?,
+        ref_inputs_cost_per_datum_byte: pp
+            .ref_inputs_cost_per_datum_byte()
+            .ok_or_else(|| missing("reference inputs cost per datum byte"))?,
     }))
 }
 
@@ -520,18 +555,8 @@ fn decode_submission(era: Era, cbor: &[u8]) -> Result<MultiEraTx<'_>, ChainError
     if era == Era::Dijkstra {
         // The traversal decoder also accepts block-only envelopes. A submitted
         // payload must satisfy the mempool rule, since these exact bytes relay.
-        let mut wire = pallas::codec::minicbor::Decoder::new(cbor);
-        let indefinite = wire.datatype()? == pallas::codec::minicbor::data::Type::ArrayIndef;
-        let _: pallas::ledger::primitives::dijkstra::MempoolTransaction = wire.decode()?;
-        if indefinite && wire.datatype()? == pallas::codec::minicbor::data::Type::Break {
-            wire.skip()?;
-        }
-        if wire.position() != cbor.len() {
-            return Err(pallas::codec::minicbor::decode::Error::message(
-                "unexpected mempool transaction fields",
-            )
-            .into());
-        }
+        let _: pallas::ledger::primitives::dijkstra::MempoolTransaction =
+            pallas::codec::minicbor::decode(cbor)?;
     }
     Ok(MultiEraTx::decode_for_era(era, cbor)?)
 }
@@ -671,6 +696,14 @@ mod parameter_tests {
                 steps: 100000000001,
             }),
             P::MaxRefScriptSizePerEndorserBlock(6000000),
+            P::PerasMinCandidateBlockAge(31),
+            P::PerasHealingFactor(r(7, 2)),
+            P::PerasCertBoost(13),
+            P::PerasTargetCommitteeSize(401),
+            P::PerasBootstrapRound(Some(17)),
+            P::PerasQuorumThresholdSafetyMargin(r(1, 8)),
+            P::RefInputsCostPerMultiAssetPolicy(1003),
+            P::RefInputsCostPerDatumByte(7),
         ] {
             pp.set(value);
         }
@@ -751,8 +784,36 @@ mod parameter_tests {
                 steps: 100000000001,
             },
             max_ref_script_size_per_endorser_block: 6000000,
+            peras_min_candidate_block_age: 31,
+            peras_healing_factor: r(7, 2),
+            peras_cert_boost: 13,
+            peras_target_committee_size: 401,
+            peras_bootstrap_round: Some(17),
+            peras_quorum_threshold_safety_margin: r(1, 8),
+            ref_inputs_cost_per_multi_asset_policy: 1003,
+            ref_inputs_cost_per_datum_byte: 7,
         };
         assert_eq!(format!("{params:?}"), format!("{expected:?}"));
+    }
+
+    #[test]
+    fn a_set_with_no_peras_bootstrap_round_leaves_it_absent() {
+        let set = active().with(P::PerasBootstrapRound(None));
+        let MultiEraProtocolParameters::Dijkstra(params) = validation_parameters(&set).unwrap()
+        else {
+            panic!("a Dijkstra parameter set");
+        };
+        assert_eq!(params.peras_bootstrap_round, None);
+    }
+
+    #[test]
+    fn a_peras_cert_boost_beyond_u16_is_refused() {
+        let set = active().with(P::PerasCertBoost(65536));
+        let refused = validation_parameters(&set).unwrap_err();
+        assert!(matches!(
+            refused,
+            ChainError::InvalidConfig(x) if x == "peras cert boost exceeds u16"
+        ));
     }
 
     #[test]

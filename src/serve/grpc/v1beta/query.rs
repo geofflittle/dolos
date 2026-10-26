@@ -1791,6 +1791,14 @@ mod live_params_tests {
         }
     }
 
+    fn optional_whole(node: &Value, key: &str) -> Option<u64> {
+        match node.get(key) {
+            Some(Value::Null) => None,
+            Some(_) => Some(whole(node, key)),
+            None => panic!("the node parameters name no {key}"),
+        }
+    }
+
     fn model(node: &Value, language: &str) -> Vec<i64> {
         nested(node, "costModels", language)
             .as_array()
@@ -1990,6 +1998,32 @@ mod live_params_tests {
             .with(Val::MaxRefScriptSizePerEndorserBlock(whole(
                 node,
                 "maxRefScriptSizePerEndorserBlock",
+            )))
+            .with(Val::PerasMinCandidateBlockAge(whole(
+                node,
+                "perasMinCandidateBlockAge",
+            )))
+            .with(Val::PerasHealingFactor(ratio(node, "perasHealingFactor")))
+            .with(Val::PerasCertBoost(whole(node, "perasCertBoost")))
+            .with(Val::PerasTargetCommitteeSize(whole(
+                node,
+                "perasTargetCommitteeSize",
+            )))
+            .with(Val::PerasBootstrapRound(optional_whole(
+                node,
+                "perasBootstrapRound",
+            )))
+            .with(Val::PerasQuorumThresholdSafetyMargin(ratio(
+                node,
+                "perasQuorumThresholdSafetyMargin",
+            )))
+            .with(Val::RefInputsCostPerMultiAssetPolicy(whole(
+                node,
+                "refInputsCostPerMultiAssetPolicy",
+            )))
+            .with(Val::RefInputsCostPerDatumByte(whole(
+                node,
+                "refInputsCostPerDatumByte",
             )))
     }
 
