@@ -450,6 +450,8 @@ pub fn run(config: &RootConfig, args: &Args, feedback: &Feedback) -> miette::Res
             .into_diagnostic()
             .with_context(|| format!("opening the target state store at {}", path.display()))?;
 
+            dolos::storage::check_state_revision(&state).into_diagnostic()?;
+
             (state, None)
         }
         Mode::Ephemeral => {
