@@ -146,13 +146,8 @@ mod cost_model_tests {
         assert_eq!(reply.unknown.len(), 2);
     }
 
-    /// MUST NOT FIRE: a client that reads the three named fields and the
-    /// wildcard map together counts every cost model the chain carries, once
-    /// each.
-    ///
-    /// A per field assertion says nothing about the total, so a reply that
-    /// reports the PlutusV4 model correctly and drops one of the others on the
-    /// way satisfies every field and still loses a cost model.
+    /// A client that reads the three named fields and the wildcard map
+    /// together counts every cost model the chain holds, once each.
     #[test]
     fn every_cost_model_is_reported_exactly_once_across_the_named_fields_and_the_wildcard() {
         let models = cost_models_with(&[PLUTUS_V4_COST_MODEL_KEY, 4, 5]);

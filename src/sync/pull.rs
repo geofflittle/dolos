@@ -731,11 +731,9 @@ mod tests {
         )
     }
 
-    /// MUST FIRE: one fixture announces without certifying, two do both, one
-    /// certifies without announcing, one does neither, and one is of an era that
-    /// has no such fields at all. The sequences below are built from these roles,
-    /// and a fixture swapped for another would otherwise change what they count
-    /// without changing what they assert.
+    /// One fixture announces without certifying, two do both, one certifies
+    /// without announcing, one does neither, and one is of an era that has no
+    /// such fields at all. The sequences below are built from these roles.
     #[test]
     fn each_fixture_carries_the_leios_fields_the_sequences_rest_on() {
         assert_eq!(leios_fields(&announce_with_txs()), (Some(false), true));
@@ -789,8 +787,8 @@ mod tests {
         certified_by(held, &decoded.header())
     }
 
-    /// MUST NOT FIRE: a header whose parent is held and which certifies
-    /// nothing owes no fetch, although an announcing header is held beside it.
+    /// A header whose parent is held and which certifies nothing owes no fetch,
+    /// although an announcing header is held beside it.
     #[test]
     fn a_header_that_certifies_nothing_owes_no_fetch() {
         let held = [stored(&announce_with_txs()), stored(&epoch_before())];
@@ -809,9 +807,9 @@ mod tests {
         assert!(payloads.is_empty());
     }
 
-    /// MUST FIRE: a certificate owes the fetch of its parent's announcement,
-    /// at the parent's slot, whether the parent was delivered by chainsync or
-    /// read back from the store, and whatever else is held after it.
+    /// A certificate owes the fetch of its parent's announcement, at the
+    /// parent's slot, whether the parent was delivered by chainsync or read back
+    /// from the store, and whatever else is held after it.
     #[test]
     fn a_certificate_owes_the_fetch_of_its_parents_announcement() {
         let parent = announce_with_txs();
@@ -849,7 +847,7 @@ mod tests {
         }
     }
 
-    /// MUST FIRE: a certificate whose parent is not held is refused, since the
+    /// A certificate whose parent is not held is refused, since the
     /// announcement it names cannot be read.
     #[test]
     fn a_certificate_whose_parent_is_not_held_is_refused() {
@@ -898,9 +896,9 @@ mod tests {
         (held, asked)
     }
 
-    /// MUST FIRE: a log seeded from the state cursor holds no block at the
-    /// cursor, so the parent is the peer's block there, and the certificate
-    /// in the next header names its announcement.
+    /// A log seeded from the state cursor holds no block at the cursor, so the
+    /// parent is the peer's block there, and the certificate in the next header
+    /// names its announcement.
     #[tokio::test]
     async fn a_log_seeded_from_the_state_holds_the_peers_block_as_the_parent() {
         let parent = announce_with_txs();
@@ -928,8 +926,8 @@ mod tests {
         assert_eq!(asked, vec![Point::try_from(point).unwrap()]);
     }
 
-    /// MUST NOT FIRE: a block logged at the point is held from the log, and
-    /// the peer is asked for nothing.
+    /// A block logged at the point is held from the log, and the peer is asked
+    /// for nothing.
     #[tokio::test]
     async fn a_block_logged_at_the_point_is_held_without_asking_the_peer() {
         let wal = WalAdapter::in_memory().unwrap();
@@ -954,8 +952,8 @@ mod tests {
         assert_eq!(asked, Vec::<Point>::new());
     }
 
-    /// MUST NOT FIRE: a log reset to the origin holds no parent, since no
-    /// block is there, and the peer is asked for nothing.
+    /// A log reset to the origin holds no parent, since no block is there, and
+    /// the peer is asked for nothing.
     #[tokio::test]
     async fn a_log_reset_to_the_origin_holds_no_parent() {
         let wal = WalAdapter::in_memory().unwrap();
@@ -968,8 +966,8 @@ mod tests {
         assert_eq!(asked, Vec::<Point>::new());
     }
 
-    /// MUST FIRE: the parent at a reset point is the block a blockfetch
-    /// server answers for that point.
+    /// The parent at a reset point is the block a blockfetch server answers for
+    /// that point.
     #[tokio::test]
     async fn the_parent_at_a_reset_point_is_fetched_over_blockfetch() {
         let parent = announce_with_txs();

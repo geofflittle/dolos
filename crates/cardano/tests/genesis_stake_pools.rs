@@ -139,15 +139,9 @@ fn a_genesis_stake_pool_does_not_create_a_deposit() {
     assert_eq!(epoch_number(&domain), 1, "the boundary was crossed");
 }
 
-/// MUST NOT FIRE: the two pots a pool deposit would move are exactly where
-/// they were. The supply assertion above sees only the sum, so it cannot tell
-/// a deposit debited from the utxo pot and credited to the obligation from no
-/// deposit at all, and that pair is what the node's own utxo pot is compared
-/// against.
-///
-/// The other pots are left out on purpose. Monetary expansion moves reserves
-/// into rewards and treasury on every boundary, so asserting those unchanged
-/// would pin the expansion and not the deposit.
+/// The boundary leaves the utxo pot and the obligation, the two pots a pool
+/// deposit would move, where they were. Monetary expansion moves reserves into
+/// rewards and treasury on every boundary, so those pots are not compared.
 #[test]
 fn the_boundary_moves_neither_the_utxo_pot_nor_the_obligation() {
     let domain = ToyDomain::new_with_genesis(genesis_with_a_stake_pool(), None, None);
@@ -173,9 +167,8 @@ fn the_boundary_moves_neither_the_utxo_pot_nor_the_obligation() {
     );
 }
 
-/// MUST FIRE: one counted pool deposit is an obligation of one pool deposit
-/// and that much more supply, so the two assertions above are assertions that
-/// a genesis pool can fail and not arithmetic that is zero whatever happens.
+/// One counted pool deposit is an obligation of one pool deposit and that
+/// much more supply.
 #[test]
 fn one_counted_pool_deposit_is_an_obligation_with_no_source() {
     let domain = ToyDomain::new_with_genesis(genesis_with_a_stake_pool(), None, None);

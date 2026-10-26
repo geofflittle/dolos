@@ -1276,8 +1276,8 @@ mod tests {
             .collect()
     }
 
-    /// MUST NOT FIRE: a certifying block comes out holding every transaction of
-    /// its endorser block, in order, none invalid, since each carries true.
+    /// A certifying block comes out holding every transaction of its endorser
+    /// block, in order, none invalid, since each carries true.
     #[test]
     fn a_certifying_block_holds_the_endorser_transactions_with_their_flags() {
         let (block, txs) = certifying_block_and_endorser_txs();
@@ -1305,8 +1305,8 @@ mod tests {
         assert_eq!(hashes_and_flags(&inlined), delivered);
     }
 
-    /// MUST FIRE: a transaction whose flag is false comes out invalid, and no
-    /// other transaction changes.
+    /// A transaction whose flag is false comes out invalid, and no other
+    /// transaction changes.
     #[test]
     fn a_transaction_flagged_false_comes_out_invalid() {
         let (block, mut txs) = certifying_block_and_endorser_txs();

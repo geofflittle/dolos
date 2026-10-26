@@ -1479,11 +1479,9 @@ mod tests {
         dolos_core::dijkstra::from_file(path).unwrap()
     }
 
-    /// MUST FIRE: the PlutusV4 cost model a Dijkstra genesis declares is
-    /// reported, in the cost model message and in the map.
-    ///
-    /// The length and the one negative cost are the chain's own numbers, so a
-    /// reply carrying some other vector fails here.
+    /// The PlutusV4 cost model a Dijkstra genesis declares is reported, in the
+    /// cost model message and in the map, with the chain's own length and
+    /// negative cost.
     #[test]
     fn a_dijkstra_genesis_reports_its_plutus_v4_cost_model() {
         let mut genesis = dolos_cardano::include::preview::load();
@@ -1500,8 +1498,8 @@ mod tests {
         assert_eq!(models.plutus_v3, map.plutus_v3);
     }
 
-    /// MUST NOT FIRE: a genesis with no Dijkstra file reports no PlutusV4 cost
-    /// model, and still reports the models it does have.
+    /// A genesis with no Dijkstra file reports no PlutusV4 cost model, and
+    /// still reports the models it does have.
     #[test]
     fn a_genesis_without_the_dijkstra_file_reports_no_plutus_v4_cost_model() {
         let genesis = dolos_cardano::include::preview::load();

@@ -245,12 +245,8 @@ mod drift_tests {
         (initial, ended)
     }
 
-    /// MUST FIRE: the drift is measured, signed, and attributed to the pots
-    /// that moved.
-    ///
-    /// MUST NOT FIRE: pots that did not move at all report a zero in every
-    /// field and name no pot, so a report is not something every boundary
-    /// produces a number for.
+    /// The drift is signed and attributed to the pots that moved. Pots that
+    /// did not move at all report a zero in every field and name no pot.
     #[test]
     fn the_drift_is_measured_and_attributed() {
         let (initial, ended) = boundary();
@@ -279,13 +275,9 @@ mod drift_tests {
         );
     }
 
-    /// MUST FIRE: a transfer is reported as a transfer. The utxo pot gained
-    /// exactly what the reserves lost, so the supply is untouched and two pots
-    /// moved, and a report that carried only the sum would say nothing
-    /// happened.
-    ///
-    /// MUST NOT FIRE: the pots that did not take part are zero, so this is an
-    /// attribution and not a report that lights up whenever anything moves.
+    /// A transfer is reported as a transfer. The utxo pot gained exactly what
+    /// the reserves lost, so the total is zero and both pots are named. The
+    /// pots that did not take part are zero.
     #[test]
     fn a_transfer_between_pots_reports_a_zero_total_and_names_both() {
         let (initial, _) = boundary();
@@ -312,9 +304,8 @@ mod drift_tests {
         assert_eq!(moved.len(), 2, "the two pots that moved are both named");
     }
 
-    /// MUST FIRE: value that came from nowhere is reported with a non zero
-    /// total naming the pot it appeared in, which is the case a total on its
-    /// own cannot tell apart from the transfer above.
+    /// Value that came from nowhere is reported with a non zero total naming
+    /// the pot it appeared in.
     #[test]
     fn a_pot_that_gained_from_nowhere_is_named_with_a_non_zero_total() {
         let (initial, _) = boundary();
@@ -336,9 +327,8 @@ mod drift_tests {
         );
     }
 
-    /// MUST NOT FIRE: a transfer is an ordinary epoch, so the reporting path
-    /// neither dumps nor asserts on one. Making the measurement total must not
-    /// turn every boundary into a warning.
+    /// A transfer is an ordinary epoch, so the reporting path neither dumps nor
+    /// asserts on one under either setting.
     #[test]
     fn a_transfer_is_not_reported_as_drift_under_either_setting() {
         let (initial, _) = boundary();
@@ -357,9 +347,8 @@ mod drift_tests {
         });
     }
 
-    /// MUST NOT FIRE: under the lenient rule a drifted boundary is reported and
-    /// the sync carries on. This is the whole point, and it is asserted by the
-    /// call returning at all.
+    /// Under the lenient rule a drifted boundary is reported without a panic
+    /// and without dumping the debug state.
     #[test]
     fn lenient_reports_the_drift_and_does_not_panic() {
         let (initial, ended) = boundary();
@@ -373,10 +362,8 @@ mod drift_tests {
         );
     }
 
-    /// MUST FIRE: under the strict rule the assertion still fires on exactly
-    /// the same pots. Every network other than this one runs it, and a
-    /// leniency that leaked into it would turn a real accounting bug into a log
-    /// line nobody reads.
+    /// Under the strict rule the consistency assertion panics on the same
+    /// pots.
     #[test]
     #[should_panic(expected = "is_consistent")]
     fn strict_still_asserts_on_the_same_pots() {
@@ -385,14 +372,9 @@ mod drift_tests {
         report_drift(false, 42, &initial, &ended, || {});
     }
 
-    /// MUST FIRE: the guard the two epoch transition deltas assert through
-    /// lets a drifted boundary past when the process is lenient.
-    ///
-    /// MUST NOT FIRE: it refuses one when the process is strict, and it accepts
-    /// a consistent boundary under both. Those deltas are handed only the
-    /// entity, so this guard is the only thing standing between the setting and
-    /// a panic five seconds after the boundary has already been reported, which
-    /// is exactly what happened when only the reset path was fixed.
+    /// The guard the two epoch transition deltas assert through lets a drifted
+    /// boundary past when the process is lenient and refuses it when the
+    /// process is strict. A consistent boundary is accepted under both.
     ///
     /// The flag is process wide, so this test sets and restores it rather than
     /// leaving it set for whatever runs next in the same binary.
@@ -426,8 +408,7 @@ mod drift_tests {
         crate::pots::set_lenient_apply(before);
     }
 
-    /// MUST NOT FIRE: a consistent boundary is silent under both settings, so
-    /// neither one is reporting or asserting on every epoch.
+    /// A consistent boundary is silent under both settings.
     #[test]
     fn a_consistent_boundary_is_silent_under_both_settings() {
         let (initial, _) = boundary();

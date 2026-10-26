@@ -894,19 +894,10 @@ mod tests {
         )
     }
 
-    /// MUST FIRE: a whole endorser block comes back, and it costs exactly the
-    /// round trips the window size implies and no more.
-    ///
-    /// The window list is the assertion that carries the throughput. Every
-    /// request is one round trip, because the behavior serves one leios-fetch
-    /// request per peer at a time, so the number of requests is the cost of the
-    /// fetch. A client that made twice as many requests would return the same
-    /// transactions, so a test that checks only the transactions cannot tell
-    /// the cheap fetch from the expensive one.
-    ///
-    /// MUST NOT FIRE: no request is issued while another is unanswered. A
-    /// second would sit in the behavior's queue behind the first with nothing
-    /// saying so, which reads as a slow peer.
+    /// A whole endorser block comes back, and it costs exactly the round trips
+    /// the window size implies and no more. The behavior serves one leios-fetch
+    /// request per peer at a time, so every request is one round trip. No
+    /// request is issued while another is unanswered.
     #[tokio::test]
     async fn a_whole_block_costs_the_round_trips_the_window_implies() {
         let (body, eb_txs, announced) = real_eb();
@@ -931,13 +922,8 @@ mod tests {
         );
     }
 
-    /// MUST FIRE: a session that ends while a fetch is waiting on it is
-    /// reported as a session that ended.
-    ///
-    /// The fetch budget is a minute and a session can end in its first second,
-    /// so a fetch that never hears the ending spends the rest of the budget
-    /// waiting on a connection that is gone, and reports a timeout, which names
-    /// the peer as slow.
+    /// A session that ends while a fetch is waiting on it is reported as a
+    /// session that ended, and not as a timeout.
     #[tokio::test]
     async fn a_session_that_ends_mid_fetch_is_reported_not_waited_out() {
         for reason in [DisconnectReason::Closed, DisconnectReason::Errored] {
@@ -961,8 +947,8 @@ mod tests {
         }
     }
 
-    /// MUST NOT FIRE: a session ending for a peer this client never held is not
-    /// this fetch's failure, and the endorser block still comes back whole.
+    /// A session ending for a peer this client never held is not this fetch's
+    /// failure, and the endorser block still comes back whole.
     #[tokio::test]
     async fn a_session_ending_for_another_peer_does_not_end_the_fetch() {
         let (body, eb_txs, announced) = real_eb();
@@ -978,12 +964,9 @@ mod tests {
         assert_eq!(txs.len(), 425, "the whole endorser block comes back");
     }
 
-    /// MUST FIRE: a relay that serves fewer transactions than were asked for is
-    /// asked again for the rest, and the block still comes back whole.
-    ///
-    /// MUST NOT FIRE: the short reply is not taken as the end of the endorser
-    /// block, which would return a prefix and leave the ledger short with no
-    /// error anywhere.
+    /// A relay that serves fewer transactions than were asked for is asked
+    /// again for the rest, and the block still comes back whole. The short
+    /// reply is not taken as the end of the endorser block.
     #[tokio::test]
     async fn a_short_reply_is_asked_for_again_rather_than_ending_the_block() {
         let (body, eb_txs, announced) = real_eb();
@@ -1005,13 +988,9 @@ mod tests {
         assert_eq!(client.transport.overlaps, 0);
     }
 
-    /// MUST FIRE: a request wider than 64 transactions is one request, not one
-    /// per 64 wide window, because the selector carries as many windows as it
-    /// likes and only the client's own window size decides the round trips.
-    ///
-    /// This is the whole reason the window is a choice worth making. At one
-    /// round trip per request, seven round trips and one are the same work and
-    /// seven times the latency.
+    /// A request wider than 64 transactions is one request, not one per 64 wide
+    /// window, because the selector holds any number of windows and only the
+    /// client's own window size decides the round trips.
     #[tokio::test]
     async fn one_request_can_span_many_selector_windows() {
         let (body, eb_txs, announced) = real_eb();
@@ -1030,17 +1009,10 @@ mod tests {
         );
     }
 
-    /// MUST FIRE: a reply that is a subset but not a prefix of the request is
-    /// refused, naming the position that does not line up.
-    ///
-    /// Filing a short reply against the first indices asked for assumes the
-    /// relay serves a prefix. Nothing on the wire says it must, and a subset
-    /// that is not a prefix would otherwise be filed under the wrong
-    /// transactions, which the whole block check at the end reports as an
-    /// unexplained hash failure on every retry, forever.
-    ///
-    /// MUST NOT FIRE: the prefix case above must stay accepted, or this refusal
-    /// would simply stop the client working at all.
+    /// A reply that is a subset but not a prefix of the request is refused,
+    /// naming the position that does not line up. A short reply is filed
+    /// against the first indices asked for, so a subset that is not a prefix
+    /// would be filed under the wrong transactions. A prefix is accepted.
     #[tokio::test]
     async fn a_reply_that_is_not_a_prefix_of_the_request_is_refused() {
         let (body, eb_txs, announced) = real_eb();
@@ -1070,18 +1042,10 @@ mod tests {
         }
     }
 
-    /// MUST FIRE: a body served under an announcement that named a different
-    /// hash is refused, and the refusal names both hashes.
-    ///
-    /// The announced size alone does not identify a body, because any other
-    /// body of the same length passes it. Only the hash says the peer served
-    /// the endorser block the chain certified, and applying a different one
-    /// under a certified block's name puts transactions nobody voted on into
-    /// the ledger.
-    ///
-    /// MUST NOT FIRE: every other test in this module fetches the same body
-    /// under its own hash and is answered, so the check refuses the wrong body
-    /// rather than refusing every body.
+    /// A body served under an announcement that named a different hash is
+    /// refused, and the refusal names both hashes. The announced size alone
+    /// does not identify a body, because any other body of the same length
+    /// has the same size.
     #[tokio::test]
     async fn a_body_served_under_a_hash_it_does_not_have_is_refused() {
         let (body, eb_txs, mut announced) = real_eb();
@@ -1111,8 +1075,7 @@ mod tests {
         }
     }
 
-    /// MUST NOT FIRE: a transaction is accepted whatever size its body entry
-    /// names.
+    /// A transaction is accepted whatever size its body entry names.
     #[tokio::test]
     async fn a_transaction_is_accepted_whatever_size_its_entry_names() {
         let (body, eb_txs, announced) = real_eb();
@@ -1156,7 +1119,7 @@ mod tests {
         }
     }
 
-    /// MUST NOT FIRE: every transaction of a real endorser block decodes.
+    /// Every transaction of a real endorser block decodes.
     #[test]
     fn a_delivery_of_dijkstra_transactions_is_finished() {
         let (_, eb_txs, _) = real_eb();
@@ -1170,8 +1133,8 @@ mod tests {
         assert_eq!(finished.len(), 425);
     }
 
-    /// MUST FIRE: delivered bytes that hold no Dijkstra transaction are refused
-    /// at their position.
+    /// Delivered bytes that hold no Dijkstra transaction are refused at their
+    /// position.
     #[test]
     fn a_delivery_holding_something_other_than_a_transaction_is_refused() {
         let (_, mut eb_txs, _) = real_eb();
@@ -1220,11 +1183,10 @@ mod tests {
         (body, txs, announced)
     }
 
-    /// MUST FIRE: a captured endorser block comes back whole, each transaction
-    /// the `block_transaction` bytes its BlockTxs item held.
-    ///
-    /// MUST NOT FIRE: none of its 67 transactions is refused as undecodable or
-    /// as filed under the wrong reference.
+    /// A captured endorser block comes back whole, each transaction the
+    /// `block_transaction` bytes its BlockTxs item held. None of its 67
+    /// transactions is refused as undecodable or as filed under the wrong
+    /// reference.
     #[tokio::test]
     async fn a_captured_endorser_block_is_fetched_whole() {
         let (body, txs, announced) = captured_eb();
@@ -1259,11 +1221,9 @@ mod tests {
         }
     }
 
-    /// MUST FIRE: the block whose slot a payload names comes out carrying the
-    /// endorser block's transactions.
-    ///
-    /// MUST NOT FIRE: every other block in the same batch comes out byte
-    /// identical, so the resolution reaches exactly one block.
+    /// The block whose slot a payload names comes out holding the endorser
+    /// block's transactions. Every other block in the same batch comes out byte
+    /// identical.
     #[test]
     fn only_the_certifying_block_is_resolved() {
         let certifying = certifying_block();
@@ -1303,13 +1263,12 @@ mod tests {
         assert!(pending.refuse_undelivered().is_ok());
     }
 
-    /// MUST FIRE: a transaction its endorser block commits to with a false flag
-    /// is fetched, checked against its reference and applied as invalid, so it
+    /// A transaction its endorser block commits to with a false flag is
+    /// fetched, checked against its reference and applied as invalid, so it
     /// spends only its collateral, and neither it nor its sub transaction
-    /// spends any other input or produces an output.
-    ///
-    /// MUST NOT FIRE: every other transaction of the block, and each of their
-    /// sub transactions, spends its inputs and produces its outputs.
+    /// spends any other input or produces an output. Every other transaction of
+    /// the block, and each of their sub transactions, spends its inputs and
+    /// produces its outputs.
     #[tokio::test]
     async fn a_transaction_committed_with_a_false_flag_is_applied_invalid() {
         // Index 5 spends an input besides its collateral, index 8 has a sub transaction.
@@ -1492,13 +1451,11 @@ mod tests {
         (body.to_vec(), txs, announced, certifying.to_vec())
     }
 
-    /// MUST FIRE: a transaction the node applied as invalid in a certified
-    /// endorser block is fetched, checked against its reference and applied as
-    /// invalid, so it spends only its collateral and produces only its
-    /// collateral return, at the index after its outputs.
-    ///
-    /// MUST NOT FIRE: each of the other 77 transactions of the block spends its
-    /// inputs and produces its outputs.
+    /// A transaction the node applied as invalid in a certified endorser block
+    /// is fetched, checked against its reference and applied as invalid, so it
+    /// spends only its collateral and produces only its collateral return, at
+    /// the index after its outputs. Each of the other 77 transactions of the
+    /// block spends its inputs and produces its outputs.
     #[tokio::test]
     async fn a_transaction_the_node_applied_as_invalid_is_applied_invalid() {
         const INVALID: usize = 77;
@@ -1615,8 +1572,8 @@ mod tests {
         );
     }
 
-    /// MUST FIRE: a block that carries transactions of its own is refused when
-    /// a payload is delivered at its slot, since inlining would replace them.
+    /// A block that holds transactions of its own is refused when a payload is
+    /// delivered at its slot, since inlining would replace them.
     #[test]
     fn a_block_with_transactions_of_its_own_is_not_inlined() {
         let plain = plain_block();
@@ -1639,9 +1596,8 @@ mod tests {
         }
     }
 
-    /// MUST FIRE: a payload keyed to a slot no block in the batch carries is
-    /// refused rather than silently dropped, which is what a short or reordered
-    /// batch would otherwise cause.
+    /// A payload keyed to a slot no block in the batch has is refused rather
+    /// than dropped.
     #[test]
     fn a_payload_no_block_claimed_is_refused() {
         let mut pending = PendingPayloads::default();
@@ -1661,9 +1617,7 @@ mod tests {
         }
     }
 
-    /// MUST NOT FIRE: with nothing pending, every block passes through byte
-    /// identical. This is the case that catches a resolution firing where no
-    /// endorser block was certified.
+    /// With nothing pending, every block passes through byte identical.
     #[test]
     fn with_nothing_pending_every_block_passes_through() {
         let blocks = vec![plain_block(), certifying_block()];
@@ -1675,18 +1629,12 @@ mod tests {
         assert!(pending.refuse_undelivered().is_ok());
     }
 
-    /// MUST FIRE: a block whose certification was recorded and whose endorser
-    /// block was never fetched is refused, rather than passed through.
-    ///
-    /// A certifying block carries no transactions of its own, so passing it
-    /// through applies an empty block where a whole endorser block belongs and
-    /// says nothing at all. The cost is paid thousands of slots later by a
-    /// transaction spending an output the follower never saw, and at that point
-    /// nothing connects the failure to the fetch that did not return.
-    ///
-    /// MUST NOT FIRE: the same block with its payload delivered still resolves,
-    /// and a block that certifies nothing still passes through. Otherwise this
-    /// refusal would simply stop the follower.
+    /// A block whose certification was recorded and whose endorser block was
+    /// never fetched is refused, rather than passed through. A certifying block
+    /// holds no transactions of its own, so passing it through would apply an
+    /// empty block in place of the endorser block. The same block with its
+    /// payload delivered resolves, and a block that certifies nothing passes
+    /// through.
     #[test]
     fn a_certifying_block_whose_endorser_block_never_arrived_is_refused() {
         let certifying = certifying_block();
@@ -1719,12 +1667,9 @@ mod tests {
         assert!(pending.refuse_undelivered().is_ok());
     }
 
-    /// MUST FIRE: a certification recorded and never fetched is refused at the
-    /// end of a batch too, and not only when its own block arrives.
-    ///
-    /// The block that certifies it may be in a later batch, so the end of a
-    /// batch is the earliest point at which nothing can still be owed. Both
-    /// leftovers are refused, and each says which it was.
+    /// A certification recorded and never fetched is refused at the end of a
+    /// batch too, and not only when its own block arrives. Both leftovers are
+    /// refused, and each says which it was.
     #[test]
     fn both_kinds_of_leftover_are_refused_and_say_which() {
         let mut unfetched = PendingPayloads::default();
@@ -1874,8 +1819,8 @@ mod tests {
     /// The gap the proxy in front of the responder lets a client stay silent.
     const PROXY_CUTOFF: Duration = Duration::from_secs(3);
 
-    /// MUST FIRE: a fetch after the client was idle for twice the gap the peer
-    /// allows a silent client still gets the whole endorser block, because the
+    /// A fetch after the client was idle for twice the gap the peer allows a
+    /// silent client still gets the whole endorser block, because the
     /// connection is kept alive between fetches.
     #[tokio::test]
     async fn a_fetch_after_an_idle_gap_longer_than_the_peer_allows_still_answers() {
@@ -1896,8 +1841,8 @@ mod tests {
         assert!(ended.try_recv().is_err(), "the proxy cut the connection");
     }
 
-    /// MUST FIRE: a fetch after the client's thread was blocked for several
-    /// housekeeping ticks still gets the whole endorser block.
+    /// A fetch after the client's thread was blocked for several housekeeping
+    /// ticks still gets the whole endorser block.
     #[tokio::test]
     async fn a_fetch_after_a_blocked_thread_still_answers() {
         let (body, eb_txs, announced) = real_eb();
@@ -1916,8 +1861,8 @@ mod tests {
         );
     }
 
-    /// MUST FIRE: the proxy closes a connection whose client sends nothing for
-    /// longer than the cutoff.
+    /// The proxy closes a connection whose client sends nothing for longer than
+    /// the cutoff.
     #[tokio::test]
     async fn the_proxy_closes_a_connection_its_client_leaves_silent() {
         use tokio::io::AsyncReadExt;
@@ -1935,7 +1880,7 @@ mod tests {
         assert_eq!(ended.recv().await, Some(Ended::ClientIdle));
     }
 
-    /// MUST NOT FIRE: dropping a client closes its connection.
+    /// Dropping a client closes its connection.
     #[tokio::test]
     async fn a_dropped_client_closes_its_connection() {
         let (body, eb_txs, announced) = real_eb();
@@ -1952,8 +1897,7 @@ mod tests {
         assert_eq!(how, Ok(Some(Ended::ClientClosed)));
     }
 
-    /// MUST NOT FIRE: the client holds none of the offers a peer makes between
-    /// fetches.
+    /// The client holds none of the offers a peer makes between fetches.
     #[tokio::test]
     async fn offers_made_between_fetches_are_not_held() {
         let (body, eb_txs, announced) = real_eb();
@@ -1975,8 +1919,8 @@ mod tests {
         assert_eq!(client.transport.events.len(), 0);
     }
 
-    /// MUST FIRE: a fetch from a peer that closes every connection it accepts
-    /// ends with the disconnection.
+    /// A fetch from a peer that closes every connection it accepts ends with
+    /// the disconnection.
     #[tokio::test]
     async fn a_peer_that_closes_the_connection_ends_the_fetch() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
