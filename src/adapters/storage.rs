@@ -98,7 +98,7 @@ pub struct ExistingDataPolicy {
 
 /// Whether storage already holds a node: a state cursor is the whole test.
 pub fn has_existing_data(config: &RootConfig) -> Result<bool, Error> {
-    let state = open_state_store(config)?;
+    let state = open_state_store_at_any_revision(config)?;
 
     Ok(state.read_cursor()?.is_some())
 }
@@ -195,6 +195,14 @@ pub fn open_archive_store(config: &RootConfig) -> Result<ArchiveStoreBackend, Er
 }
 
 pub fn open_state_store(config: &RootConfig) -> Result<StateStoreBackend, Error> {
+    let store = open_state_store_at_any_revision(config)?;
+
+    check_state_revision(&store)?;
+
+    Ok(store)
+}
+
+fn open_state_store_at_any_revision(config: &RootConfig) -> Result<StateStoreBackend, Error> {
     check_storage_version(&config.storage.version)?;
 
     let path = config.storage.state_path().unwrap_or_default();
@@ -204,6 +212,61 @@ pub fn open_state_store(config: &RootConfig) -> Result<StateStoreBackend, Error>
         dolos_cardano::model::build_schema(),
         &config.storage.state,
     )?)
+}
+
+/// The state revision this binary writes, raised whenever a store an older
+/// binary wrote lacks data this one reads.
+pub const CURRENT_STATE_REVISION: u64 = 1;
+
+/// What the recorded revision of a state store means to this binary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StateRevision {
+    /// The store holds no cursor, so it takes the current revision.
+    Fresh,
+    /// The store holds a cursor at a revision this binary reads.
+    Readable,
+}
+
+fn judge_state_revision(
+    stored: Option<u64>,
+    cursor: Option<&ChainPoint>,
+) -> Result<StateRevision, Error> {
+    match (cursor, stored) {
+        (None, _) => Ok(StateRevision::Fresh),
+        (Some(_), Some(revision)) if revision >= CURRENT_STATE_REVISION => {
+            Ok(StateRevision::Readable)
+        }
+        (Some(_), stored) => Err(Error::StateRevisionTooOld {
+            stored,
+            required: CURRENT_STATE_REVISION,
+        }),
+    }
+}
+
+/// Refuse a state store an older binary wrote, and record the current
+/// revision in one that holds no cursor.
+pub fn check_state_revision(store: &StateStoreBackend) -> Result<(), Error> {
+    let cursor = store.read_cursor()?;
+    let judge = |stored| judge_state_revision(stored, cursor.as_ref());
+
+    match store {
+        StateStoreBackend::Fjall(s) => {
+            if judge(s.read_revision().map_err(StateError::from)?)? == StateRevision::Fresh {
+                s.write_revision(CURRENT_STATE_REVISION)
+                    .map_err(StateError::from)?;
+            }
+        }
+        StateStoreBackend::Redb(s) => {
+            if judge(s.read_revision().map_err(StateError::from)?)? == StateRevision::Fresh {
+                s.write_revision(CURRENT_STATE_REVISION)
+                    .map_err(StateError::from)?;
+            }
+        }
+        // A memory store is created empty by this process.
+        StateStoreBackend::Memory(_) => {}
+    }
+
+    Ok(())
 }
 
 pub fn open_mempool_store(config: &RootConfig) -> Result<MempoolBackend, Error> {
@@ -1515,6 +1578,120 @@ mod tests {
             .expect("the current version opens");
 
         assert!(root.is_dir());
+    }
+
+    /// Writes a cursor into the state store at the configured path through the
+    /// raw backend opener, as a binary from before state revisions left it.
+    fn write_unrevised_store(config: &RootConfig) {
+        let path = config.storage.state_path().unwrap();
+        std::fs::create_dir_all(&path).unwrap();
+
+        let store = StateStoreBackend::open_fjall(&path, &FjallStateConfig::default()).unwrap();
+        let writer = store.start_writer().unwrap();
+        writer.set_cursor(ChainPoint::Slot(42)).unwrap();
+        writer.commit().unwrap();
+        store.shutdown().unwrap();
+    }
+
+    #[test]
+    fn a_store_with_data_and_no_revision_is_refused_with_the_reseed() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = config_over(&temp.path().join("data"), "v4");
+        write_unrevised_store(&config);
+
+        for message in [
+            refusal(open_state_store(&config)),
+            refusal(open_data_stores::<dolos_cardano::CardanoDelta>(&config)),
+        ] {
+            assert!(
+                message.contains("dolos bootstrap --force"),
+                "the refusal names the reseed: {message}"
+            );
+        }
+
+        assert!(
+            has_existing_data(&config).unwrap(),
+            "bootstrap still sees the old store, so `--force` can clear it"
+        );
+    }
+
+    #[test]
+    fn a_store_this_binary_wrote_reopens() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = config_over(&temp.path().join("data"), "v4");
+
+        let store = open_state_store(&config).unwrap();
+        let writer = store.start_writer().unwrap();
+        writer.set_cursor(ChainPoint::Slot(42)).unwrap();
+        writer.commit().unwrap();
+        store.shutdown().unwrap();
+        drop(store);
+
+        let reopened = open_state_store(&config).expect("a store this binary wrote reopens");
+
+        assert_eq!(reopened.read_cursor().unwrap(), Some(ChainPoint::Slot(42)));
+
+        let StateStoreBackend::Fjall(fjall) = &reopened else {
+            panic!("the configured state store is fjall");
+        };
+
+        assert_eq!(fjall.read_revision().unwrap(), Some(CURRENT_STATE_REVISION));
+    }
+
+    #[test]
+    fn a_store_with_data_at_an_older_revision_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = config_over(&temp.path().join("data"), "v4");
+        write_unrevised_store(&config);
+
+        let path = config.storage.state_path().unwrap();
+        let store = dolos_fjall::StateStore::open(&path, &FjallStateConfig::default()).unwrap();
+        store.write_revision(CURRENT_STATE_REVISION - 1).unwrap();
+        store.shutdown().unwrap();
+        drop(store);
+
+        let error = open_state_store(&config).err().expect("expected a refusal");
+
+        assert!(
+            matches!(
+                error,
+                Error::StateRevisionTooOld { stored: Some(stored), required }
+                    if stored == CURRENT_STATE_REVISION - 1 && required == CURRENT_STATE_REVISION
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_state_revision_is_judged_by_the_cursor_and_the_stored_revision() {
+        let cursor = ChainPoint::Slot(42);
+
+        for stored in [None, Some(0), Some(CURRENT_STATE_REVISION)] {
+            assert_eq!(
+                judge_state_revision(stored, None).unwrap(),
+                StateRevision::Fresh
+            );
+        }
+
+        for stored in [CURRENT_STATE_REVISION, CURRENT_STATE_REVISION + 1] {
+            assert_eq!(
+                judge_state_revision(Some(stored), Some(&cursor)).unwrap(),
+                StateRevision::Readable
+            );
+        }
+
+        for stored in [None, Some(CURRENT_STATE_REVISION - 1)] {
+            let error = judge_state_revision(stored, Some(&cursor)).unwrap_err();
+
+            assert!(
+                matches!(
+                    error,
+                    Error::StateRevisionTooOld { stored: refused, required }
+                        if refused == stored && required == CURRENT_STATE_REVISION
+                ),
+                "{error}"
+            );
+        }
     }
 
     /// `in_memory` has to reach the builtin stores, not a memory-mode disk
