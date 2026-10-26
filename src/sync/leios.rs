@@ -647,7 +647,7 @@ fn finish(wire: Vec<leiosfetch::TxCbor>) -> Result<Vec<Vec<u8>>, Error> {
             reason: e.to_string(),
         })?;
 
-        out.push(w.0);
+        out.push(w.unwrap());
     }
 
     debug!(txs = out.len(), "endorser block verified whole");
@@ -830,7 +830,7 @@ mod tests {
                             .iter()
                             .skip(skip)
                             .take(self.cap)
-                            .map(|i| leiosfetch::TxCbor(self.eb_txs[*i].clone()))
+                            .map(|i| leiosfetch::TxCbor::from_raw_bytes(self.eb_txs[*i].clone()))
                             .collect();
 
                         InitiatorEvent::EbFetched(
@@ -1155,7 +1155,10 @@ mod tests {
     #[test]
     fn a_delivery_of_dijkstra_transactions_is_finished() {
         let (_, eb_txs, _) = real_eb();
-        let wire = eb_txs.into_iter().map(leiosfetch::TxCbor).collect();
+        let wire = eb_txs
+            .into_iter()
+            .map(leiosfetch::TxCbor::from_raw_bytes)
+            .collect();
 
         let finished = finish(wire).expect("every transaction decodes");
 
@@ -1168,7 +1171,10 @@ mod tests {
     fn a_delivery_holding_something_other_than_a_transaction_is_refused() {
         let (_, mut eb_txs, _) = real_eb();
         eb_txs[3] = vec![0x01];
-        let wire = eb_txs.into_iter().map(leiosfetch::TxCbor).collect();
+        let wire = eb_txs
+            .into_iter()
+            .map(leiosfetch::TxCbor::from_raw_bytes)
+            .collect();
 
         match finish(wire) {
             Err(Error::Endorser(endorser::Error::TxDecode { index, .. })) => {
@@ -1221,7 +1227,7 @@ mod tests {
         assert_eq!(body.len(), announced.size as usize, "fixture precondition");
 
         let point: EbId = Point::Specific(announced.slot, announced.hash.to_vec());
-        let eb_txs: Vec<Vec<u8>> = txs.into_iter().map(|tx| tx.0).collect();
+        let eb_txs: Vec<Vec<u8>> = txs.into_iter().map(|tx| tx.unwrap()).collect();
         let relay = FakeRelay::new(point, body, eb_txs.clone(), usize::MAX);
         let mut client = client(relay, 64);
 
@@ -1244,7 +1250,7 @@ mod tests {
 
         CertifiedPayload {
             endorser_block,
-            txs: txs.into_iter().map(|tx| tx.0).collect(),
+            txs: txs.into_iter().map(|tx| tx.unwrap()).collect(),
         }
     }
 
@@ -1305,7 +1311,7 @@ mod tests {
         const FLAGGED: [usize; 2] = [5, 8];
 
         let (body, txs, announced) = captured_eb();
-        let mut eb_txs: Vec<Vec<u8>> = txs.into_iter().map(|tx| tx.0).collect();
+        let mut eb_txs: Vec<Vec<u8>> = txs.into_iter().map(|tx| tx.unwrap()).collect();
 
         for index in FLAGGED {
             let flag = eb_txs[index].last_mut().unwrap();
@@ -1843,7 +1849,7 @@ mod tests {
                     ResponderEvent::EbTxsRequested(pid, _, bitmaps) => {
                         let txs = FakeRelay::indices(&bitmaps)
                             .into_iter()
-                            .map(|index| leiosfetch::TxCbor(eb_txs[index].clone()))
+                            .map(|index| leiosfetch::TxCbor::from_raw_bytes(eb_txs[index].clone()))
                             .collect();
 
                         network.execute(ResponderCommand::ProvideEbTxs(pid, txs))

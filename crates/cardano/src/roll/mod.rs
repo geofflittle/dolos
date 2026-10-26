@@ -1117,7 +1117,10 @@ pub(crate) mod dijkstra_fixture {
                 operational_cert_kes_period: 0,
                 operational_cert_sigma: Bytes::from(vec![0x17]),
             },
-            protocol_version: (12, 0),
+            header_version_info: dijkstra::HeaderVersionInfo {
+                highest_supported_major_version: 12,
+                self_reported_software_tag: 0,
+            },
             block_body_contains_leios_cert: false,
             eb_announcement: Nullable::Null,
         };
