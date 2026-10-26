@@ -316,10 +316,7 @@ mod tests {
         let script = DijkstraNativeScript::ScriptRequireGuard(credential);
         let bytes = minicbor::to_vec(&script).expect("must encode");
 
-        assert_eq!(
-            native_script_json(&bytes),
-            Err(StatusCode::NOT_IMPLEMENTED)
-        );
+        assert_eq!(native_script_json(&bytes), Err(StatusCode::NOT_IMPLEMENTED));
     }
 
     #[tokio::test]

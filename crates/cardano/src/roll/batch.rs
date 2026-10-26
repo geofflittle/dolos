@@ -248,7 +248,9 @@ impl WorkBatch {
             let spent: Vec<_> = self
                 .blocks
                 .iter()
-                .flat_map(|x| crate::utxoset::compute_block_dependencies_lenient(x.decoded().view()))
+                .flat_map(|x| {
+                    crate::utxoset::compute_block_dependencies_lenient(x.decoded().view())
+                })
                 .collect();
 
             all_refs.extend(spent);

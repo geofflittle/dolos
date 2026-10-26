@@ -159,7 +159,8 @@ fn the_boundary_moves_neither_the_utxo_pot_nor_the_obligation() {
     let after = pots(&domain);
 
     assert_eq!(
-        after.utxos, before.utxos,
+        after.utxos,
+        before.utxos,
         "the boundary debited the utxo pot by {}",
         after.utxos as i128 - before.utxos as i128,
     );
