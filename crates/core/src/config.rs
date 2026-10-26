@@ -1325,14 +1325,11 @@ mod tests {
         assert_eq!(json["backend"], "no_op");
     }
 
-    /// MUST FIRE: the wire order apply rule is off in the default, off when the
-    /// sync section names nothing, and absent from the serialized default, so a
-    /// change that turned it on is refused here rather than in an operator's
-    /// ledger. It mirrors one prototype's behaviour, and on any other network
-    /// the same leniency computes a UTxO set the network does not hold.
-    ///
-    /// MUST NOT FIRE: a config that asks for it gets it. Without this half the
-    /// three assertions above also hold for a field that can never be true.
+    /// The wire order apply rule is off in the default, off when the sync
+    /// section names nothing, and absent from the serialized default. A config
+    /// that asks for it gets it. It mirrors one prototype's behaviour, and on
+    /// any other network the same leniency computes a UTxO set the network does
+    /// not hold.
     #[test]
     fn the_wire_order_apply_rule_is_off_unless_a_config_asks_for_it() {
         use serde_json::json;

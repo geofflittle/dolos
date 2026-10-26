@@ -868,12 +868,9 @@ mod tests {
     // TODO: add property based testing that ensures that the pots are
     // consistent (#1039)
 
-    /// MUST NOT FIRE: a transfer out of reserves into the treasury conserves
-    /// the supply, and the reading still names both pots with opposite signs.
-    ///
-    /// MUST FIRE: the same reading over a boundary where no pot changed names
-    /// no pot at all, so a named pot is a movement that was measured rather
-    /// than an entry the reading always carries.
+    /// A transfer out of reserves into the treasury conserves the supply, and
+    /// the reading names both pots with opposite signs. The same reading over a
+    /// boundary where no pot changed names no pot at all.
     #[test]
     fn a_transfer_between_pots_is_reported() {
         let initial = Pots {

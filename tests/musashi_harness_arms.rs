@@ -66,12 +66,8 @@ fn assert_verdict(text: &str, verdict: &str, script: &Path) {
     );
 }
 
-/// MUST NOT FIRE: every arm of the comparison harness behaves as the harness
-/// says it should, over a node and a follower that answer from fixtures.
-///
-/// MUST FIRE: an arm that stops refusing. Demonstrated on the branch
-/// `repro/d14-hollow-arm`, which drops the body check out of
-/// compare-utxo-set.py, leaving the hollow arm with nothing to object to.
+/// Every arm of the comparison harness behaves as the harness says it should,
+/// over a node and a follower that answer from fixtures.
 #[test]
 fn the_comparison_harness_meets_every_arm() {
     require_python();
@@ -82,14 +78,10 @@ fn the_comparison_harness_meets_every_arm() {
     assert_verdict(&text, "PROBE 6 arms, 6 as expected", &root().join(script));
 }
 
-/// MUST NOT FIRE: the inventory check accepts a log whose every binary asserted
-/// something and refuses each of the five shapes it is written to refuse.
-///
-/// MUST FIRE: a check that accepts an unrecorded silent binary, a recorded
-/// entry that now passes a test, a log naming no binary, a log holding a
-/// failure, or a log naming one target twice. Each of those five is an arm, and
-/// the verdict line carries how many were taken, so a run that took none of
-/// them fails this rather than passing quietly.
+/// The inventory check accepts a log whose every binary asserted something and
+/// refuses an unrecorded silent binary, a recorded entry that now passes a
+/// test, a log naming no binary, a log holding a failure, and a log naming one
+/// target twice.
 #[test]
 fn the_inventory_harness_meets_every_arm() {
     require_python();

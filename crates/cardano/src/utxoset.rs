@@ -897,15 +897,12 @@ mod tests {
         }
     }
 
-    /// MUST FIRE: a transaction spending an output a LATER transaction of the
-    /// same block produces consumes nothing, and the output survives for
-    /// whoever spends it next. This is the case at slot 1861242, and the chain
-    /// settles it: the ordinary ranking block at 1861279 spends that same
-    /// output, so it was still there.
-    ///
-    /// MUST NOT FIRE: the transactions are still applied. Their outputs are
-    /// created and the inputs that WERE there are still consumed, so this is
-    /// not a rule that quietly drops a transaction.
+    /// A transaction spending an output a later transaction of the same block
+    /// produces consumes nothing, and the output survives for whoever spends it
+    /// next. This is the case at slot 1861242, and the ordinary ranking block
+    /// at 1861279 spends that same output, so it was still there. The
+    /// transactions are still applied. Their outputs are created and the inputs
+    /// that were there are consumed.
     #[test]
     fn a_forward_referenced_input_is_left_and_the_transaction_still_applies() {
         let cbor = forward_ref_block();
@@ -944,21 +941,18 @@ mod tests {
         }
     }
 
-    /// MUST FIRE: a transaction carried a second time re-creates an output that
-    /// was spent in between, and a later block can spend it again.
+    /// A transaction carried a second time re-creates an output that was spent
+    /// in between, and a later block can spend it again.
     ///
-    /// The two real ordinary ranking blocks of the Musashi chain that showed
-    /// this. In block 1861279, index 50 creates
+    /// The blocks are two real ordinary ranking blocks of the test chain. In
+    /// block 1861279, index 50 creates
     /// `3fe3ab01a255960d22d63e7ad8fabdee8cd7d9d884790105c35fa3bea1b53e01#0` and
     /// index 234 spends it. Block 1861288 carries index 50's transaction again,
     /// which on the node re-creates that output, and a later block spends it a
-    /// second time. Suppressing the repeat instead was tried and stopped the
-    /// sync here, because the resurrection never happened.
+    /// second time.
     ///
-    /// MUST NOT FIRE: the first block's own chain still resolves, so this is
-    /// not a rule that makes everything succeed by consuming nothing. Index 17
-    /// spends what index 2 made and index 50 spends what index 17 made, and all
-    /// three are consumed.
+    /// The first block's own chain still resolves. Index 17 spends what index 2
+    /// made and index 50 spends what index 17 made, and all three are consumed.
     #[test]
     fn a_repeated_transaction_recreates_an_output_spent_in_between() {
         let first = trimmed_block("dijkstra-repeat-ranking-first.block");
@@ -1003,14 +997,9 @@ mod tests {
         );
     }
 
-    /// MUST FIRE: applying the same block twice reports every one of its
-    /// outputs as re-created the second time, and consumes nothing the second
-    /// time because the first application already spent it all.
-    ///
-    /// The counter is what an operator reads to see how much of a chain is
-    /// re-application, so it has to count the case it is named for. Asserting
-    /// it is merely non-zero on a real block would pass on any transaction that
-    /// happened to repeat, which is a different fact.
+    /// Applying the same block twice reports every one of its outputs as
+    /// re-created the second time, and consumes nothing the second time
+    /// because the first application already spent it all.
     #[test]
     fn re_applying_a_block_counts_every_output_as_re_created() {
         let cbor = trimmed_block("dijkstra-repeat-ranking-first.block");
@@ -1135,19 +1124,10 @@ mod tests {
         out
     }
 
-    /// MUST FIRE: a block whose transactions are in wire order and forward
-    /// reference nothing gets the same delta under both rules, ref for ref and
-    /// body for body. The lenient rule is then a superset of the strict one on
-    /// the ordinary case and not a second rule that happens to agree on the
-    /// counters.
-    ///
-    /// Both counters reading zero says the lenient walk took no liberty. It
-    /// says nothing about whether the walk consumed and produced the refs the
-    /// strict rule would have, which is why the deltas themselves are compared.
-    ///
-    /// MUST NOT FIRE: this block spends some of its own outputs and some from
-    /// outside, so a walk that resolved no intra block spend would consume a
-    /// smaller set here rather than agree with the strict rule on an empty one.
+    /// A block whose transactions are in wire order and forward reference
+    /// nothing gets the same delta under both rules, ref for ref and body for
+    /// body, and the lenient walk skips and re-creates nothing. The block
+    /// spends some of its own outputs and some from outside.
     #[test]
     fn a_block_in_wire_order_applies_the_same_under_both_rules() {
         let cbor = trimmed_block("dijkstra-repeat-ranking-first.block");
@@ -1220,10 +1200,7 @@ mod tests {
         );
     }
 
-    /// MUST NOT FIRE: the strict rule is untouched and still refuses an input
-    /// it cannot resolve. Every network other than this one runs it, and a
-    /// leniency that leaked into it would hide a real defect rather than mirror
-    /// a prototype.
+    /// The strict rule refuses an input it cannot resolve.
     #[test]
     fn the_strict_rule_still_refuses_a_missing_input() {
         let cbor = forward_ref_block();
@@ -1261,15 +1238,10 @@ mod tests {
             .hash()
     }
 
-    /// MUST FIRE: the stop on an input the ledger does not hold names the block
-    /// slot, the block hash, the transaction and the input, in the text that
-    /// reaches the log. `or_panic` renders the error with `error!(%x)`, so the
-    /// error's own text is the line an operator reads, and a stop that names
-    /// only the input cannot be traced back to a block or a transaction.
-    ///
-    /// MUST NOT FIRE: the same block with the same input present applies with
-    /// no error, so this is a refusal of an unresolved input and not of the
-    /// fixture.
+    /// The stop on an input the ledger does not hold names the block slot, the
+    /// block hash, the transaction and the input in the error's own text, which
+    /// `or_panic` renders with `error!(%x)`. The same block with the same input
+    /// present applies with no error.
     #[test]
     fn an_unresolved_input_stops_and_names_the_block_the_transaction_and_the_input() {
         let cbor = forward_ref_block();
@@ -1300,20 +1272,15 @@ mod tests {
             );
         }
 
-        // The must not fire half. Nothing was removed this time, so the same
-        // block resolves.
+        // Nothing is removed this time, so the same block resolves.
         let whole = fake_slice_for_block(&block);
         super::compute_apply_delta(&block, &whole)
             .expect("the block applies when every input it spends is there");
     }
 
-    /// MUST FIRE: the lenient rule says which transaction left which input
-    /// unconsumed, not only how many were left. A count says a ledger is wrong
-    /// and nothing says where, and the block, the transaction and the input are
-    /// the three an operator needs to go and look.
-    ///
-    /// MUST NOT FIRE: a block that left nothing unconsumed names nothing, so
-    /// the record is of what happened rather than of every input walked.
+    /// The lenient rule records which transaction left which input unconsumed,
+    /// not only how many were left. A block that left nothing unconsumed
+    /// records nothing.
     #[test]
     fn a_left_input_is_recorded_against_the_transaction_that_spent_it() {
         let cbor = forward_ref_block();
@@ -1460,10 +1427,10 @@ mod tests {
         ]
     }
 
-    /// MUST FIRE: every walk applies the sub transaction a block's transaction
-    /// lists, creating its outputs under the hash of its own body, which is
-    /// the key the node answers a utxo query with, and spending the input it
-    /// names. The block still counts only its top level transactions.
+    /// Every walk applies the sub transaction a block's transaction lists,
+    /// creating its outputs under the hash of its own body, which is the key
+    /// the node answers a utxo query with, and spending the input it names. The
+    /// block still counts only its top level transactions.
     #[test]
     fn a_sub_transaction_is_applied_under_the_hash_of_its_own_body() {
         for (name, slot, top_level, created_count, spent, parent, made) in SUB_TRANSACTION_CASES {
@@ -1501,11 +1468,9 @@ mod tests {
         }
     }
 
-    /// MUST NOT FIRE: a sub transaction is applied under the verdict on the
-    /// transaction that lists it, so when that transaction is phase 2 invalid
-    /// no walk creates the sub transaction's outputs or spends its input.
-    /// The same block with the verdict left valid is the case that must
-    /// fire.
+    /// A sub transaction is applied under the verdict on the transaction that
+    /// lists it, so when that transaction is phase 2 invalid no walk creates the
+    /// sub transaction's outputs or spends its input.
     #[test]
     fn a_sub_transaction_of_an_invalid_transaction_is_not_applied() {
         for (name, _, _, _, spent, parent, made) in SUB_TRANSACTION_CASES {
@@ -1549,14 +1514,12 @@ mod tests {
         }
     }
 
-    /// MUST FIRE: a phase 2 invalid transaction that lists a sub transaction
-    /// and declares collateral spends its collateral and creates its collateral
-    /// return at the index after its last output, and nothing of its sub
-    /// transaction. The block is a harvested one whose listing transaction is
-    /// rebuilt with a collateral input and a collateral return.
-    ///
-    /// MUST NOT FIRE: the same transaction left valid spends no collateral and
-    /// creates no collateral return.
+    /// A phase 2 invalid transaction that lists a sub transaction and declares
+    /// collateral spends its collateral and creates its collateral return at
+    /// the index after its last output, and nothing of its sub transaction. The
+    /// block is a harvested one whose listing transaction is rebuilt with a
+    /// collateral input and a collateral return. The same transaction left
+    /// valid spends no collateral and creates no collateral return.
     #[test]
     fn an_invalid_transaction_with_a_sub_transaction_returns_its_collateral() {
         use pallas::codec::utils::KeepRaw;
@@ -1685,10 +1648,9 @@ mod tests {
         }
     }
 
-    /// MUST NOT FIRE: a Dijkstra ranking block whose transactions carry no sub
-    /// transaction creates one output per transaction on its wire and nothing
-    /// under any other key, so the sub transaction rule invents nothing where
-    /// there is no batch.
+    /// A Dijkstra ranking block whose transactions carry no sub transaction
+    /// creates one output per transaction on its wire and nothing under any
+    /// other key.
     #[test]
     fn a_block_with_no_sub_transaction_creates_only_its_own_outputs() {
         let cbor = musashi_block("ranking-announce-with-txs.block");

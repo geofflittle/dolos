@@ -1065,7 +1065,7 @@ pub fn get_named_cost_model(plutus_version: u64, values: &[i64]) -> serde_json::
 mod naming_tests {
     use super::*;
 
-    /// MUST NOT FIRE: a model the table covers is named, one key per cost.
+    /// A model the table covers is named, one key per cost.
     #[test]
     fn a_model_the_table_covers_is_named_one_key_per_cost() {
         let values: Vec<i64> = (0..V3_NAMES.len() as i64).collect();
@@ -1081,8 +1081,8 @@ mod naming_tests {
         );
     }
 
-    /// MUST NOT FIRE: a model shorter than the table is named over the costs it
-    /// has, because the names are positional and the chain appends.
+    /// A model shorter than the table is named over the costs it has, because
+    /// the names are positional and the chain appends.
     #[test]
     fn a_model_shorter_than_the_table_is_named_over_the_costs_it_has() {
         let named = get_named_cost_model(1, &[7, 8, 9]);
@@ -1093,8 +1093,8 @@ mod naming_tests {
         assert_eq!(object.get(V1_NAMES[0]), Some(&serde_json::json!(7)));
     }
 
-    /// MUST FIRE: a model with one cost past the end of the table reports every
-    /// cost, rather than an object that kept one entry per name.
+    /// A model with one cost past the end of the table reports every cost,
+    /// rather than an object that kept one entry per name.
     #[test]
     fn a_model_longer_than_the_table_reports_every_cost() {
         let values: Vec<i64> = (0..V3_NAMES.len() as i64 + 1).collect();
@@ -1108,7 +1108,7 @@ mod naming_tests {
         assert_eq!(array[values.len() - 1], serde_json::json!(values.len() - 1));
     }
 
-    /// MUST FIRE: a version with no table reports every cost.
+    /// A version with no table reports every cost.
     ///
     /// PlutusV4 is that version in this build, and its model on the Musashi
     /// chain has 251 costs.

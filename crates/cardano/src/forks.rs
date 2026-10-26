@@ -423,7 +423,7 @@ mod tests {
         byron::from_file(&path).unwrap()
     }
 
-    /// MUST NOT FIRE: a 20 second Byron slot keeps the 21600 slot mainnet epoch.
+    /// A 20 second Byron slot keeps the 21600 slot mainnet epoch.
     #[test]
     fn a_mainnet_byron_epoch_is_ten_k_slots_of_twenty_seconds() {
         let pparams = from_byron_genesis(&mainnet_genesis().byron);
@@ -432,7 +432,7 @@ mod tests {
         assert_eq!(pparams.slot_length_or_default(), 20);
     }
 
-    /// MUST FIRE: a 250 millisecond Byron slot with k 40 gives a 400 slot epoch.
+    /// A 250 millisecond Byron slot with k 40 gives a 400 slot epoch.
     #[test]
     fn a_sub_second_byron_slot_gives_a_ten_k_slot_epoch() {
         let pparams = from_byron_genesis(&proto_devnet_byron());
@@ -520,14 +520,9 @@ mod tests {
         assert_eq!(at_twelve, expected);
     }
 
-    /// MUST FIRE: the cost model the Dijkstra genesis declares for PlutusV4
-    /// reaches the parameter set, under the key the cost model map names for
-    /// that language.
-    ///
-    /// The length, the first entry, the last entry and the one negative entry
-    /// are the chain's own numbers, so a set carrying some other vector under
-    /// that key fails here rather than passing on a value that is merely
-    /// present.
+    /// The cost model the Dijkstra genesis declares for PlutusV4 is in the
+    /// parameter set, under the key the cost model map names for that language,
+    /// with the chain's own length, first entry, last entry and negative entry.
     #[test]
     fn the_dijkstra_step_carries_the_genesis_plutus_v4_cost_model() {
         let genesis = genesis_with_dijkstra();
@@ -551,9 +546,7 @@ mod tests {
         );
     }
 
-    /// MUST NOT FIRE: a set that stops in Conway has no cost model under the
-    /// PlutusV4 key, so a model found after the version 12 step came from that
-    /// step and was not already there.
+    /// A set that stops in Conway has no cost model under the PlutusV4 key.
     #[test]
     fn the_step_before_dijkstra_carries_no_plutus_v4_cost_model() {
         let genesis = genesis_with_dijkstra();
@@ -564,9 +557,7 @@ mod tests {
         assert_eq!(at_eleven.cost_models_unknown_or_default().get(&3), None);
     }
 
-    /// MUST NOT FIRE: the Dijkstra step adds the one key and changes no other
-    /// cost model, so a step that rebuilt the map or dropped an entry fails
-    /// here.
+    /// The Dijkstra step adds the one key and changes no other cost model.
     #[test]
     fn the_dijkstra_step_adds_one_cost_model_key_and_changes_no_other() {
         let genesis = genesis_with_dijkstra();
@@ -603,8 +594,8 @@ mod tests {
         );
     }
 
-    /// MUST FIRE: a configuration with no Dijkstra genesis file stops at the
-    /// step to version 12.
+    /// A configuration with no Dijkstra genesis file stops at the step to
+    /// version 12.
     ///
     /// The PlutusV4 cost model is declared by that file and by nothing on the
     /// chain, so a follower without it would validate a PlutusV4 script against
@@ -656,8 +647,8 @@ mod tests {
         ]
     }
 
-    /// MUST FIRE: the step to version 12 seeds each Dijkstra parameter with
-    /// the value the genesis file declares.
+    /// The step to version 12 seeds each Dijkstra parameter with the value the
+    /// genesis file declares.
     #[test]
     fn the_dijkstra_step_seeds_every_dijkstra_parameter_from_the_genesis_file() {
         let genesis = genesis_with_dijkstra();
@@ -718,7 +709,7 @@ mod tests {
         assert_eq!(seeded, expected);
     }
 
-    /// MUST NOT FIRE: the step to version 11 holds no Dijkstra parameter.
+    /// The step to version 11 holds no Dijkstra parameter.
     #[test]
     fn the_step_before_dijkstra_holds_no_dijkstra_parameter() {
         let genesis = genesis_with_dijkstra();
@@ -762,8 +753,8 @@ mod tests {
         (genesis, serde_json::from_str(&answered).unwrap())
     }
 
-    /// MUST NOT FIRE: a genesis set whose alonzo file injects no PlutusV3 model
-    /// takes the conway genesis model.
+    /// A genesis set whose alonzo file injects no PlutusV3 model takes the
+    /// conway genesis model.
     #[test]
     fn a_genesis_set_with_no_injected_plutus_v3_takes_the_conway_genesis_model() {
         let genesis = mainnet_genesis();
@@ -777,8 +768,8 @@ mod tests {
         );
     }
 
-    /// MUST FIRE: the devnet genesis set steps to the cost models its node
-    /// answers with, which for PlutusV3 is the model the alonzo file injects.
+    /// The devnet genesis set steps to the cost models its node answers with,
+    /// which for PlutusV3 is the model the alonzo file injects.
     #[test]
     fn the_devnet_genesis_set_steps_to_the_cost_models_its_node_answers_with() {
         let (genesis, answered) = leios_devnet();
@@ -817,8 +808,8 @@ mod tests {
         );
     }
 
-    /// MUST FIRE: a PlutusV4 model the alonzo file injects replaces the one the
-    /// dijkstra genesis file declares.
+    /// A PlutusV4 model the alonzo file injects replaces the one the dijkstra
+    /// genesis file declares.
     #[test]
     fn an_injected_plutus_v4_model_replaces_the_dijkstra_genesis_model() {
         let (mut genesis, _) = leios_devnet();

@@ -264,22 +264,22 @@ fn assert_carries_s(name: &str, hang: usize) {
     );
 }
 
-/// MUST NOT FIRE: the fetch for S fails once, before its batch is drained.
+/// S is delivered when its fetch fails once, before its batch is drained.
 #[test]
 #[ignore]
 fn one_failure_carries_s() {
     assert_carries_s("one_failure_carries_s", 1);
 }
 
-/// MUST NOT FIRE: the fetch for S fails twice, the second time once its
-/// header batch is read.
+/// S is delivered when its fetch fails twice, the second time once its header
+/// batch is read.
 #[test]
 #[ignore]
 fn two_failures_carries_s() {
     assert_carries_s("two_failures_carries_s", 2);
 }
 
-/// MUST NOT FIRE: the fetch for S fails three times.
+/// S is delivered when its fetch fails three times.
 #[test]
 #[ignore]
 fn three_failures_carries_s() {
