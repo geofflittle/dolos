@@ -757,8 +757,7 @@ mod tests {
             .with_dijkstra(dir.join("genesis").join("dijkstra.json"))
             .unwrap();
 
-        let answered =
-            std::fs::read_to_string(dir.join("protocol-parameters.json")).unwrap();
+        let answered = std::fs::read_to_string(dir.join("protocol-parameters.json")).unwrap();
 
         (genesis, serde_json::from_str(&answered).unwrap())
     }
