@@ -175,13 +175,26 @@ pub fn into_babbage(previous: &PParamsSet, genesis: &alonzo::GenesisFile) -> PPa
     }
 }
 
-pub fn into_conway(previous: &PParamsSet, genesis: &conway::GenesisFile) -> PParamsSet {
+/// The cost models of the alonzo genesis file, its extra configuration included.
+fn alonzo_cost_models(
+    genesis: &alonzo::GenesisFile,
+) -> pallas::ledger::primitives::conway::CostModels {
+    genesis.cost_models.clone().into()
+}
+
+pub fn into_conway(
+    previous: &PParamsSet,
+    alonzo: &alonzo::GenesisFile,
+    genesis: &conway::GenesisFile,
+) -> PParamsSet {
+    let plutus_v3 = alonzo_cost_models(alonzo)
+        .plutus_v3
+        .unwrap_or_else(|| genesis.plutus_v3_cost_model.clone());
+
     previous
         .clone()
         .with(Val::ProtocolVersion((9, 0)))
-        .with(Val::CostModelsPlutusV3(
-            genesis.plutus_v3_cost_model.clone(),
-        ))
+        .with(Val::CostModelsPlutusV3(plutus_v3))
         .with(Val::PoolVotingThresholds(
             from_conway_pool_voting_thresholds(&genesis.pool_voting_thresholds),
         ))
@@ -213,11 +226,13 @@ pub fn into_dijkstra(previous: &PParamsSet, genesis: &Genesis) -> PParamsSet {
         panic!("reaching protocol version 12 needs a dijkstra genesis file and this configuration has no path to one")
     };
 
+    let plutus_v4 = alonzo_cost_models(&genesis.alonzo)
+        .unknown
+        .remove(&crate::pallas_extras::PLUTUS_V4_COST_MODEL_KEY)
+        .unwrap_or_else(|| dijkstra.plutus_v4_cost_model.clone());
+
     let mut unknown = previous.cost_models_unknown_or_default();
-    unknown.insert(
-        crate::pallas_extras::PLUTUS_V4_COST_MODEL_KEY,
-        dijkstra.plutus_v4_cost_model.clone(),
-    );
+    unknown.insert(crate::pallas_extras::PLUTUS_V4_COST_MODEL_KEY, plutus_v4);
 
     previous
         .clone()
@@ -336,7 +351,7 @@ pub fn migrate_pparams_version(
         // One intra-era hard-fork in babbage at protocol version 8
         (7, 8) => intra_era_hardfork(current, to),
         // Protocol version 9 transitions from Babbage to Conway
-        (8, 9) => into_conway(current, &genesis.conway),
+        (8, 9) => into_conway(current, &genesis.alonzo, &genesis.conway),
         // One intra-era hard-fork in conway at protocol version 10
         (9, 10) => intra_era_hardfork(current, to),
         // Van Rossem: intra-era hard-fork to protocol version 11
@@ -730,5 +745,103 @@ mod tests {
         let initial = from_byron_genesis(&genesis.byron);
 
         let _ = force_pparams_version(&initial, &genesis, 0, 13);
+    }
+
+    /// The leios devnet genesis set and the parameters its node answers with.
+    fn leios_devnet() -> (dolos_core::Genesis, serde_json::Value) {
+        let dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
+            .join("test_data")
+            .join("leios-devnet");
+
+        let genesis = load_genesis(&dir.join("genesis"))
+            .with_dijkstra(dir.join("genesis").join("dijkstra.json"))
+            .unwrap();
+
+        let answered =
+            std::fs::read_to_string(dir.join("protocol-parameters.json")).unwrap();
+
+        (genesis, serde_json::from_str(&answered).unwrap())
+    }
+
+    /// MUST NOT FIRE: a genesis set whose alonzo file injects no PlutusV3 model
+    /// takes the conway genesis model.
+    #[test]
+    fn a_genesis_set_with_no_injected_plutus_v3_takes_the_conway_genesis_model() {
+        let genesis = mainnet_genesis();
+        let initial = from_byron_genesis(&genesis.byron);
+
+        let at_eleven = force_pparams_version(&initial, &genesis, 0, 11).unwrap();
+
+        assert_eq!(
+            at_eleven.cost_models_plutus_v3(),
+            Some(genesis.conway.plutus_v3_cost_model.clone())
+        );
+    }
+
+    /// MUST FIRE: the devnet genesis set steps to the cost models its node
+    /// answers with, which for PlutusV3 is the model the alonzo file injects.
+    #[test]
+    fn the_devnet_genesis_set_steps_to_the_cost_models_its_node_answers_with() {
+        let (genesis, answered) = leios_devnet();
+        let initial = from_byron_genesis(&genesis.byron);
+
+        let at_twelve = force_pparams_version(&initial, &genesis, 0, 12).unwrap();
+
+        let answered = |language: &str| -> Vec<i64> {
+            answered["costModels"][language]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|value| value.as_i64().unwrap())
+                .collect()
+        };
+
+        assert_eq!(
+            at_twelve.cost_models_plutus_v1(),
+            Some(answered("PlutusV1"))
+        );
+        assert_eq!(
+            at_twelve.cost_models_plutus_v2(),
+            Some(answered("PlutusV2"))
+        );
+        assert_eq!(
+            at_twelve.cost_models_plutus_v3().map(|model| model.len()),
+            Some(answered("PlutusV3").len())
+        );
+        assert_eq!(
+            at_twelve.cost_models_plutus_v3(),
+            Some(answered("PlutusV3"))
+        );
+        assert_eq!(
+            at_twelve.cost_models_unknown_or_default().get(&3),
+            Some(&answered("PlutusV4"))
+        );
+    }
+
+    /// MUST FIRE: a PlutusV4 model the alonzo file injects replaces the one the
+    /// dijkstra genesis file declares.
+    #[test]
+    fn an_injected_plutus_v4_model_replaces_the_dijkstra_genesis_model() {
+        let (mut genesis, _) = leios_devnet();
+        let injected: Vec<i64> = (1..=251).collect();
+
+        let dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+        let file = dir
+            .join("test_data")
+            .join("leios-devnet")
+            .join("genesis")
+            .join("alonzo.json");
+        let mut alonzo: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+        alonzo["extraConfig"]["costModels"]["PlutusV4"] = serde_json::json!(injected);
+        genesis.alonzo = serde_json::from_value(alonzo).unwrap();
+
+        let initial = from_byron_genesis(&genesis.byron);
+        let at_twelve = force_pparams_version(&initial, &genesis, 0, 12).unwrap();
+
+        assert_eq!(
+            at_twelve.cost_models_unknown_or_default().get(&3),
+            Some(&injected)
+        );
     }
 }
