@@ -1310,14 +1310,14 @@
     "maxBlockHeaderSize": 1100,
     "maxCollateralInputs": 3,
     "maxEndorserBlockExecutionUnits": {
-        "memory": 310000000,
-        "steps": 100000000000
+        "memory": 720000000,
+        "steps": 200000000000
     },
-    "maxEndorserBlockReferencesSize": 100000,
-    "maxEndorserBlockTxsSize": 1000000,
+    "maxEndorserBlockReferencesSize": 308000,
+    "maxEndorserBlockTxsSize": 2000000,
     "maxPledgeLeverage": null,
     "maxRefScriptSizePerBlock": 1048576,
-    "maxRefScriptSizePerEndorserBlock": 4000000,
+    "maxRefScriptSizePerEndorserBlock": 1048576,
     "maxRefScriptSizePerTx": 204800,
     "maxTxExecutionUnits": {
         "memory": 16500000,
@@ -1329,6 +1329,12 @@
     "minPoolCost": 170000000,
     "minPoolMargin": 1.5e-2,
     "monetaryExpansion": 3.0e-3,
+    "perasBootstrapRound": null,
+    "perasCertBoost": 0,
+    "perasHealingFactor": 1,
+    "perasMinCandidateBlockAge": 0,
+    "perasQuorumThresholdSafetyMargin": 0,
+    "perasTargetCommitteeSize": 0,
     "poolPledgeInfluence": 0.3,
     "poolRetireMaxEpoch": 18,
     "poolVotingThresholds": {
@@ -1342,6 +1348,8 @@
         "major": 12,
         "minor": 0
     },
+    "refInputsCostPerDatumByte": 0,
+    "refInputsCostPerMultiAssetPolicy": 0,
     "refScriptCostMultiplier": 1.2,
     "refScriptCostStride": 25600,
     "stakeAddressDeposit": 2000000,

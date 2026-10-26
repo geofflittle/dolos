@@ -1,17 +1,17 @@
 protocol-parameters.json
 
-chain tag     prototype-2026w36
-source        the Musashi Leios testnet node, read with
-              cardano-cli query protocol-parameters
-harvested_at  2026-09-21T07:36:58Z
+chain tag     prototype-2026w42
+source        the Leios testnet node, read with
+              cardano-cli latest query protocol-parameters
+harvested_at  2026-10-24T22:16:31Z
 era           Dijkstra
-slot          1236869
-tip           block 55799, epoch 57,
-              hash e988726a5844c44e8c84e8cca49b5a515ad62e5e481d29a1aa5eecf721941fd9
-slot after    1236873, block 55800, still epoch 57 and still Dijkstra, so no
-              epoch boundary and no parameter update fell inside the read
-size          24642 bytes
-sha256        4a3bda4461fcb5c60a8c87a97352a784a726cd79c7a4a54dbc9cadd0dddf62be
+slot          598586
+tip           block 27297, epoch 27,
+              hash 02b7f82ea1c6eea67a7ddda6326acd06734efa1977058268a1e70069c1f4bea5
+slot after    598586, block 27297, the same tip, so no epoch boundary and no
+              parameter update fell inside the read
+size          24922 bytes
+sha256        e3bccde325132e7c31d5b78769e638e40ac9d42b16da6998103c3abc35e08800
 
 These are the values the node answers for the running chain, so a field read
 out of this file is the value a client asking the node would receive. Reharvest
