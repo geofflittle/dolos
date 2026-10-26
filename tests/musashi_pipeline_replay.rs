@@ -1294,12 +1294,7 @@ fn outputs_by_ref(block: &MultiEraBlock) -> HashMap<TxoRef, (String, u64)> {
         .into_iter()
         .flat_map(|(_, success, sub)| entry(&MultiEraTx::from_dijkstra_sub(sub, success)));
 
-    block
-        .txs()
-        .iter()
-        .flat_map(|tx| entry(tx))
-        .chain(subs)
-        .collect()
+    block.txs().iter().flat_map(entry).chain(subs).collect()
 }
 
 /// The input a `/txs/{hash}/utxos` answer lists for the output given, as

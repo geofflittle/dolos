@@ -598,11 +598,11 @@ mod tests {
 
         assert!(skipped.is_empty());
 
-        for (produced, _) in apply.produced_utxo.iter() {
+        for produced in apply.produced_utxo.keys() {
             assert!(undo.undone_utxo.contains_key(produced));
         }
 
-        for (consumed, _) in apply.consumed_utxo.iter() {
+        for consumed in apply.consumed_utxo.keys() {
             assert!(undo.recovered_stxi.contains_key(consumed));
         }
     }
@@ -632,8 +632,7 @@ mod tests {
         context.remove(&input);
 
         let error = super::compute_undo_delta(&block, &context, false)
-            .err()
-            .expect("the undo recovered a body it does not hold");
+            .expect_err("the undo recovered a body it does not hold");
 
         let text = error.to_string();
 
