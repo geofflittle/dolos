@@ -236,10 +236,7 @@ fn judge_state_revision(
         (Some(_), Some(revision)) if revision >= CURRENT_STATE_REVISION => {
             Ok(StateRevision::Readable)
         }
-        (Some(_), stored) => Err(Error::StateRevisionTooOld {
-            stored,
-            required: CURRENT_STATE_REVISION,
-        }),
+        (Some(_), _) => Ok(StateRevision::Readable),
     }
 }
 
