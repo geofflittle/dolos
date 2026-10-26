@@ -672,6 +672,7 @@ fn drop_cache(_file: &File, _offset: u64, _len: u64) {}
 pub fn evict_file(path: &Path) -> io::Result<bool> {
     let file = File::open(path)?;
     #[cfg(target_os = "linux")]
+    #[allow(clippy::needless_return)]
     {
         use std::os::unix::io::AsRawFd;
         file.sync_all()?;
