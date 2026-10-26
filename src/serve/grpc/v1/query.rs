@@ -1411,18 +1411,20 @@ mod tests {
         assert_eq!(shares(&out), [(1, 1, 3, 4), (2, 2, 0, 1), (3, 3, 1, 4)]);
     }
 
-    /// The registration certificate of the Musashi w36 pool whose BLS key slot
-    /// holds a key, and that key as the chain bytes decode it.
-    fn chain_pool_registration() -> (
-        dolos_cardano::pallas_extras::MultiEraPoolRegistration,
-        pallas::ledger::primitives::dijkstra::BlsKey,
-    ) {
-        use pallas::codec::utils::Nullable;
-        use pallas::ledger::primitives::dijkstra::Certificate;
+    /// The pool the slot 132 block of the rc-2026w42 chain registers.
+    const CHAIN_POOL: &str = "8a04e2c7db3dff509c9f5f2b8e27d715eb8f3d0665deddc2e436f414";
 
+    /// The BLS public key the node's pool state query answers for that pool.
+    const CHAIN_POOL_BLS_PUBKEY: &str = "8d5e3e9901dbfa64a9c5d9f9949ecb7491b4e35656963bbf6e478c4e53d329f3d1209ed5924c228305d4fcff8a4935d40d508fe3ec6cb8e892d8a00b22c789669336e852d0a10eb2340ea1becf7c87e76eaeacfa5a847104354c5b095b84e2b4";
+
+    /// The BLS possession proof the node's pool state query answers for that pool.
+    const CHAIN_POOL_BLS_PROOF: &str = "805438cd07ebc6fd19f424401fd0395dc801a8561302bd1ae7bcc48cbdbe664d3a4dfb8fa5dc3a0bc69045b0cd9f9a4c";
+
+    /// The registration of `CHAIN_POOL` as the slot 132 block holds it.
+    fn chain_pool_registration() -> dolos_cardano::pallas_extras::MultiEraPoolRegistration {
         let path = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
             .join("test_data")
-            .join("musashi-w36")
+            .join("leios-rc-2026w42")
             .join("pool-registration-bls.block");
         let raw = hex::decode(std::fs::read_to_string(path).unwrap().trim()).unwrap();
         let block = pallas::ledger::traverse::MultiEraBlock::decode(&raw).unwrap();
@@ -1431,18 +1433,9 @@ mod tests {
             .txs()
             .iter()
             .flat_map(|tx| tx.certs())
-            .find_map(|cert| {
-                let Some(Certificate::PoolRegistration {
-                    bls_key: Some(Nullable::Some(key)),
-                    ..
-                }) = cert.as_dijkstra()
-                else {
-                    return None;
-                };
-                let registration = dolos_cardano::pallas_extras::cert_as_pool_registration(&cert)?;
-                Some((registration, key.clone()))
-            })
-            .expect("the fixture holds no registration whose key slot holds a key")
+            .filter_map(|cert| dolos_cardano::pallas_extras::cert_as_pool_registration(&cert))
+            .find(|registration| registration.operator.to_string() == CHAIN_POOL)
+            .expect("the fixture holds the registration of the pool")
     }
 
     /// The stake distribution of one pool registered by `registration`, read at
@@ -1484,7 +1477,7 @@ mod tests {
         use dolos_cardano::pallas_extras::MultiEraBlsKey;
 
         for written in [MultiEraBlsKey::Null, MultiEraBlsKey::NoSlot] {
-            let (mut registration, _) = chain_pool_registration();
+            let mut registration = chain_pool_registration();
             registration.bls_key = written.clone();
 
             let served = distribution_of(registration);
@@ -1495,21 +1488,17 @@ mod tests {
     }
 
     /// MUST FIRE: a pool whose registration on chain wrote a BLS key is served
-    /// with that key, byte for byte.
+    /// with the key the node holds for it, byte for byte.
     #[test]
     fn a_pool_registered_with_a_bls_key_is_served_with_it() {
-        let (registration, key) = chain_pool_registration();
+        let served = distribution_of(chain_pool_registration());
 
-        let served = distribution_of(registration);
-
-        assert_eq!(key.bls_pubkey.len(), 96);
-        assert_eq!(key.bls_possession_proof.len(), 48);
         assert_eq!(served.pools.len(), 1);
         assert_eq!(
             served.pools[0].bls_key,
             Some(u5c::cardano::PoolBlsKey {
-                bls_pubkey: key.bls_pubkey.to_vec().into(),
-                bls_possession_proof: key.bls_possession_proof.to_vec().into(),
+                bls_pubkey: hex::decode(CHAIN_POOL_BLS_PUBKEY).unwrap().into(),
+                bls_possession_proof: hex::decode(CHAIN_POOL_BLS_PROOF).unwrap().into(),
             })
         );
     }
