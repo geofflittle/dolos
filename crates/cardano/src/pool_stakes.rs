@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 
 use dolos_core::{ChainError, Domain, StateStore};
-use pallas::{crypto::hash::Hash, ledger::primitives::Epoch};
+use pallas::{
+    crypto::hash::Hash,
+    ledger::primitives::{dijkstra::BlsKey, Epoch},
+};
 
 use crate::{AccountState, EraProtocol, FixedNamespace as _, PoolHash, PoolState};
 
@@ -10,6 +13,7 @@ use crate::{AccountState, EraProtocol, FixedNamespace as _, PoolHash, PoolState}
 pub struct PoolStake {
     pub stake: u64,
     pub vrf_keyhash: Hash<32>,
+    pub bls_key: Option<BlsKey>,
 }
 
 /// The stake of every pool active in the snapshot taken at the end of an epoch.
@@ -29,6 +33,7 @@ impl PoolStakes {
                 let stake = PoolStake {
                     stake: 0,
                     vrf_keyhash: snapshot.params.vrf_keyhash,
+                    bls_key: snapshot.params.bls_key.clone(),
                 };
                 (!snapshot.is_retired).then_some((pool.operator, stake))
             })
@@ -108,6 +113,7 @@ mod tests {
             pool_owners: vec![],
             relays: vec![],
             pool_metadata: None,
+            bls_key: None,
         };
         let snapshot = PoolSnapshot {
             is_retired,

@@ -1643,6 +1643,7 @@ mod tests {
             pool_owners: vec![],
             relays: vec![],
             pool_metadata: None,
+            bls_key: None,
         };
         let snapshot = PoolSnapshot {
             is_retired: false,

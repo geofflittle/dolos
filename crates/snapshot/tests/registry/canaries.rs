@@ -34,6 +34,7 @@ use dolos_cardano::{
         crypto::hash::Hash,
         ledger::primitives::{
             conway::{Anchor, DRep, GovActionId, RationalNumber, Vote},
+            dijkstra::BlsKey,
             Epoch, ExUnitPrices, ExUnits, Nonce, NonceVariant, PoolMetadata, Relay,
             StakeCredential,
         },
@@ -480,6 +481,10 @@ fn pool_params(seed: u8) -> PoolParams {
         pool_metadata: Some(PoolMetadata {
             url: "https://canary.invalid/pool.json".to_string(),
             hash: Bytes::from(bytes_of::<32>(seed.wrapping_add(4)).to_vec()),
+        }),
+        bls_key: Some(BlsKey {
+            bls_pubkey: Bytes::from(bytes_of::<96>(seed.wrapping_add(5)).to_vec()),
+            bls_possession_proof: Bytes::from(bytes_of::<48>(seed.wrapping_add(6)).to_vec()),
         }),
     }
 }

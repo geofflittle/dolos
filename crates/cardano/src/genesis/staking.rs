@@ -58,6 +58,7 @@ fn parse_pool(dto: &ConfigPool) -> PoolState {
             pool_owners: vec![],
             relays: vec![],
             pool_metadata: None,
+            bls_key: None,
         },
     };
 
