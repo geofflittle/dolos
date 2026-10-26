@@ -205,7 +205,7 @@ mod tests {
         MultiEraHeader::decode(7, None, cbor).unwrap()
     }
 
-    /// MUST NOT FIRE: a body decodes under the announcement of its own hash.
+    /// A body decodes under the announcement of its own hash.
     #[test]
     fn a_body_decodes_under_its_own_hash() {
         let cbor = body();
@@ -217,8 +217,8 @@ mod tests {
         assert_eq!(decoded.len(), 425);
     }
 
-    /// MUST FIRE: a body under an announcement of another hash is refused, and
-    /// the refusal names both hashes.
+    /// A body under an announcement of another hash is refused, and the
+    /// refusal names both hashes.
     #[test]
     fn a_body_under_another_hash_is_refused() {
         let cbor = body();
@@ -236,8 +236,8 @@ mod tests {
         }
     }
 
-    /// MUST NOT FIRE: a certificate given the parent it names reads that
-    /// parent's announcement.
+    /// A certificate given the parent it names reads that parent's
+    /// announcement.
     #[test]
     fn a_certificate_given_its_parent_reads_the_announcement() {
         let (parent, child) = (announcing(), certifying());
@@ -250,8 +250,8 @@ mod tests {
         assert!(read.is_some());
     }
 
-    /// MUST NOT FIRE: a header that certifies nothing reads nothing, whatever
-    /// it is given as its parent.
+    /// A header that certifies nothing reads nothing, whatever it is given as
+    /// its parent.
     #[test]
     fn a_header_that_certifies_nothing_is_not_checked_against_its_parent() {
         let (given, child) = (announcing(), certifies_nothing());
@@ -263,8 +263,8 @@ mod tests {
         assert_eq!(read, None);
     }
 
-    /// MUST FIRE: a certificate given a header other than the parent it names
-    /// is refused, and the refusal names both hashes.
+    /// A certificate given a header other than the parent it names is refused,
+    /// and the refusal names both hashes.
     #[test]
     fn a_certificate_given_another_parent_is_refused() {
         let (named, given, child) = (announcing(), unrelated(), certifying());
@@ -288,8 +288,7 @@ mod tests {
         }
     }
 
-    /// MUST FIRE: a certificate with no parent given is refused as not naming
-    /// genesis.
+    /// A certificate with no parent given is refused as not naming genesis.
     #[test]
     fn a_certificate_with_no_parent_given_is_refused() {
         let (named, child) = (announcing(), certifying());
@@ -310,8 +309,8 @@ mod tests {
         }
     }
 
-    /// MUST NOT FIRE: bytes after the body map are not part of the body, and the
-    /// map is accepted against the hash of its own bytes.
+    /// Bytes after the body map are not part of the body, and the map is
+    /// accepted against the hash of its own bytes.
     #[test]
     fn a_body_with_trailing_bytes_is_accepted_against_the_hash_of_its_map() {
         let mut cbor = body();
@@ -323,12 +322,10 @@ mod tests {
         assert_eq!(decoded.len(), 425);
     }
 
-    /// MUST FIRE: an empty body, which is how leios-fetch answers for a block
-    /// the peer lacks, is refused under the announcement of a body that names
-    /// transactions.
-    ///
-    /// MUST NOT FIRE: an empty body under the announcement of its own hash is
-    /// an endorser block that names nothing, and is accepted.
+    /// An empty body, which is how leios-fetch answers for a block the peer
+    /// lacks, is refused under the announcement of a body that names
+    /// transactions. An empty body under the announcement of its own hash is an
+    /// endorser block that names nothing, and is accepted.
     #[test]
     fn an_empty_reply_is_refused_against_the_announcement_that_named_it() {
         let announcement = own_announcement();
@@ -347,7 +344,7 @@ mod tests {
         assert!(empty.is_empty());
     }
 
-    /// MUST NOT FIRE: a body is accepted whatever size its announcement names.
+    /// A body is accepted whatever size its announcement names.
     #[test]
     fn a_body_is_accepted_whatever_size_the_announcement_names() {
         let cbor = body();
@@ -366,7 +363,7 @@ mod tests {
         }
     }
 
-    /// MUST FIRE: a body that is not a map is refused as an invalid body.
+    /// A body that is not a map is refused as an invalid body.
     #[test]
     fn a_body_that_is_not_a_map_is_refused() {
         let refused = announced_as_itself(&[0x83, 0x01, 0x02]);
@@ -377,8 +374,8 @@ mod tests {
         );
     }
 
-    /// MUST FIRE: a body of the announced length that is another endorser block
-    /// is refused, and the message names both hashes.
+    /// A body of the announced length that is another endorser block is
+    /// refused, and the message names both hashes.
     #[test]
     fn a_body_that_is_a_different_endorser_block_is_refused() {
         let cbor = body();
@@ -402,8 +399,8 @@ mod tests {
         );
     }
 
-    /// MUST NOT FIRE: the same entries in another encoding are accepted under
-    /// the hash of their own bytes.
+    /// The same entries in another encoding are accepted under the hash of
+    /// their own bytes.
     #[test]
     fn a_body_is_accepted_when_the_announcement_is_the_hash_of_its_bytes() {
         let entries = entries();
@@ -417,8 +414,8 @@ mod tests {
         }
     }
 
-    /// MUST FIRE: the same entries in another encoding are refused under the
-    /// hash of the announced bytes.
+    /// The same entries in another encoding are refused under the hash of the
+    /// announced bytes.
     #[test]
     fn a_body_whose_bytes_differ_from_the_announced_ones_is_refused_on_hash() {
         let announcement = own_announcement();
@@ -434,8 +431,7 @@ mod tests {
         }
     }
 
-    /// MUST NOT FIRE: a body that names one transaction twice is accepted with
-    /// both entries.
+    /// A body that names one transaction twice is accepted with both entries.
     #[test]
     fn a_body_naming_one_transaction_twice_is_accepted() {
         let entries = entries();
@@ -448,9 +444,9 @@ mod tests {
         assert_eq!(decoded[..], [first, second, first]);
     }
 
-    /// MUST FIRE: a certifying header whose parent announced nothing is
-    /// refused. No fixture certifies after such a parent, so the first header
-    /// of epoch 56 is rewritten to certify after the last block of epoch 55.
+    /// A certifying header whose parent announced nothing is refused. No
+    /// fixture certifies after such a parent, so the first header of epoch 56
+    /// is rewritten to certify after the last block of epoch 55.
     #[test]
     fn a_certificate_after_a_parent_that_announced_nothing_is_refused() {
         let parent = header_cbor(&unrelated());
@@ -474,8 +470,8 @@ mod tests {
         }
     }
 
-    /// MUST NOT FIRE: a header of an era with no certificates certifies
-    /// nothing, whatever it is given as its parent.
+    /// A header of an era with no certificates certifies nothing, whatever it
+    /// is given as its parent.
     #[test]
     fn a_header_of_an_era_before_leios_certifies_nothing() {
         let given = announcing();

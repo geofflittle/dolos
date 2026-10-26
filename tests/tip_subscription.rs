@@ -98,11 +98,9 @@ fn delivered_before_sentinel(
     })
 }
 
-/// MUST NOT FIRE: the point the caller names is the one it has already
-/// applied, so the subscription does not hand it back.
-///
-/// MUST FIRE: every point after it arrives, oldest first, which is what makes
-/// this a bound change rather than a dropped block.
+/// The point the caller names is the one it has already applied, so the
+/// subscription does not deliver it. Every point after it arrives, oldest
+/// first.
 #[test]
 fn a_subscription_skips_the_point_it_intersects_at() {
     let (_node, domain) = domain_with_wal(1..=5);
@@ -114,10 +112,7 @@ fn a_subscription_skips_the_point_it_intersects_at() {
     domain.shutdown().unwrap();
 }
 
-/// MUST NOT FIRE: with no point named the caller has applied nothing, so
-/// nothing is skipped. This is the case a fix that always drops the first
-/// entry would fail, and a bound that drops one block too many is as wrong as
-/// one that delivers one too few.
+/// With no point named the caller has applied nothing, so nothing is skipped.
 #[test]
 fn a_subscription_from_no_point_receives_the_whole_wal() {
     let (_node, domain) = domain_with_wal(1..=5);
@@ -129,10 +124,8 @@ fn a_subscription_from_no_point_receives_the_whole_wal() {
     domain.shutdown().unwrap();
 }
 
-/// MUST FIRE: a subscriber that applies every delivery applies each point
-/// once. The duplicate this pins is the one a client sees as an apply it has
-/// already recorded, and it is generated inside the replay rather than on the
-/// wire.
+/// A subscriber that applies every delivery applies each point after the
+/// intersect once.
 #[test]
 fn every_point_after_the_intersect_is_applied_exactly_once() {
     let (_node, domain) = domain_with_wal(1..=8);
@@ -150,9 +143,9 @@ fn every_point_after_the_intersect_is_applied_exactly_once() {
     domain.shutdown().unwrap();
 }
 
-/// MUST FIRE: the wal tip is the point the crawler subscribes from once it has
-/// drained the wal, and there is nothing after it, so the subscription is
-/// silent until the chain moves.
+/// The wal tip is the point the crawler subscribes from once it has read the
+/// whole wal, and there is nothing after it, so the subscription delivers
+/// nothing until the chain moves.
 #[test]
 fn a_subscription_at_the_wal_tip_replays_nothing() {
     let (_node, domain) = domain_with_wal(1..=5);

@@ -1470,8 +1470,8 @@ mod tests {
         pool_distribution(&PoolStakes::new([&pool], EPOCH), &[])
     }
 
-    /// MUST NOT FIRE: a pool whose registration wrote no key, or had no slot to
-    /// write one in, is served with no key.
+    /// A pool whose registration wrote no key, or had no slot to write one in,
+    /// is served with no key.
     #[test]
     fn a_pool_registered_without_a_bls_key_is_served_without_one() {
         use dolos_cardano::pallas_extras::MultiEraBlsKey;
@@ -1487,8 +1487,8 @@ mod tests {
         }
     }
 
-    /// MUST FIRE: a pool whose registration on chain wrote a BLS key is served
-    /// with the key the node holds for it, byte for byte.
+    /// A pool whose registration on chain wrote a BLS key is served with the
+    /// key the node holds for it, byte for byte.
     #[test]
     fn a_pool_registered_with_a_bls_key_is_served_with_it() {
         let served = distribution_of(chain_pool_registration());
@@ -1631,11 +1631,9 @@ mod tests {
         dolos_core::dijkstra::from_file(path).unwrap()
     }
 
-    /// MUST FIRE: the PlutusV4 cost model a Dijkstra genesis declares is
-    /// reported, in the cost model message and in the map.
-    ///
-    /// The length and the one negative cost are the chain's own numbers, so a
-    /// reply carrying some other vector fails here.
+    /// The PlutusV4 cost model a Dijkstra genesis declares is reported, in the
+    /// cost model message and in the map, with the chain's own length and
+    /// negative cost.
     #[test]
     fn a_dijkstra_genesis_reports_its_plutus_v4_cost_model() {
         let mut genesis = dolos_cardano::include::preview::load();
@@ -1652,8 +1650,8 @@ mod tests {
         assert_eq!(models.plutus_v3, map.plutus_v3);
     }
 
-    /// MUST NOT FIRE: a genesis with no Dijkstra file reports no PlutusV4 cost
-    /// model, and still reports the models it does have.
+    /// A genesis with no Dijkstra file reports no PlutusV4 cost model, and
+    /// still reports the models it does have.
     #[test]
     fn a_genesis_without_the_dijkstra_file_reports_no_plutus_v4_cost_model() {
         let genesis = dolos_cardano::include::preview::load();
@@ -1752,7 +1750,7 @@ mod tests {
         ]
     }
 
-    /// MUST NOT FIRE: a genesis with no Dijkstra file serves no Dijkstra field.
+    /// A genesis with no Dijkstra file serves no Dijkstra field.
     #[test]
     fn a_genesis_without_the_dijkstra_file_serves_no_dijkstra_field() {
         let genesis = dolos_cardano::include::preview::load();
@@ -1766,8 +1764,8 @@ mod tests {
         );
     }
 
-    /// MUST FIRE: each Dijkstra genesis field is served with its own value,
-    /// and a field declared null is served unset.
+    /// Each Dijkstra genesis field is served with its own value, and a field
+    /// declared null is served unset.
     #[test]
     fn a_dijkstra_genesis_serves_the_values_it_declares() {
         let mut genesis = dolos_cardano::include::preview::load();
@@ -1876,7 +1874,7 @@ mod tests {
         ))
     }
 
-    /// MUST NOT FIRE: a hash no transaction of the store has is not found.
+    /// A hash no transaction of the store has is not found.
     #[tokio::test]
     async fn read_tx_of_an_unknown_hash_is_not_found() {
         let fixture = crate::tests::musashi::sub_transaction_block();
@@ -1887,8 +1885,8 @@ mod tests {
         assert_eq!(status.code(), tonic::Code::NotFound);
     }
 
-    /// MUST FIRE: a sub transaction's hash and its parent's hash are both
-    /// answered with the parent, which lists the sub transaction.
+    /// A sub transaction's hash and its parent's hash are both answered with
+    /// the parent, which lists the sub transaction.
     #[tokio::test]
     async fn read_tx_answers_a_sub_transaction_hash_with_its_parent() {
         let fixture = crate::tests::musashi::sub_transaction_block();
@@ -1913,8 +1911,7 @@ mod tests {
         }
     }
 
-    /// MUST NOT FIRE: a hash only one top level transaction includes names
-    /// that transaction.
+    /// A hash only one top level transaction includes names that transaction.
     #[test]
     fn a_hash_one_transaction_includes_names_that_transaction() {
         let applied = [(0, [1; 32]), (0, [2; 32]), (1, [3; 32])];
@@ -1924,8 +1921,8 @@ mod tests {
         assert_eq!(found, [Some(0), Some(0), Some(1), None]);
     }
 
-    /// MUST FIRE: a sub transaction two top level transactions include names
-    /// the last of them.
+    /// A sub transaction two top level transactions include names the last of
+    /// them.
     #[test]
     fn a_hash_two_transactions_include_names_the_last() {
         let applied = [(0, [1; 32]), (0, [2; 32]), (1, [1; 32]), (1, [3; 32])];

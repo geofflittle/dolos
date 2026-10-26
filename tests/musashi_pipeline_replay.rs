@@ -386,14 +386,11 @@ fn expected_after(before: &HashSet<TxoRef>, block: &MultiEraBlock) -> HashSet<Tx
     expected
 }
 
-/// MUST FIRE: after the replay the store holds every output the block makes,
-/// byte for byte, and holds no output the block spends.
-///
-/// MUST NOT FIRE: the store holds nothing else. The set is compared whole
-/// against what the store held before the block with the block's own outputs
-/// added and its own inputs removed, so an invented output fails here as
-/// loudly as a missing one, and a block carrying no transaction must leave the
-/// set as it was.
+/// After the replay the store holds every output the block makes, byte for
+/// byte, holds no output the block spends, and holds nothing else. The set is
+/// compared whole against what the store held before the block with the
+/// block's own outputs added and its own inputs removed, so a block with no
+/// transaction leaves the set as it was.
 #[test]
 fn every_harvested_block_makes_its_outputs_and_spends_its_inputs() {
     let fixtures = block_fixtures();
@@ -456,12 +453,10 @@ fn every_harvested_block_makes_its_outputs_and_spends_its_inputs() {
     }
 }
 
-/// MUST FIRE: every transaction and sub transaction in the block resolves by
-/// its own hash and answers the block's slot, and the number of
-/// top level transactions is the number the harvest counted.
-///
-/// MUST NOT FIRE: the blocks the harvest counted no transaction in serve none,
-/// so the count is not satisfied by a store that answers for everything.
+/// Every transaction and sub transaction in the block resolves by its own hash
+/// and answers the block's slot, and the number of top level transactions is
+/// the number the harvest counted. The blocks the harvest counted no
+/// transaction in serve none.
 #[test]
 fn every_transaction_of_every_harvested_block_is_served_at_its_own_slot() {
     let fixtures = block_fixtures();
@@ -524,11 +519,9 @@ fn every_transaction_of_every_harvested_block_is_served_at_its_own_slot() {
     );
 }
 
-/// MUST NOT FIRE: the lenient apply rule changes nothing for these blocks.
-///
-/// The rule only acts on an input that is not there or an output made twice,
-/// and the harvest found neither on this chain, so a difference between the
-/// two runs means the rule is acting where it has nothing to act on.
+/// The lenient apply rule changes nothing for these blocks. The rule only acts
+/// on an input that is not there or an output made twice, and the harvest found
+/// neither on this chain.
 #[test]
 fn the_lenient_rule_changes_nothing_for_the_harvested_blocks() {
     let fixtures = block_fixtures();
@@ -608,12 +601,10 @@ fn probes(block: &MultiEraBlock) -> Vec<Probe> {
 /// A hash no fixture holds.
 const ABSENT: [u8; 32] = [0xff; 32];
 
-/// MUST FIRE: each sub transaction is found by its own hash in every core
-/// lookup by hash, which answers its own bytes and the index of the top level
-/// transaction that lists it.
-///
-/// MUST NOT FIRE: a top level transaction is found as itself at its own index,
-/// and a hash no block holds is found by no lookup.
+/// Each sub transaction is found by its own hash in every core lookup by hash,
+/// which answers its own bytes and the index of the top level transaction that
+/// lists it. A top level transaction is found as itself at its own index, and a
+/// hash no block holds is found by no lookup.
 #[test]
 fn every_lookup_by_hash_finds_each_sub_transaction() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -715,11 +706,9 @@ fn every_lookup_by_hash_finds_each_sub_transaction() {
     );
 }
 
-/// MUST FIRE: a sub transaction read back from its `TxCbor` is invalid when
-/// the transaction listing it was given as invalid.
-///
-/// MUST NOT FIRE: it is valid when that transaction was given as valid, and
-/// in both cases it keeps its own hash.
+/// A sub transaction read back from its `TxCbor` is invalid when the
+/// transaction listing it was given as invalid, and valid when that transaction
+/// was given as valid. In both cases it keeps its own hash.
 #[test]
 fn a_sub_transaction_answer_keeps_the_verdict_it_was_given() {
     let mut answers = vec![];
@@ -764,10 +753,8 @@ fn with_listing_verdict(cbor: &[u8], success: bool) -> Vec<u8> {
     minicbor::to_vec((era, block)).unwrap()
 }
 
-/// MUST FIRE: `tx_cbor` answers a sub transaction as invalid when the stored
-/// block gives the transaction that lists it as invalid.
-///
-/// MUST NOT FIRE: it answers the sub transaction as valid when the stored block
+/// `tx_cbor` answers a sub transaction as invalid when the stored block gives
+/// the transaction that lists it as invalid, and as valid when the stored block
 /// gives that transaction as valid.
 #[test]
 fn a_sub_transaction_is_looked_up_with_the_verdict_on_its_parent() {
@@ -825,11 +812,9 @@ async fn get_json(router: &axum::Router, path: &str) -> (u16, serde_json::Value)
     )
 }
 
-/// MUST FIRE: minibf answers each sub transaction's own hash, index, bytes and
-/// outputs under its own hash.
-///
-/// MUST NOT FIRE: a top level transaction is answered as itself, and a hash no
-/// block holds is answered with not found.
+/// Minibf answers each sub transaction's own hash, index, bytes and outputs
+/// under its own hash. A top level transaction is answered as itself, and a
+/// hash no block holds is answered with not found.
 #[cfg(feature = "minibf")]
 #[test]
 fn minibf_serves_each_sub_transaction_by_its_own_hash() {
@@ -934,10 +919,9 @@ fn paid_to(block: &MultiEraBlock, address: &str) -> Vec<(Hash<32>, usize, u64)> 
     top_level.into_iter().chain(subs).collect()
 }
 
-/// MUST FIRE: the address a sub transaction pays is served that payment in its
-/// total and that sub transaction in its history, at its parent's index.
-///
-/// MUST NOT FIRE: the history lists no hash the block does not apply.
+/// The address a sub transaction pays is served that payment in its total and
+/// that sub transaction in its history, at its parent's index. The history
+/// lists no hash the block does not apply.
 #[cfg(feature = "minibf")]
 #[test]
 fn minibf_address_routes_count_each_sub_transaction() {
@@ -1038,11 +1022,10 @@ fn minibf_address_routes_count_each_sub_transaction() {
     );
 }
 
-/// MUST FIRE: a block's output total counts what its sub transactions pay, and
-/// its address list names each sub transaction under the address it pays.
-///
-/// MUST NOT FIRE: a block whose transactions list no sub transaction is served
-/// the output total of its top level transactions.
+/// A block's output total counts what its sub transactions pay, and its
+/// address list names each sub transaction under the address it pays. A block
+/// whose transactions list no sub transaction is served the output total of
+/// its top level transactions.
 #[cfg(feature = "minibf")]
 #[test]
 fn minibf_block_routes_count_each_sub_transaction() {
@@ -1139,10 +1122,8 @@ fn minibf_block_routes_count_each_sub_transaction() {
     );
 }
 
-/// MUST FIRE: each input a sub transaction spends is answered with that sub
-/// transaction as its spender.
-///
-/// MUST NOT FIRE: an input the top level transaction that lists it spends is
+/// Each input a sub transaction spends is answered with that sub transaction
+/// as its spender. An input the top level transaction that lists it spends is
 /// answered with that top level transaction.
 #[test]
 fn the_spender_of_a_sub_transaction_input_is_that_sub_transaction() {
@@ -1317,12 +1298,11 @@ fn listed_input(utxos: &serde_json::Value, txo: &TxoRef) -> Option<(bool, u64)> 
     })
 }
 
-/// MUST FIRE: an input made by a sub transaction of an earlier block, spent by
-/// a sub transaction and referenced by its parent, is answered with that
-/// output's lovelace by `/txs/{hash}/utxos` for both.
-///
-/// MUST NOT FIRE: the parent's input made by a top level transaction of the
-/// earlier block is answered with that output's lovelace too.
+/// An input made by a sub transaction of an earlier block, spent by a sub
+/// transaction and referenced by its parent, is answered with that output's
+/// lovelace by `/txs/{hash}/utxos` for both. The parent's input made by a top
+/// level transaction of the earlier block is answered with that output's
+/// lovelace too.
 #[cfg(feature = "minibf")]
 #[test]
 fn minibf_resolves_an_input_a_sub_transaction_made() {
@@ -1440,12 +1420,10 @@ fn without_outputs_of(cbor: &[u8], hash: Hash<32>) -> Vec<u8> {
     minicbor::to_vec((era, block)).unwrap()
 }
 
-/// MUST FIRE: the block route lists a sub transaction under the address of the
-/// output it spends that a sub transaction of an earlier block made. The
-/// spending sub transaction's outputs are removed, so that address can come
-/// only from its resolved input.
-///
-/// MUST NOT FIRE: it lists that sub transaction under no other address.
+/// The block route lists a sub transaction under the address of the output it
+/// spends that a sub transaction of an earlier block made, and under no other
+/// address. The spending sub transaction's outputs are removed, so that
+/// address can come only from its resolved input.
 #[cfg(feature = "minibf")]
 #[test]
 fn minibf_block_route_lists_a_sub_transaction_under_the_address_it_spends() {
@@ -1523,11 +1501,10 @@ fn minibf_block_route_lists_a_sub_transaction_under_the_address_it_spends() {
     );
 }
 
-/// MUST FIRE: a match on every output of a sub transaction answers the outputs
-/// of it still unspent after the block that spends one of them.
-///
-/// MUST NOT FIRE: a match on every output of the top level transaction that
-/// lists it answers the outputs of that transaction still unspent.
+/// A match on every output of a sub transaction answers the outputs of it
+/// still unspent after the block that spends one of them. A match on every
+/// output of the top level transaction that lists it answers the outputs of
+/// that transaction still unspent.
 #[cfg(feature = "minikupo")]
 #[test]
 fn minikupo_matches_the_outputs_of_a_sub_transaction() {

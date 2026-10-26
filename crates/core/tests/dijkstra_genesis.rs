@@ -29,12 +29,8 @@ fn preview_genesis_paths(root: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
     )
 }
 
-/// MUST FIRE: every parameter the node's file declares reaches the value the
-/// file states, one assertion per parameter.
-///
-/// A count of parameters would pass on a file whose values were all read into
-/// the wrong fields, and a struct comparison would say only that something
-/// differs, so each one is named.
+/// Every parameter the node's file declares is read as the value the file
+/// states, one assertion per parameter.
 #[test]
 fn every_parameter_of_the_node_genesis_is_read() {
     let file = dijkstra::from_file(proto_devnet_dijkstra_path()).unwrap();
@@ -75,8 +71,8 @@ fn every_parameter_of_the_node_genesis_is_read() {
     assert_eq!(file.ref_script_cost_stride, 25_600);
 }
 
-/// MUST FIRE: each Peras and reference input parameter reaches its own field,
-/// which the node's file cannot show because it sets most of them to zero.
+/// Each Peras and reference input parameter is read into its own field, which
+/// the node's file cannot show because it sets most of them to zero.
 #[test]
 fn each_peras_and_reference_input_parameter_reaches_its_own_field() {
     let original = std::fs::read_to_string(proto_devnet_dijkstra_path()).unwrap();
@@ -118,12 +114,10 @@ fn each_peras_and_reference_input_parameter_reaches_its_own_field() {
     );
 }
 
-/// MUST FIRE: a parameter the file names and this type does not model is
-/// refused, because a follower running without it is applying a different
-/// rule set from the node and cannot say so.
-///
-/// MUST NOT FIRE: the same file without the extra parameter loads, so the
-/// refusal is about the unknown parameter and not about the file.
+/// A parameter the file names and this type does not model is refused,
+/// because a follower running without it is applying a different rule set
+/// from the node and cannot say so. The same file without the extra parameter
+/// loads.
 #[test]
 fn a_parameter_with_nowhere_to_go_stops_the_load() {
     let original = std::fs::read_to_string(proto_devnet_dijkstra_path()).unwrap();
@@ -147,12 +141,9 @@ fn a_parameter_with_nowhere_to_go_stops_the_load() {
     );
 }
 
-/// MUST FIRE: a parameter the file does not name is refused rather than read
-/// as a zero, because a zero is a value the follower would go on to apply as
-/// the rule.
-///
-/// MUST NOT FIRE: the file with the parameter present loads, so the refusal is
-/// about the absence and not about the edit.
+/// A parameter the file does not name is refused rather than read as a zero,
+/// because a zero is a value the follower would go on to apply as the rule.
+/// The file with the parameter present loads.
 #[test]
 fn a_parameter_the_file_omits_stops_the_load() {
     let original = std::fs::read_to_string(proto_devnet_dijkstra_path()).unwrap();
@@ -181,10 +172,9 @@ fn a_parameter_the_file_omits_stops_the_load() {
     );
 }
 
-/// MUST FIRE: a parameter the ledger reads as a 16 bit or 32 bit word is
-/// refused one past that word's maximum, as the node refuses it.
-///
-/// MUST NOT FIRE: the same parameter at the word's maximum loads.
+/// A parameter the ledger reads as a 16 bit or 32 bit word is refused one
+/// past that word's maximum, as the node refuses it. The same parameter at the
+/// word's maximum loads.
 #[test]
 fn a_parameter_past_its_ledger_word_stops_the_load() {
     let original = std::fs::read_to_string(proto_devnet_dijkstra_path()).unwrap();
@@ -221,9 +211,8 @@ fn a_parameter_past_its_ledger_word_stops_the_load() {
     }
 }
 
-/// MUST FIRE: a genesis loaded without a Dijkstra path carries no Dijkstra
-/// parameters, and one loaded with the path carries them, so the field is
-/// additive and a caller can tell the two apart.
+/// A genesis loaded without a Dijkstra path holds no Dijkstra parameters, and
+/// one loaded with the path holds them.
 #[test]
 fn the_dijkstra_file_is_additive_to_the_genesis() {
     let directory = tempfile::tempdir().unwrap();
@@ -247,9 +236,9 @@ fn the_dijkstra_file_is_additive_to_the_genesis() {
     assert_eq!(with.shelley_hash, without.shelley_hash);
 }
 
-/// MUST FIRE: a path that names no file is an error rather than an empty set
-/// of parameters, because a missing consensus rule and a rule set of zero
-/// rules are not the same answer.
+/// A path that names no file is an error rather than an empty set of
+/// parameters, because a missing consensus rule and a rule set of zero rules
+/// are not the same answer.
 #[test]
 fn a_missing_dijkstra_file_is_an_error() {
     let directory = tempfile::tempdir().unwrap();

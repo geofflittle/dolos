@@ -310,8 +310,8 @@ mod cost_model_tests {
         }
     }
 
-    /// MUST NOT FIRE: a cost model under a wildcard key that names no language
-    /// is reported under no language name.
+    /// A cost model under a wildcard key that names no language is reported
+    /// under no language name.
     #[test]
     fn a_cost_model_under_another_wildcard_key_is_reported_under_no_language() {
         let raw = map_cost_models_raw(&cost_models_with(&[4, 5]))
@@ -327,8 +327,8 @@ mod cost_model_tests {
         assert!(!named.contains_key("PlutusV4"));
     }
 
-    /// MUST FIRE: the model under the PlutusV4 key is reported as PlutusV4, on
-    /// the raw path and on the named one, with every cost it carries.
+    /// The model under the PlutusV4 key is reported as PlutusV4, on the raw
+    /// path and on the named one, with every cost it holds.
     #[test]
     fn the_model_under_the_plutus_v4_key_is_reported_as_plutus_v4() {
         let models = cost_models_with(&[PLUTUS_V4_COST_MODEL_KEY]);
@@ -355,8 +355,8 @@ mod cost_model_tests {
         );
     }
 
-    /// MUST NOT FIRE: reporting PlutusV4 leaves the three named models as they
-    /// were, PlutusV3 still named operation by operation.
+    /// Reporting PlutusV4 leaves the three named models as they were, with
+    /// PlutusV3 still named operation by operation.
     #[test]
     fn the_three_named_models_keep_their_operation_names() {
         let models = cost_models_with(&[PLUTUS_V4_COST_MODEL_KEY]);
@@ -378,8 +378,8 @@ mod cost_model_tests {
         );
     }
 
-    /// MUST NOT FIRE: parameters that carry no cost model at all report none,
-    /// rather than an empty PlutusV4.
+    /// Parameters that hold no cost model at all report none, rather than an
+    /// empty PlutusV4.
     #[test]
     fn parameters_with_no_cost_model_report_none() {
         let models = CostModels {
