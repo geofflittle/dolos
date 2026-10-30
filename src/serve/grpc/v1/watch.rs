@@ -366,17 +366,19 @@ fn apply_predicate(predicate: &u5c::watch::TxPredicate, tx: &u5c::cardano::Tx) -
     tx_matches && !not_clause && and_clause && or_clause
 }
 
+/// The transactions of a block the request admits, each built when read, with the block mapped once and its bytes shared.
 fn block_to_txs<C: ChainReads>(
     block: &RawBlock,
     context: &C,
     request: &u5c::watch::WatchTxRequest,
-) -> Vec<u5c::watch::AnyChainTx> {
-    let bytes = block;
+) -> impl Iterator<Item = u5c::watch::AnyChainTx> + Send + 'static {
+    let native_bytes = bytes::Bytes::copy_from_slice(block.as_slice());
     let block = MultiEraBlock::decode(block).unwrap();
     let mapper = interop::Mapper::new(BlockContext::new(context.clone(), &block));
-    let txs = block.txs();
 
-    txs.iter()
+    let txs: Vec<_> = block
+        .txs()
+        .iter()
         .map(|x: &pallas::ledger::traverse::MultiEraTx<'_>| mapper.map_tx(x))
         .filter(|tx| {
             request
@@ -384,16 +386,18 @@ fn block_to_txs<C: ChainReads>(
                 .as_ref()
                 .is_none_or(|predicate| apply_predicate(predicate, tx))
         })
-        .map(|x| u5c::watch::AnyChainTx {
-            chain: Some(u5c::watch::any_chain_tx::Chain::Cardano(x)),
-            block: Some(u5c::watch::AnyChainBlock {
-                native_bytes: bytes.to_vec().into(),
-                chain: Some(u5c::watch::any_chain_block::Chain::Cardano(
-                    mapper.map_block(&block),
-                )),
-            }),
-        })
-        .collect()
+        .collect();
+    let mapped = (!txs.is_empty()).then(|| mapper.map_block(&block));
+
+    txs.into_iter().map(move |x| u5c::watch::AnyChainTx {
+        chain: Some(u5c::watch::any_chain_tx::Chain::Cardano(x)),
+        block: Some(u5c::watch::AnyChainBlock {
+            native_bytes: native_bytes.clone(),
+            chain: mapped
+                .clone()
+                .map(u5c::watch::any_chain_block::Chain::Cardano),
+        }),
+    })
 }
 
 fn raw_to_blockref(raw: &[u8]) -> u5c::watch::BlockRef {
@@ -410,32 +414,32 @@ fn roll_to_watch_response<C: ChainReads>(
     log: &TipEvent,
     request: &u5c::watch::WatchTxRequest,
 ) -> impl Stream<Item = u5c::watch::WatchTxResponse> {
-    let txs: Vec<_> = match log {
+    let responses: Box<dyn Iterator<Item = u5c::watch::WatchTxResponse> + Send> = match log {
         TipEvent::Apply(_, block) => {
-            let txs = block_to_txs(block, context, request);
-            if txs.is_empty() {
-                vec![u5c::watch::WatchTxResponse {
+            let mut txs = block_to_txs(block, context, request).peekable();
+            if txs.peek().is_none() {
+                Box::new(std::iter::once(u5c::watch::WatchTxResponse {
                     action: Some(u5c::watch::watch_tx_response::Action::Idle(
                         raw_to_blockref(block),
                     )),
-                }]
+                }))
             } else {
-                txs.into_iter()
-                    .map(u5c::watch::watch_tx_response::Action::Apply)
-                    .map(|x| u5c::watch::WatchTxResponse { action: Some(x) })
-                    .collect()
+                Box::new(
+                    txs.map(u5c::watch::watch_tx_response::Action::Apply)
+                        .map(|x| u5c::watch::WatchTxResponse { action: Some(x) }),
+                )
             }
         }
-        TipEvent::Undo(_, block) => block_to_txs(block, context, request)
-            .into_iter()
-            .map(u5c::watch::watch_tx_response::Action::Undo)
-            .map(|x| u5c::watch::WatchTxResponse { action: Some(x) })
-            .collect(),
+        TipEvent::Undo(_, block) => Box::new(
+            block_to_txs(block, context, request)
+                .map(u5c::watch::watch_tx_response::Action::Undo)
+                .map(|x| u5c::watch::WatchTxResponse { action: Some(x) }),
+        ),
         // TODO: shouldn't we have a u5c event for origin?
-        TipEvent::Mark(..) => vec![],
+        TipEvent::Mark(..) => Box::new(std::iter::empty()),
     };
 
-    tokio_stream::iter(txs)
+    tokio_stream::iter(responses)
 }
 
 pub struct WatchServiceImpl<D, C>
@@ -516,6 +520,41 @@ mod tests {
     const DELEGATION_TX_CBOR: &str = "84a500d901028182582012e3d7a496de1939bc681a662884b1668f77cf1660dbc57b0aa84b1c264bd3b700018182583901376a4625c82451cc13a265b0f362ee24f85d2054158257c0fcdb7b6a493e5224dc0f58895a75ac89911186ef7e853edc65108e2fdaccb0211a59257118021a0002aa69031a0a390ad604d901028282008200581c493e5224dc0f58895a75ac89911186ef7e853edc65108e2fdaccb02183028200581c493e5224dc0f58895a75ac89911186ef7e853edc65108e2fdaccb021581c894ff15d8bef5f740a2fa3552157834d9d6b2f5a232bed3819d756b5a100d9010282825820341834b6cbf8c7c524e9c0238b23a934c9bdc4e2c4ba5c4c2b96fb4431e4455c5840e0ebed89ba8f273098b323cae468759a7f3aafca03b7de8bdb95fd8d2cadcd8f98c691729be59ad3a80ab0011463ccf36195864944da59365ebfa4d3141e8e0982582056a47150e2fa8164a59985a05a935a464917a818647f072fe7a7238d772d7d7558401a9de51c89274147107fdc3fdb261ce9f995e3d5f131ee891a1c240f1c585b9e0b714b8c261cd1cf88e394ab0054a84c8e679fdf0a3d9587c7417f8ece94bd0ef5f6";
     const STAKE_CRED: &str = "493e5224dc0f58895a75ac89911186ef7e853edc65108e2fdaccb021";
     const POOL_HASH: &str = "894ff15d8bef5f740a2fa3552157834d9d6b2f5a232bed3819d756b5";
+
+    #[test]
+    fn the_transactions_of_one_block_share_its_bytes() {
+        #[derive(Clone)]
+        struct NoOutputs;
+        impl pallas::interop::utxorpc::LedgerContext for NoOutputs {
+            fn get_utxos(
+                &self,
+                _: &[pallas::interop::utxorpc::TxoRef],
+            ) -> Option<pallas::interop::utxorpc::UtxoMap> {
+                Some(Default::default())
+            }
+            fn get_slot_timestamp(&self, _: u64) -> Option<u64> {
+                Some(42)
+            }
+        }
+        let (blocks, _, _) = dolos_testing::synthetic::build_synthetic_blocks(
+            dolos_testing::synthetic::SyntheticBlockConfig {
+                block_count: 2,
+                txs_per_block: 4,
+                spend_previous_outputs: true,
+                ..Default::default()
+            },
+        );
+        let raw = blocks[1].clone();
+        let request = u5c::watch::WatchTxRequest::default();
+        let txs: Vec<_> = block_to_txs(&raw, &NoOutputs, &request).collect();
+        assert_eq!(txs.len(), 4);
+        let served: Vec<_> = txs
+            .iter()
+            .map(|tx| tx.block.as_ref().unwrap().native_bytes.clone())
+            .collect();
+        assert!(served.iter().all(|b| b.as_ref() == raw.as_slice()));
+        assert!(served.iter().all(|b| b.as_ptr() == served[0].as_ptr()));
+    }
 
     fn decoded_tx() -> u5c::cardano::Tx {
         let domain = dolos_testing::toy_domain::ToyDomain::new(None, None);
