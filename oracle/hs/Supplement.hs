@@ -4,36 +4,52 @@
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
 -- | Writes the supplement corpus, scenarios whose shapes the Imp spec corpus lacks.
 module Main (main) where
 
-import Cardano.Ledger.Address (Addr (..), Withdrawals (..))
+import qualified Cardano.Chain.Common as Byron
+import Cardano.Crypto.Hash (hashToBytes)
+import Cardano.Crypto.Hashing (unsafeAbstractHashFromBytes)
+import Cardano.Ledger.Address (Addr (..), BootstrapAddress (..), Withdrawals (..), bootstrapKeyHash)
 import Cardano.Ledger.Alonzo.Scripts (AsIx (..), PlutusBinary (..), mkBinaryPlutusScript, pattern SpendingPurpose)
 import Cardano.Ledger.Alonzo.TxWits (Redeemers (..), TxDats (..))
 import Cardano.Ledger.BaseTypes (Network (..), StrictMaybe (..), natVersion)
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Credential (Credential (..), StakeReference (..))
 import Cardano.Ledger.Dijkstra.Core
-import Cardano.Ledger.Mary.Value (AssetName, MaryValue (..), PolicyID (..), multiAssetFromList)
-import Cardano.Ledger.Plutus.Data (Data (..), Datum (..), hashData)
+import Cardano.Ledger.Hashes (EraIndependentTxBody, SafeHash, extractHash, hashAnnotated)
+import Cardano.Ledger.Keys (KeyHash (..), coerceKeyRole)
+import Cardano.Ledger.Keys.Bootstrap (BootstrapWitness (..), ChainCode (..), bootstrapWitKeyHash, makeBootstrapWitness)
+import Cardano.Ledger.Mary.Value (AssetName (..), MaryValue (..), PolicyID (..), multiAssetFromList)
+import Cardano.Ledger.Metadata (Metadatum (..))
+import Cardano.Ledger.Plutus.Data (Data (..), Datum (..), dataToBinaryData, hashData)
 import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
 import Cardano.Ledger.Plutus.Language (Language (..))
 import Cardano.Ledger.Shelley.Scripts (pattern RequireSignature)
 import Cardano.Ledger.Tools (setMinCoinTxOut)
 import Cardano.Ledger.TxIn (mkTxInPartial)
 import Cardano.Ledger.Val (inject)
-import Control.Monad (void)
+import Codec.CBOR.Term (Term (..))
+import Control.Monad (forM_, replicateM_, void)
 import Data.ByteString (ByteString)
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Base16 as B16
+import qualified Data.ByteString.Lazy as BL
 import Data.ByteString.Short (toShort)
 import Data.Maybe (listToMaybe)
 import qualified Data.OMap.Strict as OMap
+import Data.Primitive.ByteArray (byteArrayFromList)
+import Data.Typeable (Typeable)
+import Data.Word (Word8)
 import Dump (E, dumpTo)
-import Lens.Micro ((&), (.~), (^.))
+import Edit
+import Lens.Micro ((%~), (&), (.~), (^.))
 import qualified PlutusLedgerApi.V1 as PV1
+import Test.Cardano.Ledger.Core.KeyPair (ByronKeyPair (..))
 import Test.Cardano.Ledger.Core.Utils (txInAt)
 import Test.Cardano.Ledger.Dijkstra.ImpTest
 import Test.Cardano.Ledger.Imp.Common
@@ -144,10 +160,189 @@ supplement = describe "SUPPLEMENT" $ do
   -- (program 1.1.0 (lam ctx (force [[[(force (builtin ifThenElse)) [[(builtin equalsInteger) [(force (builtin headList)) [[(force (builtin dropList)) (con integer 2)] (con (list integer) [1, 2, 3])]]] (con integer 3)]] (delay (con unit ()))] (delay (error))])))
   it "a V3 script calls dropList" $
     spendWithV3 "581d01010025333573466e1cd5d099abd8480112f582050483120061498581"
+  forM_ ([Top, Sub] :: [Level]) $ \level -> do
+    it ("a bootstrap input is spent at the " <> show level) $ do
+      bootAddr <- freshBootstrapAddress
+      bootIn <- sendCoinTo (AddrBootstrap bootAddr) mempty
+      submitTx_ (atLevel level (mkBasicTxBody & inputsTxBodyL .~ [bootIn]))
+    it ("a bootstrap input is spent without its witness at the " <> show level) $ do
+      bootAddr <- freshBootstrapAddress
+      bootIn <- sendCoinTo (AddrBootstrap bootAddr) mempty
+      void . expectLeft =<< withoutBootstrapWitnesses level (trySubmitTx (atLevel level (mkBasicTxBody & inputsTxBodyL .~ [bootIn])))
+    it ("a bootstrap witness whose attributes hold a key Byron addresses do not define at the " <> show level) $
+      customBootstrapSpend level (replicate 32 7) [0xa1, 0x03, 0x41, 0x00]
+    it ("a bootstrap witness with a 31 byte chain code at the " <> show level) $
+      customBootstrapSpend level (replicate 31 7) [0xa0]
+    it ("a guard key only a bootstrap witness provides at the " <> show level) $ do
+      bootAddr <- freshBootstrapAddress
+      bootIn <- sendCoinTo (AddrBootstrap bootAddr) mempty
+      let guardKey = KeyHashObj (coerceKeyRole (bootstrapKeyHash bootAddr))
+      submitTx_ (atLevel level (mkBasicTxBody & inputsTxBodyL .~ [bootIn] & guardsTxBodyL .~ [guardKey]))
+    it ("a native script signature only a bootstrap witness provides at the " <> show level) $ do
+      bootAddr <- freshBootstrapAddress
+      bootIn <- sendCoinTo (AddrBootstrap bootAddr) mempty
+      script <- impAddNativeScript (RequireSignature (coerceKeyRole (bootstrapKeyHash bootAddr)))
+      locked <- sendCoinTo (Addr Testnet (ScriptHashObj script) StakeRefNull) (Coin 5_000_000)
+      void $ trySubmitTx (atLevel level (mkBasicTxBody & inputsTxBodyL .~ [bootIn, locked]))
+  decoderRules
+
+-- | Transactions whose bytes break one rule of the node's decoder, or one it reads differently from the CDDL, each case at a slot of its own.
+decoderRules :: SpecWith (ImpInit (LedgerSpec E))
+decoderRules = describe "decoder rules" $
+  forM_ (zip [1 ..] cases) $ \(ticks, (name, submit)) ->
+    it name (replicateM_ ticks passTick >> submit)
+  where
+    cases :: [(String, ImpTestM E ())]
+    cases =
+      [ ("an empty guards set at body key 14 at the top level", edited (body (setKey 14 emptySet)))
+      , ("an empty guards set at body key 14 at a sub transaction", subEdited (setKey 14 emptySet) id id)
+      , ( "an inline datum under tag 24 over indefinite length bytes"
+        , do
+            out <- inlineDatumOutput
+            submitEdited (body (overKey 1 (overFirst (overKey 2 (overIndex 1 indefinite))))) (mkBasicTx (mkBasicTxBody & outputsTxBodyL .~ [out]))
+        )
+      , ("a key witness given twice in its set", edited (wits (overKey 0 dupFirst)))
+      , ( "a datum given twice in its set"
+        , do
+            holder <- freshKeyAddrNoPtr_
+            let datum = Data (PV1.I 7) :: Data E
+                out = mkBasicTxOut holder (inject (Coin 5_000_000)) & datumTxOutL .~ DatumHash (hashData datum)
+            submitEdited (wits (overKey 4 dupFirst)) (mkBasicTx (mkBasicTxBody & outputsTxBodyL .~ [out]) & witsTxL . datsTxWitsL .~ TxDats [(hashData datum, datum)])
+        )
+      , ("an empty required top level guards map at a sub transaction", subEdited (setKey 24 (TMap [])) id id)
+      , ( "a guard given twice at body key 14"
+        , do
+            guard <- KeyHashObj <$> freshKeyHash
+            submitEdited (body (overKey 14 dupFirst)) (mkBasicTx (mkBasicTxBody & guardsTxBodyL .~ [guard]))
+        )
+      , ("an empty redeemers map", edited (wits (setKey 5 (TMap []))))
+      , ( "redeemer memory units past the largest signed 64 bit integer"
+        , spendWithV3Using (submitEdited (wits (overKey 5 (overFirstValue (overIndex 1 (overIndex 0 (const (TInteger (2 ^ (63 :: Int)))))))))) "4901010023357369324d"
+        )
+      , ("an empty withdrawals map", edited (body (setKey 5 (TMap []))))
+      , ("an output address of one byte", edited (body (overKey 1 (overFirst (outAddr (TBytes "\x60"))))))
+      , ("a byte after the transaction", submitEdited noEdit {trailing = "\x00"} plain)
+      , ("a witness set key given twice", edited (wits (dupKey 0)))
+      , ("a witness set key the era does not define", edited (wits (addEntry (TInt 99) (TInt 0))))
+      , ("a verification key of 31 bytes", edited (wits (overKey 0 (overFirst (overIndex 0 (shorten 31))))))
+      , ("a signature of 63 bytes", edited (wits (overKey 0 (overFirst (overIndex 1 (shorten 63))))))
+      , ("a body key given twice", edited (body (dupKey 2)))
+      , ("a body key the era does not define", edited (body (addEntry (TInt 99) (TInt 0))))
+      , ("an input given twice in its set", edited (body (overKey 0 dupFirst)))
+      , ("an empty votes map", edited (body (setKey 19 (TMap []))))
+      , ("a donation of zero", edited (body (setKey 22 (TInt 0))))
+      , ("an empty mint map", edited (body (setKey 9 (TMap []))))
+      , ("a mint policy with no assets", edited (body (setKey 9 (TMap [(policyBytes, TMap [])]))))
+      , ( "a minted asset name of 33 bytes"
+        , do
+            policy <- PolicyID <$> (impAddNativeScript . RequireSignature =<< freshKeyHash)
+            holder <- freshKeyAddrNoPtr_
+            let name = BS.replicate 32 1
+                token = multiAssetFromList [(policy, AssetName (toShort name), 1)]
+                longer (TBytes b) | b == name = TBytes (name <> "\x01")
+                longer t = t
+            submitEdited (body (everywhere longer)) (mkBasicTx (mkBasicTxBody & mintTxBodyL .~ token & outputsTxBodyL .~ [mkBasicTxOut holder (MaryValue (Coin 5_000_000) token)]))
+        )
+      , ("an output asset quantity of zero", edited (body (overKey 1 (overFirst (outValue (withAssets (TMap [(TBytes "a", TInt 0)])))))))
+      , ("an output policy with no assets", edited (body (overKey 1 (overFirst (outValue (withAssets (TMap [])))))))
+      , ( "an output map key given twice"
+        , do
+            out <- inlineDatumOutput
+            submitEdited (body (overKey 1 (overFirst (dupKey 0)))) (mkBasicTx (mkBasicTxBody & outputsTxBodyL .~ [out]))
+        )
+      , ( "metadata bytes of 65 bytes"
+        , void $ trySubmitTx (plain & auxDataTxL .~ SJust (mkBasicTxAuxData & metadataTxAuxDataL .~ [(1, B (byteArrayFromList (replicate 65 (1 :: Word8))))]))
+        )
+      , ("an auxiliary data map key given twice", submitEdited noEdit {editAux = dupAuxKey} (plain & auxDataTxL .~ SJust (mkBasicTxAuxData & metadataTxAuxDataL .~ [(1, I 1)])))
+      , ( "a required top level guard given twice at a sub transaction"
+        , do
+            guard <- KeyHashObj <$> freshKeyHash
+            subEdited (overKey 24 dupFirst) (requiredTopLevelGuardsTxBodyL .~ [(guard, SNothing)]) (guardsTxBodyL .~ [guard])
+        )
+      , ("an empty direct deposits map", edited (body (setKey 25 (TMap []))))
+      , ("an empty account balance intervals map", edited (body (setKey 26 (TMap []))))
+      , ("a bootstrap witness with a 33 byte chain code at the top level", customBootstrapSpend Top (replicate 33 7) [0xa0])
+      ]
+    plain :: Tx TopTx E
+    plain = mkBasicTx mkBasicTxBody
+    edited e = submitEdited e plain
+    body f = noEdit {editBody = f}
+    wits f = noEdit {editWits = f}
+    policyBytes = TBytes (BS.replicate 28 9)
+    withAssets assets coin = TList [coin, TMap [(policyBytes, assets)]]
+    shorten n (TBytes b) = TBytes (BS.take n b)
+    shorten _ t = t
+    indefinite (TTagged 24 (TBytes b)) = TTagged 24 (TBytesI (BL.fromStrict b))
+    indefinite t = t
+    outValue f out = case out of
+      TList (a : v : rest) -> TList (a : f v : rest)
+      m -> overKey 1 f m
+    outAddr new out = case out of
+      TList (_ : rest) -> TList (new : rest)
+      m -> setKey 0 new m
+    dupAuxKey (TTagged n m) = TTagged n (dupKey 0 m)
+    dupAuxKey m = dupFirst m
+
+-- | An output to a fresh key address holding an inline datum.
+inlineDatumOutput :: ImpTestM E (TxOut E)
+inlineDatumOutput = do
+  holder <- freshKeyAddrNoPtr_
+  pure (mkBasicTxOut holder (inject (Coin 5_000_000)) & datumTxOutL .~ Datum (dataToBinaryData (Data (PV1.I 42) :: Data E)))
+
+-- | Submits a top level transaction with one sub transaction that spends a fresh input, after the edit to the sub transaction body.
+subEdited :: (Term -> Term) -> (TxBody SubTx E -> TxBody SubTx E) -> (TxBody TopTx E -> TxBody TopTx E) -> ImpTestM E ()
+subEdited f subBody topBody = do
+  x <- freshFundedTxIn
+  let sub = mkBasicTx (subBody (mkBasicTxBody & inputsTxBodyL .~ [x])) :: Tx SubTx E
+  submitEdited noEdit {editSubBody = f} (mkTopTxWithSubTxs [sub] & bodyTxL %~ topBody)
+
+-- | Where a body goes in a submitted transaction.
+data Level = Top | Sub
+
+instance Show Level where
+  show Top = "top level"
+  show Sub = "sub transaction"
+
+-- | A top level transaction with the body, or with one sub transaction that has the body.
+atLevel :: Level -> (forall l. Typeable l => TxBody l E) -> Tx TopTx E
+atLevel Top body = mkBasicTx body
+atLevel Sub body = mkTopTxWithSubTxs [mkBasicTx body]
+
+-- | Runs an action whose submitted transaction loses the bootstrap witnesses of the level after every fixup.
+withoutBootstrapWitnesses :: Level -> ImpTestM E a -> ImpTestM E a
+withoutBootstrapWitnesses Top = withPostFixup (pure . (witsTxL . bootAddrTxWitsL .~ mempty))
+withoutBootstrapWitnesses Sub = withPostFixupSubTxs (pure . (witsTxL . bootAddrTxWitsL .~ mempty))
+
+-- | Submits a spend of a fresh bootstrap input at the level, whose witness carries the given chain code and attribute bytes.
+customBootstrapSpend :: Level -> [Word8] -> [Word8] -> ImpTestM E ()
+customBootstrapSpend level chainCode attributes = do
+  ByronKeyPair _ signingKey <- uniformM
+  let attrs = Byron.mkAttributes (Byron.AddrAttributes Nothing (Byron.NetworkTestnet 0))
+      witness :: SafeHash EraIndependentTxBody -> BootstrapWitness
+      witness body =
+        (makeBootstrapWitness (extractHash body) signingKey attrs)
+          { bwChainCode = ChainCode (byteArrayFromList chainCode)
+          , bwAttributes = byteArrayFromList attributes
+          }
+      placeholder = witness (hashAnnotated (mkBasicTxBody :: TxBody TopTx E))
+      KeyHash root = bootstrapWitKeyHash placeholder
+      addr = BootstrapAddress (Byron.Address (unsafeAbstractHashFromBytes (hashToBytes root)) attrs Byron.ATVerKey)
+      signed :: forall l. Tx l E -> ImpTestM E (Tx l E)
+      signed tx = pure (tx & witsTxL . bootAddrTxWitsL .~ [witness (hashAnnotated (tx ^. bodyTxL))])
+  bootIn <- sendCoinTo (AddrBootstrap addr) mempty
+  let spend :: forall l. Typeable l => Tx l E
+      spend = mkBasicTx (mkBasicTxBody & inputsTxBodyL .~ [bootIn]) & witsTxL . bootAddrTxWitsL .~ [placeholder]
+  case level of
+    Top -> withPostFixup signed (submitTx_ (spend :: Tx TopTx E))
+    Sub -> withPostFixupSubTxs signed (submitTx_ (mkTopTxWithSubTxs [spend]))
 
 -- | Locks coin at a V3 script given as its CBOR hex, then spends it with that script and no datum.
 spendWithV3 :: ByteString -> ImpTestM E ()
-spendWithV3 hex = do
+spendWithV3 = spendWithV3Using submitTx_
+
+-- | Locks coin at a V3 script given as its CBOR hex, then submits a spend of it with that script and no datum.
+spendWithV3Using :: (Tx TopTx E -> ImpTestM E ()) -> ByteString -> ImpTestM E ()
+spendWithV3Using submit hex = do
   plutus :: PlutusScript E <- expectJust $ mkBinaryPlutusScript PlutusV3 . PlutusBinary . toShort =<< either (const Nothing) Just (B16.decode hex)
   let script = fromPlutusScript plutus
       hash = hashScript script
@@ -158,7 +353,7 @@ spendWithV3 hex = do
         mkBasicTx (mkBasicTxBody & inputsTxBodyL .~ [locked] & collateralInputsTxBodyL .~ [collateral] & feeTxBodyL .~ Coin 400_000)
           & witsTxL . scriptTxWitsL .~ [(hash, script)]
           & witsTxL . rdmrsTxWitsL .~ Redeemers [(SpendingPurpose (AsIx 0), (Data (PV1.I 0), ExUnits 1_000_000 1_000_000_000))]
-  submitTx_ tx
+  submit tx
 
 main :: IO ()
 main =

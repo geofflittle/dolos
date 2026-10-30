@@ -1,21 +1,33 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
 -- | One JSON line per LEDGER rule run, written from the Imp post submit hook.
-module Dump (E, dumpTo, failurePath) where
+module Dump (E, decodeTx, dumpTo, editedBytes, failurePath) where
 
+import Cardano.Ledger.Alonzo.PParams (ppCostModelsL, ppMaxTxExUnitsL)
+import Cardano.Ledger.Alonzo.Plutus.Context (LedgerLevelTxInfo (..), LedgerTxInfo (..), SupportedPlutusRunnable (..), toScriptHashByPurpose)
 import Cardano.Ledger.Alonzo.Plutus.Evaluate (evalTxExUnits)
+import Cardano.Ledger.Alonzo.Plutus.TxInfo (mkPlutusWithContext)
+import Cardano.Ledger.Alonzo.Scripts (AsIx, PlutusPurpose, hoistPlutusPurpose, toAsIx)
 import Cardano.Ledger.Alonzo.Tx (IsPhase2Valid (..), isPhase2ValidTxL)
-import Cardano.Ledger.BaseTypes (Globals (..), Network, epochInfoPure, unNonZero)
-import Cardano.Ledger.Binary (serialize')
+import Cardano.Ledger.Alonzo.TxWits (rdmrsTxWitsL, unRedeemersL)
+import Cardano.Ledger.Alonzo.UTxO (resolveNeededPlutusScriptsWithPurpose)
+import Cardano.Ledger.BaseTypes (Globals (..), Network, TxIx (..), epochInfoPure, pvMajor, unNonZero)
+import Cardano.Ledger.Binary (DecCBOR (decCBOR), DecoderError, Version, decodeFullAnnotator, serialize')
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Core
 import Cardano.Ledger.Dijkstra (DijkstraEra)
+import Cardano.Ledger.Dijkstra.Tx (DijkstraStAnnTx (..))
+import Cardano.Ledger.Plutus.CostModels (costModelsValid)
+import Cardano.Ledger.Plutus.Evaluate (evaluatePlutusWithContext)
 import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
+import Cardano.Ledger.Plutus.TxInfo (exBudgetToExUnits)
+import Cardano.Ledger.Plutus.Language (plutusLanguage)
 import Cardano.Ledger.Shelley.LedgerState (lsCertStateL, lsUTxOStateL)
 import Cardano.Ledger.Shelley.Rules (LedgerEnv (..))
 import Cardano.Ledger.State (UTxO (..), accountsL, certDStateL, getMinFeeTxUtxo, utxoL)
@@ -33,7 +45,9 @@ import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.List (dropWhileEnd, isSuffixOf)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
+import Data.Maybe (fromMaybe)
 import Lens.Micro ((^.))
+import qualified PlutusLedgerApi.Common as P
 import System.IO.Unsafe (unsafePerformIO)
 import Test.Cardano.Ledger.Dijkstra.ImpTest
 
@@ -42,6 +56,11 @@ type E = DijkstraEra
 {-# NOINLINE lastPost #-}
 lastPost :: IORef (Maybe (UTxO E))
 lastPost = unsafePerformIO (newIORef Nothing)
+
+{-# NOINLINE editedBytes #-}
+-- | The bytes the next record carries in place of its transaction's encoding, which the node's decoder refuses.
+editedBytes :: IORef (Maybe BS8.ByteString)
+editedBytes = unsafePerformIO (newIORef Nothing)
 
 {-# NOINLINE counter #-}
 counter :: IORef Int
@@ -55,6 +74,20 @@ pairs (UTxO m) =
   [ [hex (serialize' (eraProtVerHigh @E) i), hex (serialize' (eraProtVerHigh @E) o)]
   | (i, o) <- Map.toList m
   ]
+
+-- | The transaction the node's decoder reads from the bytes at a protocol version.
+decodeTx :: Version -> BS8.ByteString -> Either DecoderError (Tx TopTx E)
+decodeTx v b = decodeFullAnnotator v "Tx" decCBOR (BL8.fromStrict b)
+
+-- | The inputs the first UTxO holds and the second does not.
+consumed :: UTxO E -> UTxO E -> [String]
+consumed (UTxO before) (UTxO after) =
+  [hex (serialize' (eraProtVerHigh @E) i) | i <- Map.keys (Map.difference before after)]
+
+-- | The entries of the second UTxO that the first does not hold with the same output.
+produced :: UTxO E -> UTxO E -> UTxO E
+produced (UTxO before) (UTxO after) =
+  UTxO (Map.differenceWith (\new old -> if new == old then Nothing else Just new) after before)
 
 -- | The constructor names of one shown failure, from the outer wrapper to the leaf.
 failurePath :: String -> [String]
@@ -112,27 +145,29 @@ dumpTo out g (TRC (env, st, stAnn)) res = liftIO $ do
   n <- readIORef counter
   writeIORef counter (n + 1)
   prev <- readIORef lastPost
+  edited <- readIORef editedBytes
+  writeIORef editedBytes Nothing
   let tx = stAnn ^. txStAnnTxG
       pre = st ^. lsUTxOStateL . utxoL
       epoch = ledgerEpochNo env
       valid = tx ^. isPhase2ValidTxL == Phase2Valid
+      bytes = fromMaybe (serialize' (eraProtVerHigh @E) tx) edited
       accountsJson s = A.toJSON (s ^. lsCertStateL . certDStateL . accountsL)
-      (outcome, post) = case res of
-        Left fs ->
-          ( A.object
-              [ "refused"
-                  A..= A.object
-                    [ "failures" A..= take 300 (show (NE.toList fs))
-                    , "failure_names" A..= map (failurePath . show) (NE.toList fs)
-                    ]
-              ]
-          , Nothing
-          )
-        Right (st', _) ->
+      refused shown names =
+        A.object ["refused" A..= A.object ["failures" A..= take 300 shown, "failure_names" A..= names]]
+      decoded = decodeTx (pvMajor (ledgerPp env ^. ppProtocolVersionL)) bytes
+      (outcome, post) = case (decoded, res) of
+        (Left e, _) -> (refused (show e) [failurePath (show e)], Nothing)
+        (Right _, Left fs) -> (refused (show (NE.toList fs)) (map (failurePath . show) (NE.toList fs)), Nothing)
+        (Right _, Right (st', _)) ->
           let p = st' ^. lsUTxOStateL . utxoL
            in ( A.object
                   [ "accepted"
-                      A..= A.object ["post_utxo" A..= pairs p, "accounts_post" A..= accountsJson st']
+                      A..= A.object
+                        [ "consumed" A..= consumed pre p
+                        , "produced" A..= pairs (produced pre p)
+                        , "accounts_post" A..= accountsJson st'
+                        ]
                   ]
               , Just p
               )
@@ -141,20 +176,21 @@ dumpTo out g (TRC (env, st, stAnn)) res = liftIO $ do
           [ "n" A..= n
           , "slot" A..= unSlotNo (ledgerSlotNo env)
           , "epoch" A..= fmap unEpochNo epoch
-          , "follows_prev" A..= (prev == Just pre)
           , "phase2_valid" A..= valid
-          , "tx" A..= hex (serialize' (eraProtVerHigh @E) tx)
+          , "tx" A..= hex bytes
           , "pparams" A..= A.toJSON (ledgerPp env)
-          , "pre_utxo" A..= pairs pre
+          , "pre" A..= if prev == Just pre then A.String "follows_prev" else A.object ["fresh" A..= pairs pre]
           , "accounts_pre" A..= accountsJson st
           , "outcome" A..= outcome
           , "ex_units" A..= map evaluationJson (Map.toList (evalTxExUnits (ledgerPp env) tx pre (epochInfo g) (systemStart g)))
-          , "min_fee" A..= unCoin (getMinFeeTxUtxo (ledgerPp env) tx pre)
+          , "sub_ex_units" A..= map (map evaluationJson . Map.toList) (subTxExUnits (ledgerPp env) g pre stAnn)
+          , "min_fee" A..= either (const Nothing) (\t -> Just (unCoin (getMinFeeTxUtxo (ledgerPp env) t pre))) decoded
           ]
             ++ [ "globals" A..= globalsJson g e | n == 0, Just e <- [epoch] ]
   writeIORef lastPost (maybe (Just pre) Just post)
   BL8.appendFile out (A.encode line <> "\n")
   where
+    evaluationJson :: Show e => (PlutusPurpose AsIx E, Either e ExUnits) -> A.Value
     evaluationJson (purpose, result) =
       A.object
         [ "purpose" A..= hex (serialize' (eraProtVerHigh @E) purpose)
@@ -162,3 +198,35 @@ dumpTo out g (TRC (env, st, stAnn)) res = liftIO $ do
             Right (ExUnits mem steps) -> A.object ["ran" A..= [mem, steps]]
             Left failure -> A.object ["failed" A..= take 300 (show failure)]
         ]
+
+-- | The units each sub transaction's redeemers run in at the maximum budget, one map per sub transaction in order, evaluated in that sub transaction's own context.
+subTxExUnits :: PParams E -> Globals -> UTxO E -> DijkstraStAnnTx TopTx E -> [Map.Map (PlutusPurpose AsIx E) (Either String ExUnits)]
+subTxExUnits pp g utxo DijkstraStAnnTopTx {dsattSubTransactions} = zipWith one [0 ..] dsattSubTransactions
+  where
+    protVer = pp ^. ppProtocolVersionL
+    costModels = costModelsValid (pp ^. ppCostModelsL)
+    one :: Int -> DijkstraStAnnTx SubTx E -> Map.Map (PlutusPurpose AsIx E) (Either String ExUnits)
+    one ix DijkstraStAnnSubTx {dsastTx, dsastScriptsNeeded, dsastScriptsProvided, dsastTxInfoResult} =
+      Map.mapWithKey run (dsastTx ^. witsTxL . rdmrsTxWitsL . unRedeemersL)
+      where
+        (_, used) = resolveNeededPlutusScriptsWithPurpose protVer dsastScriptsProvided dsastScriptsNeeded mempty
+        byPointer = Map.fromList [(hoistPlutusPurpose toAsIx purpose, (purpose, runnable)) | (purpose, runnable) <- used]
+        lti =
+          LedgerTxInfo
+            { ltiProtVer = protVer
+            , ltiEpochInfo = epochInfo g
+            , ltiSystemStart = systemStart g
+            , ltiUTxO = utxo
+            , ltiTx = dsastTx
+            , ltiScriptsUsed = used
+            , ltiScriptHashesUsed = toScriptHashByPurpose used
+            , ltiLevelTxInfo = LedgerSubTxInfo (TxIx (fromIntegral ix))
+            }
+        run pointer (redeemerData, _) = do
+          (purpose, runnable) <- maybe (Left ("no script for " <> show pointer)) Right (Map.lookup pointer byPointer)
+          let lang = case runnable of SupportedPlutusRunnable r -> plutusLanguage r
+          costModel <- maybe (Left ("no cost model for " <> show lang)) Right (Map.lookup lang costModels)
+          pwc <- either (Left . show) Right $ mkPlutusWithContext runnable purpose lti dsastTxInfoResult redeemerData (pp ^. ppMaxTxExUnitsL) costModel
+          case evaluatePlutusWithContext P.Verbose pwc of
+            (_, Left failure) -> Left (show failure)
+            (_, Right budget) -> maybe (Left ("incompatible budget " <> show budget)) Right (exBudgetToExUnits budget)

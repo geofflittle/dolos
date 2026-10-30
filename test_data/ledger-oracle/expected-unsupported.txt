@@ -258,6 +258,552 @@ ic#1307 account or governance state
 ic#1332 stateful or scripted subtransaction
 ic#1335 stateful or scripted subtransaction
 ic#1344 scripted or stateful batch
+ic#1412 stateful or scripted subtransaction
+ic#1416 stateful or scripted subtransaction
+ic#1417 certificate kind
+ic#1425 stateful or scripted subtransaction
+ic#1427 stateful or scripted subtransaction
+ic#1429 certificate kind
+ic#1431 stateful or scripted subtransaction
+ic#1433 certificate kind
+ic#1434 certificate kind
+ic#1436 certificate kind
+ic#1439 certificate kind
+ic#1441 stateful or scripted subtransaction
+ic#1442 certificate kind
+ic#1444 certificate kind
+ic#1446 stateful or scripted subtransaction
+ic#1448 certificate kind
+ic#1450 certificate kind
+ic#1452 stateful or scripted subtransaction
+ic#1454 certificate kind
+ic#1456 stateful or scripted subtransaction
+ic#1459 certificate kind
+ic#1461 certificate kind
+ic#1469 stateful or scripted subtransaction
+ic#1477 stateful or scripted subtransaction
+ic#1482 stateful or scripted subtransaction
+ic#1484 certificate kind
+ic#1504 stateful or scripted subtransaction
+ic#1507 stateful or scripted subtransaction
+ic#1512 stateful or scripted subtransaction
+ic#1514 certificate kind
+ic#1552 stateful or scripted subtransaction
+ic#1555 stateful or scripted subtransaction
+ic#1561 stateful or scripted subtransaction
+ic#1565 stateful or scripted subtransaction
+ic#1569 stateful or scripted subtransaction
+ic#1572 stateful or scripted subtransaction
+ic#1574 stateful or scripted subtransaction
+ic#1579 stateful or scripted subtransaction
+ic#1580 certificate kind
+ic#1582 certificate kind
+ic#1594 stateful or scripted subtransaction
+ic#1595 certificate kind
+ic#1600 stateful or scripted subtransaction
+ic#1602 certificate kind
+ic#1604 stateful or scripted subtransaction
+ic#1606 certificate kind
+ic#1625 stateful or scripted subtransaction
+ic#1626 certificate kind
+ic#1627 certificate kind
+ic#1628 certificate kind
+ic#1629 certificate kind
+ic#1633 bootstrap or reward address
+ic#1707 Plutus witnesses
+ic#1709 Plutus witnesses
+ic#1711 Plutus witnesses
+ic#1713 Plutus witnesses
+ic#1715 Plutus witnesses
+ic#1717 Plutus witnesses
+ic#1719 Plutus witnesses
+ic#1721 Plutus witnesses
+ic#1723 Plutus witnesses
+ic#1725 Plutus witnesses
+ic#1727 Plutus witnesses
+ic#1729 Plutus witnesses
+ic#1731 Plutus witnesses
+ic#1733 Plutus witnesses
+ic#1735 Plutus witnesses
+ic#1737 Plutus witnesses
+ic#1739 Plutus witnesses
+ic#1741 Plutus witnesses
+ic#1743 Plutus witnesses
+ic#1745 Plutus witnesses
+ic#1747 Plutus witnesses
+ic#1770 Plutus witnesses
+ic#1772 Plutus witnesses
+ic#1774 Plutus witnesses
+ic#1776 Plutus witnesses
+ic#1778 Plutus witnesses
+ic#1780 Plutus witnesses
+ic#1782 Plutus witnesses
+ic#1784 Plutus witnesses
+ic#1786 Plutus witnesses
+ic#1788 Plutus witnesses
+ic#1790 Plutus witnesses
+ic#1792 Plutus witnesses
+ic#1794 Plutus witnesses
+ic#1796 Plutus witnesses
+ic#1798 Plutus witnesses
+ic#1800 Plutus witnesses
+ic#1802 Plutus witnesses
+ic#1804 Plutus witnesses
+ic#1806 Plutus witnesses
+ic#1808 Plutus witnesses
+ic#1810 Plutus witnesses
+ic#1896 witness fields
+ic#1898 witness fields
+ic#1900 witness fields
+ic#1902 witness fields
+ic#1904 witness fields
+ic#1906 witness fields
+ic#1908 witness fields
+ic#1910 witness fields
+ic#1912 witness fields
+ic#1914 witness fields
+ic#1916 witness fields
+ic#1918 witness fields
+ic#1920 witness fields
+ic#1922 witness fields
+ic#1924 witness fields
+ic#1926 witness fields
+ic#1928 witness fields
+ic#1930 witness fields
+ic#1932 witness fields
+ic#1934 witness fields
+ic#1936 witness fields
+ic#1956 Plutus witnesses
+ic#1961 Plutus witnesses
+ic#1964 Plutus witnesses
+ic#1967 Plutus witnesses
+ic#1970 Plutus witnesses
+ic#1974 Plutus witnesses
+ic#1977 Plutus witnesses
+ic#1980 Plutus witnesses
+ic#1983 Plutus witnesses
+ic#1988 Plutus witnesses
+ic#1990 Plutus witnesses
+ic#1992 Plutus witnesses
+ic#1995 Plutus witnesses
+ic#2000 Plutus witnesses
+ic#2003 Plutus witnesses
+ic#2006 Plutus witnesses
+ic#2009 Plutus witnesses
+ic#2013 Plutus witnesses
+ic#2016 Plutus witnesses
+ic#2019 Plutus witnesses
+ic#2022 Plutus witnesses
+ic#2027 Plutus witnesses
+ic#2029 Plutus witnesses
+ic#2031 Plutus witnesses
+ic#2076 witness fields
+ic#2079 witness fields
+ic#2082 witness fields
+ic#2085 witness fields
+ic#2088 witness fields
+ic#2092 witness fields
+ic#2095 witness fields
+ic#2098 witness fields
+ic#2101 witness fields
+ic#2107 witness fields
+ic#2109 witness fields
+ic#2111 witness fields
+ic#2113 witness fields
+ic#2118 Plutus witnesses
+ic#2120 Plutus witnesses
+ic#2123 Plutus witnesses
+ic#2125 Plutus witnesses
+ic#2127 Plutus witnesses
+ic#2129 stateful or scripted subtransaction
+ic#2132 Plutus witnesses
+ic#2134 Plutus witnesses
+ic#2137 Plutus witnesses
+ic#2139 Plutus witnesses
+ic#2141 Plutus witnesses
+ic#2143 stateful or scripted subtransaction
+ic#2157 stateful or scripted subtransaction
+ic#2160 witness fields
+ic#2162 witness fields
+ic#2165 witness fields
+ic#2167 witness fields
+ic#2169 witness fields
+ic#2171 stateful or scripted subtransaction
+ic#2252 witness fields
+ic#2274 reference script language (requires V3)
+ic#2277 reference script language (requires V3)
+ic#2280 reference script language (requires V3)
+ic#2294 new script language (requires V3)
+ic#2296 reference script language (requires V3)
+ic#2297 new script language (requires V3)
+ic#2299 reference script language (requires V3)
+ic#2300 new script language (requires V3)
+ic#2302 reference script language (requires V3)
+ic#2310 Plutus witnesses
+ic#2338 witness fields
+ic#2339 new script language (requires V3)
+ic#2350 Plutus witnesses
+ic#2354 Plutus witnesses
+ic#2369 Plutus witnesses
+ic#7300 stateful or scripted subtransaction
+ic#7302 stateful or scripted subtransaction
+ic#7315 stateful or scripted subtransaction
+ic#7318 stateful or scripted subtransaction
+ic#7319 certificate kind
+ic#7321 certificate kind
+ic#7322 certificate kind
+ic#7344 certificate kind
+ic#7345 certificate kind
+ic#7346 certificate kind
+ic#7349 certificate kind
+ic#7351 certificate kind
+ic#7352 certificate kind
+ic#7353 certificate kind
+ic#7354 certificate kind
+ic#7355 certificate kind
+ic#7356 certificate kind
+ic#7357 certificate kind
+ic#7358 certificate kind
+ic#7359 certificate kind
+ic#7360 certificate kind
+ic#7361 certificate kind
+ic#7362 certificate kind
+ic#7392 certificate kind
+ic#7393 certificate kind
+ic#7394 certificate kind
+ic#7395 certificate kind
+ic#7397 certificate kind
+ic#7398 certificate kind
+ic#7399 certificate kind
+ic#7401 certificate kind
+ic#7403 stateful or scripted subtransaction
+ic#7405 certificate kind
+ic#7407 certificate kind
+ic#7411 certificate kind
+ic#7412 certificate kind
+ic#7413 certificate kind
+ic#7414 certificate kind
+ic#7416 certificate kind
+ic#7418 certificate kind
+ic#7420 certificate kind
+ic#7422 account or governance state
+ic#7423 account or governance state
+ic#7424 account or governance state
+ic#7479 account or governance state
+ic#7483 account or governance state
+ic#7502 certificate kind
+ic#7503 certificate kind
+ic#7505 certificate kind
+ic#7515 account or governance state
+ic#7516 account or governance state
+ic#7517 account or governance state
+ic#7518 account or governance state
+ic#7580 certificate kind
+ic#7581 certificate kind
+ic#7583 certificate kind
+ic#7585 account or governance state
+ic#7586 account or governance state
+ic#7587 account or governance state
+ic#7588 account or governance state
+ic#7589 certificate kind
+ic#7591 certificate kind
+ic#7593 certificate kind
+ic#7595 certificate kind
+ic#7597 account or governance state
+ic#7599 account or governance state
+ic#7601 account or governance state
+ic#7602 account or governance state
+ic#7603 account or governance state
+ic#7604 account or governance state
+ic#7605 account or governance state
+ic#7606 account or governance state
+ic#7607 account or governance state
+ic#7608 certificate kind
+ic#7610 certificate kind
+ic#7612 certificate kind
+ic#7615 account or governance state
+ic#7618 account or governance state
+ic#7621 account or governance state
+ic#7622 account or governance state
+ic#7623 account or governance state
+ic#7624 account or governance state
+ic#7625 account or governance state
+ic#7626 account or governance state
+ic#7627 account or governance state
+ic#7628 account or governance state
+ic#7629 account or governance state
+ic#7630 account or governance state
+ic#7631 certificate kind
+ic#7633 certificate kind
+ic#7635 certificate kind
+ic#7640 account or governance state
+ic#7641 account or governance state
+ic#7642 account or governance state
+ic#7643 account or governance state
+ic#7644 account or governance state
+ic#7645 account or governance state
+ic#7646 account or governance state
+ic#7647 account or governance state
+ic#7648 account or governance state
+ic#7649 account or governance state
+ic#7737 account or governance state
+ic#7740 account or governance state
+ic#7743 account or governance state
+ic#7746 account or governance state
+ic#7749 account or governance state
+ic#7752 account or governance state
+ic#7754 account or governance state
+ic#7755 certificate kind
+ic#7776 account or governance state
+ic#7778 account or governance state
+ic#7814 account or governance state
+ic#7817 account or governance state
+ic#7982 account or governance state
+ic#7983 account or governance state
+ic#7984 account or governance state
+ic#7986 account or governance state
+ic#7988 account or governance state
+ic#7993 account or governance state
+ic#7994 certificate kind
+ic#7995 account or governance state
+ic#7996 certificate kind
+ic#7997 certificate kind
+ic#7999 certificate kind
+ic#8001 account or governance state
+ic#8003 certificate kind
+ic#8005 account or governance state
+ic#8007 certificate kind
+ic#8009 account or governance state
+ic#8011 certificate kind
+ic#8012 certificate kind
+ic#8014 certificate kind
+ic#8015 certificate kind
+ic#8017 account or governance state
+ic#8045 account or governance state
+ic#8053 certificate kind
+ic#8054 certificate kind
+ic#8056 certificate kind
+ic#8059 account or governance state
+ic#8060 account or governance state
+ic#8061 account or governance state
+ic#8062 account or governance state
+ic#8083 account or governance state
+ic#8085 account or governance state
+ic#8087 account or governance state
+ic#8091 account or governance state
+ic#8093 account or governance state
+ic#8095 account or governance state
+ic#8097 account or governance state
+ic#8099 account or governance state
+ic#8103 account or governance state
+ic#8140 account or governance state
+ic#8141 certificate kind
+ic#8142 certificate kind
+ic#8144 certificate kind
+ic#8146 certificate kind
+ic#8148 certificate kind
+ic#8149 account or governance state
+ic#8150 account or governance state
+ic#8151 account or governance state
+ic#8153 account or governance state
+ic#8154 certificate kind
+ic#8155 certificate kind
+ic#8157 certificate kind
+ic#8159 certificate kind
+ic#8161 certificate kind
+ic#8162 account or governance state
+ic#8163 account or governance state
+ic#8164 account or governance state
+ic#8166 account or governance state
+ic#8167 certificate kind
+ic#8168 certificate kind
+ic#8170 certificate kind
+ic#8172 certificate kind
+ic#8174 certificate kind
+ic#8175 account or governance state
+ic#8176 account or governance state
+ic#8177 account or governance state
+ic#8180 account or governance state
+ic#8182 account or governance state
+ic#8184 account or governance state
+ic#8186 account or governance state
+ic#8188 account or governance state
+ic#8189 certificate kind
+ic#8191 stateful or scripted subtransaction
+ic#8192 certificate kind
+ic#8194 certificate kind
+ic#8196 stateful or scripted subtransaction
+ic#8198 stateful or scripted subtransaction
+ic#8200 stateful or scripted subtransaction
+ic#8202 stateful or scripted subtransaction
+ic#8204 stateful or scripted subtransaction
+ic#8206 stateful or scripted subtransaction
+ic#8207 certificate kind
+ic#8208 certificate kind
+ic#8210 stateful or scripted subtransaction
+ic#8211 certificate kind
+ic#8213 stateful or scripted subtransaction
+ic#8214 certificate kind
+ic#8215 certificate kind
+ic#8216 certificate kind
+ic#8218 stateful or scripted subtransaction
+ic#8219 certificate kind
+ic#8221 stateful or scripted subtransaction
+ic#8223 stateful or scripted subtransaction
+ic#8224 certificate kind
+ic#8225 certificate kind
+ic#8228 stateful or scripted subtransaction
+ic#8231 stateful or scripted subtransaction
+ic#8245 certificate kind
+ic#8249 account or governance state
+ic#8250 certificate kind
+ic#8621 certificate kind
+ic#8623 account or governance state
+ic#8624 certificate kind
+ic#8628 account or governance state
+ic#8666 certificate kind
+ic#8668 certificate kind
+ic#8669 certificate kind
+ic#8671 certificate kind
+ic#8673 certificate kind
+ic#8675 certificate kind
+ic#8677 account or governance state
+ic#8678 account or governance state
+ic#8679 account or governance state
+ic#9011 certificate kind
+ic#9012 certificate kind
+ic#9014 certificate kind
+ic#9016 account or governance state
+ic#9018 account or governance state
+ic#9020 account or governance state
+ic#9022 account or governance state
+ic#9023 account or governance state
+ic#9024 account or governance state
+ic#9025 account or governance state
+ic#9026 account or governance state
+ic#9027 account or governance state
+ic#9028 account or governance state
+ic#9029 account or governance state
+ic#9030 account or governance state
+ic#9031 account or governance state
+ic#9032 account or governance state
+ic#9033 account or governance state
+ic#9034 account or governance state
+ic#9035 certificate kind
+ic#9036 certificate kind
+ic#9038 certificate kind
+ic#9041 account or governance state
+ic#9044 account or governance state
+ic#9047 account or governance state
+ic#9049 account or governance state
+ic#9051 account or governance state
+ic#9052 account or governance state
+ic#9053 account or governance state
+ic#9054 account or governance state
+ic#9055 account or governance state
+ic#9056 account or governance state
+ic#9057 account or governance state
+ic#9058 account or governance state
+ic#9059 account or governance state
+ic#9060 account or governance state
+ic#9061 account or governance state
+ic#9062 account or governance state
+ic#9063 account or governance state
+ic#9064 account or governance state
+ic#9065 account or governance state
+ic#9066 account or governance state
+ic#9452 certificate kind
+ic#9454 certificate kind
+ic#9456 account or governance state
+ic#9457 account or governance state
+ic#9459 certificate kind
+ic#9461 certificate kind
+ic#9464 account or governance state
+ic#9465 account or governance state
+ic#9480 certificate kind
+ic#9482 certificate kind
+ic#9484 account or governance state
+ic#9485 account or governance state
+ic#9486 certificate kind
+ic#9488 certificate kind
+ic#9490 account or governance state
+ic#9491 account or governance state
+ic#9492 certificate kind
+ic#9493 certificate kind
+ic#9494 certificate kind
+ic#9496 certificate kind
+ic#9498 account or governance state
+ic#9499 account or governance state
+ic#9500 certificate kind
+ic#9501 certificate kind
+ic#9502 account or governance state
+ic#9503 account or governance state
+ic#9519 account or governance state
+ic#9545 certificate kind
+ic#9547 certificate kind
+ic#9549 certificate kind
+ic#9551 certificate kind
+ic#9552 account or governance state
+ic#9606 account or governance state
+ic#9609 account or governance state
+ic#9630 account or governance state
+ic#9645 reference script language (requires V3)
+ic#9648 reference script language (requires V3)
+ic#9655 reference script language (requires V3)
+ic#9658 reference script language (requires V3)
+ic#9662 reference script language (requires V3)
+ic#9675 new script language (requires V3)
+ic#9677 reference script language (requires V3)
+ic#9678 new script language (requires V3)
+ic#9680 reference script language (requires V3)
+ic#9681 new script language (requires V3)
+ic#9684 new script language (requires V3)
+ic#9686 reference script language (requires V3)
+ic#9695 certificate kind
+ic#9698 account or governance state
+ic#9702 certificate kind
+ic#9705 account or governance state
+ic#9725 Plutus witnesses
+ic#9728 Plutus witnesses
+ic#9730 certificate kind
+ic#9732 certificate kind
+ic#9735 Plutus witnesses
+ic#9737 certificate kind
+ic#9739 certificate kind
+ic#9742 Plutus witnesses
+ic#9743 certificate kind
+ic#9745 certificate kind
+ic#9749 certificate kind
+ic#9751 certificate kind
+ic#9755 certificate kind
+ic#9757 certificate kind
+ic#9761 certificate kind
+ic#9763 certificate kind
+ic#9785 certificate kind
+ic#9787 certificate kind
+ic#9791 certificate kind
+ic#9793 certificate kind
+ic#9797 certificate kind
+ic#9799 certificate kind
+ic#9803 certificate kind
+ic#9805 certificate kind
+ic#9820 stateful or scripted subtransaction
+ic#9848 certificate kind
+ic#9850 account or governance state
+ic#9851 account or governance state
 supp#14 stateful or scripted subtransaction
 supp#20 overlapping spending and reference inputs
 supp#22 account or governance state
+supp#54 bootstrap or reward address
+supp#56 bootstrap or reward address
+supp#58 bootstrap or reward address
+supp#60 bootstrap or reward address
+supp#62 bootstrap or reward address
+supp#64 bootstrap or reward address
+supp#67 bootstrap or reward address
+supp#69 bootstrap or reward address
+supp#71 bootstrap or reward address
+supp#73 bootstrap or reward address
+supp#75 bootstrap or reward address
+supp#77 bootstrap or reward address
+supp#117 bootstrap or reward address

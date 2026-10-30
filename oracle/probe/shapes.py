@@ -43,14 +43,14 @@ def ins(body, key=0):
 def main():
     rs = [json.loads(l) for l in open(sys.argv[1])]
     origin, kind = Counter(), Counter()
-    made = {}
+    made, pre = {}, {}
     for r in rs:
-        if not r["follows_prev"]:
+        if r["pre"] != "follows_prev":
             made = {}
+            pre = {txin(i): o for i, o in r["pre"]["fresh"]}
         tx = untag(loads(r["tx"])[0])
         body = tx[0]
         top = set(ins(body))
-        pre = {txin(i): o for i, o in r["pre_utxo"]}
         verdict = next(iter(r["outcome"]))
         for sub in untag(body.get(23, [])):
             for i in ins(untag(sub)[0]):
@@ -62,9 +62,13 @@ def main():
                     for k in kinds(pre[i]):
                         kind[k] += 1
         if verdict == "accepted":
-            for i, _ in r["outcome"]["accepted"]["post_utxo"]:
-                if txin(i) not in pre:
-                    made[txin(i)] = r["n"]
+            accepted = r["outcome"]["accepted"]
+            pre = dict(pre)
+            for i in accepted["consumed"]:
+                del pre[txin(i)]
+            for i, o in accepted["produced"]:
+                made[txin(i)] = r["n"]
+                pre[txin(i)] = o
     print("records", len(rs), Counter(next(iter(r["outcome"])) for r in rs))
     print("child only input origin", dict(sorted(origin.items())))
     print("accepted child only input kinds", dict(sorted(kind.items())))
