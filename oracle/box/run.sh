@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs the oracle on the build box, its done run, its live leg alone or the regeneration of its committed manifests.
 # Usage: [REV=ref] run.sh done|live|regen
-# The live leg reads ENDPOINT, NODE, GRPCURL, SERVE_CONFIG and CANDIDATE_GRPC from $LIVE_ENV.
+# The live leg reads ENDPOINT, NODE, NODE_DB, GRPCURL, SERVE_CONFIG and CANDIDATE_GRPC from $LIVE_ENV.
 set -eu
 ROOT=${ROOT:-/opt/build/ledger-oracle-1027}
 REV=${REV:-feat/ledger-oracle}

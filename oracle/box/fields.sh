@@ -14,7 +14,7 @@ leaves() {
 
 differing=0
 compared=0
-for name in params.json era.json $(cd "$DIR/candidate" && ls block-*.json tx-*.json 2>/dev/null); do
+for name in params.json era.json utxos.json $(cd "$DIR/candidate" && ls block-*.json tx-*.json 2>/dev/null); do
   if [ ! -f "$DIR/serve/$name" ]; then
     echo "LIVE-FIELD $name serve=absent"
     differing=$((differing + 1))

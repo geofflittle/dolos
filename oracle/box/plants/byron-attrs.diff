@@ -1,0 +1,22 @@
+diff --git a/pallas-validate/src/phase1/conway.rs b/pallas-validate/src/phase1/conway.rs
+index 8825dbf3..b12ff650 100644
+--- a/pallas-validate/src/phase1/conway.rs
++++ b/pallas-validate/src/phase1/conway.rs
+@@ -1570,12 +1570,16 @@ pub(crate) const BOOTSTRAP_ROOT_HEADER: [u8; 6] = [0x83, 0x00, 0x82, 0x00, 0x58,
+ 
+ /// The key hash a bootstrap witness provides, over its key, chain code and attribute bytes as sent.
+ pub(crate) fn bootstrap_wit_root(wit: &BootstrapWitness) -> AddressId {
++    let attributes: Vec<u8> =
++        pallas_codec::minicbor::decode::<pallas_addresses::byron::AddrAttrs>(&wit.attributes)
++            .map(|x| pallas_codec::minicbor::to_vec(x).unwrap())
++            .unwrap_or_default();
+     AddressPayload::hash_address_id_preimage(
+         &[
+             &BOOTSTRAP_ROOT_HEADER[..],
+             wit.public_key.as_slice(),
+             wit.chain_code.as_slice(),
+-            wit.attributes.as_slice(),
++            attributes.as_slice(),
+         ]
+         .concat(),
+     )

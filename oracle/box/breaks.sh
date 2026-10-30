@@ -1,11 +1,11 @@
 #!/bin/sh
 # Judges the oracle branch head and each named arm, one oracle run each.
-# Usage: [REV=ref] [ARMS="head colret coin inflight rodrigo-reverted rob-reverted cost revalidate subouts"] breaks.sh
+# Usage: [REV=ref] [ARMS="head colret coin ..."] breaks.sh
 # The branch is read from the bare repository $ROOT/dolos.git.
 set -eu
 ROOT=${ROOT:-/opt/build/ledger-oracle-1027}
 REV=${REV:-feat/ledger-oracle}
-ARMS=${ARMS:-head colret coin inflight rodrigo-reverted rob-reverted cost revalidate subouts}
+ARMS=${ARMS:-head colret coin inflight rodrigo-reverted rob-reverted cost revalidate revalidate-drops subouts byron-attrs byron-signer byron-guard chaincode minfee-subtx emptyguards tag24 v1v2}
 MIN_FREE_G=${MIN_FREE_G:-6}
 HERE=$(cd "$(dirname "$0")" && pwd)
 IMAGE="$HERE/in-image.sh"
@@ -50,6 +50,10 @@ plant_revalidate() {
   git -C "$ROOT/$SCRATCH" apply "$HERE/plants/revalidate.diff"
 }
 
+plant_revalidate_drops() {
+  git -C "$ROOT/$SCRATCH" apply "$HERE/plants/revalidate-drops.diff"
+}
+
 plant_subouts() {
   git -C "$ROOT/$SCRATCH" apply "$HERE/plants/subouts.diff"
 }
@@ -80,6 +84,12 @@ plant_cost() {
   git -C "$ROOT/$PALLAS" apply "$HERE/plants/cost.diff"
 }
 
+# Applies the named pallas plant over the pinned pallas commit.
+plant_pallas() {
+  pallas_tree "$pin"
+  git -C "$ROOT/$PALLAS" apply "$HERE/plants/$1.diff"
+}
+
 # Whether an arm's log holds the line its plant must produce and the head log lacks.
 caught() {
   arm=$1
@@ -92,7 +102,16 @@ caught() {
     rob-reverted) pattern='^(UNSUPPORTED_UNEXPECTED|DISAGREE|REASON_MISMATCH|STALE_MANIFEST) ic#(851|861|1215|1233) ' ;;
     cost) pattern='^DIFF units supp#[0-9]+ purpose=[0-9]+#[0-9]+ ledger=\(ran ' ;;
     revalidate) pattern='^DIFF revalidate [a-z]+#[0-9]+ kept_after_rollback_to=' ;;
+    revalidate-drops) pattern='^DIFF revalidate [a-z]+#[0-9]+ dropped_after_rollback_to=' ;;
     subouts) pattern='^DIFF (undo|as_output) [a-z]+#[0-9]+ ' ;;
+    byron-attrs) pattern='^DISAGREE supp#(59|72) ' ;;
+    byron-signer) pattern='^DISAGREE supp#(55|68) ' ;;
+    byron-guard) pattern='^DISAGREE supp#(63|76) ' ;;
+    chaincode) pattern='^DISAGREE supp#(61|74) ' ;;
+    minfee-subtx) pattern='^DIFF fee [a-z]+#[0-9]+ ledger=[0-9]+ dolos=[0-9]+$' ;;
+    emptyguards) pattern='^DISAGREE supp#(80|82) ' ;;
+    tag24) pattern='^DISAGREE supp#83 ' ;;
+    v1v2) pattern='^UNSUPPORTED_UNEXPECTED ic#[0-9]+ label=new script language ' ;;
   esac
   if [ ! -f "$OUT/head.log" ]; then
     echo "ARM $arm NO_HEAD_LOG"
@@ -100,6 +119,12 @@ caught() {
   fi
   grep -E "$pattern" "$OUT/$arm.log" >"$OUT/$arm.expected" || true
   grep -E "$pattern" "$OUT/head.log" | grep -v -x -F -f - "$OUT/$arm.expected" >"$OUT/$arm.new" || true
+  # The subouts arm counts only records that no known row names.
+  if [ "$arm" = subouts ]; then
+    sed -n 's/^[^ ]* [^ ]* \([a-z]*#[0-9]*\).*/ \1 /p' "$ROOT/$SCRATCH/test_data/ledger-oracle/known.txt" >"$OUT/known.ids"
+    grep -v -F -f "$OUT/known.ids" "$OUT/$arm.new" >"$OUT/$arm.unknown" || true
+    mv "$OUT/$arm.unknown" "$OUT/$arm.new"
+  fi
   head -4 "$OUT/$arm.new"
   [ -s "$OUT/$arm.new" ]
 }
@@ -117,16 +142,18 @@ for arm in $ARMS; do
     coin) plant_coin ;;
     inflight) plant_inflight ;;
     revalidate) plant_revalidate ;;
+    revalidate-drops) plant_revalidate_drops ;;
     subouts) plant_subouts ;;
     rodrigo-reverted) plant_rodrigo ;;
     rob-reverted) plant_rob ; locked= ;;
     cost) plant_cost ; locked= ;;
+    byron-attrs | byron-signer | byron-guard | chaincode | minfee-subtx | emptyguards | tag24 | v1v2) plant_pallas "$arm" ; locked= ;;
     *) echo "unknown arm $arm" ; exit 2 ;;
   esac
   source=$(pallas_source)
   case $arm in
     rob-reverted) pallas_rev="$(echo "$ROB_BASE" | cut -c1-7)-reverted-f3419a3a" ;;
-    cost) pallas_rev="$pin_short-cost" ;;
+    cost | byron-attrs | byron-signer | byron-guard | chaincode | minfee-subtx | emptyguards | tag24 | v1v2) pallas_rev="$pin_short-$arm" ;;
     *) pallas_rev=$pin_short ;;
   esac
   if [ -z "$locked" ] && [ "$source" != "/w/$PALLAS/pallas-validate" ]; then

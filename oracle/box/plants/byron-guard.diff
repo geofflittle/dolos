@@ -1,0 +1,24 @@
+diff --git a/pallas-validate/src/phase1/dijkstra.rs b/pallas-validate/src/phase1/dijkstra.rs
+index 39707551..d69510a1 100644
+--- a/pallas-validate/src/phase1/dijkstra.rs
++++ b/pallas-validate/src/phase1/dijkstra.rs
+@@ -255,6 +255,9 @@ pub fn validate_dijkstra_tx(
+         }
+         output_coin = add(output_coin, check_outputs(&sb.outputs, pp, network_id)?)?;
+         check_signatures(w, &encode(&sub.sub_transaction_body)?, sub_keys)?;
++        if !guard_keys(&guards).is_subset(&witness_keys(w)) {
++            return Err(PostAlonzo(VKWitnessMissing));
++        }
+     }
+     let spending = check_inputs(&b.inputs, utxos, &mut spent, &mut keys)?;
+     consumed = add(consumed, spending.coin)?;
+@@ -272,6 +275,9 @@ pub fn validate_dijkstra_tx(
+     }
+     check_assets(tx, utxos)?;
+     check_signatures(&tx.transaction_witness_set, &encode(b)?, keys)?;
++    if !guard_keys(&guards).is_subset(&witness_keys(&tx.transaction_witness_set)) {
++        return Err(PostAlonzo(VKWitnessMissing));
++    }
+     cert_state.dijkstra_registrations = state;
+     cert_state.dijkstra_account_balances = accounts;
+     Ok(())

@@ -1,0 +1,8 @@
+diff --git a/crates/core/src/submit.rs b/crates/core/src/submit.rs
+--- a/crates/core/src/submit.rs
++++ b/crates/core/src/submit.rs
+@@ -115,3 +115,3 @@ pub trait SubmitExt: Domain {
+             match chain.validate_tx(&tx.payload.1, &utxos, tip.clone(), &genesis) {
+-                Ok(_) => kept.push(tx),
++                Ok(_) => refused.push(tx.hash),
+                 Err(error) => {

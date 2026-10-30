@@ -1,0 +1,13 @@
+diff --git a/pallas-validate/src/phase1/dijkstra.rs b/pallas-validate/src/phase1/dijkstra.rs
+index 5833ddc1..f5b40626 100644
+--- a/pallas-validate/src/phase1/dijkstra.rs
++++ b/pallas-validate/src/phase1/dijkstra.rs
+@@ -1397,8 +1397,6 @@ fn check_new_script(script: &MultiEraScriptRef<'_>) -> ValidationResult {
+     match script {
+         MultiEraScriptRef::Dijkstra(s) => match s.as_ref() {
+             ScriptRef::NativeScript(_) => Ok(()),
+-            ScriptRef::PlutusV1Script(s) => well_formed_plutus(s.as_ref()),
+-            ScriptRef::PlutusV2Script(s) => well_formed_plutus(s.as_ref()),
+             ScriptRef::PlutusV3Script(s) => well_formed_plutus(s.as_ref()),
+             _ => Err(DijkstraUnsupported("new script language (requires V3)")),
+         },

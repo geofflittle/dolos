@@ -1,7 +1,7 @@
 #!/bin/sh
 # Syncs a candidate Dolos from the node beside the serving one, reads both and the node, prints each field the two serve differently, and removes the candidate.
 # Usage: CANDIDATE=<binary path or image reference> COMMIT=sha candidate.sh <dir>
-# Reads ROOT, NODE, ENDPOINT, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_NEED_G and GRPCURL from the environment.
+# Reads ROOT, NODE, NODE_DB, ENDPOINT, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_NEED_G and GRPCURL from the environment.
 set -eu
 DIR=$1
 : "${CANDIDATE:?}" "${COMMIT:?}" "${ROOT:?}" "${NODE:?}" "${ENDPOINT:?}" "${SERVE_CONFIG:?}"
@@ -18,7 +18,7 @@ free_g() {
   df -BG --output=avail "$1" | tail -1 | tr -dc 0-9
 }
 
-if [ "$(free_g "$ROOT")" -lt $((NEED_G + 3)) ] || [ "$(free_g /)" -lt 30 ]; then
+if [ "$(free_g "$ROOT")" -lt $((NEED_G + 3)) ] || [ "$(free_g /)" -lt 25 ]; then
   echo "LIVE-CANDIDATE REFUSED free=$(free_g "$ROOT")G root_free=$(free_g /)G need=$((NEED_G + 3))G"
   exit 2
 fi
@@ -80,14 +80,20 @@ while :; do
   sleep 30
 done
 echo "LIVE-CANDIDATE synced slot=$slot node=$node seconds=$(($(date +%s) - start)) store=$(du -sh "$STORE" | cut -f1)"
+# The bytes of each part of the store and the height of its tip, which divide into bytes per block.
+height=$("$GRPCURL" -plaintext -d '{}' "$CANDIDATE_GRPC" utxorpc.v1.sync.SyncService/ReadTip | jq -r '.tip.height // 0')
+du -sb "$STORE"/data/archive/* "$STORE/data/state" "$STORE/data/wal" | while read -r bytes path; do
+  echo "LIVE-CANDIDATE store part=${path#"$STORE"/data/} bytes=$bytes height=$height"
+done
 
-# The last block of the candidate's recent history whose body holds a certificate.
+# The last block whose body holds a certificate among the candidate's blocks from 6000 to 3000 slots back, which the node holds in its immutable database.
 recent=$("$GRPCURL" -plaintext -max-msg-sz 200000000 \
-  -d "{\"startToken\":{\"slot\":$((slot - 2000))},\"maxItems\":100,\"fieldMask\":{\"paths\":[\"cardano.header\"]}}" \
+  -d "{\"startToken\":{\"slot\":$((slot - 6000))},\"maxItems\":200,\"fieldMask\":{\"paths\":[\"cardano.header\"]}}" \
   "$CANDIDATE_GRPC" utxorpc.v1.sync.SyncService/DumpHistory |
-  jq -r '[.block[].cardano.header | select(.bodyContainsLeiosCertificate) | .slot] | last // empty')
+  jq -r --argjson end $((slot - 3000)) \
+    '[.block[].cardano.header | select(.bodyContainsLeiosCertificate and (.slot | tonumber) < $end) | .slot] | last // empty')
 if [ -z "$recent" ]; then
-  echo "LIVE-CANDIDATE no_certifying_block from=$((slot - 2000))"
+  echo "LIVE-CANDIDATE no_certifying_block from=$((slot - 6000)) to=$((slot - 3000))"
   exit 1
 fi
 echo "LIVE-CANDIDATE certifying_slot=$recent"

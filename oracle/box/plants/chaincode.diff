@@ -1,0 +1,13 @@
+diff --git a/pallas-validate/src/phase1/dijkstra.rs b/pallas-validate/src/phase1/dijkstra.rs
+index 7fef62d8..b194cad3 100644
+--- a/pallas-validate/src/phase1/dijkstra.rs
++++ b/pallas-validate/src/phase1/dijkstra.rs
+@@ -660,7 +660,7 @@ fn check_witness_fields(w: &KeepRaw<'_, WitnessSet<'_>>, redeemers: bool) -> Val
+     }
+     let mut roots = HashSet::new();
+     for x in w.bootstrap_witness.iter().flat_map(|x| x.iter()) {
+-        if x.public_key.len() != 32 || x.signature.len() != 64 || x.chain_code.len() != 32 {
++        if x.public_key.len() != 32 || x.signature.len() != 64 {
+             return Err(DijkstraMalformed("bootstrap witness"));
+         }
+         if !roots.insert(super::conway::bootstrap_wit_root(x)) {

@@ -1,0 +1,26 @@
+diff --git a/pallas-primitives/src/dijkstra/model.rs b/pallas-primitives/src/dijkstra/model.rs
+index e71e5aae..da9e8a62 100644
+--- a/pallas-primitives/src/dijkstra/model.rs
++++ b/pallas-primitives/src/dijkstra/model.rs
+@@ -1194,10 +1194,6 @@ pub struct SubTransactionBody<'a> {
+     pub script_data_hash: Option<Hash<32>>,
+ 
+     #[n(14)]
+-    #[cbor(
+-        decode_with = "guards_field::decode_option",
+-        nil = "guards_field::none"
+-    )]
+     pub guards: Option<Guards>,
+ 
+     #[n(15)]
+@@ -1282,10 +1278,6 @@ pub struct TransactionBody<'a> {
+     pub collateral: Option<NonEmptySet<TransactionInput>>,
+ 
+     #[n(14)]
+-    #[cbor(
+-        decode_with = "guards_field::decode_option",
+-        nil = "guards_field::none"
+-    )]
+     pub guards: Option<Guards>,
+ 
+     #[n(15)]

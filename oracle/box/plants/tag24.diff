@@ -1,0 +1,13 @@
+diff --git a/pallas-primitives/src/babbage/model.rs b/pallas-primitives/src/babbage/model.rs
+index 246cd109..1013cf6f 100644
+--- a/pallas-primitives/src/babbage/model.rs
++++ b/pallas-primitives/src/babbage/model.rs
+@@ -390,7 +390,7 @@ pub enum DatumOption<'b> {
+ 
+ crate::flat_enum::decode_flat_enum!(DatumOption<'b>,
+     0 => Hash(hash),
+-    1 => Data(data: decode_inline_datum),
++    1 => Data(data),
+ );
+ 
+ /// Decodes inline datum data, tagged bytes of either length form that hold the data's CBOR.
