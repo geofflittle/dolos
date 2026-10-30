@@ -147,7 +147,7 @@ pub fn estimate_tx_calls<D: Domain>(
     estimate_decoded::<D>(&tx, utxos, &pparams)
 }
 
-/// The minimum fee `dijkstra_min_fee` computes for a transaction under the active parameters, none outside Dijkstra.
+/// The minimum fee of a Dijkstra transaction under the active parameters, with the redeemers of its top level and sub transactions priced together, none outside Dijkstra.
 pub fn min_fee<D: Domain>(
     cbor: &[u8],
     utxos: &MempoolAwareUtxoStore<D>,
