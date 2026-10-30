@@ -39,7 +39,7 @@ impl fmt::Display for OutputField {
 
 /// An integer as CBOR states it, its sign and the big endian magnitude, without leading zeros, of the value when nonnegative or of minus one minus the value when negative.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct Integer {
+pub(super) struct Integer {
     negative: bool,
     magnitude: Vec<u8>,
 }
@@ -62,13 +62,23 @@ impl Integer {
     }
 
     /// The integer a served big integer states, none when the message states none.
-    fn served(value: &cardano::BigInt) -> Option<Self> {
+    pub(super) fn served(value: &cardano::BigInt) -> Option<Self> {
         use cardano::big_int::BigInt as B;
         match value.big_int.as_ref()? {
             B::Int(i) => Some(Integer::of((*i).into())),
             B::BigUInt(bytes) => Some(Integer::from_bytes(false, bytes)),
             B::BigNInt(bytes) => Some(Integer::from_bytes(true, bytes)),
         }
+    }
+
+    /// The value of the integer when it is nonnegative and fits 128 bits.
+    pub(super) fn unsigned(&self) -> Option<u128> {
+        let fits = !self.negative && self.magnitude.len() <= 16;
+        let value = self
+            .magnitude
+            .iter()
+            .fold(0, |a, b| a << 8 | u128::from(*b));
+        fits.then_some(value)
     }
 }
 
@@ -391,6 +401,7 @@ mod tests {
         interop::utxorpc::{v1::Mapper, LedgerContext, TxoRef, UtxoMap},
         ledger::traverse::{Era, MultiEraOutput},
     };
+    use std::collections::BTreeSet;
 
     use super::*;
 
@@ -410,18 +421,22 @@ mod tests {
 
     /// Every output the accepted records of both corpora leave in the ledger state.
     fn ledger_outputs() -> Vec<Vec<u8>> {
-        let mut outputs = Vec::new();
+        let mut outputs = BTreeSet::new();
         for kind in [CorpusKind::Ic, CorpusKind::Supp] {
             let corpus = corpus::load(kind).unwrap_or_else(|e| panic!("{e}"));
-            for record in corpus.kept().flat_map(|run| run.records()) {
-                if let LedgerOutcome::Accepted { post_utxo, .. } = &record.outcome {
-                    outputs.extend(post_utxo.iter().map(|e| e.output.0.clone()));
+            for run in corpus.kept() {
+                for record in run.records() {
+                    if let LedgerOutcome::Accepted { .. } = &record.outcome {
+                        for entry in run.post(record) {
+                            if !outputs.contains(&entry.output.0) {
+                                outputs.insert(entry.output.0.clone());
+                            }
+                        }
+                    }
                 }
             }
         }
-        outputs.sort();
-        outputs.dedup();
-        outputs
+        outputs.into_iter().collect()
     }
 
     fn bigint(value: i64) -> Option<cardano::BigInt> {

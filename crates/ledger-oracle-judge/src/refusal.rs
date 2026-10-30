@@ -15,6 +15,7 @@ pub enum RefusalClass {
     AccountAndWithdrawal,
     CertificateAndGovernance,
     Collateral,
+    Decoding,
 }
 
 impl RefusalClass {
@@ -25,6 +26,7 @@ impl RefusalClass {
             "BadInputsUTxO"
             | "SubBadInputsUTxO"
             | "SubInputSetEmptyUTxO"
+            | "UnspendableUTxONoDatumHash"
             | "SubUnspendableUTxONoDatumHash" => C::Inputs,
             "ValueNotConservedUTxO"
             | "ValueNotConservedInLegacyMode"
@@ -32,29 +34,39 @@ impl RefusalClass {
             | "SubOutputTooBigUTxO"
             | "SubOutputBootAddrAttrsTooBig" => C::Value,
             "MaxTxSizeUTxO" | "DijkstraTxRefScriptsSizeTooBig" => C::FeeAndSize,
-            "SubMissingVKeyWitnessesUTXOW"
+            "MissingVKeyWitnessesUTXOW"
+            | "SubMissingVKeyWitnessesUTXOW"
+            | "InvalidWitnessesUTXOW"
             | "SubInvalidWitnessesUTXOW"
             | "MissingRequiredGuards" => C::Witness,
             "ScriptWitnessNotValidatingUTXOW"
             | "SubScriptWitnessNotValidatingUTXOW"
             | "MissingScriptWitnessesUTXOW"
+            | "ExtraneousScriptWitnessesUTXOW"
+            | "ValidationTagMismatch"
             | "SubScriptIntegrityHashMismatch"
             | "MissingRedeemers"
             | "SubMissingRedeemers"
             | "ExtraRedeemers"
             | "SubExtraRedeemers"
             | "CollectErrors" => C::Script,
-            "SubMissingRequiredDatums"
+            "MissingRequiredDatums"
+            | "SubMissingRequiredDatums"
             | "NotAllowedSupplementalDatums"
             | "SubNotAllowedSupplementalDatums"
             | "MalformedGuardDatums"
             | "SubMalformedGuardDatums" => C::Datum,
-            "SubMissingTxMetadata"
+            "MissingTxMetadata"
+            | "SubMissingTxMetadata"
+            | "MissingTxBodyMetadataHash"
             | "SubMissingTxBodyMetadataHash"
+            | "ConflictingMetadataHash"
             | "SubConflictingMetadataHash" => C::Metadata,
-            "SubOutsideValidityIntervalUTxO" => C::Interval,
+            "OutsideValidityIntervalUTxO" | "SubOutsideValidityIntervalUTxO" => C::Interval,
             "SubWrongNetwork"
+            | "WrongNetworkInTxBody"
             | "SubWrongNetworkInTxBody"
+            | "WrongNetworkPOOL"
             | "WithdrawalAddressesWithWrongNetwork"
             | "SubWithdrawalAddressesWithWrongNetwork"
             | "DirectDepositAddressesWithWrongNetwork"
@@ -80,6 +92,20 @@ impl RefusalClass {
             | "SubDirectDepositAccountsMissing"
             | "StakeKeyNotRegisteredDELEG" => C::AccountAndWithdrawal,
             "RefundIncorrectDELEG"
+            | "DepositIncorrectDELEG"
+            | "DelegAccountAlreadyRegistered"
+            | "StakeKeyHasNonZeroAccountBalanceDELEG"
+            | "DelegateeDRepNotRegisteredDELEG"
+            | "DelegateeStakePoolNotRegisteredDELEG"
+            | "StakePoolCostTooLowPOOL"
+            | "StakePoolNotRegisteredOnKeyPOOL"
+            | "StakePoolRetirementWrongEpochPOOL"
+            | "DijkstraDRepAlreadyRegistered"
+            | "DijkstraDRepNotRegistered"
+            | "DijkstraDRepIncorrectDeposit"
+            | "DijkstraDRepIncorrectRefund"
+            | "DijkstraCommitteeIsUnknown"
+            | "DijkstraCommitteeHasPreviouslyResigned"
             | "BlsKeyInvalidProofOfPossession"
             | "VRFKeyHashAlreadyRegistered"
             | "DijkstraTreasuryValueMismatch"
@@ -99,6 +125,10 @@ impl RefusalClass {
             | "VotersDoNotExist"
             | "UnelectedCommitteeVoters"
             | "VotingOnExpiredGovAction" => C::CertificateAndGovernance,
+            "InsufficientCollateral" => C::Collateral,
+            "DecoderErrorDeserialiseFailure" | "DecoderErrorCustom" | "DecoderErrorLeftover" => {
+                C::Decoding
+            }
             _ => return None,
         };
         Some(class)
@@ -119,6 +149,7 @@ impl RefusalClass {
             RefusalClass::AccountAndWithdrawal => "account_and_withdrawal",
             RefusalClass::CertificateAndGovernance => "certificate_and_governance",
             RefusalClass::Collateral => "collateral",
+            RefusalClass::Decoding => "decoding",
         }
     }
 }

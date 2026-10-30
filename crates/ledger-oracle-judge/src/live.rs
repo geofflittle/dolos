@@ -148,9 +148,258 @@ pub fn settle(tallies: &BTreeMap<LiveLocus, Tally>, known: &KnownLive) -> Settle
     settled
 }
 
+/// The bytes of one block the node's immutable database holds, with where its header is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeBlock {
+    pub slot: u64,
+    pub header: Range<usize>,
+    pub bytes: Vec<u8>,
+}
+
+/// The size of one entry of an immutable chunk's secondary index.
+const SECONDARY_ENTRY: usize = 56;
+
+/// The blocks of one immutable chunk, by the entries of its secondary index.
+pub fn chunk_blocks(secondary: &[u8], chunk: &[u8]) -> Result<Vec<NodeBlock>, String> {
+    let entries = secondary.chunks(SECONDARY_ENTRY);
+    let entries: Vec<(usize, Range<usize>, u64)> = entries
+        .map(|e| {
+            let e: &[u8; SECONDARY_ENTRY] = e
+                .try_into()
+                .map_err(|_| format!("secondary entry of {} bytes", e.len()))?;
+            let offset = u64::from_be_bytes(e[0..8].try_into().unwrap());
+            let header_offset = u16::from_be_bytes(e[8..10].try_into().unwrap());
+            let header_size = u16::from_be_bytes(e[10..12].try_into().unwrap());
+            let slot = u64::from_be_bytes(e[48..56].try_into().unwrap());
+            let start = usize::from(header_offset);
+            Ok((
+                offset as usize,
+                start..start + usize::from(header_size),
+                slot,
+            ))
+        })
+        .collect::<Result<_, String>>()?;
+    let ends = entries
+        .iter()
+        .skip(1)
+        .map(|(offset, ..)| *offset)
+        .chain([chunk.len()]);
+    entries
+        .iter()
+        .zip(ends)
+        .map(|((offset, header, slot), end)| {
+            let bytes = chunk
+                .get(*offset..end)
+                .ok_or(format!("slot {slot} bytes {offset}..{end} past the chunk"))?;
+            Ok(NodeBlock {
+                slot: *slot,
+                header: header.clone(),
+                bytes: bytes.to_vec(),
+            })
+        })
+        .collect()
+}
+
+/// How the bytes of a block Dolos serves compare with the node's block at its slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockBytes {
+    Same,
+    /// A block whose body holds a certificate, whose header bytes are the node's and whose body carries the endorsed transactions in place of the node's certificate body.
+    SameHeader,
+    NodeAbsent,
+    HeaderDiffers,
+    BytesDiffer,
+}
+
+impl BlockBytes {
+    /// Whether the served bytes agree with the node's.
+    pub fn agrees(self) -> bool {
+        matches!(self, BlockBytes::Same | BlockBytes::SameHeader)
+    }
+
+    /// The name printed in judgement lines.
+    pub fn name(self) -> &'static str {
+        match self {
+            BlockBytes::Same => "same",
+            BlockBytes::SameHeader => "same_header",
+            BlockBytes::NodeAbsent => "node_absent",
+            BlockBytes::HeaderDiffers => "header_differs",
+            BlockBytes::BytesDiffer => "bytes_differ",
+        }
+    }
+}
+
+/// Compares the bytes Dolos serves for a block with the node's, the header alone for a block whose body holds a certificate.
+pub fn block_bytes(node: Option<&NodeBlock>, served: &[u8], certifying: bool) -> BlockBytes {
+    let Some(node) = node else {
+        return BlockBytes::NodeAbsent;
+    };
+    if served.get(node.header.clone()) != node.bytes.get(node.header.clone()) {
+        return BlockBytes::HeaderDiffers;
+    }
+    match (served == node.bytes.as_slice(), certifying) {
+        (true, _) => BlockBytes::Same,
+        (false, true) => BlockBytes::SameHeader,
+        (false, false) => BlockBytes::BytesDiffer,
+    }
+}
+
+/// An output's value as named amounts, lovelace under `lovelace` and each asset under its policy and name in hex.
+pub type Amounts = BTreeMap<String, u128>;
+
+/// The value of each output in the node's UTxO query answer, keyed by its reference as the query prints it.
+pub fn node_amounts(answer: &serde_json::Value) -> Result<BTreeMap<String, Amounts>, String> {
+    let outputs = answer
+        .as_object()
+        .ok_or("the UTxO answer is not an object")?;
+    outputs
+        .iter()
+        .map(|(reference, output)| {
+            let value = output["value"]
+                .as_object()
+                .ok_or(format!("{reference} has no value"))?;
+            let mut amounts = Amounts::new();
+            for (key, amount) in value {
+                match amount {
+                    serde_json::Value::Number(n) => {
+                        let n = n.as_u64().ok_or(format!("{reference} {key}={n}"))?;
+                        amounts.insert(key.clone(), u128::from(n));
+                    }
+                    serde_json::Value::Object(assets) => {
+                        for (name, n) in assets {
+                            let n = n.as_u64().ok_or(format!("{reference} {key}.{name}={n}"))?;
+                            amounts.insert(format!("{key}.{name}"), u128::from(n));
+                        }
+                    }
+                    other => return Err(format!("{reference} {key}={other}")),
+                }
+            }
+            Ok((reference.clone(), amounts))
+        })
+        .collect()
+}
+
+/// How one output reference compares between Dolos and the node's UTxO query.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UtxoPresence {
+    Both { same: bool },
+    NodeOnly,
+    DolosOnly,
+    Neither,
+}
+
+/// Compares an output Dolos serves with the node's, by value when both hold it.
+pub fn utxo_presence(node: Option<&Amounts>, dolos: Option<&Amounts>) -> UtxoPresence {
+    match (node, dolos) {
+        (Some(n), Some(d)) => UtxoPresence::Both { same: n == d },
+        (Some(_), None) => UtxoPresence::NodeOnly,
+        (None, Some(_)) => UtxoPresence::DolosOnly,
+        (None, None) => UtxoPresence::Neither,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn entry(offset: u64, header: (u16, u16), slot: u64) -> Vec<u8> {
+        let mut e = offset.to_be_bytes().to_vec();
+        e.extend(header.0.to_be_bytes());
+        e.extend(header.1.to_be_bytes());
+        e.extend([0u8; 4 + 32]);
+        e.extend(slot.to_be_bytes());
+        e
+    }
+
+    #[test]
+    fn a_chunk_splits_into_its_blocks_by_the_secondary_index() {
+        let secondary = [entry(0, (1, 2), 16), entry(5, (1, 3), 20)].concat();
+        let chunk = b"aHHbbcHHHd";
+        let blocks = chunk_blocks(&secondary, chunk).unwrap();
+        assert_eq!(
+            blocks,
+            vec![
+                NodeBlock {
+                    slot: 16,
+                    header: 1..3,
+                    bytes: b"aHHbb".to_vec()
+                },
+                NodeBlock {
+                    slot: 20,
+                    header: 1..4,
+                    bytes: b"cHHHd".to_vec()
+                },
+            ]
+        );
+        assert!(chunk_blocks(&secondary[..55], chunk).is_err());
+        assert!(chunk_blocks(&entry(11, (0, 0), 1), chunk).is_err());
+    }
+
+    #[test]
+    fn served_block_bytes_agree_only_with_the_node_bytes_or_its_header_when_certifying() {
+        let node = NodeBlock {
+            slot: 7,
+            header: 1..3,
+            bytes: b"aHHbb".to_vec(),
+        };
+        assert_eq!(block_bytes(Some(&node), b"aHHbb", false), BlockBytes::Same);
+        assert_eq!(block_bytes(Some(&node), b"aHHbb", true), BlockBytes::Same);
+        assert_eq!(
+            block_bytes(Some(&node), b"aHHxxxx", true),
+            BlockBytes::SameHeader
+        );
+        assert_eq!(
+            block_bytes(Some(&node), b"aHHxxxx", false),
+            BlockBytes::BytesDiffer
+        );
+        assert_eq!(
+            block_bytes(Some(&node), b"aHXbb", true),
+            BlockBytes::HeaderDiffers
+        );
+        assert_eq!(
+            block_bytes(Some(&node), b"aH", true),
+            BlockBytes::HeaderDiffers
+        );
+        assert_eq!(block_bytes(None, b"aHHbb", false), BlockBytes::NodeAbsent);
+        assert!(!BlockBytes::NodeAbsent.agrees());
+    }
+
+    #[test]
+    fn node_utxo_values_read_as_named_amounts() {
+        let answer = serde_json::json!({
+            "ab#0": {"address": "addr", "value": {"lovelace": 5, "cd": {"ef": 2, "": 1}}},
+            "ab#1": {"value": {"lovelace": 7}},
+        });
+        let amounts = node_amounts(&answer).unwrap();
+        assert_eq!(
+            amounts["ab#0"],
+            Amounts::from([
+                ("lovelace".into(), 5),
+                ("cd.ef".into(), 2),
+                ("cd.".into(), 1)
+            ])
+        );
+        assert_eq!(amounts["ab#1"], Amounts::from([("lovelace".into(), 7)]));
+        assert!(node_amounts(&serde_json::json!({"ab#0": {}})).is_err());
+        assert!(node_amounts(&serde_json::json!({"ab#0": {"value": {"lovelace": "x"}}})).is_err());
+    }
+
+    #[test]
+    fn an_output_agrees_only_when_both_hold_the_same_value() {
+        let five = Amounts::from([("lovelace".into(), 5)]);
+        let six = Amounts::from([("lovelace".into(), 6)]);
+        assert_eq!(
+            utxo_presence(Some(&five), Some(&five)),
+            UtxoPresence::Both { same: true }
+        );
+        assert_eq!(
+            utxo_presence(Some(&five), Some(&six)),
+            UtxoPresence::Both { same: false }
+        );
+        assert_eq!(utxo_presence(Some(&five), None), UtxoPresence::NodeOnly);
+        assert_eq!(utxo_presence(None, Some(&five)), UtxoPresence::DolosOnly);
+        assert_eq!(utxo_presence(None, None), UtxoPresence::Neither);
+    }
 
     fn tip() -> NodeTip {
         NodeTip {
@@ -201,6 +450,8 @@ mod tests {
             (LiveLocus::EraSummary, era),
             (LiveLocus::Params, params),
             (LiveLocus::ChildAsOutput, child),
+            (LiveLocus::Block, tally(4, &[])),
+            (LiveLocus::Utxo, tally(9, &[])),
         ])
     }
 

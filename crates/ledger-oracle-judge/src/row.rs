@@ -15,6 +15,8 @@ pub enum Check {
     EraSummary,
     LiveParams,
     LiveAsOutput,
+    LiveBlock,
+    LiveUtxo,
 }
 
 /// How the oracle's comparisons judge one catalog row.
@@ -141,7 +143,7 @@ pub fn coverage(row: Row) -> Coverage {
         }
         Row::V25 => Partial(Validation, &[ReadTx], "Plutus in a batch is unsupported"),
         Row::V28 => Uncovered("the ledger gives no execution unit estimate to judge EvalTx"),
-        Row::S1 => Covered(AsOutput, &[LiveAsOutput]),
+        Row::S1 => Covered(AsOutput, &[LiveAsOutput, LiveBlock]),
         Row::S2 | Row::S3 | Row::S4 | Row::S7 => Covered(AsOutput, &[]),
         Row::S5 => Covered(Undo, &[]),
         Row::S6 => {
@@ -150,7 +152,7 @@ pub fn coverage(row: Row) -> Coverage {
         Row::S8 => Uncovered("the WatchTx consumed set is not compared"),
         Row::S9 => Partial(
             Utxo,
-            &[],
+            &[LiveUtxo],
             "ReadUtxos by reference only, and valid blocks never undo a recreated output",
         ),
         Row::S10 => Partial(

@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, fmt};
 use crate::{
     cbor::Purpose,
     compare::Tally,
-    record::{Evaluation, LedgerRedeemer, Units},
+    record::{Evaluation, LedgerOutcome, LedgerRedeemer, Units},
 };
 
 /// What the node answered for the redeemers of one transaction.
@@ -89,6 +89,8 @@ pub enum CostSkip {
     Refused,
     /// The record has a declared unsupported row, so Dolos evaluates no script of it.
     Declared,
+    /// Dolos refused a maker of the record, so Dolos resolves its inputs to other outputs than the ledger.
+    Cascade,
 }
 
 /// The redeemer cost and minimum fee comparisons of one arm.
@@ -97,8 +99,11 @@ pub struct CostTallies {
     pub units: Tally,
     pub ran: usize,
     pub fee: Tally,
+    pub fee_unresolved_refused: usize,
+    pub fee_undecoded: usize,
     pub skipped_refused: usize,
     pub skipped_declared: usize,
+    pub skipped_cascade: usize,
 }
 
 impl CostTallies {
@@ -107,6 +112,7 @@ impl CostTallies {
         match why {
             CostSkip::Refused => self.skipped_refused += 1,
             CostSkip::Declared => self.skipped_declared += 1,
+            CostSkip::Cascade => self.skipped_cascade += 1,
         }
     }
 
@@ -118,8 +124,22 @@ impl CostTallies {
         }
     }
 
-    /// Counts the minimum fee of one record, kept when the node's differs or is missing.
-    pub fn add_fee(&mut self, id: impl fmt::Display, ledger: u64, node: Result<u64, String>) {
+    /// Counts the minimum fee of one record, kept when the node's differs or is missing from a record the ledger accepted, and counted apart when it is missing from a refused one or the ledger's decoder refused the bytes.
+    pub fn add_fee(
+        &mut self,
+        id: impl fmt::Display,
+        ledger: Option<u64>,
+        node: Result<u64, String>,
+        outcome: &LedgerOutcome,
+    ) {
+        let Some(ledger) = ledger else {
+            self.fee_undecoded += 1;
+            return;
+        };
+        if matches!(outcome, LedgerOutcome::Refused { .. }) && node.is_err() {
+            self.fee_unresolved_refused += 1;
+            return;
+        }
         let agrees = node.as_ref() == Ok(&ledger);
         self.fee.add(agrees, || match &node {
             Ok(n) => format!("{id} ledger={ledger} dolos={n}"),
@@ -145,12 +165,15 @@ impl fmt::Display for CostTallies {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "COST redeemers={} ran_alike={} fees={} skipped_refused={} skipped_declared={}",
+            "COST redeemers={} ran_alike={} fees={} fees_unresolved_refused={} fees_undecoded={} skipped_refused={} skipped_declared={} skipped_cascade={}",
             self.units.compared,
             self.ran,
             self.fee.compared,
+            self.fee_unresolved_refused,
+            self.fee_undecoded,
             self.skipped_refused,
-            self.skipped_declared
+            self.skipped_declared,
+            self.skipped_cascade
         )?;
         for (name, t) in [("units", &self.units), ("fee", &self.fee)] {
             if !t.disagree.is_empty() {
@@ -167,6 +190,7 @@ impl fmt::Display for CostTallies {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::record::{FailurePath, NonEmpty};
 
     fn purpose(index: u64) -> Purpose {
         Purpose { tag: 0, index }
@@ -186,22 +210,69 @@ mod tests {
         }
     }
 
+    const ACCEPTED: LedgerOutcome = LedgerOutcome::Accepted {
+        consumed: Vec::new(),
+        produced: Vec::new(),
+        accounts_post: BTreeMap::new(),
+    };
+
+    fn refused() -> LedgerOutcome {
+        let names = NonEmpty::of(["BadInputsUTxO".to_string()]).unwrap();
+        LedgerOutcome::Refused {
+            failures: String::new(),
+            failure_names: NonEmpty::of([FailurePath {
+                names,
+                class: crate::refusal::RefusalClass::Inputs,
+            }])
+            .unwrap(),
+        }
+    }
+
     #[test]
     fn equal_units_and_failures_on_both_sides_agree() {
         let ledger = [ran(0, 10, 20), failed(1)];
         let node = NodeCosts::Evaluated(vec![failed(1), ran(0, 10, 20)]);
         let mut t = CostTallies::default();
         t.add_units("supp#1", &pair(&ledger, &node));
-        t.add_fee("supp#1", 7, Ok(7));
+        t.add_fee("supp#1", Some(7), Ok(7), &ACCEPTED);
         assert_eq!((t.units.compared, t.ran), (2, 1));
         t.skip(CostSkip::Refused);
         t.skip(CostSkip::Declared);
         t.skip(CostSkip::Declared);
+        t.skip(CostSkip::Cascade);
         assert!(t.pass(), "{t}");
         assert_eq!(
             t.to_string(),
-            "COST redeemers=2 ran_alike=1 fees=1 skipped_refused=1 skipped_declared=2"
+            "COST redeemers=2 ran_alike=1 fees=1 fees_unresolved_refused=0 fees_undecoded=0 skipped_refused=1 skipped_declared=2 skipped_cascade=1"
         );
+    }
+
+    #[test]
+    fn a_refused_record_compares_a_fee_the_node_computes_and_counts_one_it_cannot_apart() {
+        let mut t = CostTallies::default();
+        t.add_fee("ic#1", Some(7), Ok(7), &refused());
+        t.add_fee(
+            "ic#2",
+            Some(7),
+            Err("missing input".to_string()),
+            &refused(),
+        );
+        assert!(t.pass(), "{t}");
+        assert_eq!((t.fee.compared, t.fee_unresolved_refused), (1, 1));
+        t.add_fee("ic#3", Some(9), Ok(7), &refused());
+        assert_eq!(t.fee.disagree, vec!["ic#3 ledger=9 dolos=7"]);
+        assert!(!t.pass());
+    }
+
+    #[test]
+    fn bytes_the_ledger_does_not_decode_have_no_fee_to_compare() {
+        let mut t = CostTallies::default();
+        t.add_fee("supp#1", None, Ok(7), &refused());
+        t.add_fee("supp#2", None, Err("cbor error".to_string()), &refused());
+        assert_eq!((t.fee.compared, t.fee_undecoded), (0, 2));
+        assert!(t.fee.disagree.is_empty());
+        t.add_fee("supp#3", Some(9), Ok(7), &refused());
+        assert_eq!(t.fee.disagree, vec!["supp#3 ledger=9 dolos=7"]);
     }
 
     #[test]
@@ -211,13 +282,13 @@ mod tests {
             "ic#1",
             &pair(&[failed(0)], &NodeCosts::Evaluated(vec![failed(0)])),
         );
-        failing.add_fee("ic#1", 7, Ok(7));
+        failing.add_fee("ic#1", Some(7), Ok(7), &ACCEPTED);
         assert!(failing.pass(), "{failing}");
         assert!(!pass_all([&failing]));
         let mut alike = CostTallies::default();
         let node = NodeCosts::Evaluated(vec![ran(0, 1, 1)]);
         alike.add_units("supp#1", &pair(&[ran(0, 1, 1)], &node));
-        alike.add_fee("supp#1", 7, Ok(7));
+        alike.add_fee("supp#1", Some(7), Ok(7), &ACCEPTED);
         assert!(pass_all([&failing, &alike]));
         assert!(!pass_all([&failing, &alike, &CostTallies::default()]));
     }
@@ -229,8 +300,13 @@ mod tests {
         t.add_units("supp#1", &pair(&[ran(0, 10, 20), ran(1, 1, 1)], &node));
         let unevaluated = NodeCosts::Unevaluated("unsupported".to_string());
         t.add_units("supp#2", &pair(&[ran(0, 1, 1)], &unevaluated));
-        t.add_fee("supp#1", 7, Ok(8));
-        t.add_fee("supp#2", 7, Err("no parameters".to_string()));
+        t.add_fee("supp#1", Some(7), Ok(8), &ACCEPTED);
+        t.add_fee(
+            "supp#2",
+            Some(7),
+            Err("no parameters".to_string()),
+            &ACCEPTED,
+        );
         assert!(!t.pass());
         assert_eq!(
             t.units.disagree,

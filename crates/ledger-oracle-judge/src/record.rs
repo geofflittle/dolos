@@ -206,12 +206,23 @@ impl From<(TxIn, Bytes)> for UtxoEntry {
     }
 }
 
+/// The UTxO the ledger ran one record from.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Pre {
+    /// The UTxO, written whole because it is not the one the previous record left.
+    Fresh(Vec<UtxoEntry>),
+    /// The UTxO the previous record left.
+    FollowsPrev,
+}
+
 /// The ledger's answer for one record.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "lowercase", deny_unknown_fields)]
 pub enum LedgerOutcome {
     Accepted {
-        post_utxo: Vec<UtxoEntry>,
+        consumed: Vec<TxIn>,
+        produced: Vec<UtxoEntry>,
         accounts_post: LedgerAccounts,
     },
     Refused {
@@ -236,15 +247,15 @@ pub struct Record {
     pub n: u32,
     pub slot: u64,
     pub epoch: Option<u64>,
-    pub follows_prev: bool,
     pub phase2_valid: Phase2,
     pub tx: Bytes,
     pub pparams: PParams,
-    pub pre_utxo: Vec<UtxoEntry>,
+    pub pre: Pre,
     pub accounts_pre: LedgerAccounts,
     pub outcome: LedgerOutcome,
     pub ex_units: Vec<LedgerRedeemer>,
-    pub min_fee: u64,
+    pub sub_ex_units: Vec<Vec<LedgerRedeemer>>,
+    pub min_fee: Option<u64>,
     #[serde(default)]
     pub globals: Option<Globals>,
 }

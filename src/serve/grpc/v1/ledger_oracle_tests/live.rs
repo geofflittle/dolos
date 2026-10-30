@@ -6,7 +6,10 @@ use std::{
 
 use ledger_oracle_judge::{
     compare::Tally,
-    live::{era_name, settle, Aligned, NodeTip},
+    live::{
+        block_bytes, chunk_blocks, era_name, node_amounts, settle, utxo_presence, Aligned, Amounts,
+        NodeTip, UtxoPresence,
+    },
     manifest::{self, Candidates, Known, LiveLocus},
     record::PParams,
 };
@@ -18,6 +21,7 @@ use super::super::spec::{
     sync::{self as s, any_chain_block},
 };
 use super::{
+    output::Integer,
     params,
     serve::{add_block, add_tx, Served},
     show_input,
@@ -138,6 +142,102 @@ fn compare_children(dir: &Path, tally: &mut Tally) {
     }
 }
 
+/// Counts the bytes of each served block against the node's immutable block at its slot.
+fn compare_blocks(dir: &Path, tally: &mut Tally) {
+    let mut node = BTreeMap::new();
+    for name in files(dir, "node-").iter().filter(|n| n.ends_with(".chunk")) {
+        let secondary = name.replace(".chunk", ".secondary");
+        let bytes = |name: &str| {
+            let path = dir.join(name);
+            fs::read(&path).unwrap_or_else(|e| panic!("LIVE {} {e}", path.display()))
+        };
+        let blocks = chunk_blocks(&bytes(&secondary), &bytes(name))
+            .unwrap_or_else(|e| panic!("LIVE {name} {e}"));
+        node.extend(blocks.into_iter().map(|b| (b.slot, b)));
+    }
+    for name in files(dir, "block-") {
+        let response: s::FetchBlockResponse = read(dir, &name);
+        let block = response
+            .block
+            .unwrap_or_else(|| panic!("LIVE {name} serves no block"));
+        let Some(any_chain_block::Chain::Cardano(cardano)) = &block.chain else {
+            panic!("LIVE {name} serves no Cardano block");
+        };
+        let header = cardano
+            .header
+            .as_ref()
+            .unwrap_or_else(|| panic!("LIVE {name} serves no header"));
+        let certifying = header.body_contains_leios_certificate;
+        let verdict = block_bytes(node.get(&header.slot), &block.native_bytes, certifying);
+        tally.add(verdict.agrees(), || {
+            format!(
+                "{name} slot={} certifying={certifying} bytes={}",
+                header.slot,
+                verdict.name()
+            )
+        });
+    }
+}
+
+/// The value of a served output as named amounts, none when an amount is not a natural number.
+fn served_amounts(output: &cardano::TxOutput) -> Option<Amounts> {
+    let amount = |value: Option<&cardano::BigInt>| Integer::served(value?)?.unsigned();
+    let mut amounts = Amounts::from([("lovelace".to_string(), amount(output.coin.as_ref())?)]);
+    for policy in &output.assets {
+        for asset in &policy.assets {
+            let key = format!(
+                "{}.{}",
+                hex::encode(&policy.policy_id),
+                hex::encode(&asset.name)
+            );
+            amounts.insert(key, amount(asset.quantity.as_ref())?);
+        }
+    }
+    Some(amounts)
+}
+
+/// Counts the outputs of the served blocks by their values on Dolos and the node, and returns how many neither holds.
+fn compare_utxos(dir: &Path, tally: &mut Tally) -> usize {
+    let refs = fs::read_to_string(dir.join("refs.txt")).expect("LIVE refs.txt");
+    let node = node_amounts(&read(dir, "node-utxo.json")).unwrap_or_else(|e| panic!("LIVE {e}"));
+    let served: q::ReadUtxosResponse = read(dir, "utxos.json");
+    let mut dolos = BTreeMap::new();
+    for item in served.items {
+        let txo = item
+            .txo_ref
+            .expect("LIVE a served UTxO names its reference");
+        let output = match item.parsed_state {
+            Some(q::any_utxo_data::ParsedState::Cardano(output)) => served_amounts(&output),
+            None => None,
+        };
+        dolos.insert(format!("{}#{}", hex::encode(&txo.hash), txo.index), output);
+    }
+    let mut neither = 0;
+    for line in refs.lines() {
+        let fields: Vec<&str> = line.split(' ').collect();
+        let [_, hash, index] = fields[..] else {
+            panic!("LIVE refs.txt line {line}");
+        };
+        let key = format!("{hash}#{index}");
+        let served = match dolos.get(&key) {
+            None => None,
+            Some(Some(amounts)) => Some(amounts),
+            Some(None) => {
+                tally.add(false, || format!("utxo={key} dolos=unreadable"));
+                continue;
+            }
+        };
+        let show = |presence: &str| format!("utxo={key} {presence}");
+        match utxo_presence(node.get(&key), served) {
+            UtxoPresence::Neither => neither += 1,
+            UtxoPresence::Both { same } => tally.add(same, || show("values=differ")),
+            UtxoPresence::NodeOnly => tally.add(false, || show("dolos=absent")),
+            UtxoPresence::DolosOnly => tally.add(false, || show("node=absent")),
+        }
+    }
+    neither
+}
+
 #[test]
 #[ignore = "judges a live Dolos endpoint against its node from reads written by oracle/box/live.sh"]
 fn live() {
@@ -176,6 +276,9 @@ fn live() {
     let era = tallies.entry(LiveLocus::EraSummary).or_default();
     era.add(verdict.agrees(), || verdict.to_string());
     compare_children(&dir, tallies.entry(LiveLocus::ChildAsOutput).or_default());
+    compare_blocks(&dir, tallies.entry(LiveLocus::Block).or_default());
+    let spent = compare_utxos(&dir, tallies.entry(LiveLocus::Utxo).or_default());
+    println!("LIVE utxo spent_on_both={spent}");
 
     let compared = LiveLocus::ALL.iter().map(|locus| {
         let n = tallies.get(locus).map_or(0, |t| t.compared);

@@ -305,7 +305,9 @@ pub fn maker(id: RecordId, dolos: &DolosVerdict, outcome: &Outcome) -> Maker {
     use DolosVerdict as D;
     match (dolos, outcome) {
         (D::Accepted, Outcome::Pass(_) | Outcome::Fail(_) | Outcome::Cascade(_)) => Maker::Taken,
-        (D::Phase2Rejected | D::Unsupported(_) | D::Refused { .. }, Outcome::Pass(_)) => {
+        // An unsupported answer says nothing of the outputs, so later records spend the ledger's outputs.
+        (D::Phase2Rejected | D::Unsupported(_) | D::Refused { .. }, Outcome::Pass(_))
+        | (D::Unsupported(_), Outcome::Fail(Fail::UnsupportedUnexpected { .. })) => {
             Maker::Seeds(SeedingMaker(id))
         }
         (
@@ -490,7 +492,8 @@ mod tests {
 
     fn accepted() -> LedgerOutcome {
         LedgerOutcome::Accepted {
-            post_utxo: vec![],
+            consumed: vec![],
+            produced: vec![],
             accounts_post: Default::default(),
         }
     }
@@ -770,7 +773,8 @@ mod tests {
     }
 
     #[test]
-    fn a_maker_dolos_did_not_take_seeds_when_it_passes_and_fails_its_dependents_otherwise() {
+    fn a_maker_dolos_did_not_take_seeds_when_it_passes_or_is_unsupported_and_fails_its_dependents_otherwise(
+    ) {
         let unsupported = DolosVerdict::Unsupported("certificate kind".into());
         let expected = outcome(
             &accepted(),
@@ -779,13 +783,28 @@ mod tests {
             Some(&feature("certificate kind")),
         );
         let unexpected = outcome(&accepted(), Phase2::Valid, &unsupported, None);
+        let stale = outcome(
+            &accepted(),
+            Phase2::Valid,
+            &input_refusal(),
+            Some(&feature("certificate kind")),
+        );
         let held = Outcome::Pass(Pass::Agree);
         assert_eq!(
             maker(supp(3), &unsupported, &expected),
             Maker::Seeds(SeedingMaker(supp(3)))
         );
+        assert!(matches!(
+            unexpected,
+            Outcome::Fail(Fail::UnsupportedUnexpected { .. })
+        ));
         assert_eq!(
             maker(supp(3), &unsupported, &unexpected),
+            Maker::Seeds(SeedingMaker(supp(3)))
+        );
+        assert!(matches!(stale, Outcome::Fail(Fail::StaleManifest { .. })));
+        assert_eq!(
+            maker(supp(3), &input_refusal(), &stale),
             Maker::Fails(FailingMaker(supp(3)))
         );
         assert_eq!(maker(supp(3), &DolosVerdict::Accepted, &held), Maker::Taken);

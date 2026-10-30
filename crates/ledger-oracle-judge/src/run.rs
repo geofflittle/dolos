@@ -1,8 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use crate::{
     cbor::TxIn,
-    record::{CorpusKind, LedgerOutcome, PParams, Record, RecordId},
+    record::{CorpusKind, LedgerOutcome, PParams, Pre, Record, RecordId, UtxoEntry},
 };
 
 /// Why a run of records is left out of the judgement.
@@ -28,15 +28,117 @@ impl ExcludeReason {
     }
 }
 
+/// The point in a run where an output enters the UTxO.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Made {
+    Seed,
+    Record(u32),
+}
+
+/// One output the UTxO of a run holds after some record, with the records that made and spent it.
+#[derive(Debug, Clone)]
+struct Life {
+    entry: UtxoEntry,
+    made: Made,
+    spent: Option<u32>,
+}
+
+impl Life {
+    /// Whether the UTxO holds the output at the start of some record numbered `first` to `last`.
+    fn held(&self, first: u32, last: u32) -> bool {
+        let made = match self.made {
+            Made::Seed => true,
+            Made::Record(m) => m < last,
+        };
+        made && !matches!(self.spent, Some(s) if s < first)
+    }
+}
+
+/// Every output the run's UTxO holds at some record, from its seed and the consumed and produced entries of each accepted record.
+fn lives(seed: &[UtxoEntry], records: &[Record]) -> BTreeMap<TxIn, Life> {
+    let mut lives: BTreeMap<TxIn, Life> = seed
+        .iter()
+        .map(|entry| {
+            let life = Life {
+                entry: entry.clone(),
+                made: Made::Seed,
+                spent: None,
+            };
+            (entry.input, life)
+        })
+        .collect();
+    for record in records {
+        let LedgerOutcome::Accepted {
+            consumed, produced, ..
+        } = &record.outcome
+        else {
+            continue;
+        };
+        for input in consumed {
+            match lives.get_mut(input) {
+                Some(life) if life.held(record.n, record.n) => life.spent = Some(record.n),
+                _ => panic!(
+                    "RECORD {} consumes an output its pre state does not hold",
+                    record.n
+                ),
+            }
+        }
+        for entry in produced {
+            let life = Life {
+                entry: entry.clone(),
+                made: Made::Record(record.n),
+                spent: None,
+            };
+            if lives.insert(entry.input, life).is_some() {
+                panic!(
+                    "RECORD {} produces an output the run already held",
+                    record.n
+                );
+            }
+        }
+    }
+    lives
+}
+
 /// A run of records in one epoch under one parameter set.
 #[derive(Debug, Clone)]
 pub struct KeptRun {
     epoch: Option<u64>,
     pparams: PParams,
     records: Vec<Record>,
+    lives: BTreeMap<TxIn, Life>,
 }
 
 impl KeptRun {
+    /// The UTxO the run starts from.
+    pub fn seed(&self) -> &[UtxoEntry] {
+        match &self.records[0].pre {
+            Pre::Fresh(seed) => seed,
+            Pre::FollowsPrev => unreachable!("a kept run starts at a fresh pre state"),
+        }
+    }
+
+    /// The entry the UTxO holds at an input when a record of the run starts.
+    pub fn pre_entry(&self, record: &Record, input: &TxIn) -> Option<&UtxoEntry> {
+        let life = self.lives.get(input)?;
+        life.held(record.n, record.n).then_some(&life.entry)
+    }
+
+    /// Every input the UTxO holds when some record of a group of the run starts.
+    pub fn held_in(&self, group: &[Record]) -> impl Iterator<Item = &TxIn> {
+        let (first, last) = (group[0].n, group[group.len() - 1].n);
+        let lives = self.lives.values();
+        lives
+            .filter(move |l| l.held(first, last))
+            .map(|l| &l.entry.input)
+    }
+
+    /// The UTxO once a record of the run has run.
+    pub fn post(&self, record: &Record) -> impl Iterator<Item = &UtxoEntry> {
+        let next = record.n + 1;
+        let lives = self.lives.values();
+        lives.filter(move |l| l.held(next, next)).map(|l| &l.entry)
+    }
     /// The epoch every record of the run is in.
     pub fn epoch(&self) -> Option<u64> {
         self.epoch
@@ -59,21 +161,34 @@ impl KeptRun {
 
     /// The record whose ledger run made each output that a later record of the run can spend.
     pub fn makers(&self, kind: CorpusKind) -> BTreeMap<TxIn, RecordId> {
-        let mut makers = BTreeMap::new();
-        for record in &self.records {
-            let LedgerOutcome::Accepted { post_utxo, .. } = &record.outcome else {
-                continue;
-            };
-            let pre: BTreeSet<&TxIn> = record.pre_utxo.iter().map(|e| &e.input).collect();
-            let id = RecordId {
-                corpus: kind,
-                n: record.n,
-            };
-            for entry in post_utxo.iter().filter(|e| !pre.contains(&e.input)) {
-                makers.insert(entry.input, id);
-            }
+        let made = self
+            .lives
+            .iter()
+            .filter_map(|(input, life)| match life.made {
+                Made::Seed => None,
+                Made::Record(n) => Some((*input, RecordId { corpus: kind, n })),
+            });
+        made.collect()
+    }
+
+    /// The origin of one input of a record, given the run's makers and the records of its slot group.
+    pub fn origin(
+        &self,
+        input: &TxIn,
+        record: &Record,
+        makers: &BTreeMap<TxIn, RecordId>,
+        group: &[Record],
+    ) -> InputOrigin {
+        if self.pre_entry(record, input).is_none() {
+            return InputOrigin::AbsentFromPre;
         }
-        makers
+        match makers.get(input) {
+            None => InputOrigin::Seeded,
+            Some(made_by) if group.iter().any(|r| r.n == made_by.n) => {
+                InputOrigin::InGroup { made_by: *made_by }
+            }
+            Some(made_by) => InputOrigin::InRun { made_by: *made_by },
+        }
     }
 }
 
@@ -84,25 +199,6 @@ pub enum InputOrigin {
     InRun { made_by: RecordId },
     InGroup { made_by: RecordId },
     AbsentFromPre,
-}
-
-/// The origin of one input of a record, given the run's makers and the records of its slot group.
-pub fn origin(
-    input: &TxIn,
-    record: &Record,
-    makers: &BTreeMap<TxIn, RecordId>,
-    group: &[Record],
-) -> InputOrigin {
-    if !record.pre_utxo.iter().any(|e| e.input == *input) {
-        return InputOrigin::AbsentFromPre;
-    }
-    match makers.get(input) {
-        None => InputOrigin::Seeded,
-        Some(made_by) if group.iter().any(|r| r.n == made_by.n) => {
-            InputOrigin::InGroup { made_by: *made_by }
-        }
-        Some(made_by) => InputOrigin::InRun { made_by: *made_by },
-    }
 }
 
 /// A maximal sequence of records where each starts from the state the previous left.
@@ -118,6 +214,9 @@ pub enum Run {
 
 fn classify(records: Vec<Record>) -> Run {
     let first = &records[0];
+    let Pre::Fresh(seed) = &first.pre else {
+        panic!("RECORD {} starts a corpus from a previous record", first.n);
+    };
     let epoch_changes = records.iter().any(|r| r.epoch != first.epoch);
     let pparams_change = records.iter().any(|r| r.pparams != first.pparams);
     let reason = match (epoch_changes, pparams_change) {
@@ -125,6 +224,7 @@ fn classify(records: Vec<Record>) -> Run {
             return Run::Kept(KeptRun {
                 epoch: first.epoch,
                 pparams: first.pparams.clone(),
+                lives: lives(seed, &records),
                 records,
             })
         }
@@ -144,7 +244,7 @@ pub fn split(records: Vec<Record>) -> Vec<Run> {
     let mut groups: Vec<Vec<Record>> = Vec::new();
     for record in records {
         match groups.last_mut() {
-            Some(group) if record.follows_prev => group.push(record),
+            Some(group) if record.pre == Pre::FollowsPrev => group.push(record),
             _ => groups.push(vec![record]),
         }
     }
@@ -178,7 +278,9 @@ mod tests {
             .spend
             .iter()
             .chain(inputs.subs.iter().flat_map(|s| &s.spend));
-        spend.map(|i| origin(i, record, &makers, group)).collect()
+        spend
+            .map(|i| run.origin(i, record, &makers, group))
+            .collect()
     }
 
     #[test]

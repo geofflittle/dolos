@@ -95,6 +95,8 @@ live_loci! {
     EraSummary = "era_summary" judged by EraSummary,
     Params = "live_params" judged by LiveParams,
     ChildAsOutput = "live_as_output" judged by LiveAsOutput,
+    Block = "live_block" judged by LiveBlock,
+    Utxo = "live_utxo" judged by LiveUtxo,
 }
 
 impl fmt::Display for LiveLocus {
