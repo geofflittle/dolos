@@ -5,7 +5,7 @@
 //! deployments and development/testing.
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, RwLock},
 };
 use tokio::sync::broadcast;
@@ -22,37 +22,38 @@ type Seq = u64;
 
 #[derive(Default)]
 struct MempoolState {
-    pending: BTreeMap<(Seq, TxHash), MempoolTx>,
-    inflight: Vec<(Seq, MempoolTx)>,
-    acknowledged: HashMap<TxHash, (Seq, MempoolTx)>,
+    /// Each transaction not yet finalized or dropped, with its admission position, at the stage the transaction holds.
+    live: HashMap<TxHash, (Seq, MempoolTx)>,
     finalized_log: VecDeque<MempoolTx>,
 }
 
 impl MempoolState {
     fn next_seq(&self) -> Seq {
-        let pending = self.pending.keys().next_back().map(|(seq, _)| *seq);
-        let inflight = self.inflight.iter().map(|(seq, _)| *seq);
-        let acknowledged = self.acknowledged.values().map(|(seq, _)| *seq);
-        pending
-            .into_iter()
-            .chain(inflight)
-            .chain(acknowledged)
+        self.live
+            .values()
+            .map(|(seq, _)| *seq)
             .max()
             .map_or(0, |seq| seq + 1)
     }
 
-    fn take_pending(&mut self, hashes: &HashSet<&TxHash>) -> Vec<(Seq, MempoolTx)> {
-        let taken: Vec<(Seq, TxHash)> = self
-            .pending
-            .keys()
-            .filter(|(_, hash)| hashes.contains(&hash))
-            .copied()
-            .collect();
-        taken
-            .into_iter()
-            .filter_map(|key| self.pending.remove(&key).map(|tx| (key.0, tx)))
-            .collect()
+    /// The hashes of the live transactions the filter admits, in admission order.
+    fn in_order(&self, admit: impl Fn(&MempoolTx) -> bool) -> Vec<TxHash> {
+        let mut admitted: Vec<&(Seq, MempoolTx)> =
+            self.live.values().filter(|(_, tx)| admit(tx)).collect();
+        admitted.sort_by_key(|(seq, _)| *seq);
+        admitted.into_iter().map(|(_, tx)| tx.hash).collect()
     }
+
+    fn count(&self, stage: MempoolTxStage) -> usize {
+        self.live
+            .values()
+            .filter(|(_, tx)| tx.stage == stage)
+            .count()
+    }
+}
+
+fn is_pending(tx: &MempoolTx) -> bool {
+    tx.stage == MempoolTxStage::Pending
 }
 
 const MAX_FINALIZED_LOG: usize = 1000;
@@ -86,9 +87,11 @@ impl EphemeralMempool {
 
     fn log_state(&self, state: &MempoolState) {
         debug!(
-            pending = state.pending.len(),
-            inflight = state.inflight.len(),
-            acknowledged = state.acknowledged.len(),
+            pending = state.count(MempoolTxStage::Pending),
+            inflight = state.count(MempoolTxStage::Propagated),
+            acknowledged = state.live.len()
+                - state.count(MempoolTxStage::Pending)
+                - state.count(MempoolTxStage::Propagated),
             "mempool state changed"
         );
     }
@@ -126,13 +129,13 @@ impl MempoolStore for EphemeralMempool {
     fn receive(&self, tx: MempoolTx) -> Result<(), MempoolError> {
         let mut state = self.state.write().unwrap();
 
-        if state.pending.values().any(|p| p.hash == tx.hash) {
+        if state.live.contains_key(&tx.hash) {
             return Err(MempoolError::DuplicateTx);
         }
 
         debug!(tx.hash = %tx.hash, "tx received");
         let seq = state.next_seq();
-        state.pending.insert((seq, tx.hash), tx.clone());
+        state.live.insert(tx.hash, (seq, tx.clone()));
         self.notify(tx);
         self.log_state(&state);
 
@@ -141,23 +144,27 @@ impl MempoolStore for EphemeralMempool {
 
     fn has_pending(&self) -> bool {
         let state = self.state.read().unwrap();
-        !state.pending.is_empty()
+        state.live.values().any(|(_, tx)| is_pending(tx))
     }
 
     fn peek_pending(&self) -> Vec<MempoolTx> {
         let state = self.state.read().unwrap();
-        state.pending.values().cloned().collect()
+        state
+            .in_order(is_pending)
+            .iter()
+            .map(|hash| state.live[hash].1.clone())
+            .collect()
     }
 
     fn mark_inflight(&self, hashes: &[TxHash]) -> Result<(), MempoolError> {
         let hash_set: HashSet<_> = hashes.iter().collect();
         let mut state = self.state.write().unwrap();
 
-        for (seq, mut tx) in state.take_pending(&hash_set) {
+        for hash in state.in_order(|tx| is_pending(tx) && hash_set.contains(&tx.hash)) {
+            let (_, tx) = state.live.get_mut(&hash).unwrap();
             debug!(tx.hash = %tx.hash, "tx inflight");
             tx.stage = MempoolTxStage::Propagated;
-            state.inflight.push((seq, tx.clone()));
-            self.notify(tx);
+            self.notify(tx.clone());
         }
 
         self.log_state(&state);
@@ -168,33 +175,14 @@ impl MempoolStore for EphemeralMempool {
         let hash_set: HashSet<_> = hashes.iter().collect();
         let mut state = self.state.write().unwrap();
 
-        let mut moved = Vec::new();
-        state.inflight.retain(|(seq, tx)| {
-            if hash_set.contains(&tx.hash) {
-                moved.push((*seq, tx.clone()));
-                false
-            } else {
-                true
-            }
-        });
-
-        for (seq, mut tx) in moved {
+        // A confirmed transaction keeps its stage and expiry counters.
+        let propagated =
+            |tx: &MempoolTx| tx.stage == MempoolTxStage::Propagated && hash_set.contains(&tx.hash);
+        for hash in state.in_order(propagated) {
+            let (_, tx) = state.live.get_mut(&hash).unwrap();
             debug!(tx.hash = %tx.hash, "tx acknowledged");
             tx.stage = MempoolTxStage::Acknowledged;
-            state.acknowledged.insert(tx.hash, (seq, tx.clone()));
-            self.notify(tx);
-        }
-
-        // confirm() also moves still-propagated entries into this map. A
-        // later peer acknowledgement must update them, but never regress an
-        // already confirmed transaction or reset its expiry counters.
-        for hash in hashes {
-            if let Some((_, tx)) = state.acknowledged.get_mut(hash) {
-                if tx.stage == MempoolTxStage::Propagated {
-                    tx.stage = MempoolTxStage::Acknowledged;
-                    self.notify(tx.clone());
-                }
-            }
+            self.notify(tx.clone());
         }
 
         self.log_state(&state);
@@ -203,22 +191,20 @@ impl MempoolStore for EphemeralMempool {
 
     fn find_inflight(&self, tx_hash: &TxHash) -> Option<MempoolTx> {
         let state = self.state.read().unwrap();
-        // Check propagated (inflight vec)
-        if let Some((_, tx)) = state.inflight.iter().find(|(_, x)| x.hash.eq(tx_hash)) {
-            return Some(tx.clone());
-        }
-        // Check acknowledged/confirmed
-        state.acknowledged.get(tx_hash).map(|(_, tx)| tx.clone())
+        state
+            .live
+            .get(tx_hash)
+            .map(|(_, tx)| tx)
+            .filter(|tx| !is_pending(tx))
+            .cloned()
     }
 
     fn peek_inflight(&self) -> Vec<MempoolTx> {
         let state = self.state.read().unwrap();
-
         state
-            .inflight
+            .in_order(|tx| !is_pending(tx))
             .iter()
-            .chain(state.acknowledged.values())
-            .map(|(_, tx)| tx.clone())
+            .map(|hash| state.live[hash].1.clone())
             .collect()
     }
 
@@ -234,31 +220,23 @@ impl MempoolStore for EphemeralMempool {
         let seen_set: HashSet<&TxHash> = seen_txs.iter().collect();
         let unseen_set: HashSet<&TxHash> = unseen_txs.iter().collect();
 
-        // Promote Propagated txs into the acknowledged map so the confirm
-        // logic below applies uniformly to every inflight tx.
-        let propagated: Vec<(Seq, MempoolTx)> = state.inflight.drain(..).collect();
         // A pending transaction the block holds is confirmed.
-        let included = state.take_pending(&seen_set);
-        for (seq, tx) in propagated.into_iter().chain(included) {
-            state.acknowledged.insert(tx.hash, (seq, tx));
-        }
+        let hashes = state.in_order(|tx| !is_pending(tx) || seen_set.contains(&tx.hash));
 
-        if state.acknowledged.is_empty() {
+        if hashes.is_empty() {
             return Ok(());
         }
 
-        let hashes: Vec<TxHash> = state.acknowledged.keys().copied().collect();
-
         for tx_hash in hashes {
             if seen_set.contains(&tx_hash) {
-                let (_, tx) = state.acknowledged.get_mut(&tx_hash).unwrap();
+                let (_, tx) = state.live.get_mut(&tx_hash).unwrap();
                 tx.confirm(point);
                 // Check if finalizable
                 if tx.confirmations >= finalize_threshold {
                     let mut finalized = tx.clone();
                     finalized.stage = MempoolTxStage::Finalized;
                     state.finalized_log.push_back(finalized.clone());
-                    state.acknowledged.remove(&tx_hash);
+                    state.live.remove(&tx_hash);
                     debug!(tx.hash = %tx_hash, "tx finalized");
                     self.notify(finalized);
                 } else {
@@ -266,17 +244,16 @@ impl MempoolStore for EphemeralMempool {
                     debug!(tx.hash = %tx_hash, "tx confirmed");
                 }
             } else if unseen_set.contains(&tx_hash) {
-                let (seq, mut tx) = state.acknowledged.remove(&tx_hash).unwrap();
+                let (_, tx) = state.live.get_mut(&tx_hash).unwrap();
 
                 let mut event_tx = tx.clone();
                 event_tx.stage = MempoolTxStage::RolledBack;
                 self.notify(event_tx);
 
                 tx.retry();
-                state.pending.insert((seq, tx_hash), tx);
                 debug!(tx.hash = %tx_hash, "retry tx");
             } else {
-                let (_, tx) = state.acknowledged.get_mut(&tx_hash).unwrap();
+                let (_, tx) = state.live.get_mut(&tx_hash).unwrap();
                 if tx.stage == MempoolTxStage::Confirmed {
                     // Already confirmed on-chain; treat subsequent blocks as
                     // additional confirmations (increasing depth).
@@ -285,7 +262,7 @@ impl MempoolStore for EphemeralMempool {
                         let mut finalized = tx.clone();
                         finalized.stage = MempoolTxStage::Finalized;
                         state.finalized_log.push_back(finalized.clone());
-                        state.acknowledged.remove(&tx_hash);
+                        state.live.remove(&tx_hash);
                         debug!(tx.hash = %tx_hash, "tx finalized");
                         self.notify(finalized);
                     } else {
@@ -298,7 +275,7 @@ impl MempoolStore for EphemeralMempool {
                         let mut dropped = tx.clone();
                         dropped.stage = MempoolTxStage::Dropped;
                         state.finalized_log.push_back(dropped.clone());
-                        state.acknowledged.remove(&tx_hash);
+                        state.live.remove(&tx_hash);
                         debug!(tx.hash = %tx_hash, "tx dropped");
                         self.notify(dropped);
                     }
@@ -318,7 +295,8 @@ impl MempoolStore for EphemeralMempool {
         let hash_set: HashSet<_> = hashes.iter().collect();
         let mut state = self.state.write().unwrap();
 
-        for (_, mut tx) in state.take_pending(&hash_set) {
+        for hash in state.in_order(|tx| is_pending(tx) && hash_set.contains(&tx.hash)) {
+            let (_, mut tx) = state.live.remove(&hash).unwrap();
             tx.stage = MempoolTxStage::Dropped;
             state.finalized_log.push_back(tx.clone());
             debug!(tx.hash = %tx.hash, "pending tx dropped");
@@ -338,26 +316,12 @@ impl MempoolStore for EphemeralMempool {
     fn check_status(&self, tx_hash: &TxHash) -> TxStatus {
         let state = self.state.read().unwrap();
 
-        if let Some((_, tx)) = state.acknowledged.get(tx_hash) {
+        if let Some((_, tx)) = state.live.get(tx_hash) {
             TxStatus {
                 stage: tx.stage.clone(),
                 confirmations: tx.confirmations,
                 non_confirmations: tx.non_confirmations,
                 confirmed_at: tx.confirmed_at.clone(),
-            }
-        } else if let Some((_, tx)) = state.inflight.iter().find(|(_, x)| x.hash.eq(tx_hash)) {
-            TxStatus {
-                stage: tx.stage.clone(),
-                confirmations: 0,
-                non_confirmations: 0,
-                confirmed_at: None,
-            }
-        } else if state.pending.values().any(|x| x.hash.eq(tx_hash)) {
-            TxStatus {
-                stage: MempoolTxStage::Pending,
-                confirmations: 0,
-                non_confirmations: 0,
-                confirmed_at: None,
             }
         } else {
             TxStatus {
@@ -427,6 +391,31 @@ mod tests {
         assert_eq!(pending(&store), [a, t]);
         store.receive(tx(3)).unwrap();
         assert_eq!(pending(&store), [a, t, u]);
+    }
+
+    #[test]
+    fn a_transaction_in_flight_is_not_admitted_again() {
+        let store = EphemeralMempool::new();
+        let a = tx(1).hash;
+        store.receive(tx(1)).unwrap();
+        store.mark_inflight(&[a]).unwrap();
+        assert!(matches!(
+            store.receive(tx(1)),
+            Err(MempoolError::DuplicateTx)
+        ));
+        assert!(pending(&store).is_empty());
+        assert_eq!(store.check_status(&a).stage, MempoolTxStage::Propagated);
+    }
+
+    #[test]
+    fn a_new_transaction_is_admitted_beside_one_in_flight() {
+        let store = EphemeralMempool::new();
+        let (a, t) = (tx(1).hash, tx(2).hash);
+        store.receive(tx(1)).unwrap();
+        store.mark_inflight(&[a]).unwrap();
+        store.receive(tx(2)).unwrap();
+        assert_eq!(pending(&store), [t]);
+        assert_eq!(store.check_status(&a).stage, MempoolTxStage::Propagated);
     }
 
     #[test]
