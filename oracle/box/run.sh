@@ -76,14 +76,17 @@ live_run() {
   [ "$live" = PASS ]
 }
 
+# Runs the live leg, then the arms, since the arms take hours while the serving store fills the root filesystem the candidate needs.
 done_run() {
   mkdir -p "$OUT"
-  sh "$HERE/breaks.sh" | tee "$OUT/breaks.out"
-  arms=$(sed -n 's/^ARMS \(.*\) logs=.*/\1/p' "$OUT/breaks.out")
+  require_free
+  reset_scratch
   live=FAIL
   if live_leg; then
     live=PASS
   fi
+  sh "$HERE/breaks.sh" | tee "$OUT/breaks.out"
+  arms=$(sed -n 's/^ARMS \(.*\) logs=.*/\1/p' "$OUT/breaks.out")
   grep -E '^(LIVE|KNOWN|KNOWN_STALE|LIVE-DIFF|LIVE-GAP) ' "$OUT/live.log" | cut -c1-400 || true
   echo "DONE $arms live=$live commit=$commit logs=$OUT"
   case " $arms " in
