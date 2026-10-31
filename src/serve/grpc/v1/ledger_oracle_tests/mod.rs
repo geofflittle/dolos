@@ -11,7 +11,11 @@ mod validate;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread,
 };
 
 use dolos_cardano::{
@@ -20,8 +24,9 @@ use dolos_cardano::{
     FixedNamespace as _,
 };
 use dolos_core::{
-    AsyncQueryFacade, BlockHash, ChainError, ChainPoint, Domain as _, EraCbor, MempoolStore as _,
-    MempoolTx, RawBlock, StateStore as _, SubmitExt as _, SyncExt as _, TxHash, TxoRef,
+    AsyncQueryFacade, BlockHash, ChainError, ChainPoint, Domain as _, EraCbor, Genesis,
+    MempoolStore as _, MempoolTx, RawBlock, StateStore as _, SubmitExt as _, SyncExt as _, TxHash,
+    TxoRef,
 };
 use itertools::Itertools as _;
 use ledger_oracle_judge::{
@@ -30,7 +35,8 @@ use ledger_oracle_judge::{
     compare::{ByteVerdict, RollFail, StateTallies, Tally},
     corpus::{self, Corpus},
     cost::{self, CostSkip, CostTallies, NodeCosts},
-    manifest::{self, Candidates, Declared, Feature, KnownList, Locus},
+    manifest::{self, Candidates, Declared, Feature, Known, KnownList, Locus},
+    parallel::in_parallel,
     record::{
         CorpusKind, Evaluation, LedgerOutcome, LedgerRedeemer, PParams, Phase2, Record, RecordId,
         Units, UtxoEntry,
@@ -60,6 +66,7 @@ use pallas::{
 };
 use seed::SeedPoint;
 use serve::{Event, Served, Service};
+use tokio::{runtime::Handle, task};
 use tonic::{Request, Status};
 use validate::Relay;
 
@@ -333,6 +340,29 @@ fn builtin_bar(audited: &[Builtin], added: &[Builtin], coverage: &Coverage) -> (
 impl Judged {
     fn pass(&self) -> bool {
         self.validation.pass() && self.state.pass()
+    }
+
+    /// Adds the judgement of another part of the corpus after this one's.
+    fn merge(&mut self, other: Judged) {
+        let Judged {
+            validation,
+            state,
+            cost,
+            coverage,
+            constructs,
+            inventory,
+            candidates: Candidates { declared, known },
+        } = other;
+        let Known { records, live } = known;
+        self.validation.merge(validation);
+        self.state.merge(state);
+        self.cost.merge(cost);
+        self.coverage.extend(coverage);
+        self.constructs.extend(constructs);
+        self.inventory.extend(inventory);
+        self.candidates.declared.extend(declared);
+        self.candidates.known.records.extend(records);
+        self.candidates.known.live.extend(live);
     }
 }
 
@@ -1541,16 +1571,16 @@ async fn sweep(
 }
 
 /// The pre state a planted check seeds for a record in place of its own.
-type PreEdit<'a> = Box<dyn Fn(RecordId, &[UtxoEntry]) -> Vec<UtxoEntry> + 'a>;
+type PreEdit<'a> = Box<dyn Fn(RecordId, &[UtxoEntry]) -> Vec<UtxoEntry> + Sync + 'a>;
 
 /// What a planted check changes in the seed, the expected parameters and the blocks of one judgement.
 struct Edits<'a> {
     pre: PreEdit<'a>,
-    accounts_pre: Box<dyn Fn(&LedgerAccounts) -> LedgerAccounts + 'a>,
-    expected_params: Box<dyn Fn(&PParams) -> PParams + 'a>,
-    block_tx: Box<dyn Fn(RecordId, Phase2) -> Option<Phase2> + 'a>,
-    rolled_block: Box<dyn Fn(RecordId, RawBlock) -> RawBlock + 'a>,
-    expected_datum: Box<dyn Fn(RecordId, Vec<u8>) -> Vec<u8> + 'a>,
+    accounts_pre: Box<dyn Fn(&LedgerAccounts) -> LedgerAccounts + Sync + 'a>,
+    expected_params: Box<dyn Fn(&PParams) -> PParams + Sync + 'a>,
+    block_tx: Box<dyn Fn(RecordId, Phase2) -> Option<Phase2> + Sync + 'a>,
+    rolled_block: Box<dyn Fn(RecordId, RawBlock) -> RawBlock + Sync + 'a>,
+    expected_datum: Box<dyn Fn(RecordId, Vec<u8>) -> Vec<u8> + Sync + 'a>,
 }
 
 impl Default for Edits<'_> {
@@ -1566,82 +1596,113 @@ impl Default for Edits<'_> {
     }
 }
 
-/// Judges every kept run of a corpus, each seeded from its first pre state.
+/// The judgement of one kept run, the records it judged and the served output and account comparisons of each of its records.
+#[derive(Default)]
+struct RunJudged {
+    judged: Judged,
+    ids: BTreeSet<RecordId>,
+    as_output: BTreeMap<RecordId, Tally>,
+    accounts: BTreeMap<RecordId, Tally>,
+}
+
+/// Judges one kept run of a corpus seeded from its first pre state.
+async fn judge_run(
+    kind: CorpusKind,
+    genesis: &Arc<Genesis>,
+    run: &KeptRun,
+    manifests: &Manifests,
+    edits: &Edits<'_>,
+) -> RunJudged {
+    let mut part = RunJudged::default();
+    let RunJudged {
+        judged,
+        ids,
+        as_output,
+        accounts: account_checks,
+    } = &mut part;
+    let first = &run.records()[0];
+    let id = RecordId {
+        corpus: kind,
+        n: first.n,
+    };
+    let epoch = run
+        .epoch()
+        .unwrap_or_else(|| panic!("RUN {id} has no epoch"));
+    let pparams = params::seed_values(run.pparams()).unwrap_or_else(|e| panic!("{e}"));
+    let seeded = seed::seed(
+        genesis,
+        epoch,
+        &pparams,
+        &(edits.pre)(id, run.seed()),
+        &(edits.accounts_pre)(&first.accounts_pre),
+    );
+    let seed = run.seed();
+    compare_utxos(
+        &seeded.domain,
+        id,
+        [],
+        seed,
+        &BTreeMap::new(),
+        &mut judged.state.utxo,
+    )
+    .await;
+    let served = dolos_accounts(&seeded.domain);
+    let checks = account_checks.entry(id).or_default();
+    accounts::compare(&first.accounts_pre, &served, checks);
+    let served = read_params(&seeded.domain).await;
+    let expected = (edits.expected_params)(run.pparams());
+    params::compare(id, &expected, &served, &mut judged.state.params);
+    let (blocks, run_accounts) =
+        validate_run(&seeded.domain, kind, run, manifests, edits, ids, judged).await;
+    for (id, tally) in run_accounts {
+        account_checks.entry(id).or_default().merge(tally);
+    }
+    let readtx = &mut judged.state.readtx;
+    compare_read_tx(&seeded.domain, kind, &blocks, readtx).await;
+    let script = &mut judged.state.script;
+    compare_scripts(&seeded.domain, kind, &blocks, script).await;
+    let rolled: Vec<&Rolled> = blocks.iter().filter_map(GroupBlock::rolled).collect();
+    let services = serve_rolled(&seeded.domain, &seeded.seed, &rolled).await;
+    compare_as_output(kind, run, &rolled, &services, &mut judged.state, as_output);
+    sweep(
+        &seeded.domain,
+        &seeded.seed,
+        kind,
+        run,
+        &rolled,
+        &mut judged.state,
+    )
+    .await;
+    part
+}
+
+/// Judges every kept run of a corpus, each seeded from its first pre state, on one thread per core.
 async fn judge(corpus: &Corpus, manifests: &Manifests, edits: &Edits<'_>) -> Judged {
     let genesis = seed::genesis(epoch_size(corpus));
+    let runs: Vec<&KeptRun> = corpus.kept().collect();
+    let threads = thread::available_parallelism().map_or(1, usize::from);
+    let handle = Handle::current();
+    let parts = task::block_in_place(|| {
+        in_parallel(
+            &runs,
+            threads,
+            |run| run.records().len(),
+            |run| handle.block_on(judge_run(corpus.kind, &genesis, run, manifests, edits)),
+        )
+    });
     let mut judged = Judged::default();
     let mut judged_ids = BTreeSet::new();
-    let mut as_output = BTreeMap::new();
+    let mut as_output: BTreeMap<RecordId, Tally> = BTreeMap::new();
     let mut account_checks: BTreeMap<RecordId, Tally> = BTreeMap::new();
-    for run in corpus.kept() {
-        let first = &run.records()[0];
-        let id = RecordId {
-            corpus: corpus.kind,
-            n: first.n,
-        };
-        let epoch = run
-            .epoch()
-            .unwrap_or_else(|| panic!("RUN {id} has no epoch"));
-        let pparams = params::seed_values(run.pparams()).unwrap_or_else(|e| panic!("{e}"));
-        let seeded = seed::seed(
-            &genesis,
-            epoch,
-            &pparams,
-            &(edits.pre)(id, run.seed()),
-            &(edits.accounts_pre)(&first.accounts_pre),
-        );
-        let seed = run.seed();
-        compare_utxos(
-            &seeded.domain,
-            id,
-            [],
-            seed,
-            &BTreeMap::new(),
-            &mut judged.state.utxo,
-        )
-        .await;
-        let served = dolos_accounts(&seeded.domain);
-        let checks = account_checks.entry(id).or_default();
-        accounts::compare(&first.accounts_pre, &served, checks);
-        let served = read_params(&seeded.domain).await;
-        let expected = (edits.expected_params)(run.pparams());
-        params::compare(id, &expected, &served, &mut judged.state.params);
-        let (blocks, run_accounts) = validate_run(
-            &seeded.domain,
-            corpus.kind,
-            run,
-            manifests,
-            edits,
-            &mut judged_ids,
-            &mut judged,
-        )
-        .await;
-        for (id, tally) in run_accounts {
+    for part in parts {
+        judged.merge(part.judged);
+        judged_ids.extend(part.ids);
+        for (id, tally) in part.as_output {
+            as_output.entry(id).or_default().merge(tally);
+        }
+        for (id, tally) in part.accounts {
             account_checks.entry(id).or_default().merge(tally);
         }
-        let readtx = &mut judged.state.readtx;
-        compare_read_tx(&seeded.domain, corpus.kind, &blocks, readtx).await;
-        let script = &mut judged.state.script;
-        compare_scripts(&seeded.domain, corpus.kind, &blocks, script).await;
-        let rolled: Vec<&Rolled> = blocks.iter().filter_map(GroupBlock::rolled).collect();
-        let services = serve_rolled(&seeded.domain, &seeded.seed, &rolled).await;
-        compare_as_output(
-            corpus.kind,
-            run,
-            &rolled,
-            &services,
-            &mut judged.state,
-            &mut as_output,
-        );
-        sweep(
-            &seeded.domain,
-            &seeded.seed,
-            corpus.kind,
-            run,
-            &rolled,
-            &mut judged.state,
-        )
-        .await;
     }
     manifests.unjudged(corpus.kind, &judged_ids, &mut judged.validation);
     judged

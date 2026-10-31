@@ -7,6 +7,7 @@ pub mod corpus;
 pub mod cost;
 pub mod live;
 pub mod manifest;
+pub mod parallel;
 pub mod params;
 pub mod record;
 pub mod refusal;

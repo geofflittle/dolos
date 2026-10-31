@@ -147,6 +147,28 @@ impl CostTallies {
         });
     }
 
+    /// Adds the comparisons and skips of another arm part after this one's.
+    pub fn merge(&mut self, other: CostTallies) {
+        let CostTallies {
+            units,
+            ran,
+            fee,
+            fee_unresolved_refused,
+            fee_undecoded,
+            skipped_refused,
+            skipped_declared,
+            skipped_cascade,
+        } = other;
+        self.units.merge(units);
+        self.ran += ran;
+        self.fee.merge(fee);
+        self.fee_unresolved_refused += fee_unresolved_refused;
+        self.fee_undecoded += fee_undecoded;
+        self.skipped_refused += skipped_refused;
+        self.skipped_declared += skipped_declared;
+        self.skipped_cascade += skipped_cascade;
+    }
+
     /// Whether every redeemer agreed and some fee was compared with none differing.
     pub fn pass(&self) -> bool {
         self.units.disagree.is_empty() && self.fee.compared > 0 && self.fee.disagree.is_empty()
@@ -191,6 +213,51 @@ impl fmt::Display for CostTallies {
 mod tests {
     use super::*;
     use crate::record::{FailurePath, NonEmpty};
+
+    fn tally(lines: &[&str]) -> Tally {
+        Tally {
+            compared: 2 * lines.len(),
+            disagree: lines.iter().map(|l| l.to_string()).collect(),
+        }
+    }
+
+    fn part(n: usize) -> CostTallies {
+        let line = format!("line{n}");
+        CostTallies {
+            units: tally(&[&line]),
+            ran: 1,
+            fee: tally(&[&line]),
+            fee_unresolved_refused: 2,
+            fee_undecoded: 3,
+            skipped_refused: 4,
+            skipped_declared: 5,
+            skipped_cascade: 6,
+        }
+    }
+
+    #[test]
+    fn a_merged_part_adds_every_count_and_keeps_every_line_after_the_first_part() {
+        let mut merged = part(0);
+        merged.merge(part(1));
+        let both = CostTallies {
+            units: tally(&["line0", "line1"]),
+            ran: 2,
+            fee: tally(&["line0", "line1"]),
+            fee_unresolved_refused: 4,
+            fee_undecoded: 6,
+            skipped_refused: 8,
+            skipped_declared: 10,
+            skipped_cascade: 12,
+        };
+        assert_eq!(merged, both);
+    }
+
+    #[test]
+    fn merging_an_empty_part_changes_nothing() {
+        let mut merged = part(0);
+        merged.merge(CostTallies::default());
+        assert_eq!(merged, part(0));
+    }
 
     fn purpose(index: u64) -> Purpose {
         Purpose { tag: 0, index }

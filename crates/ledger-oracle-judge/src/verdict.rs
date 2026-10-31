@@ -390,6 +390,38 @@ impl ValidationTally {
         }
     }
 
+    /// Adds the outcomes of another arm part after this one's.
+    pub fn merge(&mut self, other: ValidationTally) {
+        let ValidationTally {
+            dependent,
+            agree,
+            unsupported_expected,
+            refuse_unsupported,
+            known,
+            disagree,
+            reason_mismatch,
+            cascade,
+            unsupported_unexpected,
+            stale_manifest,
+            known_stale,
+            unknown_refusal,
+        } = other;
+        self.dependent.extend(dependent);
+        self.agree += agree;
+        for (label, n) in unsupported_expected {
+            *self.unsupported_expected.entry(label).or_default() += n;
+        }
+        self.refuse_unsupported.extend(refuse_unsupported);
+        self.known.extend(known);
+        self.disagree.extend(disagree);
+        self.reason_mismatch.extend(reason_mismatch);
+        self.cascade.extend(cascade);
+        self.unsupported_unexpected.extend(unsupported_unexpected);
+        self.stale_manifest.extend(stale_manifest);
+        self.known_stale.extend(known_stale);
+        self.unknown_refusal.extend(unknown_refusal);
+    }
+
     /// Whether the arm judged a record and no outcome fails it.
     pub fn pass(&self) -> bool {
         let ValidationTally {
@@ -489,6 +521,68 @@ impl fmt::Display for ValidationTally {
 mod tests {
     use super::*;
     use crate::record::CorpusKind;
+
+    fn part(n: u32, label: &str) -> ValidationTally {
+        let line = || vec![(supp(n), format!("line{n}"))];
+        ValidationTally {
+            dependent: vec![(supp(n), BTreeSet::from([supp(n + 10)]))],
+            agree: 1,
+            unsupported_expected: BTreeMap::from([(label.to_string(), 1), ("both".to_string(), 2)]),
+            refuse_unsupported: line(),
+            known: vec![(supp(n), Row::S1, format!("line{n}"))],
+            disagree: line(),
+            reason_mismatch: line(),
+            cascade: line(),
+            unsupported_unexpected: line(),
+            stale_manifest: line(),
+            known_stale: line(),
+            unknown_refusal: line(),
+        }
+    }
+
+    #[test]
+    fn a_merged_part_adds_every_count_and_keeps_every_line_after_the_first_part() {
+        let mut merged = part(0, "first");
+        merged.merge(part(1, "second"));
+        let lines = || {
+            vec![
+                (supp(0), "line0".to_string()),
+                (supp(1), "line1".to_string()),
+            ]
+        };
+        let both = ValidationTally {
+            dependent: vec![
+                (supp(0), BTreeSet::from([supp(10)])),
+                (supp(1), BTreeSet::from([supp(11)])),
+            ],
+            agree: 2,
+            unsupported_expected: BTreeMap::from([
+                ("both".to_string(), 4),
+                ("first".to_string(), 1),
+                ("second".to_string(), 1),
+            ]),
+            refuse_unsupported: lines(),
+            known: vec![
+                (supp(0), Row::S1, "line0".to_string()),
+                (supp(1), Row::S1, "line1".to_string()),
+            ],
+            disagree: lines(),
+            reason_mismatch: lines(),
+            cascade: lines(),
+            unsupported_unexpected: lines(),
+            stale_manifest: lines(),
+            known_stale: lines(),
+            unknown_refusal: lines(),
+        };
+        assert_eq!(merged, both);
+    }
+
+    #[test]
+    fn merging_an_empty_part_changes_nothing() {
+        let mut merged = part(0, "first");
+        merged.merge(ValidationTally::default());
+        assert_eq!(merged, part(0, "first"));
+    }
 
     fn accepted() -> LedgerOutcome {
         LedgerOutcome::Accepted {
