@@ -449,6 +449,19 @@ impl Manifests {
         }
     }
 
+    /// The entries that name one of the records.
+    fn within(&self, records: &BTreeSet<RecordId>) -> Self {
+        let declared = self.declared.iter().filter(|(id, _)| records.contains(id));
+        let known = self
+            .known
+            .iter()
+            .filter(|((_, id), _)| records.contains(id));
+        Manifests {
+            declared: declared.map(|(id, f)| (*id, f.clone())).collect(),
+            known: known.map(|(entry, row)| (*entry, *row)).collect(),
+        }
+    }
+
     /// Fails each declared or validation known entry for the corpus that names a record the judgement did not reach.
     fn unjudged(&self, kind: CorpusKind, judged: &BTreeSet<RecordId>, tally: &mut ValidationTally) {
         let missed = |id: &RecordId| id.corpus == kind && !judged.contains(id);
@@ -1753,6 +1766,82 @@ async fn ledger_oracle() {
     let result = if pass { "PASS" } else { "FAIL" };
     println!("RESULT {result}");
     assert!(pass);
+}
+
+/// The records a comma separated list names.
+fn named_records(list: &str) -> BTreeSet<RecordId> {
+    let names = list.split(',').map(str::trim).filter(|s| !s.is_empty());
+    let named: BTreeSet<RecordId> = names
+        .map(|s| s.parse().unwrap_or_else(|e| panic!("{e}")))
+        .collect();
+    assert!(!named.is_empty(), "the list names no record: {list:?}");
+    named
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "judges Dolos on the kept runs that hold a record ORACLE_RECORDS names, run in release"]
+async fn ledger_oracle_records() {
+    let list = std::env::var("ORACLE_RECORDS").unwrap_or_else(|e| panic!("ORACLE_RECORDS {e}"));
+    let named = named_records(&list);
+    let committed = Manifests::committed();
+    let mut pass = true;
+    let mut candidates = Candidates::default();
+    for kind in [CorpusKind::Ic, CorpusKind::Supp] {
+        let corpus = load(kind).select(&named).unwrap_or_else(|e| panic!("{e}"));
+        let held = corpus.kept().flat_map(|run| {
+            let records = run.records().iter();
+            records.map(move |r| RecordId {
+                corpus: kind,
+                n: r.n,
+            })
+        });
+        let manifests = committed.within(&held.collect());
+        println!("{corpus}");
+        let tallies = judge(&corpus, &manifests, &Edits::default()).await;
+        println!("{tallies}");
+        pass &= tallies.pass();
+        candidates.declared.extend(tallies.candidates.declared);
+        let known = tallies.candidates.known.records;
+        candidates.known.records.extend(known);
+    }
+    for line in candidates.lines() {
+        println!("{line}");
+    }
+    let result = if pass { "PASS" } else { "FAIL" };
+    println!("RESULT {result}");
+    assert!(pass);
+}
+
+#[test]
+fn manifests_within_records_keep_only_their_entries() {
+    let committed = Manifests::committed();
+    let (declared, _) = committed.declared.iter().next().expect("a declared record");
+    let ((_, known), _) = committed.known.iter().next().expect("a known record");
+    let named = BTreeSet::from([*declared, *known]);
+    let within = committed.within(&named);
+    let kept: Vec<&RecordId> = within.declared.keys().collect();
+    let expected: Vec<&RecordId> = committed
+        .declared
+        .keys()
+        .filter(|id| named.contains(id))
+        .collect();
+    assert_eq!(kept, expected);
+    assert!(within.known.keys().all(|(_, id)| named.contains(id)));
+    assert!(within.known.keys().any(|(_, id)| id == known));
+    assert!(within.declared.len() < committed.declared.len());
+    assert!(within.known.len() < committed.known.len());
+}
+
+#[test]
+fn a_list_names_each_record_once() {
+    let named = named_records("supp#55, supp#68,supp#55,");
+    assert_eq!(named, BTreeSet::from([supp(55), supp(68)]));
+}
+
+#[test]
+#[should_panic(expected = "the list names no record")]
+fn an_empty_list_is_refused() {
+    named_records(" , ");
 }
 
 #[tokio::test(flavor = "multi_thread")]

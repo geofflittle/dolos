@@ -1,10 +1,14 @@
-use std::{collections::BTreeMap, fmt, io::Read};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    io::Read,
+};
 
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
-    record::{CorpusKind, Globals, Record},
+    record::{CorpusKind, Globals, Record, RecordId},
     run::{self, Run},
 };
 
@@ -150,7 +154,42 @@ impl Corpus {
             Run::Excluded { .. } => None,
         })
     }
+
+    /// The corpus with only the kept runs that hold a record of this corpus the set names.
+    pub fn select(&self, named: &BTreeSet<RecordId>) -> Result<Corpus, NotKept> {
+        let mine: BTreeSet<u32> = named
+            .iter()
+            .filter(|id| id.corpus == self.kind)
+            .map(|id| id.n)
+            .collect();
+        let kept: Vec<&run::KeptRun> = self
+            .kept()
+            .filter(|run| run.records().iter().any(|r| mine.contains(&r.n)))
+            .collect();
+        let held: BTreeSet<u32> = kept
+            .iter()
+            .flat_map(|run| run.records().iter().map(|r| r.n))
+            .collect();
+        if let Some(n) = mine.difference(&held).next() {
+            return Err(NotKept(RecordId {
+                corpus: self.kind,
+                n: *n,
+            }));
+        }
+        Ok(Corpus {
+            kind: self.kind,
+            sha256: self.sha256.clone(),
+            records: held.len(),
+            globals: self.globals.clone(),
+            runs: kept.into_iter().cloned().map(Run::Kept).collect(),
+        })
+    }
 }
+
+/// A named record that no kept run of its corpus holds.
+#[derive(Debug, Error, PartialEq, Eq)]
+#[error("SELECTION {0} is in no kept run")]
+pub struct NotKept(pub RecordId);
 
 impl fmt::Display for Corpus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -298,6 +337,64 @@ mod tests {
         let (reason, (records, _)) = e.reasons.iter().next().unwrap();
         assert_eq!(*records, 1);
         assert!(reason.contains("unclassified ledger leaf Nil"), "{reason}");
+    }
+
+    fn numbers(corpus: &Corpus) -> Vec<u32> {
+        let kept = corpus.kept();
+        kept.flat_map(|run| run.records().iter().map(|r| r.n))
+            .collect()
+    }
+
+    #[test]
+    fn a_record_in_no_kept_run_is_refused() {
+        let corpus = load(CorpusKind::Ic).unwrap();
+        let excluded = corpus
+            .runs
+            .iter()
+            .find_map(|run| match run {
+                Run::Excluded { first, .. } => Some(*first),
+                Run::Kept(_) => None,
+            })
+            .unwrap();
+        let named = BTreeSet::from([RecordId {
+            corpus: CorpusKind::Ic,
+            n: excluded,
+        }]);
+        assert_eq!(
+            corpus.select(&named).unwrap_err().to_string(),
+            format!("SELECTION ic#{excluded} is in no kept run")
+        );
+    }
+
+    #[test]
+    fn a_record_of_the_other_corpus_selects_no_run() {
+        let corpus = load(CorpusKind::Supp).unwrap();
+        let named = BTreeSet::from([RecordId {
+            corpus: CorpusKind::Ic,
+            n: 9,
+        }]);
+        let selected = corpus.select(&named).unwrap();
+        assert_eq!(selected.runs.len(), 0);
+        assert_eq!(selected.records, 0);
+    }
+
+    #[test]
+    fn a_selection_keeps_every_record_of_each_named_run_and_no_other_run() {
+        let corpus = load(CorpusKind::Supp).unwrap();
+        let named = BTreeSet::from([RecordId {
+            corpus: CorpusKind::Supp,
+            n: 9,
+        }]);
+        let selected = corpus.select(&named).unwrap();
+        let run = corpus
+            .kept()
+            .find(|run| run.records().iter().any(|r| r.n == 9))
+            .unwrap();
+        let whole: Vec<u32> = run.records().iter().map(|r| r.n).collect();
+        assert!(whole.contains(&8), "{whole:?}");
+        assert_eq!(numbers(&selected), whole);
+        assert_eq!(selected.records, whole.len());
+        assert_eq!(selected.sha256, corpus.sha256);
     }
 
     fn input_totals(kind: CorpusKind) -> [usize; 7] {

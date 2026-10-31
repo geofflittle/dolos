@@ -1,11 +1,11 @@
 #!/bin/sh
-# Judges the oracle branch head and each named arm, one oracle run each.
-# Usage: [REV=ref] [ARMS="head colret coin ..."] breaks.sh
+# Judges the oracle branch head on both corpora, the control (the head on every arm's records) and each arm on the records plants/<arm>.records names, one oracle run each.
+# Usage: [REV=ref] [ARMS="head control colret coin ..."] breaks.sh
 # The branch is read from the bare repository $ROOT/dolos.git.
 set -eu
 ROOT=${ROOT:-/opt/build/ledger-oracle-1027}
 REV=${REV:-feat/ledger-oracle}
-ARMS=${ARMS:-head colret coin inflight rodrigo-reverted rob-reverted cost revalidate revalidate-drops subouts byron-attrs byron-signer byron-guard chaincode minfee-subtx emptyguards tag24 v1v2}
+ARMS=${ARMS:-head control colret coin inflight rodrigo-reverted rob-reverted cost revalidate revalidate-drops subouts byron-attrs byron-signer byron-guard chaincode minfee-subtx emptyguards tag24 v1v2}
 MIN_FREE_G=${MIN_FREE_G:-6}
 HERE=$(cd "$(dirname "$0")" && pwd)
 IMAGE="$HERE/in-image.sh"
@@ -95,38 +95,65 @@ caught() {
   arm=$1
   case $arm in
     head) return 1 ;;
-    colret) pattern='^(DIFF utxo .* ledger=none dolos=|DISAGREE supp#9 |KNOWN_STALE supp#9 row=S3 )' ;;
+    colret) pattern='^(DIFF utxo .* ledger=none dolos=|DISAGREE [a-z]+#[0-9]+ |KNOWN_STALE [a-z]+#[0-9]+ row=)' ;;
     coin) pattern='^DIFF utxo .* fields=([a-z_]+,)*coin(,|$)' ;;
     inflight) pattern='^DISAGREE [a-z]+#[0-9]+ held=' ;;
-    rodrigo-reverted) pattern='^STATE as_output disagree=' ;;
-    rob-reverted) pattern='^(UNSUPPORTED_UNEXPECTED|DISAGREE|REASON_MISMATCH|STALE_MANIFEST) ic#(851|861|1215|1233) ' ;;
+    rodrigo-reverted) pattern='^DIFF as_output [a-z]+#[0-9]+ ' ;;
+    rob-reverted) pattern='^(UNSUPPORTED_UNEXPECTED|DISAGREE|REASON_MISMATCH|STALE_MANIFEST) [a-z]+#[0-9]+ ' ;;
     cost) pattern='^DIFF units supp#[0-9]+ purpose=[0-9]+#[0-9]+ ledger=\(ran ' ;;
     revalidate) pattern='^DIFF revalidate [a-z]+#[0-9]+ kept_after_rollback_to=' ;;
     revalidate-drops) pattern='^DIFF revalidate [a-z]+#[0-9]+ dropped_after_rollback_to=' ;;
     subouts) pattern='^DIFF (undo|as_output) [a-z]+#[0-9]+ ' ;;
-    byron-attrs) pattern='^DISAGREE supp#(59|72) ' ;;
-    byron-signer) pattern='^DISAGREE supp#(55|68) ' ;;
-    byron-guard) pattern='^DISAGREE supp#(63|76) ' ;;
-    chaincode) pattern='^DISAGREE supp#(61|74) ' ;;
+    byron-attrs | byron-signer | byron-guard | chaincode | emptyguards | tag24) pattern='^DISAGREE [a-z]+#[0-9]+ ' ;;
     minfee-subtx) pattern='^DIFF fee [a-z]+#[0-9]+ ledger=[0-9]+ dolos=[0-9]+$' ;;
-    emptyguards) pattern='^DISAGREE supp#(80|82) ' ;;
-    tag24) pattern='^DISAGREE supp#83 ' ;;
-    v1v2) pattern='^UNSUPPORTED_UNEXPECTED ic#[0-9]+ label=new script language ' ;;
+    v1v2) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=new script language ' ;;
   esac
   if [ ! -f "$OUT/head.log" ]; then
     echo "ARM $arm NO_HEAD_LOG"
     return 1
   fi
-  grep -E "$pattern" "$OUT/$arm.log" >"$OUT/$arm.expected" || true
-  grep -E "$pattern" "$OUT/head.log" | grep -v -x -F -f - "$OUT/$arm.expected" >"$OUT/$arm.new" || true
+  log=$2
+  at=$3
+  grep -E "$pattern" "$log" >"$at.expected" || true
+  # Keeps the lines the head run lacks that name one of the arm's records.
+  sed 's/^/ /; s/$/ /' "$HERE/plants/$arm.records" >"$at.ids"
+  grep -E "$pattern" "$OUT/head.log" | grep -v -x -F -f - "$at.expected" |
+    sed 's/$/ /' | grep -F -f "$at.ids" | sed 's/ $//' >"$at.new" || true
   # The subouts arm counts only records that no known row names.
   if [ "$arm" = subouts ]; then
     sed -n 's/^[^ ]* [^ ]* \([a-z]*#[0-9]*\).*/ \1 /p' "$ROOT/$SCRATCH/test_data/ledger-oracle/known.txt" >"$OUT/known.ids"
-    grep -v -F -f "$OUT/known.ids" "$OUT/$arm.new" >"$OUT/$arm.unknown" || true
-    mv "$OUT/$arm.unknown" "$OUT/$arm.new"
+    grep -v -F -f "$OUT/known.ids" "$at.new" >"$at.unknown" || true
+    mv "$at.unknown" "$at.new"
   fi
-  head -4 "$OUT/$arm.new"
-  [ -s "$OUT/$arm.new" ]
+  head -4 "$at.new"
+  [ -s "$at.new" ]
+}
+
+# The arms of ARMS that judge named records.
+planted_arms() {
+  for a in $ARMS; do
+    case $a in
+      head | control) ;;
+      *) echo "$a" ;;
+    esac
+  done
+}
+
+# Whether the unplanted head judges every planted arm's records with a pass and no arm's line, the case where each arm must not fire.
+control_clean() {
+  if ! grep -q '^RESULT PASS' "$OUT/control.log"; then
+    echo "ARM control RESULT not PASS log=$OUT/control.log"
+    return 1
+  fi
+  clean=0
+  mkdir -p "$OUT/control"
+  for a in $(planted_arms); do
+    if caught "$a" "$OUT/control.log" "$OUT/control/$a" >/dev/null; then
+      echo "ARM control FIRED arm=$a lines=$OUT/control/$a.new"
+      clean=1
+    fi
+  done
+  return $clean
 }
 
 head_result=SKIPPED
@@ -138,6 +165,7 @@ for arm in $ARMS; do
   locked=--locked
   case $arm in
     head) ;;
+    control) ;;
     colret) plant_colret ;;
     coin) plant_coin ;;
     inflight) plant_inflight ;;
@@ -168,9 +196,23 @@ for arm in $ARMS; do
     verdicts="$verdicts $arm=MISSED"
     continue
   fi
-  RUST_BACKTRACE=0 sh "$IMAGE" "$SCRATCH" cargo test -q --release $locked -p dolos --lib "$TEST" \
+  case $arm in
+    head) test=$TEST records= ;;
+    control) test=${TEST}_records records=$(for a in $(planted_arms); do cat "$HERE/plants/$a.records"; done | sort -u | paste -sd, -) ;;
+    *) test=${TEST}_records records=$(paste -sd, "$HERE/plants/$arm.records") ;;
+  esac
+  echo "ARM $arm test=${test##*::} records=$(echo "$records" | tr , '\n' | grep -c . || true)"
+  ORACLE_RECORDS=$records RUST_BACKTRACE=0 sh "$IMAGE" "$SCRATCH" cargo test -q --release $locked -p dolos --lib "$test" \
     -- --exact --ignored --nocapture >"$OUT/$arm.log" 2>&1 || true
-  if [ "$arm" = head ]; then
+  if [ "$arm" = control ]; then
+    if control_clean; then
+      echo "control=CLEAN"
+      verdicts="$verdicts control=CLEAN"
+    else
+      echo "control=FIRED"
+      verdicts="$verdicts control=FIRED"
+    fi
+  elif [ "$arm" = head ]; then
     grep -E '^(CORPUS|VALIDATION|DEPENDENT|KNOWN|STATE|COST|REVALIDATE|BUILTIN|BUILTIN_UNCOVERED|ROLL_FAIL|RESULT|DISAGREE|REASON_MISMATCH|CASCADE|UNSUPPORTED_UNEXPECTED|STALE_MANIFEST|KNOWN_STALE|UNKNOWN_REFUSAL) ' "$OUT/$arm.log" |
       cut -c1-400 || true
     if grep -q '^RESULT PASS' "$OUT/$arm.log" && ! grep -q '^RESULT FAIL' "$OUT/$arm.log"; then
@@ -179,7 +221,7 @@ for arm in $ARMS; do
       head_result=FAIL
     fi
     verdicts="$verdicts head=$head_result"
-  elif caught "$arm"; then
+  elif caught "$arm" "$OUT/$arm.log" "$OUT/$arm"; then
     echo "$arm=CAUGHT"
     verdicts="$verdicts $arm=CAUGHT"
   else
@@ -191,6 +233,6 @@ reset_scratch
 
 echo "ARMS$verdicts logs=$OUT"
 case "$verdicts" in
-  *MISSED* | *FAIL* | *SKIPPED*) exit 1 ;;
+  *MISSED* | *FAIL* | *FIRED* | *SKIPPED*) exit 1 ;;
 esac
 [ "$head_result" = PASS ]
