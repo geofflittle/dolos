@@ -4,6 +4,7 @@
 # The branch is read from the bare repository $ROOT/dolos.git.
 set -eu
 ROOT=${ROOT:-/opt/build/ledger-oracle-1027}
+export ROOT
 REV=${REV:-feat/ledger-oracle}
 MIN_FREE_G=${MIN_FREE_G:-6}
 HERE=$(cd "$(dirname "$0")" && pwd)
