@@ -1435,7 +1435,7 @@ fn hold_undone(
     Some((rid, hash))
 }
 
-/// Rolls a run back one block at a time to its seed point, counting what FollowTip and WatchTx serve for each undone input, what ReadUtxos serves for the inputs earlier blocks made, whether a pending transaction spending the undone block is dropped and the undone block's first transaction kept, and the seed outputs and accounts Dolos holds at the end.
+/// Rolls a run back one block at a time to its seed point, counting what FollowTip and WatchTx serve for each undone input, what ReadUtxos serves for the inputs earlier blocks made, what revalidation keeps and drops, and the seed outputs and accounts Dolos holds at the end.
 async fn sweep(
     domain: &DomainAdapter,
     seed: &SeedPoint,

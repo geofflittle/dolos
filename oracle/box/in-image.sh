@@ -2,7 +2,7 @@
 # Runs one command in the Dolos build image against a tree under the build root.
 # Usage: [TARGET=name] [MEMORY=size] in-image.sh <tree dir under root> <command...>
 # The root holds HOME, CARGO_HOME, RUSTUP_HOME and every target dir.
-# The container is held to MEMORY, so the kernel kills it rather than a process of the node.
+# The container is held to MEMORY, so the kernel's out of memory kill ends a process of the container.
 set -eu
 ROOT=${ROOT:-/opt/build/ledger-oracle-1027}
 MEMORY=${MEMORY:-6g}
