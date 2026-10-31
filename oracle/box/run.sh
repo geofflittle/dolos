@@ -9,7 +9,6 @@ REV=${REV:-feat/ledger-oracle}
 BASE=${BASE:-}
 MIN_FREE_G=${MIN_FREE_G:-6}
 CANDIDATE_NEED_G=${CANDIDATE_NEED_G:-12}
-JUDGE_CPU_SHARES=${JUDGE_CPU_SHARES:-256}
 LAST_DONE="$ROOT/runs/last-done"
 HERE=$(cd "$(dirname "$0")" && pwd)
 LIVE_ENV=${LIVE_ENV:-$ROOT/live.env}
@@ -146,8 +145,6 @@ done_run() {
     sync_candidate >>"$OUT/live-leg.out" 2>&1 &
     sync=$!
   fi
-  # The sync is the longest step of the tier, so the builds and judges take a lower CPU weight than its container.
-  export CPU_SHARES="$JUDGE_CPU_SHARES"
   build_live_judge >>"$OUT/live-leg.out" 2>&1 || true
   sh "$HERE/breaks.sh" | tee "$OUT/breaks.out"
   fields=1
