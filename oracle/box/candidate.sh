@@ -1,7 +1,7 @@
 #!/bin/sh
 # Syncs a candidate Dolos from the node beside the serving one, reads both and the node, prints each field the two serve differently, and removes the candidate.
 # Usage: CANDIDATE=<binary path or image reference> COMMIT=sha candidate.sh <dir>
-# Reads ROOT, NODE, NODE_DB, ENDPOINT, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_NEED_G and GRPCURL from the environment.
+# Reads ROOT, NODE, NODE_DB, ENDPOINT, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_NEED_G, PRUNE_MINUTES and GRPCURL from the environment.
 set -eu
 DIR=$1
 : "${CANDIDATE:?}" "${COMMIT:?}" "${ROOT:?}" "${NODE:?}" "${ENDPOINT:?}" "${SERVE_CONFIG:?}"
@@ -11,6 +11,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 GRPCURL=${GRPCURL:-grpcurl}
 NAME=${CANDIDATE_NAME:-dolos-candidate-1028}
 SYNC_MINUTES=${SYNC_MINUTES:-90}
+PRUNE_MINUTES=${PRUNE_MINUTES:-5}
 FIXED_SLOTS="205422 368793 783572"
 STORE="$ROOT/candidate/$(date -u +%Y%m%dT%H%M%SZ)"
 
@@ -41,15 +42,16 @@ printf '[serve.grpc]\nlisten_address = "%s"\n' "$CANDIDATE_GRPC" >>"$STORE/dolos
 case $CANDIDATE in
   /*)
     cp "$CANDIDATE" "$STORE/dolos-candidate"
-    docker run -d --name "$NAME" --network host --log-opt max-size=100m --log-opt max-file=2 \
-      -v "$STORE:/run-dolos" -w /run-dolos --entrypoint /run-dolos/dolos-candidate \
-      dolos-build:1 -c dolos.toml daemon >/dev/null
+    IMAGE=dolos-build:1
+    ENTRY="--entrypoint /run-dolos/dolos-candidate"
     ;;
   *)
-    docker run -d --name "$NAME" --network host --log-opt max-size=100m --log-opt max-file=2 \
-      -v "$STORE:/run-dolos" -w /run-dolos "$CANDIDATE" -c dolos.toml daemon >/dev/null
+    IMAGE=$CANDIDATE
+    ENTRY=
     ;;
 esac
+docker run -d --name "$NAME" --network host --log-opt max-size=100m --log-opt max-file=2 \
+  -v "$STORE:/run-dolos" -w /run-dolos $ENTRY "$IMAGE" -c dolos.toml daemon >/dev/null
 echo "LIVE-CANDIDATE started name=$NAME commit=$COMMIT candidate=$CANDIDATE grpc=$CANDIDATE_GRPC"
 
 candidate_slot() {
@@ -61,7 +63,17 @@ node_slot() {
   docker exec "$NODE" cardano-cli latest query tip | jq -r .slot
 }
 
+# Stops the candidate, prunes its wal to the rollback window and compacts it, and starts it again.
+prune_wal() {
+  docker stop -t 120 "$NAME" >/dev/null
+  docker run --rm --network none -v "$STORE:/run-dolos" -w /run-dolos $ENTRY "$IMAGE" \
+    -c dolos.toml data prune-wal >>"$DIR/prune-wal.log" 2>&1
+  docker start "$NAME" >/dev/null
+  echo "LIVE-CANDIDATE pruned_wal slot=$slot wal_bytes=$(du -sb "$STORE/data/wal" | cut -f1)"
+}
+
 start=$(date +%s)
+pruned=$start
 while :; do
   slot=$(candidate_slot || true)
   slot=${slot:-0}
@@ -72,6 +84,10 @@ while :; do
   if [ "$(free_g "$ROOT")" -lt 3 ]; then
     echo "LIVE-CANDIDATE REFUSED free=$(free_g "$ROOT")G during sync slot=$slot node=$node store=$(du -sh "$STORE" | cut -f1)"
     exit 2
+  fi
+  if [ $(($(date +%s) - pruned)) -ge $((PRUNE_MINUTES * 60)) ]; then
+    prune_wal
+    pruned=$(date +%s)
   fi
   if [ $(($(date +%s) - start)) -gt $((SYNC_MINUTES * 60)) ]; then
     echo "LIVE-CANDIDATE sync_timeout slot=$slot node=$node minutes=$SYNC_MINUTES"
