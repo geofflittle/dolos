@@ -97,14 +97,16 @@ while :; do
 done
 echo "LIVE-CANDIDATE synced slot=$slot node=$node seconds=$(($(date +%s) - start)) store=$(du -sh "$STORE" | cut -f1)"
 # The bytes of each part of the store and the height of its tip, which divide into bytes per block.
-height=$("$GRPCURL" -plaintext -d '{}' "$CANDIDATE_GRPC" utxorpc.v1.sync.SyncService/ReadTip | jq -r '.tip.height // 0')
+height=$("$GRPCURL" -plaintext -max-msg-sz 200000000 \
+  -d "{\"ref\":[{\"slot\":$slot}],\"fieldMask\":{\"paths\":[\"cardano.header\"]}}" \
+  "$CANDIDATE_GRPC" utxorpc.v1.sync.SyncService/FetchBlock | jq -r '.block.cardano.header.height // 0')
 du -sb "$STORE"/data/archive/* "$STORE/data/state" "$STORE/data/wal" | while read -r bytes path; do
   echo "LIVE-CANDIDATE store part=${path#"$STORE"/data/} bytes=$bytes height=$height"
 done
 
 # The last block whose body holds a certificate among the candidate's blocks from 6000 to 3000 slots back, which the node holds in its immutable database.
 recent=$("$GRPCURL" -plaintext -max-msg-sz 200000000 \
-  -d "{\"startToken\":{\"slot\":$((slot - 6000))},\"maxItems\":200,\"fieldMask\":{\"paths\":[\"cardano.header\"]}}" \
+  -d "{\"startToken\":{\"slot\":$((slot - 6000))},\"maxItems\":100,\"fieldMask\":{\"paths\":[\"cardano.header\"]}}" \
   "$CANDIDATE_GRPC" utxorpc.v1.sync.SyncService/DumpHistory |
   jq -r --argjson end $((slot - 3000)) \
     '[.block[].cardano.header | select(.bodyContainsLeiosCertificate and (.slot | tonumber) < $end) | .slot] | last // empty')
