@@ -1,3 +1,18 @@
+diff --git a/pallas-addresses/src/byron.rs b/pallas-addresses/src/byron.rs
+index 981871cf..ceb41d01 100644
+--- a/pallas-addresses/src/byron.rs
++++ b/pallas-addresses/src/byron.rs
+@@ -187,6 +187,10 @@ impl AddressPayload {
+         pallas_crypto::hash::Hasher::<224>::hash(&sha3_256(&buf))
+     }
+ 
++    pub fn hash_address_id_preimage(preimage: &[u8]) -> Hash<28> {
++        pallas_crypto::hash::Hasher::<224>::hash(&sha3_256(preimage))
++    }
++
+     pub fn new(addrtype: AddrType, spending_data: SpendingData, attributes: AddrAttrs) -> Self {
+         AddressPayload {
+             root: Self::hash_address_id(&addrtype, &spending_data, &attributes),
 diff --git a/pallas-validate/src/phase1/dijkstra.rs b/pallas-validate/src/phase1/dijkstra.rs
 index 3592a412..7e4b7348 100644
 --- a/pallas-validate/src/phase1/dijkstra.rs
@@ -134,3 +149,18 @@ index fc492676..6793e7b9 100644
      }
      let units = budget_to_ex_units(result.info.consumed_budget);
      let logs = result.info.logs;
+diff --git a/pallas-validate/src/utils/validation.rs b/pallas-validate/src/utils/validation.rs
+index e95673e1..5833228f 100644
+--- a/pallas-validate/src/utils/validation.rs
++++ b/pallas-validate/src/utils/validation.rs
+@@ -44,6 +44,10 @@ pub enum ValidationError {
+     #[error("malformed Dijkstra Plutus V3 script")]
+     DijkstraMalformedScript,
+ 
++    #[cfg(feature = "unstable")]
++    #[error("malformed Dijkstra transaction field: {0}")]
++    DijkstraMalformed(&'static str),
++
+     #[error("transaction and protocol parameters differ")]
+     TxAndProtParamsDiffer,
+ 
