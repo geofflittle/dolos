@@ -316,6 +316,13 @@ impl<D: Domain> MempoolAwareUtxoStore<'_, D> {
     }
 }
 
+/// Each sub transaction the transaction lists, then the transaction, in the order the ledger applies them.
+fn applied<'t>(tx: &'t MultiEraTx<'t>) -> Vec<MultiEraTx<'t>> {
+    let mut txs = tx.sub_transactions();
+    txs.push(tx.clone());
+    txs
+}
+
 fn scan_mempool_utxos<F>(predicate: F, all_txs: Vec<MempoolTx>) -> HashSet<TxoRef>
 where
     F: Fn(&MultiEraOutput<'_>) -> bool,
@@ -324,17 +331,19 @@ where
 
     for mtx in all_txs {
         let era_cbor = &mtx.payload;
-        let Some(tx) = MultiEraTx::try_from(era_cbor).ok() else {
+        let Some(top) = MultiEraTx::try_from(era_cbor).ok() else {
             continue;
         };
 
-        debug!(tx = %tx.hash(), "scanning mempool tx");
+        for tx in applied(&top) {
+            debug!(tx = %tx.hash(), "scanning mempool tx");
 
-        for (idx, inflight) in tx.produces() {
-            if predicate(&inflight) {
-                let txoref = TxoRef::from((tx.hash(), idx as u32));
-                debug!(txoref = %txoref, "mempool utxo matches predicate");
-                refs.insert(txoref);
+            for (idx, inflight) in tx.produces() {
+                if predicate(&inflight) {
+                    let txoref = TxoRef::from((tx.hash(), idx as u32));
+                    debug!(txoref = %txoref, "mempool utxo matches predicate");
+                    refs.insert(txoref);
+                }
             }
         }
     }
@@ -347,17 +356,19 @@ fn exclude_inflight_stxis(refs: &mut HashSet<TxoRef>, all_txs: Vec<MempoolTx>) {
 
     for mtx in all_txs {
         let era_cbor = &mtx.payload;
-        let Some(tx) = MultiEraTx::try_from(era_cbor).ok() else {
+        let Some(top) = MultiEraTx::try_from(era_cbor).ok() else {
             warn!("invalid inflight tx");
             continue;
         };
 
-        debug!(tx = %tx.hash(), "checking inflight tx");
+        for tx in applied(&top) {
+            debug!(tx = %tx.hash(), "checking inflight tx");
 
-        for locked in tx.consumes() {
-            let txoref = TxoRef::from(&locked);
-            if refs.remove(&txoref) {
-                debug!(txoref = %txoref, "excluded stxi");
+            for locked in tx.consumes() {
+                let txoref = TxoRef::from(&locked);
+                if refs.remove(&txoref) {
+                    debug!(txoref = %txoref, "excluded stxi");
+                }
             }
         }
     }
@@ -368,21 +379,23 @@ fn select_mempool_utxos(refs: &mut HashSet<TxoRef>, all_txs: Vec<MempoolTx>) -> 
 
     for mtx in all_txs {
         let era_cbor = &mtx.payload;
-        let Some(tx) = MultiEraTx::try_from(era_cbor).ok() else {
+        let Some(top) = MultiEraTx::try_from(era_cbor).ok() else {
             continue;
         };
 
-        debug!(tx = %tx.hash(), "checking mempool tx");
+        for tx in applied(&top) {
+            debug!(tx = %tx.hash(), "checking mempool tx");
 
-        for (idx, inflight) in tx.produces() {
-            let txoref = TxoRef::from((tx.hash(), idx as u32));
-            debug!(txoref = %txoref, "checking mempool utxo");
+            for (idx, inflight) in tx.produces() {
+                let txoref = TxoRef::from((tx.hash(), idx as u32));
+                debug!(txoref = %txoref, "checking mempool utxo");
 
-            if refs.contains(&txoref) {
-                let era_cbor = EraCbor::from(inflight);
-                debug!(txoref = %txoref, "selected utxo available inmempool tx");
-                refs.remove(&txoref);
-                map.insert(txoref, Arc::new(era_cbor));
+                if refs.contains(&txoref) {
+                    let era_cbor = EraCbor::from(inflight);
+                    debug!(txoref = %txoref, "selected utxo available inmempool tx");
+                    refs.remove(&txoref);
+                    map.insert(txoref, Arc::new(era_cbor));
+                }
             }
         }
     }
@@ -767,5 +780,93 @@ mod tests {
 
         // Fourth poll: stream done.
         assert!(matches!(poll_once(&mut filter, &mut cx), Poll::Ready(None)));
+    }
+
+    // The transaction bd1b7336 of the block at slot 854292 lists the sub
+    // transaction ca42eb12, which spends d2fa6568#0 and makes one output.
+    const PARENT: &str = "bd1b7336a5a62005a2576658e64990fab684a641139095afc16865c371e637b4";
+    const SUB: &str = "ca42eb1227f150670a8a8c7c82468ff10dd726b2aa08ac209a8b8b5530fb28c7";
+    const SUB_SPENDS: &str = "d2fa6568066113f78eefdc89025b419a8e68db15eef70e9a8cbea3b4ed87d8b6";
+
+    fn txo(hash: &str, index: u32) -> TxoRef {
+        TxoRef(hash.parse().unwrap(), index)
+    }
+
+    /// The transaction that lists a sub transaction, as a pending entry.
+    fn pending_with_sub() -> MempoolTx {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test_data/musashi-w36/ranking-sub-transaction.block");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let cbor = hex::decode(text.trim()).unwrap();
+        let block = pallas::ledger::traverse::MultiEraBlock::decode(&cbor).unwrap();
+        let tx = block
+            .txs()
+            .into_iter()
+            .find(|tx| tx.hash() == PARENT.parse::<TxHash>().unwrap())
+            .unwrap();
+        MempoolTx::new(tx.hash(), EraCbor(tx.era().into(), tx.encode()), vec![])
+    }
+
+    /// The output reference one past the last output of the listing transaction.
+    fn past_parent_outputs(mtx: &MempoolTx) -> TxoRef {
+        let tx = MultiEraTx::try_from(&mtx.payload).unwrap();
+        txo(PARENT, tx.outputs().len() as u32)
+    }
+
+    #[test]
+    fn a_sub_transaction_output_is_not_selected_under_the_listing_hash() {
+        let mtx = pending_with_sub();
+        let past = past_parent_outputs(&mtx);
+        let mut refs = HashSet::from([past.clone()]);
+
+        let selected = select_mempool_utxos(&mut refs, vec![mtx]);
+
+        assert!(selected.is_empty());
+        assert_eq!(refs, HashSet::from([past]));
+    }
+
+    #[test]
+    fn a_sub_transaction_output_is_selected_under_its_own_hash() {
+        let mtx = pending_with_sub();
+        let mut refs = HashSet::from([txo(SUB, 0)]);
+
+        let selected = select_mempool_utxos(&mut refs, vec![mtx]);
+
+        assert_eq!(
+            selected.keys().cloned().collect::<HashSet<_>>(),
+            HashSet::from([txo(SUB, 0)])
+        );
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn an_input_no_pending_transaction_spends_is_kept() {
+        let mtx = pending_with_sub();
+        let mut refs = HashSet::from([txo(PARENT, 0)]);
+
+        exclude_inflight_stxis(&mut refs, vec![mtx]);
+
+        assert_eq!(refs, HashSet::from([txo(PARENT, 0)]));
+    }
+
+    #[test]
+    fn an_input_a_pending_sub_transaction_spends_is_excluded() {
+        let mtx = pending_with_sub();
+        let mut refs = HashSet::from([txo(SUB_SPENDS, 0)]);
+
+        exclude_inflight_stxis(&mut refs, vec![mtx]);
+
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn a_tag_scan_finds_a_sub_transaction_output_under_its_own_hash() {
+        let mtx = pending_with_sub();
+        let past = past_parent_outputs(&mtx);
+
+        let found = scan_mempool_utxos(|_| true, vec![mtx]);
+
+        assert!(found.contains(&txo(SUB, 0)));
+        assert!(!found.contains(&past));
     }
 }

@@ -1,5 +1,4 @@
 V1 validation supp#5
-V2 validation supp#2
 V25 validation ic#1971
 V25 validation ic#1972
 V25 validation ic#2010
