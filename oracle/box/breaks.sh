@@ -5,18 +5,17 @@
 set -eu
 ROOT=${ROOT:-/opt/build/ledger-oracle-1027}
 REV=${REV:-feat/ledger-oracle}
-ARMS=${ARMS:-head control colret coin inflight rodrigo-reverted rob-reverted cost revalidate revalidate-drops subouts byron-attrs byron-signer byron-guard chaincode minfee-subtx emptyguards tag24 v1v2}
 MIN_FREE_G=${MIN_FREE_G:-6}
 HERE=$(cd "$(dirname "$0")" && pwd)
 IMAGE="$HERE/in-image.sh"
 SCRATCH=scratch/dolos
-PALLAS=scratch/pallas
 # The pallas commit the rob arm reverts f3419a3a on, one where no later change touches the lines of that merge.
 ROB_BASE=${ROB_BASE:-362f5e0e2610686382752b1392fde02c84eb3b50}
 TEST=serve::grpc::v1::ledger_oracle_tests::ledger_oracle
 OUT=${OUT:-"$ROOT/runs/$(date -u +%Y%m%dT%H%M%SZ)"}
 mkdir -p "$OUT"
 . "$HERE/lib.sh"
+ARMS=${ARMS:-head control $PLANTED_ARMS}
 require_free
 
 # The source cargo resolves pallas-validate from, as the scratch tree's build sees it.
@@ -60,34 +59,37 @@ plant_subouts() {
 
 # Checks pallas out at a commit into the scratch pallas tree and points the scratch tree's pallas crates at it.
 pallas_tree() {
-  rm -rf "${ROOT:?}/$PALLAS"
+  if [ ! -d "$ROOT/$PALLAS/.git" ]; then
+    git init -q "$ROOT/$PALLAS" || return
+  fi
   for db in "$ROOT"/cargo-home/git/db/pallas-*; do
     if git -C "$db" cat-file -e "$1^{commit}" 2>/dev/null; then
-      git clone -q --no-checkout "$db" "$ROOT/$PALLAS"
+      git -C "$ROOT/$PALLAS" fetch -q "$db" '+refs/*:refs/db/*' || return
       break
     fi
   done
-  git -C "$ROOT/$PALLAS" checkout -q --detach "$1"
-  sed -E -i 's#^(pallas[a-z-]*) = \{ git = "https://github.com/[^/]+/pallas", rev = "[0-9a-f]+"#\1 = { path = "/w/'"$PALLAS"'/\1"#' \
-    "$ROOT/$SCRATCH/Cargo.toml"
+  git -C "$ROOT/$PALLAS" checkout -q -f --detach "$1" &&
+    git -C "$ROOT/$PALLAS" clean -q -fdx &&
+    sed -E -i 's#^(pallas[a-z-]*) = \{ git = "https://github.com/[^/]+/pallas", rev = "[0-9a-f]+"#\1 = { path = "/w/'"$PALLAS"'/\1"#' \
+      "$ROOT/$SCRATCH/Cargo.toml"
 }
 
 plant_rob() {
-  pallas_tree "$ROB_BASE"
-  git -C "$ROOT/$PALLAS" revert -m 1 --no-commit f3419a3a
-  # Adds the pallas items Dolos names that this commit lacks, with every refusal message unchanged.
-  git -C "$ROOT/$PALLAS" apply "$HERE/plants/rob-surface.diff"
+  pallas_tree "$ROB_BASE" &&
+    git -C "$ROOT/$PALLAS" revert -m 1 --no-commit f3419a3a &&
+    # Adds the pallas items Dolos names that this commit lacks, with every refusal message unchanged.
+    git -C "$ROOT/$PALLAS" apply "$HERE/plants/rob-surface.diff"
 }
 
 plant_cost() {
-  pallas_tree "$pin"
-  git -C "$ROOT/$PALLAS" apply "$HERE/plants/cost.diff"
+  pallas_tree "$pin" &&
+    git -C "$ROOT/$PALLAS" apply "$HERE/plants/cost.diff"
 }
 
 # Applies the named pallas plant over the pinned pallas commit.
 plant_pallas() {
-  pallas_tree "$pin"
-  git -C "$ROOT/$PALLAS" apply "$HERE/plants/$1.diff"
+  pallas_tree "$pin" &&
+    git -C "$ROOT/$PALLAS" apply "$HERE/plants/$1.diff"
 }
 
 # Whether an arm's log holds the line its plant must produce and the head log lacks.
@@ -163,27 +165,35 @@ for arm in $ARMS; do
   pin=$(sed -n 's/^pallas-validate = { git = "[^"]*", rev = "\([0-9a-f]*\)".*/\1/p' "$ROOT/$SCRATCH/Cargo.toml" | head -1)
   pin_short=$(echo "$pin" | cut -c1-7)
   locked=--locked
+  if pallas_arm "$arm"; then
+    locked=
+  fi
   case $arm in
-    head) ;;
-    control) ;;
-    colret) plant_colret ;;
-    coin) plant_coin ;;
-    inflight) plant_inflight ;;
-    revalidate) plant_revalidate ;;
-    revalidate-drops) plant_revalidate_drops ;;
-    subouts) plant_subouts ;;
-    rodrigo-reverted) plant_rodrigo ;;
-    rob-reverted) plant_rob ; locked= ;;
-    cost) plant_cost ; locked= ;;
-    byron-attrs | byron-signer | byron-guard | chaincode | minfee-subtx | emptyguards | tag24 | v1v2) plant_pallas "$arm" ; locked= ;;
+    head | control) plant=true ;;
+    colret) plant=plant_colret ;;
+    coin) plant=plant_coin ;;
+    inflight) plant=plant_inflight ;;
+    revalidate) plant=plant_revalidate ;;
+    revalidate-drops) plant=plant_revalidate_drops ;;
+    subouts) plant=plant_subouts ;;
+    rodrigo-reverted) plant=plant_rodrigo ;;
+    rob-reverted) plant=plant_rob ;;
+    cost) plant=plant_cost ;;
+    byron-attrs | byron-signer | byron-guard | chaincode | minfee-subtx | emptyguards | tag24 | v1v2) plant="plant_pallas $arm" ;;
     *) echo "unknown arm $arm" ; exit 2 ;;
   esac
+  if ! $plant >"$OUT/$arm.plant" 2>&1; then
+    echo "ARM $arm PLANT_FAILED log=$OUT/$arm.plant"
+    verdicts="$verdicts $arm=MISSED"
+    continue
+  fi
   source=$(pallas_source)
-  case $arm in
-    rob-reverted) pallas_rev="$(echo "$ROB_BASE" | cut -c1-7)-reverted-f3419a3a" ;;
-    cost | byron-attrs | byron-signer | byron-guard | chaincode | minfee-subtx | emptyguards | tag24 | v1v2) pallas_rev="$pin_short-$arm" ;;
-    *) pallas_rev=$pin_short ;;
-  esac
+  pallas_rev=$pin_short
+  if [ "$arm" = rob-reverted ]; then
+    pallas_rev="$(echo "$ROB_BASE" | cut -c1-7)-reverted-f3419a3a"
+  elif pallas_arm "$arm"; then
+    pallas_rev="$pin_short-$arm"
+  fi
   if [ -z "$locked" ] && [ "$source" != "/w/$PALLAS/pallas-validate" ]; then
     echo "ARM $arm REFUSED pallas_source=$source"
     verdicts="$verdicts $arm=MISSED"
@@ -191,19 +201,23 @@ for arm in $ARMS; do
   fi
   dolos_rev=$(git -C "$ROOT/$SCRATCH" rev-parse --short HEAD)
   echo "ARM $arm dolos=$dolos_rev pallas=$pallas_rev pallas_source=$source"
-  if ! sh "$IMAGE" "$SCRATCH" cargo check -q --release $locked -p dolos --lib --tests >"$OUT/$arm.check" 2>&1; then
-    echo "ARM $arm CHECK_FAILED log=$OUT/$arm.check"
+  started=$(date +%s)
+  if ! built=$(build_checked "$OUT/$arm.build" test --release $locked -p dolos --lib --no-run); then
+    echo "ARM $arm BUILD_REFUSED $built"
     verdicts="$verdicts $arm=MISSED"
     continue
   fi
+  judge=$(executable "$OUT/$arm.build")
   case $arm in
     head) test=$TEST records= ;;
     control) test=${TEST}_records records=$(for a in $(planted_arms); do cat "$HERE/plants/$a.records"; done | sort -u | paste -sd, -) ;;
     *) test=${TEST}_records records=$(paste -sd, "$HERE/plants/$arm.records") ;;
   esac
-  echo "ARM $arm test=${test##*::} records=$(echo "$records" | tr , '\n' | grep -c . || true)"
-  ORACLE_RECORDS=$records RUST_BACKTRACE=0 sh "$IMAGE" "$SCRATCH" cargo test -q --release $locked -p dolos --lib "$test" \
-    -- --exact --ignored --nocapture >"$OUT/$arm.log" 2>&1 || true
+  echo "ARM $arm test=${test##*::} records=$(echo "$records" | tr , '\n' | grep -c . || true) build_seconds=$(($(date +%s) - started))"
+  started=$(date +%s)
+  ORACLE_RECORDS=$records RUST_BACKTRACE=0 sh "$IMAGE" "$SCRATCH" "$judge" "$test" \
+    --exact --ignored --nocapture >"$OUT/$arm.log" 2>&1 || true
+  echo "ARM $arm judge_seconds=$(($(date +%s) - started))"
   if [ "$arm" = control ]; then
     if control_clean; then
       echo "control=CLEAN"
