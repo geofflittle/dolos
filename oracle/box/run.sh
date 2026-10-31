@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs the oracle on the build box, its quick or done tier, its live leg alone or the regeneration of its committed manifests.
 # Usage: [REV=ref] [BASE=ref] run.sh quick|done|live|regen
-# The quick tier judges the head on both corpora and each arm whose plant changes a file that differs between BASE and REV, a pallas arm when Cargo.toml or Cargo.lock differ, with the control when an arm runs and no live leg. BASE defaults to the commit of the last done run that passed, and when there is none every arm runs. The done tier judges every arm while the live leg runs and records its commit when it passes.
+# The quick tier judges the head on both corpora, the control and each arm whose plant changes a file that differs between BASE and REV, a pallas arm when Cargo.toml or Cargo.lock differ, and runs no live leg. BASE defaults to the commit of the last done run that passed, and when there is none every arm runs. The done tier judges every arm while the live leg runs and records its commit when it passes.
 # The live leg reads ENDPOINT, NODE, NODE_DB, GRPCURL, SERVE_CONFIG and CANDIDATE_GRPC from $LIVE_ENV.
 set -eu
 ROOT=${ROOT:-/opt/build/ledger-oracle-1027}
@@ -101,7 +101,7 @@ touched_arms() {
   done
 }
 
-# Judges the head and the arms the change from BASE touches with their control, every arm when no BASE is known.
+# Judges the head, the control and the arms the change from BASE touches, every arm when no BASE is known.
 quick_run() {
   mkdir -p "$OUT"
   require_free
@@ -118,7 +118,7 @@ quick_run() {
     arms=$(touched_arms "$base" "$commit" | paste -sd ' ' -)
   fi
   echo "QUICK base=$base arms=\"$arms\""
-  ARMS="head${arms:+ control $arms}" sh "$HERE/breaks.sh" | tee "$OUT/breaks.out"
+  ARMS="head control${arms:+ $arms}" sh "$HERE/breaks.sh" | tee "$OUT/breaks.out"
   verdicts=$(sed -n 's/^ARMS \(.*\) logs=.*/\1/p' "$OUT/breaks.out")
   echo "DONE tier=quick $verdicts base=$base commit=$commit logs=$OUT"
   passed "$verdicts"

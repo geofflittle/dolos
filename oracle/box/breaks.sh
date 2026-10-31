@@ -131,16 +131,6 @@ caught() {
   [ -s "$at.new" ]
 }
 
-# The arms of ARMS that judge named records.
-planted_arms() {
-  for a in $ARMS; do
-    case $a in
-      head | control) ;;
-      *) echo "$a" ;;
-    esac
-  done
-}
-
 # Whether the unplanted head judges every planted arm's records with a pass and no arm's line, the case where each arm must not fire.
 control_clean() {
   if ! grep -q '^RESULT PASS' "$OUT/control.log"; then
@@ -149,7 +139,7 @@ control_clean() {
   fi
   clean=0
   mkdir -p "$OUT/control"
-  for a in $(planted_arms); do
+  for a in $PLANTED_ARMS; do
     if caught "$a" "$OUT/control.log" "$OUT/control/$a" >/dev/null; then
       echo "ARM control FIRED arm=$a lines=$OUT/control/$a.new"
       clean=1
@@ -210,7 +200,7 @@ for arm in $ARMS; do
   judge=$(executable "$OUT/$arm.build")
   case $arm in
     head) test=$TEST records= ;;
-    control) test=${TEST}_records records=$(for a in $(planted_arms); do cat "$HERE/plants/$a.records"; done | sort -u | paste -sd, -) ;;
+    control) test=${TEST}_records records=$(for a in $PLANTED_ARMS; do cat "$HERE/plants/$a.records"; done | sort -u | paste -sd, -) ;;
     *) test=${TEST}_records records=$(paste -sd, "$HERE/plants/$arm.records") ;;
   esac
   echo "ARM $arm test=${test##*::} records=$(echo "$records" | tr , '\n' | grep -c . || true) build_seconds=$(($(date +%s) - started))"
