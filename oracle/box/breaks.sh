@@ -202,7 +202,7 @@ for arm in $ARMS; do
   dolos_rev=$(git -C "$ROOT/$SCRATCH" rev-parse --short HEAD)
   echo "ARM $arm dolos=$dolos_rev pallas=$pallas_rev pallas_source=$source"
   started=$(date +%s)
-  if ! built=$(build_checked "$OUT/$arm.build" test --release $locked -p dolos --lib --no-run); then
+  if ! built=$(build_judge "$OUT/$arm.build" $locked); then
     echo "ARM $arm BUILD_REFUSED $built"
     verdicts="$verdicts $arm=MISSED"
     continue

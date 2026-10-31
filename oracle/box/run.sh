@@ -9,6 +9,7 @@ REV=${REV:-feat/ledger-oracle}
 BASE=${BASE:-}
 MIN_FREE_G=${MIN_FREE_G:-6}
 CANDIDATE_NEED_G=${CANDIDATE_NEED_G:-12}
+JUDGE_CPU_SHARES=${JUDGE_CPU_SHARES:-256}
 LAST_DONE="$ROOT/runs/last-done"
 HERE=$(cd "$(dirname "$0")" && pwd)
 LIVE_ENV=${LIVE_ENV:-$ROOT/live.env}
@@ -23,7 +24,7 @@ esac
 export ROOT REV MIN_FREE_G CANDIDATE_NEED_G OUT
 . "$HERE/lib.sh"
 
-# Builds Dolos and its live judge from the scratch tree into $OUT/bin.
+# Builds Dolos from the scratch tree into $OUT/bin/dolos.
 build_candidate() {
   mkdir -p "$OUT/bin"
   if ! built=$(build_checked "$OUT/bin/dolos.build" build --release --locked --bin dolos); then
@@ -32,7 +33,12 @@ build_candidate() {
   fi
   dolos=$(executable "$OUT/bin/dolos.build")
   cp "$ROOT${dolos#/w}" "$OUT/bin/dolos"
-  if ! built=$(build_checked "$OUT/bin/judge.build" test --release --locked -p dolos --lib --no-run); then
+}
+
+# Builds the live judge from the scratch tree into $OUT/bin/judge.
+build_live_judge() {
+  mkdir -p "$OUT/bin"
+  if ! built=$(build_judge "$OUT/bin/judge.build" --locked); then
     echo "LIVE-CANDIDATE judge_build_failed $built"
     return 1
   fi
@@ -40,8 +46,8 @@ build_candidate() {
   cp "$ROOT${judge#/w}" "$OUT/bin/judge"
 }
 
-# Syncs the candidate in $OUT/bin from the node, compares its reads with the serving Dolos field by field and judges them against the node, logging to $OUT/candidate.log and $OUT/live.log.
-live_leg() {
+# Syncs the candidate in $OUT/bin/dolos from the node and compares its reads with the serving Dolos field by field, logging to $OUT/candidate.log.
+sync_candidate() {
   set -a
   . "$LIVE_ENV"
   set +a
@@ -50,12 +56,24 @@ live_leg() {
     >"$OUT/candidate.log" 2>&1 || fields=$?
   grep -E '^(LIVE-CANDIDATE|LIVE-FIELD|LIVE-FIELD-SPENT|LIVE-FIELDS|LIVE) ' "$OUT/candidate.log" |
     cut -c1-400 || true
+  return "$fields"
+}
+
+# Judges the candidate's reads against the node with $OUT/bin/judge, logging to $OUT/live.log.
+judge_live() {
   # The judge runs in the run's own dir, since the arms check other commits out in the scratch tree meanwhile.
-  [ -f "$OUT/live/candidate/image.txt" ] &&
+  [ -f "$OUT/bin/judge" ] && [ -f "$OUT/live/candidate/image.txt" ] &&
     LIVE_DIR="/w/${OUT#"$ROOT"/}/live/candidate" sh "$HERE/in-image.sh" "${OUT#"$ROOT"/}" \
       "/w/${OUT#"$ROOT"/}/bin/judge" "$TEST::live::live" --exact --ignored --nocapture \
-      >"$OUT/live.log" 2>&1 &&
-    [ "$fields" -eq 0 ]
+      >"$OUT/live.log" 2>&1
+}
+
+# Builds the candidate and the live judge, syncs the candidate and judges its reads.
+live_leg() {
+  build_candidate && build_live_judge || return 1
+  fields=0
+  sync_candidate || fields=$?
+  judge_live && [ "$fields" -eq 0 ]
 }
 
 # Runs the live leg alone at REV.
@@ -65,7 +83,7 @@ live_run() {
   reset_scratch
   commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
   live=FAIL
-  if build_candidate && live_leg; then
+  if live_leg; then
     live=PASS
   fi
   grep -E '^(LIVE|KNOWN|KNOWN_STALE|LIVE-DIFF|LIVE-GAP) ' "$OUT/live.log" | cut -c1-400 || true
@@ -117,20 +135,27 @@ passed() {
   esac
 }
 
-# Builds the candidate, runs the live leg while the arms run, and records the commit when every verdict passes.
+# Builds the candidate, syncs it while the arms run, judges its reads, and records the commit when every verdict passes.
 done_run() {
   mkdir -p "$OUT"
   require_free
   reset_scratch
   commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
-  leg=
+  sync=
   if build_candidate >"$OUT/live-leg.out" 2>&1; then
-    live_leg >>"$OUT/live-leg.out" 2>&1 &
-    leg=$!
+    sync_candidate >>"$OUT/live-leg.out" 2>&1 &
+    sync=$!
   fi
+  # The sync is the longest step of the tier, so the builds and judges take a lower CPU weight than its container.
+  export CPU_SHARES="$JUDGE_CPU_SHARES"
+  build_live_judge >>"$OUT/live-leg.out" 2>&1 || true
   sh "$HERE/breaks.sh" | tee "$OUT/breaks.out"
+  fields=1
+  if [ -n "$sync" ] && wait "$sync"; then
+    fields=0
+  fi
   live=FAIL
-  if [ -n "$leg" ] && wait "$leg"; then
+  if judge_live && [ "$fields" -eq 0 ]; then
     live=PASS
   fi
   cat "$OUT/live-leg.out"
@@ -152,7 +177,7 @@ regen() {
     echo "REGEN REFUSED the head run printed no RESULT log=$OUT/head.log"
     exit 1
   fi
-  { build_candidate && live_leg; } || true
+  live_leg || true
   if ! grep -q '^LIVE RESULT ' "$OUT/live.log"; then
     echo "REGEN REFUSED the live leg printed no LIVE RESULT log=$OUT/live.log"
     exit 1

@@ -141,6 +141,13 @@ build_checked() {
   echo "$dolos $pallas" >"$BUILT"
 }
 
+# Builds the test binary of the scratch tree's dolos library, cargo's messages in $1 and the rest of the arguments passed to cargo.
+build_judge() {
+  json=$1
+  shift
+  build_checked "$json" test --release -p dolos --lib --no-run "$@"
+}
+
 # The executable cargo built that a message file names, the test binary of a no run test build or the binary of a build.
 executable() {
   sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' "$1" | tail -1
