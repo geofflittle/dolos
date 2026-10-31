@@ -53,7 +53,7 @@ live_leg() {
   fields=0
   CANDIDATE="$OUT/bin/dolos" COMMIT=$commit sh "$HERE/candidate.sh" "$OUT/live" \
     >"$OUT/candidate.log" 2>&1 || fields=$?
-  grep -E '^(LIVE-CANDIDATE|LIVE-FIELD|LIVE-FIELDS|LIVE) ' "$OUT/candidate.log" |
+  grep -E '^(LIVE-CANDIDATE|LIVE-FIELD|LIVE-FIELD-SPENT|LIVE-FIELDS|LIVE) ' "$OUT/candidate.log" |
     cut -c1-400 || true
   [ -f "$OUT/live/candidate/image.txt" ] &&
     LIVE_DIR="/w/${OUT#"$ROOT"/}/live/candidate" sh "$HERE/in-image.sh" "$SCRATCH" \
