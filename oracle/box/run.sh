@@ -1,12 +1,15 @@
 #!/bin/sh
-# Runs the oracle on the build box, its done run, its live leg alone or the regeneration of its committed manifests.
-# Usage: [REV=ref] run.sh done|live|regen
+# Runs the oracle on the build box, its quick or done tier, its live leg alone or the regeneration of its committed manifests.
+# Usage: [REV=ref] [BASE=ref] run.sh quick|done|live|regen
+# The quick tier judges the head on both corpora and each arm whose plant changes a file that differs between BASE and REV, a pallas arm when Cargo.toml or Cargo.lock differ, with the control when an arm runs and no live leg. BASE defaults to the commit of the last done run that passed, and when there is none every arm runs. The done tier judges every arm while the live leg runs and records its commit when it passes.
 # The live leg reads ENDPOINT, NODE, NODE_DB, GRPCURL, SERVE_CONFIG and CANDIDATE_GRPC from $LIVE_ENV.
 set -eu
 ROOT=${ROOT:-/opt/build/ledger-oracle-1027}
 REV=${REV:-feat/ledger-oracle}
+BASE=${BASE:-}
 MIN_FREE_G=${MIN_FREE_G:-6}
-CANDIDATE_NEED_G=${CANDIDATE_NEED_G:-20}
+CANDIDATE_NEED_G=${CANDIDATE_NEED_G:-12}
+LAST_DONE="$ROOT/runs/last-done"
 HERE=$(cd "$(dirname "$0")" && pwd)
 LIVE_ENV=${LIVE_ENV:-$ROOT/live.env}
 REGEN_DIR=${REGEN_DIR:-$ROOT/regen}
@@ -20,43 +23,36 @@ esac
 export ROOT REV MIN_FREE_G CANDIDATE_NEED_G OUT
 . "$HERE/lib.sh"
 
-# Builds Dolos and its live judge from the scratch tree into $OUT/bin, freeing the target dir when the candidate store would not fit beside it.
+# Builds Dolos and its live judge from the scratch tree into $OUT/bin.
 build_candidate() {
   mkdir -p "$OUT/bin"
-  if ! sh "$HERE/in-image.sh" "$SCRATCH" cargo build -q --release --locked --bin dolos \
-    >"$OUT/bin/build.log" 2>&1; then
-    echo "LIVE-CANDIDATE build_failed log=$OUT/bin/build.log"
+  if ! built=$(build_checked "$OUT/bin/dolos.build" build --release --locked --bin dolos); then
+    echo "LIVE-CANDIDATE build_failed $built"
     return 1
   fi
-  cp "$ROOT/target/release/dolos" "$OUT/bin/dolos"
-  judge=$(sh "$HERE/in-image.sh" "$SCRATCH" cargo test --release --locked -p dolos --lib --no-run 2>&1 |
-    sed -n 's#.*Executable unittests src/lib.rs (/w/\(.*\))#\1#p')
-  if [ -z "$judge" ]; then
-    echo "LIVE-CANDIDATE judge_build_failed"
+  dolos=$(executable "$OUT/bin/dolos.build")
+  cp "$ROOT${dolos#/w}" "$OUT/bin/dolos"
+  if ! built=$(build_checked "$OUT/bin/judge.build" test --release --locked -p dolos --lib --no-run); then
+    echo "LIVE-CANDIDATE judge_build_failed $built"
     return 1
   fi
-  cp "$ROOT/$judge" "$OUT/bin/judge"
-  free=$(df -BG --output=avail "$ROOT" | tail -1 | tr -dc 0-9)
-  if [ "$free" -lt $((CANDIDATE_NEED_G + 3)) ]; then
-    echo "LIVE-CANDIDATE freed target free=${free}G size=$(du -sh "$ROOT/target" | cut -f1)"
-    rm -rf "${ROOT:?}/target"
-  fi
+  judge=$(executable "$OUT/bin/judge.build")
+  cp "$ROOT${judge#/w}" "$OUT/bin/judge"
 }
 
-# Syncs a candidate of the scratch tree's commit beside the serving Dolos, compares their reads field by field and judges the candidate's reads against the node, logging to $OUT/candidate.log and $OUT/live.log.
+# Syncs the candidate in $OUT/bin from the node, compares its reads with the serving Dolos field by field and judges them against the node, logging to $OUT/candidate.log and $OUT/live.log.
 live_leg() {
   set -a
   . "$LIVE_ENV"
   set +a
-  commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
-  build_candidate || return 1
   fields=0
   CANDIDATE="$OUT/bin/dolos" COMMIT=$commit sh "$HERE/candidate.sh" "$OUT/live" \
     >"$OUT/candidate.log" 2>&1 || fields=$?
   grep -E '^(LIVE-CANDIDATE|LIVE-FIELD|LIVE-FIELD-SPENT|LIVE-FIELDS|LIVE) ' "$OUT/candidate.log" |
     cut -c1-400 || true
+  # The judge runs in the run's own dir, since the arms check other commits out in the scratch tree meanwhile.
   [ -f "$OUT/live/candidate/image.txt" ] &&
-    LIVE_DIR="/w/${OUT#"$ROOT"/}/live/candidate" sh "$HERE/in-image.sh" "$SCRATCH" \
+    LIVE_DIR="/w/${OUT#"$ROOT"/}/live/candidate" sh "$HERE/in-image.sh" "${OUT#"$ROOT"/}" \
       "/w/${OUT#"$ROOT"/}/bin/judge" "$TEST::live::live" --exact --ignored --nocapture \
       >"$OUT/live.log" 2>&1 &&
     [ "$fields" -eq 0 ]
@@ -67,8 +63,9 @@ live_run() {
   mkdir -p "$OUT"
   require_free
   reset_scratch
+  commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
   live=FAIL
-  if live_leg; then
+  if build_candidate && live_leg; then
     live=PASS
   fi
   grep -E '^(LIVE|KNOWN|KNOWN_STALE|LIVE-DIFF|LIVE-GAP) ' "$OUT/live.log" | cut -c1-400 || true
@@ -76,39 +73,86 @@ live_run() {
   [ "$live" = PASS ]
 }
 
-# Runs the live leg, then the arms, since the arms take hours while the serving store fills the root filesystem the candidate needs.
+# The arms whose plant changes a file that differs between the commits $1 and $2 of the scratch tree, one per line.
+touched_arms() {
+  git -C "$ROOT/$SCRATCH" diff --name-only "$1" "$2" >"$OUT/changed"
+  for arm in $PLANTED_ARMS; do
+    if plant_files "$arm" | grep -q -x -F -f "$OUT/changed"; then
+      echo "$arm"
+    fi
+  done
+}
+
+# Judges the head and the arms the change from BASE touches with their control, every arm when no BASE is known.
+quick_run() {
+  mkdir -p "$OUT"
+  require_free
+  reset_scratch
+  commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
+  if [ -z "$BASE" ] && [ -f "$LAST_DONE" ]; then
+    BASE=$(cat "$LAST_DONE")
+  fi
+  base=none
+  arms=$PLANTED_ARMS
+  if [ -n "$BASE" ]; then
+    git -C "$ROOT/$SCRATCH" fetch -q "$ROOT/dolos.git" "$BASE"
+    base=$(git -C "$ROOT/$SCRATCH" rev-parse FETCH_HEAD)
+    arms=$(touched_arms "$base" "$commit" | paste -sd ' ' -)
+  fi
+  echo "QUICK base=$base arms=\"$arms\""
+  ARMS="head${arms:+ control $arms}" sh "$HERE/breaks.sh" | tee "$OUT/breaks.out"
+  verdicts=$(sed -n 's/^ARMS \(.*\) logs=.*/\1/p' "$OUT/breaks.out")
+  echo "DONE tier=quick $verdicts base=$base commit=$commit logs=$OUT"
+  passed "$verdicts"
+}
+
+# Whether a verdict list holds a passing head and no failed arm or leg.
+passed() {
+  case " $1 " in
+    *" head=PASS "*) ;;
+    *) return 1 ;;
+  esac
+  case "$1" in
+    *MISSED* | *FAIL* | *FIRED* | *SKIPPED*) return 1 ;;
+  esac
+}
+
+# Builds the candidate, runs the live leg while the arms run, and records the commit when every verdict passes.
 done_run() {
   mkdir -p "$OUT"
   require_free
   reset_scratch
-  live=FAIL
-  if live_leg; then
-    live=PASS
+  commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
+  leg=
+  if build_candidate >"$OUT/live-leg.out" 2>&1; then
+    live_leg >>"$OUT/live-leg.out" 2>&1 &
+    leg=$!
   fi
   sh "$HERE/breaks.sh" | tee "$OUT/breaks.out"
-  arms=$(sed -n 's/^ARMS \(.*\) logs=.*/\1/p' "$OUT/breaks.out")
+  live=FAIL
+  if [ -n "$leg" ] && wait "$leg"; then
+    live=PASS
+  fi
+  cat "$OUT/live-leg.out"
+  verdicts=$(sed -n 's/^ARMS \(.*\) logs=.*/\1/p' "$OUT/breaks.out")
   grep -E '^(LIVE|KNOWN|KNOWN_STALE|LIVE-DIFF|LIVE-GAP) ' "$OUT/live.log" | cut -c1-400 || true
-  echo "DONE $arms live=$live commit=$commit logs=$OUT"
-  case " $arms " in
-    *" head=PASS "*) ;;
-    *) exit 1 ;;
-  esac
-  case "$arms live=$live" in
-    *MISSED* | *FAIL* | *SKIPPED*) exit 1 ;;
-  esac
+  echo "DONE tier=done $verdicts live=$live commit=$commit logs=$OUT"
+  passed "$verdicts live=$live"
+  echo "$commit" >"$LAST_DONE"
 }
 
 regen() {
   mkdir -p "$OUT"
   require_free
   reset_scratch
+  commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
   sh "$HERE/in-image.sh" "$SCRATCH" cargo test -q --release --locked -p dolos --lib \
     "$TEST::ledger_oracle" -- --exact --ignored --nocapture >"$OUT/head.log" 2>&1 || true
   if ! grep -q '^RESULT ' "$OUT/head.log"; then
     echo "REGEN REFUSED the head run printed no RESULT log=$OUT/head.log"
     exit 1
   fi
-  live_leg || true
+  { build_candidate && live_leg; } || true
   if ! grep -q '^LIVE RESULT ' "$OUT/live.log"; then
     echo "REGEN REFUSED the live leg printed no LIVE RESULT log=$OUT/live.log"
     exit 1
@@ -136,8 +180,9 @@ regen() {
 }
 
 case ${1:-} in
+  quick) quick_run ;;
   done) done_run ;;
   live) live_run ;;
   regen) regen ;;
-  *) echo "usage: run.sh done|live|regen" ; exit 2 ;;
+  *) echo "usage: run.sh quick|done|live|regen" ; exit 2 ;;
 esac

@@ -14,6 +14,19 @@ pallas_arm() {
   esac
 }
 
+# The Dolos files whose change puts an arm in the quick tier, the pin files for a pallas arm.
+plant_files() {
+  if pallas_arm "$1"; then
+    printf 'Cargo.toml\nCargo.lock\n'
+    return
+  fi
+  case $1 in
+    rodrigo-reverted) diff=rodrigo ;;
+    *) diff=$1 ;;
+  esac
+  sed -n 's#^+++ b/##p' "$HERE/plants/$diff.diff"
+}
+
 # Exits when the build root has less than MIN_FREE_G gigabytes free.
 require_free() {
   free=$(df -BG --output=avail "$ROOT" | tail -1 | tr -dc 0-9)

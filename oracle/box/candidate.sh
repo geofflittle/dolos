@@ -19,7 +19,7 @@ free_g() {
   df -BG --output=avail "$1" | tail -1 | tr -dc 0-9
 }
 
-if [ "$(free_g "$ROOT")" -lt $((NEED_G + 3)) ] || [ "$(free_g /)" -lt 25 ]; then
+if [ "$(free_g "$ROOT")" -lt $((NEED_G + 3)) ] || [ "$(free_g /)" -lt 10 ]; then
   echo "LIVE-CANDIDATE REFUSED free=$(free_g "$ROOT")G root_free=$(free_g /)G need=$((NEED_G + 3))G"
   exit 2
 fi
