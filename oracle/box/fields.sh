@@ -7,8 +7,10 @@ TAB=$(printf '\t')
 export LC_ALL=C
 
 # Each scalar of a read as one line, its dotted path, a tab, then its value.
+# ReadUtxos answers in the order of a hash map, so its items are put in output reference order first.
 leaves() {
-  jq -r 'paths(scalars) as $p | "\($p | map(tostring) | join("."))\t\(getpath($p) | tojson)"' "$1" |
+  jq -r '(if has("items") then .items |= sort_by(.txoRef.hash, (.txoRef.index // 0)) else . end) |
+    paths(scalars) as $p | "\($p | map(tostring) | join("."))\t\(getpath($p) | tojson)"' "$1" |
     sort -t "$TAB" -k1,1
 }
 
