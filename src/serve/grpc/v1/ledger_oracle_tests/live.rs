@@ -7,8 +7,8 @@ use std::{
 use ledger_oracle_judge::{
     compare::Tally,
     live::{
-        block_bytes, chunk_blocks, era_name, node_amounts, settle, utxo_presence, Aligned, Amounts,
-        NodeTip, UtxoPresence,
+        block_bytes, chunk_blocks, compare_utxos, era_name, node_amounts, settle, Aligned, Amounts,
+        AtPoint, NodeTip, Point, UtxoBracket, UtxoReads,
     },
     manifest::{self, Candidates, Known, LiveLocus},
     record::PParams,
@@ -196,11 +196,51 @@ fn served_amounts(output: &cardano::TxOutput) -> Option<Amounts> {
     Some(amounts)
 }
 
-/// Counts the outputs of the served blocks by their values on Dolos and the node, and returns how many neither holds.
-fn compare_utxos(dir: &Path, tally: &mut Tally) -> usize {
+/// The point a node tip query names.
+fn node_point(dir: &Path, name: &str) -> Point {
+    #[derive(serde::Deserialize)]
+    struct Tip {
+        slot: u64,
+        hash: String,
+    }
+    let tip: Tip = read(dir, name);
+    let hash = hex::decode(&tip.hash).unwrap_or_else(|e| panic!("LIVE {name} {e}"));
+    Point {
+        slot: tip.slot,
+        hash,
+    }
+}
+
+/// The ledger point a ReadUtxos answer names.
+fn served_point(response: &q::ReadUtxosResponse, name: &str) -> Point {
+    let tip = response
+        .ledger_tip
+        .as_ref()
+        .unwrap_or_else(|| panic!("LIVE {name} names no ledger tip"));
+    Point {
+        slot: tip.slot,
+        hash: tip.hash.to_vec(),
+    }
+}
+
+/// Counts the outputs of the served blocks by their values on Dolos and the node when both read them at one point, and returns how many neither holds, none when the reads name two points.
+fn compare_served_utxos(dir: &Path, tally: &mut Tally) -> Option<usize> {
     let refs = fs::read_to_string(dir.join("refs.txt")).expect("LIVE refs.txt");
+    let refs = refs.lines().map(|line| {
+        let fields: Vec<&str> = line.split(' ').collect();
+        let [_, hash, index] = fields[..] else {
+            panic!("LIVE refs.txt line {line}");
+        };
+        format!("{hash}#{index}")
+    });
     let node = node_amounts(&read(dir, "node-utxo.json")).unwrap_or_else(|e| panic!("LIVE {e}"));
     let served: q::ReadUtxosResponse = read(dir, "utxos.json");
+    let bracket = UtxoBracket {
+        node_before: node_point(dir, "node-utxo-tip-before.json"),
+        dolos_before: served_point(&read(dir, "utxos-tip-before.json"), "utxos-tip-before.json"),
+        dolos_after: served_point(&served, "utxos.json"),
+        node_after: node_point(dir, "node-utxo-tip-after.json"),
+    };
     let mut dolos = BTreeMap::new();
     for item in served.items {
         let txo = item
@@ -212,30 +252,18 @@ fn compare_utxos(dir: &Path, tally: &mut Tally) -> usize {
         };
         dolos.insert(format!("{}#{}", hex::encode(&txo.hash), txo.index), output);
     }
-    let mut neither = 0;
-    for line in refs.lines() {
-        let fields: Vec<&str> = line.split(' ').collect();
-        let [_, hash, index] = fields[..] else {
-            panic!("LIVE refs.txt line {line}");
-        };
-        let key = format!("{hash}#{index}");
-        let served = match dolos.get(&key) {
-            None => None,
-            Some(Some(amounts)) => Some(amounts),
-            Some(None) => {
-                tally.add(false, || format!("utxo={key} dolos=unreadable"));
-                continue;
-            }
-        };
-        let show = |presence: &str| format!("utxo={key} {presence}");
-        match utxo_presence(node.get(&key), served) {
-            UtxoPresence::Neither => neither += 1,
-            UtxoPresence::Both { same } => tally.add(same, || show("values=differ")),
-            UtxoPresence::NodeOnly => tally.add(false, || show("dolos=absent")),
-            UtxoPresence::DolosOnly => tally.add(false, || show("node=absent")),
+    let reads = UtxoReads {
+        refs: refs.collect(),
+        node,
+        dolos,
+    };
+    match AtPoint::new(&bracket, reads) {
+        Some(reads) => Some(compare_utxos(&reads, tally)),
+        None => {
+            tally.add(false, || format!("utxo reads at two points {bracket}"));
+            None
         }
     }
-    neither
 }
 
 #[test]
@@ -277,8 +305,11 @@ fn live() {
     era.add(verdict.agrees(), || verdict.to_string());
     compare_children(&dir, tallies.entry(LiveLocus::ChildAsOutput).or_default());
     compare_blocks(&dir, tallies.entry(LiveLocus::Block).or_default());
-    let spent = compare_utxos(&dir, tallies.entry(LiveLocus::Utxo).or_default());
-    println!("LIVE utxo spent_on_both={spent}");
+    let spent = compare_served_utxos(&dir, tallies.entry(LiveLocus::Utxo).or_default());
+    println!(
+        "LIVE utxo spent_on_both={}",
+        spent.map_or("not_compared".to_string(), |n| n.to_string())
+    );
 
     let compared = LiveLocus::ALL.iter().map(|locus| {
         let n = tallies.get(locus).map_or(0, |t| t.compared);

@@ -298,6 +298,98 @@ pub fn utxo_presence(node: Option<&Amounts>, dolos: Option<&Amounts>) -> UtxoPre
     }
 }
 
+/// A chain point as its slot and block hash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Point {
+    pub slot: u64,
+    pub hash: Vec<u8>,
+}
+
+/// The points the node and Dolos held around one UTxO read on each, in the order they were read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UtxoBracket {
+    pub node_before: Point,
+    pub dolos_before: Point,
+    pub dolos_after: Point,
+    pub node_after: Point,
+}
+
+impl fmt::Display for UtxoBracket {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "node_before={} dolos_before={} dolos_after={} node_after={}",
+            self.node_before.slot,
+            self.dolos_before.slot,
+            self.dolos_after.slot,
+            self.node_after.slot
+        )
+    }
+}
+
+/// Reads the node and Dolos both took at one chain point.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AtPoint<T> {
+    point: Point,
+    value: T,
+}
+
+impl<T> AtPoint<T> {
+    /// Pairs the reads with the point all four bracket points name, none when two of them differ.
+    pub fn new(bracket: &UtxoBracket, value: T) -> Option<Self> {
+        let point = &bracket.node_before;
+        let one = [
+            &bracket.dolos_before,
+            &bracket.dolos_after,
+            &bracket.node_after,
+        ]
+        .iter()
+        .all(|other| *other == point);
+        one.then(|| AtPoint {
+            point: point.clone(),
+            value,
+        })
+    }
+
+    /// The point the reads were taken at.
+    pub fn point(&self) -> &Point {
+        &self.point
+    }
+}
+
+/// The outputs one UTxO read asked for, with the node's values and the values Dolos served, `None` where Dolos served one unreadably.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UtxoReads {
+    pub refs: Vec<String>,
+    pub node: BTreeMap<String, Amounts>,
+    pub dolos: BTreeMap<String, Option<Amounts>>,
+}
+
+/// Counts each output asked for by its value on Dolos and the node, and returns how many neither holds.
+pub fn compare_utxos(reads: &AtPoint<UtxoReads>, tally: &mut Tally) -> usize {
+    let slot = reads.point.slot;
+    let UtxoReads { refs, node, dolos } = &reads.value;
+    let mut neither = 0;
+    for key in refs {
+        let show = |presence: &str| format!("utxo={key} {presence} point={slot}");
+        let served = match dolos.get(key) {
+            None => None,
+            Some(Some(amounts)) => Some(amounts),
+            Some(None) => {
+                tally.add(false, || show("dolos=unreadable"));
+                continue;
+            }
+        };
+        match utxo_presence(node.get(key), served) {
+            UtxoPresence::Neither => neither += 1,
+            UtxoPresence::Both { same } => tally.add(same, || show("values=differ")),
+            UtxoPresence::NodeOnly => tally.add(false, || show("dolos=absent")),
+            UtxoPresence::DolosOnly => tally.add(false, || show("node=absent")),
+        }
+    }
+    neither
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -532,5 +624,93 @@ mod tests {
             era_name(&names(&[]), "Dijkstra").to_string(),
             "name=none node=Dijkstra"
         );
+    }
+
+    fn point(slot: u64) -> Point {
+        Point {
+            slot,
+            hash: vec![slot as u8; 32],
+        }
+    }
+
+    fn bracket(slots: [u64; 4]) -> UtxoBracket {
+        let [node_before, dolos_before, dolos_after, node_after] = slots.map(point);
+        UtxoBracket {
+            node_before,
+            dolos_before,
+            dolos_after,
+            node_after,
+        }
+    }
+
+    #[test]
+    fn utxo_reads_bracketed_by_one_point_are_paired_with_it() {
+        let reads = AtPoint::new(&bracket([7, 7, 7, 7]), ()).unwrap();
+        assert_eq!(reads.point(), &point(7));
+    }
+
+    #[test]
+    fn utxo_reads_bracketed_by_two_points_are_not_paired() {
+        for slots in [[7, 7, 7, 8], [7, 7, 8, 8], [7, 8, 8, 8], [6, 7, 7, 7]] {
+            assert_eq!(AtPoint::new(&bracket(slots), ()), None, "{slots:?}");
+        }
+        let mut fork = bracket([7, 7, 7, 7]);
+        fork.dolos_after.hash = vec![0; 32];
+        assert_eq!(AtPoint::new(&fork, ()), None);
+        assert_eq!(
+            bracket([1213053, 1213053, 1213099, 1213099]).to_string(),
+            "node_before=1213053 dolos_before=1213053 dolos_after=1213099 node_after=1213099"
+        );
+    }
+
+    fn lovelace(n: u128) -> Amounts {
+        Amounts::from([("lovelace".into(), n)])
+    }
+
+    fn reads(node: &[(&str, u128)], dolos: &[(&str, Option<u128>)]) -> AtPoint<UtxoReads> {
+        let refs = ["a#0", "a#1", "b#0"].map(String::from).to_vec();
+        let node = node.iter().map(|(r, n)| (r.to_string(), lovelace(*n)));
+        let dolos = dolos.iter().map(|(r, n)| (r.to_string(), n.map(lovelace)));
+        let reads = UtxoReads {
+            refs,
+            node: node.collect(),
+            dolos: dolos.collect(),
+        };
+        AtPoint::new(&bracket([9, 9, 9, 9]), reads).unwrap()
+    }
+
+    #[test]
+    fn outputs_held_at_one_value_on_both_sides_agree() {
+        let mut t = Tally::default();
+        let both = reads(
+            &[("a#0", 5), ("b#0", 2)],
+            &[("a#0", Some(5)), ("b#0", Some(2))],
+        );
+        assert_eq!(compare_utxos(&both, &mut t), 1);
+        assert_eq!(t, tally(2, &[]));
+    }
+
+    #[test]
+    fn an_output_one_side_lacks_or_values_differently_disagrees() {
+        let mut t = Tally::default();
+        let read = reads(
+            &[("a#0", 5), ("a#1", 3)],
+            &[("a#0", Some(6)), ("b#0", Some(2)), ("a#1", None)],
+        );
+        assert_eq!(compare_utxos(&read, &mut t), 0);
+        assert_eq!(
+            t,
+            tally(
+                3,
+                &[
+                    "utxo=a#0 values=differ point=9",
+                    "utxo=a#1 dolos=unreadable point=9",
+                    "utxo=b#0 node=absent point=9",
+                ]
+            )
+        );
+        let mut t = Tally::default();
+        compare_utxos(&reads(&[("b#0", 2)], &[]), &mut t);
+        assert_eq!(t, tally(1, &["utxo=b#0 dolos=absent point=9"]));
     }
 }

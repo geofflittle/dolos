@@ -73,6 +73,19 @@ for slot in $BATCH_SLOTS; do
   done
 done
 keys=$(awk '{ printf "%s{\"hash\":\"%s\",\"index\":%s}", (NR > 1 ? "," : ""), $1, $3 }' "$DIR/refs.txt")
-read_endpoint query.QueryService/ReadUtxos "{\"keys\":[$keys]}" utxos.json
-query_node utxo node-utxo.json --output-json $(awk '{ printf "--tx-in %s#%s ", $2, $3 }' "$DIR/refs.txt")
-echo "LIVE read dir=$DIR refs=$(wc -l <"$DIR/refs.txt" | tr -dc 0-9)"
+# Each try brackets both UTxO reads with the node tip and the endpoint ledger tip, until all four name one slot.
+try=1
+while :; do
+  query_node tip node-utxo-tip-before.json
+  read_endpoint query.QueryService/ReadUtxos '{"keys":[]}' utxos-tip-before.json
+  read_endpoint query.QueryService/ReadUtxos "{\"keys\":[$keys]}" utxos.json
+  query_node utxo node-utxo.json --output-json $(awk '{ printf "--tx-in %s#%s ", $2, $3 }' "$DIR/refs.txt")
+  query_node tip node-utxo-tip-after.json
+  slots=$(jq -r '.slot // .ledgerTip.slot' "$DIR/node-utxo-tip-before.json" "$DIR/utxos-tip-before.json" \
+    "$DIR/utxos.json" "$DIR/node-utxo-tip-after.json" | sort -u | wc -l | tr -dc 0-9)
+  if [ "$slots" -eq 1 ] || [ "$try" -ge "${UTXO_TRIES:-10}" ]; then
+    break
+  fi
+  try=$((try + 1))
+done
+echo "LIVE read dir=$DIR refs=$(wc -l <"$DIR/refs.txt" | tr -dc 0-9) utxo_tries=$try utxo_slots=$slots"

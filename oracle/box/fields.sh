@@ -14,14 +14,24 @@ leaves() {
     sort -t "$TAB" -k1,1
 }
 
-# Each output one read holds and the other does not, when the node held it at the first read and not at the second, and the second read's ledger tip is later.
+# The slot all four points around a side's UTxO reads name, or null when two differ.
+point() {
+  jq -n --slurpfile a "$1/node-utxo-tip-before.json" --slurpfile b "$1/utxos-tip-before.json" \
+    --slurpfile c "$1/utxos.json" --slurpfile d "$1/node-utxo-tip-after.json" \
+    '[$a[0].slot, $b[0].ledgerTip.slot, $c[0].ledgerTip.slot, $d[0].slot] | map(tonumber) | unique |
+      if length == 1 then .[0] else null end' 2>/dev/null || echo null
+}
+
+# Each output one read holds and the other does not, when each side read at one point and the node held it at the first point and not at the later second.
 spent() {
   jq -r -n --rawfile refs "$DIR/candidate/refs.txt" \
     --slurpfile c "$DIR/candidate/utxos.json" --slurpfile s "$DIR/serve/utxos.json" \
-    --slurpfile cn "$DIR/candidate/node-utxo.json" --slurpfile sn "$DIR/serve/node-utxo.json" '
+    --slurpfile cn "$DIR/candidate/node-utxo.json" --slurpfile sn "$DIR/serve/node-utxo.json" \
+    --argjson cp "$(point "$DIR/candidate")" --argjson sp "$(point "$DIR/serve")" '
     def held($read): [$read.items[] | {key: "\(.txoRef.hash)#\(.txoRef.index // 0)", value: true}] | from_entries;
-    {candidate: {held: held($c[0]), node: $cn[0], tip: ($c[0].ledgerTip.slot | tonumber)},
-     serve: {held: held($s[0]), node: $sn[0], tip: ($s[0].ledgerTip.slot | tonumber)}} as $side |
+    {candidate: {held: held($c[0]), node: $cn[0], tip: $cp},
+     serve: {held: held($s[0]), node: $sn[0], tip: $sp}} as $side |
+    select($cp != null and $sp != null) |
     $refs | split("\n")[] | select(. != "") | split(" ") |
     {ref: "\(.[0])#\(.[2])", node: "\(.[1])#\(.[2])"} as $r |
     select(($side.candidate.held | has($r.ref)) != ($side.serve.held | has($r.ref))) |
