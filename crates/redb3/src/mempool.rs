@@ -339,17 +339,15 @@ impl FinalizedEntry {
         } else {
             MempoolTxStage::Finalized
         };
-        MempoolTx {
-            hash: TxHash::from(hash_bytes),
-            payload: self.payload.unwrap_or(EraCbor(0, vec![])),
+        MempoolTx::restored(
+            TxHash::from(hash_bytes),
+            self.payload.unwrap_or(EraCbor(0, vec![])),
             stage,
-            confirmations: self.confirmations,
-            non_confirmations: 0,
-            confirmed_at: self
-                .confirmed_at
+            self.confirmations,
+            0,
+            self.confirmed_at
                 .map(|b| ChainPoint::from_bytes(b[..].try_into().unwrap())),
-            report: None,
-        }
+        )
     }
 }
 
@@ -442,18 +440,16 @@ impl InflightRecord {
             InflightStage::Acknowledged => MempoolTxStage::Acknowledged,
             InflightStage::Confirmed => MempoolTxStage::Confirmed,
         };
-        MempoolTx {
+        MempoolTx::restored(
             hash,
-            payload: self.payload.clone(),
+            self.payload.clone(),
             stage,
-            confirmations: self.confirmations,
-            non_confirmations: self.non_confirmations,
-            confirmed_at: self
-                .confirmed_at
+            self.confirmations,
+            self.non_confirmations,
+            self.confirmed_at
                 .as_ref()
                 .map(|b| ChainPoint::from_bytes(b[..].try_into().unwrap())),
-            report: None,
-        }
+        )
     }
 }
 
@@ -482,15 +478,14 @@ impl PendingTable {
             let entry = entry?;
             let key = entry.0.value();
             let payload = entry.1.value().0;
-            result.push(MempoolTx {
-                hash: key.hash(),
+            result.push(MempoolTx::restored(
+                key.hash(),
                 payload,
-                stage: MempoolTxStage::Pending,
-                confirmations: 0,
-                non_confirmations: 0,
-                confirmed_at: None,
-                report: None,
-            });
+                MempoolTxStage::Pending,
+                0,
+                0,
+                None,
+            ));
         }
         Ok(result)
     }

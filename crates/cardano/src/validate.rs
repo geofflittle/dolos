@@ -466,7 +466,17 @@ fn certificate_state<D: Domain>(
     use crate::model::AccountState;
     use pallas::ledger::primitives::dijkstra::Certificate;
     let mut state = CertState::default();
-    if let Some(native) = tx.as_dijkstra() {
+    // Only withdrawals and registrations read the accounts pending transactions change.
+    let reads_accounts = tx.as_dijkstra().filter(|native| {
+        let body = &native.transaction_body;
+        body.withdrawals.is_some()
+            || body
+                .certificates
+                .iter()
+                .flatten()
+                .any(|cert| matches!(cert, Certificate::Reg(..)))
+    });
+    if let Some(native) = reads_accounts {
         let unconfirmed = unconfirmed_txs(utxos);
         let unconfirmed = unconfirmed
             .iter()
