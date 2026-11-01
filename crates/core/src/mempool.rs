@@ -11,8 +11,8 @@ use tracing::{debug, warn};
 
 #[derive(Debug)]
 pub struct MempoolTx {
-    pub hash: TxHash,
-    pub payload: EraCbor,
+    hash: TxHash,
+    payload: EraCbor,
     pub stage: MempoolTxStage,
     pub confirmations: u32,
     pub non_confirmations: u32,
@@ -108,6 +108,21 @@ impl MempoolTx {
             report: None,
             effects: Arc::default(),
         }
+    }
+
+    /// The hash the transaction was admitted under.
+    pub fn hash(&self) -> TxHash {
+        self.hash
+    }
+
+    /// The encoded transaction.
+    pub fn payload(&self) -> &EraCbor {
+        &self.payload
+    }
+
+    /// The encoded transaction, taken from the entry.
+    pub fn into_payload(self) -> EraCbor {
+        self.payload
     }
 
     /// The outputs the transaction makes and the inputs it spends, none when the payload does not decode.
@@ -917,8 +932,7 @@ mod tests {
 
     #[test]
     fn an_entry_whose_payload_does_not_decode_makes_and_spends_nothing() {
-        let mut mtx = pending_with_sub();
-        mtx.payload = undecodable();
+        let mtx = MempoolTx::new(PARENT.parse().unwrap(), undecodable(), vec![]);
         let mut refs = HashSet::from([txo(SUB, 0), txo(SUB_SPENDS, 0)]);
 
         exclude_inflight_stxis(&mut refs, &[mtx.clone()]);

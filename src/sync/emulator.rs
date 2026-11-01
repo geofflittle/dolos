@@ -52,9 +52,9 @@ impl Worker {
         let txs: Vec<_> = self.mempool.peek_pending().into_iter().take(10).collect();
 
         for (i, tx) in txs.iter().enumerate() {
-            debug!(tx = hex::encode(tx.hash), "adding tx to emulated block");
+            debug!(tx = hex::encode(tx.hash()), "adding tx to emulated block");
 
-            let EraCbor(era, cbor) = &tx.payload;
+            let EraCbor(era, cbor) = tx.payload();
 
             let era = pallas::ledger::traverse::Era::try_from(*era).or_panic()?;
 
@@ -72,7 +72,7 @@ impl Worker {
             }
         }
 
-        let hashes: Vec<TxHash> = txs.iter().map(|tx| tx.hash).collect();
+        let hashes: Vec<TxHash> = txs.iter().map(|tx| tx.hash()).collect();
         self.mempool.mark_inflight(&hashes).or_panic()?;
         self.mempool.mark_acknowledged(&hashes).or_panic()?;
 

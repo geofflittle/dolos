@@ -18,17 +18,17 @@ fn to_n2n_era(era: u16) -> u16 {
 }
 
 fn to_n2n_reply(mempool_tx: &MempoolTx) -> TxIdAndSize<EraTxId> {
-    let EraCbor(era, bytes) = &mempool_tx.payload;
+    let EraCbor(era, bytes) = mempool_tx.payload();
 
     let era = to_n2n_era(*era);
 
-    let id = EraTxId(era, mempool_tx.hash.to_vec());
+    let id = EraTxId(era, mempool_tx.hash().to_vec());
 
     TxIdAndSize(id, bytes.len() as u32)
 }
 
 fn to_n2n_body(mempool_tx: MempoolTx) -> EraTxBody {
-    let EraCbor(era, bytes) = mempool_tx.payload;
+    let EraCbor(era, bytes) = mempool_tx.into_payload();
 
     let era = to_n2n_era(era);
 
@@ -60,7 +60,7 @@ impl Worker {
                 )
             })
             .chain(mempool.peek_pending())
-            .unique_by(|tx| tx.hash)
+            .unique_by(|tx| tx.hash())
             .collect()
     }
 
@@ -69,7 +69,7 @@ impl Worker {
         mempool: &MempoolBackend,
         txs: Vec<MempoolTx>,
     ) -> Result<(), WorkerError> {
-        let hashes: Vec<TxHash> = txs.iter().map(|tx| tx.hash).collect();
+        let hashes: Vec<TxHash> = txs.iter().map(|tx| tx.hash()).collect();
         mempool.mark_inflight(&hashes).or_restart()?;
         debug!(?hashes, "announcing transaction IDs");
 
@@ -185,7 +185,7 @@ impl gasket::framework::Worker<Stage> for Worker {
                     MempoolTxStage::Propagated | MempoolTxStage::Acknowledged
                 )
             })
-            .map(|tx| tx.hash)
+            .map(|tx| tx.hash())
             .collect();
         info!(address = stage.peer_address, hashes = ?recovery_hashes, "submission session initialized; recovering unconfirmed transactions");
 
@@ -258,11 +258,11 @@ impl gasket::framework::Worker<Stage> for Worker {
                         stage
                             .mempool
                             .find_inflight(&hash)
-                            .filter(|tx| to_n2n_era(tx.payload.0) == id.0)
+                            .filter(|tx| to_n2n_era(tx.payload().0) == id.0)
                     })
                     .collect_vec();
 
-                let hashes: Vec<_> = found.iter().map(|tx| tx.hash).collect();
+                let hashes: Vec<_> = found.iter().map(|tx| tx.hash()).collect();
                 debug!(?hashes, "sending transaction bodies");
                 let to_send = found.into_iter().map(to_n2n_body).collect_vec();
 
@@ -389,7 +389,7 @@ mod tests {
             .map(|id| {
                 let tx = expected
                     .iter()
-                    .find(|tx| tx.hash.as_ref() == id.0 .1.as_slice())
+                    .find(|tx| tx.hash().as_ref() == id.0 .1.as_slice())
                     .unwrap();
                 assert_eq!(*id, to_n2n_reply(tx));
                 to_n2n_body(tx.clone())
@@ -433,7 +433,8 @@ mod tests {
                     .join(format!("test_data/submission-recovery/{name}.mempool.hex"));
                 let bytes = hex::decode(std::fs::read_to_string(path).unwrap().trim()).unwrap();
                 assert_eq!(
-                    tx.payload.1, bytes,
+                    tx.payload().1,
+                    bytes,
                     "representative signed fixture must be unchanged"
                 );
                 store.receive(tx.clone()).unwrap();
@@ -535,7 +536,7 @@ mod tests {
                 .await
                 .is_empty());
             for tx in &expected {
-                assert_eq!(stage.mempool.check_status(&tx.hash).non_confirmations, 1);
+                assert_eq!(stage.mempool.check_status(&tx.hash()).non_confirmations, 1);
             }
             assert!(matches!(
                 worker.acknowledge_propagated(&stage.mempool, 1),
@@ -568,7 +569,7 @@ mod tests {
                 .dump_finalized(0, 10)
                 .items
                 .iter()
-                .any(|tx| tx.hash == second && tx.stage == MempoolTxStage::Dropped));
+                .any(|tx| tx.hash() == second && tx.stage == MempoolTxStage::Dropped));
             worker.peer_session.abort().await;
             peer.abort().await;
         })
@@ -590,7 +591,7 @@ mod tests {
                 let mut expected = vec![];
                 for settings in [false, true] {
                     let tx = capture::assert_submission(settings, alternate);
-                    expected.push((tx.hash.to_vec(), tx.payload.1.clone()));
+                    expected.push((tx.hash().to_vec(), tx.payload().1.clone()));
                     store.receive(tx).unwrap();
                 }
                 // Exercise durable encoding and a real reopen, not only Clone.

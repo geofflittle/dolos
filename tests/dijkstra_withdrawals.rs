@@ -186,7 +186,7 @@ fn captured_v3_withdrawals_validate_both_phases_without_changing_state() {
     domain
         .receive_tx("offline-capture", &domain.read_chain(), &raw)
         .unwrap();
-    assert_eq!(domain.mempool().peek_pending()[0].payload.1, raw);
+    assert_eq!(domain.mempool().peek_pending()[0].payload().1, raw);
     assert_eq!(
         credentials
             .iter()
@@ -428,7 +428,7 @@ fn confirmation_rollback_and_drop_update_withdrawal_reservations() {
     assert!(domain.mempool().peek_inflight().is_empty());
     let finalized = domain.mempool().dump_finalized(0, 10);
     assert_eq!(finalized.items.len(), 1);
-    assert_eq!(finalized.items[0].hash, hash);
+    assert_eq!(finalized.items[0].hash(), hash);
     assert_eq!(finalized.items[0].stage, MempoolTxStage::Dropped);
     domain.validate_tx(&domain.read_chain(), &txs[2]).unwrap();
 }
@@ -511,7 +511,7 @@ fn revalidation_keeps_pending_transactions_the_ledger_still_accepts() {
         .mempool()
         .peek_pending()
         .iter()
-        .map(|x| x.hash)
+        .map(|x| x.hash())
         .collect();
     assert_eq!(pending, vec![a, t]);
     domain.mempool().mark_inflight(&[a]).unwrap();
@@ -549,7 +549,7 @@ fn a_pending_withdrawal_is_dropped_once_its_registration_is_dropped() {
     let stages: Vec<_> = finalized
         .items
         .iter()
-        .map(|x| (x.hash, x.stage.clone()))
+        .map(|x| (x.hash(), x.stage.clone()))
         .collect();
     assert_eq!(
         stages,
@@ -580,7 +580,7 @@ fn a_rolled_back_registration_stays_ahead_of_its_pending_withdrawal() {
         .mempool()
         .peek_pending()
         .iter()
-        .map(|x| x.hash)
+        .map(|x| x.hash())
         .collect();
     assert_eq!(pending, vec![a, t]);
     assert_eq!(

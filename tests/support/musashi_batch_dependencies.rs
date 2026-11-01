@@ -103,8 +103,8 @@ fn batch_validates_without_child_inputs_in_parent_references() {
     assert_eq!(hash, tx.hash());
     let accepted = domain.mempool().peek_pending();
     assert_eq!(accepted.len(), 1);
-    assert_eq!(accepted[0].payload.0, 8);
-    assert_eq!(accepted[0].payload.1, bytes);
+    assert_eq!(accepted[0].payload().0, 8);
+    assert_eq!(accepted[0].payload().1, bytes);
 }
 
 #[test]

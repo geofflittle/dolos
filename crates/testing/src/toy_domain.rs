@@ -107,13 +107,13 @@ impl dolos_core::MempoolStore for Mempool {
         let mut pending = self.pending.write().map_err(|_| {
             MempoolError::Internal(Box::new(std::io::Error::other("mempool lock poisoned")))
         })?;
-        pending.retain(|tx| !hashes.contains(&tx.hash));
+        pending.retain(|tx| !hashes.contains(&tx.hash()));
         Ok(())
     }
 
     fn check_status(&self, tx_hash: &TxHash) -> TxStatus {
         let stage = if let Ok(pending) = self.pending.read() {
-            if pending.iter().any(|tx| &tx.hash == tx_hash) {
+            if pending.iter().any(|tx| &tx.hash() == tx_hash) {
                 MempoolTxStage::Pending
             } else {
                 MempoolTxStage::Unknown

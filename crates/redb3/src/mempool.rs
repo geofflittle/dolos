@@ -780,14 +780,14 @@ impl RedbMempool {
 
     fn receive_inner(&self, tx: MempoolTx) -> Result<(), RedbMempoolError> {
         let wx = self.db.begin_write()?;
-        if PendingTable::contains(&wx, &tx.hash)? {
+        if PendingTable::contains(&wx, &tx.hash())? {
             return Err(MempoolError::DuplicateTx.into());
         }
-        if InflightTable::read(&wx, &tx.hash)?.is_some() {
+        if InflightTable::read(&wx, &tx.hash())?.is_some() {
             return Err(MempoolError::DuplicateTx.into());
         }
         let seq = PendingTable::next_seq(&wx)?;
-        PendingTable::insert(&wx, seq, &tx.hash, &tx.payload)?;
+        PendingTable::insert(&wx, seq, &tx.hash(), tx.payload())?;
         wx.commit()?;
         self.notify(tx);
         Ok(())
@@ -798,7 +798,7 @@ impl MempoolStore for RedbMempool {
     type Stream = RedbMempoolStream;
 
     fn receive(&self, tx: MempoolTx) -> Result<(), MempoolError> {
-        debug!(tx.hash = %tx.hash, "tx received");
+        debug!(tx.hash = %tx.hash(),"tx received");
         self.receive_inner(tx)?;
         Ok(())
     }
@@ -829,7 +829,7 @@ impl MempoolStore for RedbMempool {
                 let record = InflightRecord::new(payload, seq);
                 let tx = record.to_mempool_tx(hash);
                 InflightTable::write(wx, &hash, &record)?;
-                debug!(tx.hash = %tx.hash, "tx inflight");
+                debug!(tx.hash = %tx.hash(),"tx inflight");
                 events.push(tx);
             }
             Ok(events)
@@ -846,7 +846,7 @@ impl MempoolStore for RedbMempool {
                     if record.acknowledge() {
                         let tx = record.to_mempool_tx(*hash);
                         InflightTable::write(wx, hash, &record)?;
-                        debug!(tx.hash = %tx.hash, "tx acknowledged");
+                        debug!(tx.hash = %tx.hash(),"tx acknowledged");
                         events.push(tx);
                     }
                 }
@@ -900,12 +900,12 @@ impl MempoolStore for RedbMempool {
                         InflightTable::remove(wx, &tx_hash)?;
                         FinalizedTable::append(wx, log_entry)?;
                         tx.stage = MempoolTxStage::Finalized;
-                        debug!(tx.hash = %tx.hash, "tx finalized");
+                        debug!(tx.hash = %tx.hash(),"tx finalized");
                         events.push(tx);
                     } else {
                         InflightTable::write(wx, &tx_hash, &record)?;
                         let tx = record.to_mempool_tx(tx_hash);
-                        debug!(tx.hash = %tx.hash, "tx confirmed");
+                        debug!(tx.hash = %tx.hash(),"tx confirmed");
                         events.push(tx);
                     }
                 } else if unseen_set.contains(&tx_hash) {
@@ -918,7 +918,7 @@ impl MempoolStore for RedbMempool {
                     PendingTable::insert(wx, seq, &tx_hash, &record.payload)?;
                     let mut tx = record.to_mempool_tx(tx_hash);
                     tx.retry();
-                    debug!(tx.hash = %tx.hash, "retry tx");
+                    debug!(tx.hash = %tx.hash(),"retry tx");
                     events.push(tx);
                 } else if record.stage == InflightStage::Confirmed {
                     // Already confirmed on-chain; treat subsequent blocks as
@@ -930,7 +930,7 @@ impl MempoolStore for RedbMempool {
                         InflightTable::remove(wx, &tx_hash)?;
                         FinalizedTable::append(wx, log_entry)?;
                         tx.stage = MempoolTxStage::Finalized;
-                        debug!(tx.hash = %tx.hash, "tx finalized");
+                        debug!(tx.hash = %tx.hash(),"tx finalized");
                         events.push(tx);
                     } else {
                         InflightTable::write(wx, &tx_hash, &record)?;
@@ -946,7 +946,7 @@ impl MempoolStore for RedbMempool {
                         InflightTable::remove(wx, &tx_hash)?;
                         FinalizedTable::append(wx, log_entry)?;
                         tx.stage = MempoolTxStage::Dropped;
-                        debug!(tx.hash = %tx.hash, "tx dropped");
+                        debug!(tx.hash = %tx.hash(),"tx dropped");
                         events.push(tx);
                     } else {
                         InflightTable::write(wx, &tx_hash, &record)?;
@@ -971,7 +971,7 @@ impl MempoolStore for RedbMempool {
                 let mut tx = record.to_mempool_tx(hash);
                 FinalizedTable::append(wx, record.into_dropped_entry(hash))?;
                 tx.stage = MempoolTxStage::Dropped;
-                debug!(tx.hash = %tx.hash, "pending tx dropped");
+                debug!(tx.hash = %tx.hash(),"pending tx dropped");
                 events.push(tx);
             }
             Ok(events)
@@ -1072,8 +1072,8 @@ mod tests {
     fn test_receive_and_has_pending() {
         let store = test_store();
         let tx = test_tx(1);
-        let hash = tx.hash;
-        let payload = tx.payload.clone();
+        let hash = tx.hash();
+        let payload = tx.payload().clone();
 
         store.receive(tx).unwrap();
 
@@ -1081,8 +1081,8 @@ mod tests {
 
         let peeked = store.peek_pending();
         assert_eq!(peeked.len(), 1);
-        assert_eq!(peeked[0].hash, hash);
-        assert_eq!(peeked[0].payload, payload);
+        assert_eq!(peeked[0].hash(), hash);
+        assert_eq!(peeked[0].payload(), &payload);
     }
 
     #[test]
@@ -1100,7 +1100,7 @@ mod tests {
     fn test_mark_inflight() {
         let store = test_store();
         let tx = test_tx(1);
-        let hash = tx.hash;
+        let hash = tx.hash();
 
         store.receive(tx).unwrap();
         store.mark_inflight(&[hash]).unwrap();
@@ -1117,7 +1117,7 @@ mod tests {
     fn test_mark_acknowledged() {
         let store = test_store();
         let tx = test_tx(1);
-        let hash = tx.hash;
+        let hash = tx.hash();
 
         store.receive(tx).unwrap();
         store.mark_inflight(&[hash]).unwrap();
@@ -1147,7 +1147,7 @@ mod tests {
     fn test_get_tx_status_lifecycle() {
         let store = test_store();
         let tx = test_tx(1);
-        let hash = tx.hash;
+        let hash = tx.hash();
         let point = test_point();
 
         // Unknown
@@ -1222,7 +1222,7 @@ mod tests {
         // Finalize 3 transactions
         for n in 0..3u8 {
             let tx = test_tx(n);
-            let hash = tx.hash;
+            let hash = tx.hash();
             store.receive(tx).unwrap();
             store.mark_inflight(&[hash]).unwrap();
             store.mark_acknowledged(&[hash]).unwrap();
@@ -1243,7 +1243,7 @@ mod tests {
             assert_eq!(entry.confirmations, 2);
             assert!(entry.confirmed_at.is_some());
             assert!(
-                !entry.payload.1.is_empty(),
+                !entry.payload().1.is_empty(),
                 "finalized entry should include payload"
             );
         }
@@ -1260,7 +1260,7 @@ mod tests {
     }
 
     fn pending(store: &RedbMempool) -> Vec<TxHash> {
-        store.peek_pending().iter().map(|tx| tx.hash).collect()
+        store.peek_pending().iter().map(|tx| tx.hash()).collect()
     }
 
     #[test]
@@ -1315,7 +1315,7 @@ mod tests {
         assert_eq!(listing.len(), 3);
         let h2_stage = listing
             .iter()
-            .find(|tx| tx.hash == h2)
+            .find(|tx| tx.hash() == h2)
             .unwrap()
             .stage
             .clone();
@@ -1329,7 +1329,7 @@ mod tests {
         assert_eq!(listing.len(), 3);
         let h2_stage = listing
             .iter()
-            .find(|tx| tx.hash == h2)
+            .find(|tx| tx.hash() == h2)
             .unwrap()
             .stage
             .clone();
@@ -1341,6 +1341,6 @@ mod tests {
             .unwrap();
         let listing = store.peek_inflight();
         assert_eq!(listing.len(), 2);
-        assert!(!listing.iter().any(|tx| tx.hash == h2));
+        assert!(!listing.iter().any(|tx| tx.hash() == h2));
     }
 }

@@ -231,10 +231,10 @@ pub async fn trp_dump_logs<D: Domain>(
     let entries = entries
         .iter()
         .map(|e| TxLog {
-            hash: hex::encode(e.hash.as_ref()),
+            hash: hex::encode(e.hash().as_ref()),
             stage: stage_to_string(&e.stage).to_string(),
             payload: if include_payload {
-                Some(hex::encode(&e.payload.1))
+                Some(hex::encode(&e.payload().1))
             } else {
                 None
             },
@@ -267,9 +267,9 @@ pub async fn trp_peek_pending<D: Domain>(
     let entries = peeked
         .iter()
         .map(|tx| PendingTx {
-            hash: hex::encode(tx.hash.as_ref()),
+            hash: hex::encode(tx.hash().as_ref()),
             payload: if include_payload {
-                Some(hex::encode(&tx.payload.1))
+                Some(hex::encode(&tx.payload().1))
             } else {
                 None
             },
@@ -296,13 +296,13 @@ pub async fn trp_peek_inflight<D: Domain>(
     let entries = peeked
         .iter()
         .map(|tx| InflightTx {
-            hash: hex::encode(tx.hash.as_ref()),
+            hash: hex::encode(tx.hash().as_ref()),
             stage: stage_to_string(&tx.stage).to_string(),
             confirmations: tx.confirmations as u64,
             non_confirmations: tx.non_confirmations as u64,
             confirmed_at: tx.confirmed_at.as_ref().map(chain_point_to_spec),
             payload: if include_payload {
-                Some(hex::encode(&tx.payload.1))
+                Some(hex::encode(&tx.payload().1))
             } else {
                 None
             },

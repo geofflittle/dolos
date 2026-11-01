@@ -214,7 +214,7 @@ impl Group {
     /// Validates one transaction against the group's stores and mempool without holding it.
     pub(super) fn check(&self, tx: &[u8]) -> Result<TxHash, DomainError> {
         let chain = self.domain.read_chain();
-        self.domain.validate_tx(&chain, tx).map(|tx| tx.hash)
+        self.domain.validate_tx(&chain, tx).map(|tx| tx.hash())
     }
 
     /// The redeemer evaluations Dolos estimates for one transaction against the group's stores and mempool, with the builtins each called.

@@ -480,7 +480,7 @@ fn certificate_state<D: Domain>(
         let unconfirmed = unconfirmed_txs(utxos);
         let unconfirmed = unconfirmed
             .iter()
-            .map(|entry| MultiEraTx::try_from(&entry.payload))
+            .map(|entry| MultiEraTx::try_from(entry.payload()))
             .collect::<Result<Vec<_>, _>>()?;
         let pending = pending_accounts(&unconfirmed)?;
         if let Some(withdrawals) = &native.transaction_body.withdrawals {
@@ -671,7 +671,7 @@ fn unconfirmed_txs<D: Domain>(utxos: &MempoolAwareUtxoStore<D>) -> Vec<MempoolTx
     inflight
         .into_iter()
         .chain(pending)
-        .filter(|entry| seen.insert(entry.hash))
+        .filter(|entry| seen.insert(entry.hash()))
         .filter(|entry| {
             matches!(
                 entry.stage,

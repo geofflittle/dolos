@@ -1511,7 +1511,7 @@ async fn sweep(
             .mempool()
             .peek_pending()
             .iter()
-            .map(|tx| tx.hash)
+            .map(|tx| tx.hash())
             .collect();
         let kept: Vec<TxHash> = held
             .iter()
