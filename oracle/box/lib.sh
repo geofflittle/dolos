@@ -1,8 +1,9 @@
-# Functions the oracle box scripts share, reading ROOT, SCRATCH, REV, MIN_FREE_G, HERE and TARGET.
+# Functions the oracle box scripts share, reading ROOT, SCRATCH, REV, MIN_FREE_G, HERE, TARGET and IN_IMAGE.
 
 PALLAS=${PALLAS:-scratch/pallas}
-# The tree ids of the scratch trees the target dir's last build read.
-BUILT="$ROOT/${TARGET:-target}/built-trees"
+IN_IMAGE=${IN_IMAGE:-$HERE/in-image.sh}
+# One line for each unit of the target dir, the tree ids of the scratch trees its last build read and its output files.
+BUILT="$ROOT/${TARGET:-target}/built-units"
 # The arms that plant a defect, each judged on the records plants/<arm>.records names.
 PLANTED_ARMS="colret coin inflight rodrigo-reverted rob-reverted cost revalidate revalidate-drops subouts byron-attrs byron-signer byron-guard chaincode minfee-subtx emptyguards tag24 v1v2"
 
@@ -90,32 +91,58 @@ dep_info() {
   done
 }
 
-# One line for each unit cargo reports fresh whose dep-info names a file of the list, or that has no dep-info.
-fresh_reading() {
-  grep '"reason":"compiler-artifact"' "$1" | grep '"fresh":true' |
-    sed -n 's/.*"filenames":\[\([^]]*\)\].*/\1/p' | tr -d '"' |
-    while read -r outs; do
-      d=$(dep_info "$outs")
-      if [ -z "$d" ]; then
-        echo "STALE unit=$outs dep_info=missing"
-        continue
-      fi
-      tr ' ' '\n' <"$d" | sed "s/:\$//; s#^/w/$SCRATCH/##" | grep -x -F -f "$2" | sort -u |
-        sed "s#^#STALE unit=$outs file=#"
-    done
+# The output files of each unit a message file names, comma separated, one line per unit, only the fresh ones when $2 is fresh.
+units() {
+  only=
+  if [ "${2:-}" = fresh ]; then
+    only='"fresh":true'
+  fi
+  grep '"reason":"compiler-artifact"' "$1" | grep -F -e "$only" |
+    sed -n 's/.*"filenames":\[\([^]]*\)\].*/\1/p' | tr -d '"'
 }
 
-# Runs cargo with the arguments in the scratch tree, cargo's messages in $1, and refuses when cargo reused a unit that reads a file changed since the target dir's last build.
+# One line for each unit cargo reports fresh whose dep-info names a file changed between the trees of its last build and the trees $2 and $3, or that has no dep-info.
+fresh_reading() {
+  units "$1" fresh | while read -r outs; do
+    built=$(awk -v outs="$outs" '$3 == outs { print $1, $2 }' "$BUILT" 2>/dev/null || true)
+    built=${built:-none none}
+    changed="$1.changed-$(echo "$built" | tr ' ' -)"
+    if [ ! -f "$changed" ]; then
+      {
+        changed_files "$ROOT/$SCRATCH" "${built% *}" "$2" ""
+        changed_files "$ROOT/$PALLAS" "${built#* }" "$3" "/w/$PALLAS/"
+      } >"$changed"
+    fi
+    d=$(dep_info "$outs")
+    if [ -z "$d" ]; then
+      echo "STALE unit=$outs dep_info=missing"
+      continue
+    fi
+    tr ' ' '\n' <"$d" | sed "s/:\$//; s#^/w/$SCRATCH/##" | grep -x -F -f "$changed" | sort -u |
+      sed "s#^#STALE unit=$outs file=#"
+  done
+}
+
+# Records the trees $2 and $3 for each unit a message file names, keeping the record of every other unit.
+record_units() {
+  units "$1" >"$1.units"
+  {
+    if [ -f "$BUILT" ]; then
+      awk 'NR == FNR { named[$0] = 1; next } !($3 in named)' "$1.units" "$BUILT"
+    fi
+    sed "s#^#$2 $3 #" "$1.units"
+  } >"$BUILT.new"
+  mv "$BUILT.new" "$BUILT"
+}
+
+# Runs cargo with the arguments in the scratch tree, cargo's messages in $1, and refuses when cargo reused a unit that reads a file changed since that unit's last build.
 build_checked() {
   json=$1
   shift
   dolos=$(tree_of "$ROOT/$SCRATCH")
   pallas=$(tree_of "$ROOT/$PALLAS")
-  if [ -f "$BUILT" ]; then
-    read -r built_dolos built_pallas <"$BUILT"
-  else
-    # With no record of the last build, every file gets a new time, so cargo rebuilds each unit that reads one.
-    built_dolos=none built_pallas=none
+  if [ ! -f "$BUILT" ]; then
+    # With no record of any build, every file gets a new time, so cargo rebuilds each unit that reads one.
     for tree in "$SCRATCH" "$PALLAS"; do
       if [ -d "$ROOT/$tree/.git" ]; then
         git -C "$ROOT/$tree" ls-files -z --cached --others --exclude-standard | (cd "$ROOT/$tree" && xargs -0 touch)
@@ -125,22 +152,20 @@ build_checked() {
     done
   fi
   # A build that fails or reuses a stale unit leaves units built from more than one tree, so it removes the record and the next build starts cold.
-  if ! sh "$HERE/in-image.sh" "$SCRATCH" cargo "$@" --message-format=json >"$json" 2>"$json.err"; then
+  if ! sh "$IN_IMAGE" "$SCRATCH" cargo "$@" --message-format=json >"$json" 2>"$json.err"; then
     rm -f "$BUILT"
     echo "BUILD_FAILED log=$json.err"
     return 1
   fi
-  {
-    changed_files "$ROOT/$SCRATCH" "$built_dolos" "$dolos" ""
-    changed_files "$ROOT/$PALLAS" "$built_pallas" "$pallas" "/w/$PALLAS/"
-  } >"$json.changed"
-  fresh_reading "$json" "$json.changed" >"$json.stale"
+  rm -f "$json".changed-*
+  fresh_reading "$json" "$dolos" "$pallas" >"$json.stale"
   if [ -s "$json.stale" ]; then
     rm -f "$BUILT"
     head -4 "$json.stale"
     return 1
   fi
-  echo "$dolos $pallas" >"$BUILT"
+  # A fresh unit that reads no changed file has the inputs it would have at the current trees.
+  record_units "$json" "$dolos" "$pallas"
 }
 
 # Builds the test binary of the scratch tree's dolos library, cargo's messages in $1 and the rest of the arguments passed to cargo.

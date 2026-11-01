@@ -23,6 +23,15 @@ esac
 export ROOT REV MIN_FREE_G CANDIDATE_NEED_G OUT
 . "$HERE/lib.sh"
 
+# Exits when the test of the stale unit check fails.
+require_lib_test() {
+  mkdir -p "$OUT/lib-test"
+  if ! sh "$HERE/lib_test.sh" "$OUT/lib-test" >"$OUT/lib-test.log" 2>&1; then
+    echo "REFUSED lib_test log=$OUT/lib-test.log"
+    exit 2
+  fi
+}
+
 # Builds Dolos from the scratch tree into $OUT/bin/dolos.
 build_candidate() {
   mkdir -p "$OUT/bin"
@@ -79,6 +88,7 @@ live_leg() {
 live_run() {
   mkdir -p "$OUT"
   require_free
+  require_lib_test
   reset_scratch
   commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
   live=FAIL
@@ -104,6 +114,7 @@ touched_arms() {
 quick_run() {
   mkdir -p "$OUT"
   require_free
+  require_lib_test
   reset_scratch
   commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
   if [ -z "$BASE" ] && [ -f "$LAST_DONE" ]; then
@@ -138,6 +149,7 @@ passed() {
 done_run() {
   mkdir -p "$OUT"
   require_free
+  require_lib_test
   reset_scratch
   commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
   sh "$HERE/breaks.sh" | tee "$OUT/breaks.out"
@@ -151,6 +163,7 @@ done_run() {
 ship_run() {
   mkdir -p "$OUT"
   require_free
+  require_lib_test
   reset_scratch
   commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
   sync=
@@ -179,10 +192,15 @@ ship_run() {
 regen() {
   mkdir -p "$OUT"
   require_free
+  require_lib_test
   reset_scratch
   commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
-  sh "$HERE/in-image.sh" "$SCRATCH" cargo test -q --release --locked -p dolos --lib \
-    "$TEST::ledger_oracle" -- --exact --ignored --nocapture >"$OUT/head.log" 2>&1 || true
+  if ! built=$(build_judge "$OUT/head.build" --locked); then
+    echo "REGEN REFUSED the judge build $built"
+    exit 1
+  fi
+  sh "$IN_IMAGE" "$SCRATCH" "$(executable "$OUT/head.build")" "$TEST::ledger_oracle" \
+    --exact --ignored --nocapture >"$OUT/head.log" 2>&1 || true
   if ! grep -q '^RESULT ' "$OUT/head.log"; then
     echo "REGEN REFUSED the head run printed no RESULT log=$OUT/head.log"
     exit 1
