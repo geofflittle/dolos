@@ -99,10 +99,68 @@ impl gasket::framework::Worker<Stage> for Worker {
                 PullEvent::Rollback(x) => stage.on_rollback(x)?,
             },
             WorkUnit::Housekeeping => {
-                stage.domain.housekeeping().or_panic()?;
+                housekeeping_tick(&stage.domain).or_panic()?;
             }
         }
 
         Ok(())
+    }
+}
+
+/// The pruning one housekeeping tick does, until no backlog is left.
+fn housekeeping_tick<D: Domain>(domain: &D) -> Result<(), DomainError> {
+    domain.drain_housekeeping(None)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use dolos_cardano::CardanoDelta;
+    use dolos_core::{config::SyncConfig, LogEntry, LogValue};
+    use dolos_testing::toy_domain::ToyDomain;
+
+    use super::*;
+
+    const MAX_ROLLBACK: u64 = 1_000;
+
+    /// A domain whose wal holds one entry for each slot in `slots`, with `max_rollback` set.
+    fn domain_with_wal(slots: std::ops::Range<u64>) -> ToyDomain {
+        let mut config = SyncConfig::default();
+        config.max_rollback = Some(MAX_ROLLBACK);
+        let domain = ToyDomain::new(None, None).with_sync_config(config);
+        let entries: Vec<LogEntry<CardanoDelta>> = slots
+            .map(|slot| {
+                let mut hash = [1u8; 32];
+                hash[0..8].copy_from_slice(&slot.to_be_bytes());
+                (ChainPoint::Specific(slot, hash.into()), LogValue::origin())
+            })
+            .collect();
+        domain.wal().append_entries(&entries).unwrap();
+        domain
+    }
+
+    fn wal_span(domain: &ToyDomain) -> (u64, u64) {
+        let start = domain.wal().find_start().unwrap().unwrap().0.slot();
+        let tip = domain.wal().find_tip().unwrap().unwrap().0.slot();
+        (start, tip)
+    }
+
+    #[test]
+    fn a_tick_leaves_a_wal_inside_max_rollback_untouched() {
+        let domain = domain_with_wal(5_000..5_500);
+
+        housekeeping_tick(&domain).unwrap();
+
+        assert_eq!(wal_span(&domain), (5_000, 5_499));
+    }
+
+    #[test]
+    fn a_tick_far_behind_leaves_the_wal_inside_max_rollback() {
+        let tip = 3 * <ToyDomain as Domain>::MAX_PRUNE_SLOTS_PER_HOUSEKEEPING;
+        let domain = domain_with_wal(1..tip + 1);
+
+        housekeeping_tick(&domain).unwrap();
+
+        assert_eq!(wal_span(&domain), (tip - MAX_ROLLBACK, tip));
     }
 }
