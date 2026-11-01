@@ -243,7 +243,6 @@ ic#1176 stateful or scripted subtransaction
 ic#1182 scripted or stateful batch
 ic#1185 account or governance state
 ic#1188 stateful or scripted subtransaction
-ic#1244 bootstrap or reward address
 ic#1255 scripted or stateful batch
 ic#1273 certificate kind
 ic#1275 certificate kind
@@ -252,7 +251,6 @@ ic#1280 certificate kind
 ic#1282 account or governance state
 ic#1286 certificate kind
 ic#1288 account or governance state
-ic#1291 bootstrap or reward address
 ic#1305 certificate kind
 ic#1307 account or governance state
 ic#1332 stateful or scripted subtransaction
@@ -309,7 +307,6 @@ ic#1626 certificate kind
 ic#1627 certificate kind
 ic#1628 certificate kind
 ic#1629 certificate kind
-ic#1633 bootstrap or reward address
 ic#1707 Plutus witnesses
 ic#1709 Plutus witnesses
 ic#1711 Plutus witnesses
@@ -794,16 +791,3 @@ ic#9851 account or governance state
 supp#14 stateful or scripted subtransaction
 supp#20 overlapping spending and reference inputs
 supp#22 account or governance state
-supp#54 bootstrap or reward address
-supp#56 bootstrap or reward address
-supp#58 bootstrap or reward address
-supp#60 bootstrap or reward address
-supp#62 bootstrap or reward address
-supp#64 bootstrap or reward address
-supp#67 bootstrap or reward address
-supp#69 bootstrap or reward address
-supp#71 bootstrap or reward address
-supp#73 bootstrap or reward address
-supp#75 bootstrap or reward address
-supp#77 bootstrap or reward address
-supp#117 bootstrap or reward address

@@ -408,6 +408,7 @@ fn validation_class(v: &ValidationError) -> DolosClass {
         V::PostAlonzo(e) => return post_alonzo_class(e),
         V::DijkstraInputAlreadySpent => C::Inputs,
         V::DijkstraReferenceScriptsTooLarge => C::FeeAndSize,
+        V::DijkstraBootstrapAttributesTooLarge => C::Value,
         V::DijkstraMalformedScript => C::Script,
         V::DijkstraMalformed(_) | V::DijkstraInvalidMetadata => C::Decoding,
         V::DijkstraInvalidWithdrawal(_) | V::DijkstraCertificateStateUnavailable => {

@@ -108,6 +108,7 @@ caught() {
     revalidate-drops) pattern='^DIFF revalidate [a-z]+#[0-9]+ dropped_after_rollback_to=' ;;
     subouts) pattern='^DIFF (undo|as_output) [a-z]+#[0-9]+ ' ;;
     byron-attrs | byron-signer | byron-guard | chaincode | emptyguards | tag24) pattern='^DISAGREE [a-z]+#[0-9]+ ' ;;
+    byron-out) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=(bootstrap or reward address|output address)' ;;
     minfee-subtx) pattern='^DIFF fee [a-z]+#[0-9]+ ledger=[0-9]+ dolos=[0-9]+$' ;;
     v1v2) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=new script language ' ;;
   esac
@@ -170,7 +171,7 @@ for arm in $ARMS; do
     rodrigo-reverted) plant=plant_rodrigo ;;
     rob-reverted) plant=plant_rob ;;
     cost) plant=plant_cost ;;
-    byron-attrs | byron-signer | byron-guard | chaincode | minfee-subtx | emptyguards | tag24 | v1v2) plant="plant_pallas $arm" ;;
+    byron-attrs | byron-signer | byron-guard | chaincode | minfee-subtx | emptyguards | tag24 | v1v2 | byron-out) plant="plant_pallas $arm" ;;
     *) echo "unknown arm $arm" ; exit 2 ;;
   esac
   if ! $plant >"$OUT/$arm.plant" 2>&1; then
