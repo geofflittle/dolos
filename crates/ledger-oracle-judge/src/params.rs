@@ -77,6 +77,15 @@ impl Canon {
                 .map(|v| Canon::of_json(key, v))
                 .collect::<Result<_, _>>()
                 .map(Canon::List),
+            // The ledger writes a ratio with no finite decimal as its numerator and denominator.
+            Value::Object(fields)
+                if fields.len() == 2
+                    && fields.contains_key("numerator")
+                    && fields.contains_key("denominator") =>
+            {
+                let part = |k: &str| fields[k].as_i64().map(i128::from).ok_or_else(inexact);
+                Canon::ratio(part("numerator")?, part("denominator")?).ok_or_else(inexact)
+            }
             Value::Object(fields) => fields
                 .iter()
                 .map(|(k, v)| Ok((k.clone(), Canon::of_json(&format!("{key}.{k}"), v)?)))
@@ -152,6 +161,21 @@ mod tests {
                 Canon::Ratio(3, 200),
             ]))
         );
+    }
+
+    #[test]
+    fn a_numerator_and_denominator_object_reads_as_its_fraction() {
+        let units: Value = serde_json::from_str(r#"{"memory": 2, "steps": 3}"#).unwrap();
+        assert_eq!(
+            Canon::of_json("k", &units),
+            Ok(Canon::Map(
+                [("memory".into(), Canon::Int(2)), ("steps".into(), Canon::Int(3))].into()
+            ))
+        );
+        let ratio: Value = serde_json::from_str(r#"{"denominator": 3, "numerator": 2}"#).unwrap();
+        assert_eq!(Canon::of_json("k", &ratio), Ok(Canon::Ratio(2, 3)));
+        let whole: Value = serde_json::from_str(r#"{"denominator": 3, "numerator": 6}"#).unwrap();
+        assert_eq!(Canon::of_json("k", &whole), Ok(Canon::Int(2)));
     }
 
     #[test]

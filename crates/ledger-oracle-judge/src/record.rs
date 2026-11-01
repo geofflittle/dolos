@@ -6,6 +6,7 @@ use crate::{
     accounts::LedgerAccounts,
     cbor::{self, Purpose, TxIn},
     refusal::RefusalClass,
+    state::{Certs, Gov},
 };
 
 /// The corpus a record comes from.
@@ -253,6 +254,9 @@ pub struct Record {
     pub pparams: PParams,
     pub pre: Pre,
     pub accounts_pre: LedgerAccounts,
+    pub certs_pre: Certs,
+    pub gov_pre: Gov,
+    pub treasury: u64,
     pub outcome: LedgerOutcome,
     pub ex_units: Vec<LedgerRedeemer>,
     pub sub_ex_units: Vec<Vec<LedgerRedeemer>>,

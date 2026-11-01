@@ -15,7 +15,7 @@ docker run --rm -v "$STORE":/work:ro -v "$WORK":/probe -w /probe conformance-gen
     -package base -package containers -package data-default -package microlens \
     -package cardano-strict-containers -package cardano-data -package cardano-slotting \
     -package cardano-ledger-core -package cardano-ledger-shelley -package cardano-ledger-mary \
-    -package cardano-ledger-dijkstra -package cardano-ledger-binary \
+    -package cardano-ledger-dijkstra -package cardano-ledger-conway -package cardano-ledger-binary \
     -package-id cardano-ledger-core-1.23.0.0-inplace-testlib \
     -package small-steps -package transformers -package bytestring -package base16-bytestring \
     -package hspec -package ImpSpec -package aeson -package cardano-ledger-alonzo \

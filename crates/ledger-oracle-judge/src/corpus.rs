@@ -9,14 +9,14 @@ use thiserror::Error;
 
 use crate::{
     record::{CorpusKind, Globals, Record, RecordId},
-    run::{self, Run},
+    run::{self, KeptRun},
 };
 
 /// The sha256 of the decompressed Imp spec corpus.
-pub const IC_SHA256: &str = "e541d1a3746d772279761f083fecd6a8b9e27eeb709709e1d6cd8dfdc46650e4";
+pub const IC_SHA256: &str = "3b827e089ddf10c8bffdecbdf28576c52c320271b9e354fa4698993e0545bf90";
 
 /// The sha256 of the decompressed supplement corpus.
-pub const SUPP_SHA256: &str = "90c56d806c68e6d5c6d30ae424af21b6774e56716d6beb9f46cb1eda9b8dc08b";
+pub const SUPP_SHA256: &str = "4ae6592ad757c9f3648b887f59f69f9c7017a562905aacaa5dc8316dc8d9fde0";
 
 const IC_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/ic.jsonl.gz");
 const SUPP_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/supp.jsonl.gz");
@@ -131,7 +131,7 @@ pub struct Corpus {
     pub sha256: String,
     pub records: usize,
     pub globals: Option<Globals>,
-    pub runs: Vec<Run>,
+    pub runs: Vec<KeptRun>,
 }
 
 impl Corpus {
@@ -148,11 +148,8 @@ impl Corpus {
     }
 
     /// The runs kept for judgement.
-    pub fn kept(&self) -> impl Iterator<Item = &run::KeptRun> {
-        self.runs.iter().filter_map(|r| match r {
-            Run::Kept(k) => Some(k),
-            Run::Excluded { .. } => None,
-        })
+    pub fn kept(&self) -> impl Iterator<Item = &KeptRun> {
+        self.runs.iter()
     }
 
     /// The corpus with only the kept runs that hold a record of this corpus
@@ -163,7 +160,7 @@ impl Corpus {
             .filter(|id| id.corpus == self.kind)
             .map(|id| id.n)
             .collect();
-        let kept: Vec<&run::KeptRun> = self
+        let kept: Vec<&KeptRun> = self
             .kept()
             .filter(|run| run.records().iter().any(|r| mine.contains(&r.n)))
             .collect();
@@ -182,7 +179,7 @@ impl Corpus {
             sha256: self.sha256.clone(),
             records: held.len(),
             globals: self.globals.clone(),
-            runs: kept.into_iter().cloned().map(Run::Kept).collect(),
+            runs: kept.into_iter().cloned().collect(),
         })
     }
 }
@@ -194,23 +191,14 @@ pub struct NotKept(pub RecordId);
 
 impl fmt::Display for Corpus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let excluded = |test: fn(run::ExcludeReason) -> bool| {
-            self.runs
-                .iter()
-                .filter(|r| matches!(r, Run::Excluded { reason, .. } if test(*reason)))
-                .count()
-        };
         write!(
             f,
-            "CORPUS {} sha={} records={} runs={} kept_runs={} kept_records={} excluded_epoch={} excluded_pparams={}",
+            "CORPUS {} sha={} records={} runs={} kept_records={}",
             self.kind.name(),
             &self.sha256[..16],
             self.records,
             self.runs.len(),
-            self.kept().count(),
             self.kept().map(|k| k.records().len()).sum::<usize>(),
-            excluded(run::ExcludeReason::epoch),
-            excluded(run::ExcludeReason::pparams),
         )
     }
 }
@@ -275,11 +263,11 @@ mod tests {
     fn committed_corpora_load_into_their_runs() {
         assert_eq!(
             load(CorpusKind::Ic).unwrap().to_string(),
-            "CORPUS ic sha=e541d1a3746d7722 records=9853 runs=700 kept_runs=574 kept_records=8063 excluded_epoch=112 excluded_pparams=29"
+            "CORPUS ic sha=3b827e089ddf10c8 records=9853 runs=886 kept_records=9853"
         );
         assert_eq!(
             load(CorpusKind::Supp).unwrap().to_string(),
-            "CORPUS supp sha=90c56d806c68e6d5 records=125 runs=39 kept_runs=39 kept_records=125 excluded_epoch=0 excluded_pparams=0"
+            "CORPUS supp sha=4ae6592ad757c9f3 records=125 runs=39 kept_records=125"
         );
     }
 
@@ -291,7 +279,7 @@ mod tests {
         let e = verify(CorpusKind::Ic, &bytes, IC_SHA256).unwrap_err();
         assert!(e
             .to_string()
-            .starts_with("CORPUS ic sha mismatch expected=e541d1a3"));
+            .starts_with("CORPUS ic sha mismatch expected=3b827e08"));
     }
 
     #[test]
@@ -306,6 +294,20 @@ mod tests {
             e.to_string(),
             "CORPUS ic load error records=1 first_line=4 reason=missing field `pparams`"
         );
+    }
+
+    #[test]
+    fn a_record_without_its_pool_vote_or_governance_state_fails_the_load() {
+        for field in ["certs_pre", "gov_pre", "treasury"] {
+            let missing = edit_line(3, |v| {
+                v.as_object_mut().unwrap().remove(field);
+            });
+            let e = reload(CorpusKind::Ic, &missing).unwrap_err();
+            assert_eq!(
+                e.to_string(),
+                format!("CORPUS ic load error records=1 first_line=4 reason=missing field `{field}`")
+            );
+        }
     }
 
     #[test]
@@ -349,21 +351,13 @@ mod tests {
     #[test]
     fn a_record_in_no_kept_run_is_refused() {
         let corpus = load(CorpusKind::Ic).unwrap();
-        let excluded = corpus
-            .runs
-            .iter()
-            .find_map(|run| match run {
-                Run::Excluded { first, .. } => Some(*first),
-                Run::Kept(_) => None,
-            })
-            .unwrap();
         let named = BTreeSet::from([RecordId {
             corpus: CorpusKind::Ic,
-            n: excluded,
+            n: 9853,
         }]);
         assert_eq!(
             corpus.select(&named).unwrap_err().to_string(),
-            format!("SELECTION ic#{excluded} is in no kept run")
+            "SELECTION ic#9853 is in no kept run"
         );
     }
 

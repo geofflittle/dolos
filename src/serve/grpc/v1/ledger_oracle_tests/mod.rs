@@ -1,6 +1,7 @@
 //! Judges what Dolos validates and serves against ledger corpora.
 
 mod construct;
+mod ledger_state;
 mod live;
 mod output;
 mod params;
@@ -1656,6 +1657,7 @@ async fn judge_run(
         &pparams,
         &(edits.pre)(id, run.seed()),
         &(edits.accounts_pre)(&first.accounts_pre),
+        first,
     );
     let seed = run.seed();
     compare_utxos(
@@ -2315,6 +2317,7 @@ async fn a_tx_received_in_one_group_is_absent_from_the_next() {
             &pparams,
             run.seed(),
             &run.records()[0].accounts_pre,
+            &run.records()[0],
         );
         let one = validate::group(&seeded.domain, first[0].slot, Relay::Held);
         let Some(hash) = first
@@ -2650,6 +2653,7 @@ async fn a_seed_output_compared_as_bytes_names_the_first_differing_byte() {
         &[],
         run.seed(),
         &first.accounts_pre,
+        first,
     );
     let id = RecordId {
         corpus: corpus.kind,
@@ -2719,6 +2723,7 @@ async fn the_seed_point_is_a_rollback_target() {
         &[],
         run.seed(),
         &run.records()[0].accounts_pre,
+        &run.records()[0],
     );
     let rolled = seeded.domain.rollback(seeded.seed.point());
     assert!(rolled.is_ok(), "{rolled:?}");

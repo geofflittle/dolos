@@ -28,9 +28,11 @@ import Cardano.Ledger.Plutus.Evaluate (evaluatePlutusWithContext)
 import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
 import Cardano.Ledger.Plutus.TxInfo (exBudgetToExUnits)
 import Cardano.Ledger.Plutus.Language (plutusLanguage)
-import Cardano.Ledger.Shelley.LedgerState (lsCertStateL, lsUTxOStateL)
+import Cardano.Ledger.Conway.Governance (GovRelation (..), PRoot (..), cgsCommitteeL, cgsConstitutionL, cgsProposalsL, pRootsL)
+import Cardano.Ledger.Shelley.LedgerState (lsCertStateL, lsUTxOStateL, utxosGovStateL)
 import Cardano.Ledger.Shelley.Rules (LedgerEnv (..))
-import Cardano.Ledger.State (UTxO (..), accountsL, certDStateL, getMinFeeTxUtxo, utxoL)
+import qualified Data.Aeson.KeyMap as KM
+import Cardano.Ledger.State (ChainAccountState (..), UTxO (..), accountsL, certDStateL, getMinFeeTxUtxo, utxoL)
 import Cardano.Slotting.EpochInfo (epochInfoSize)
 import Cardano.Slotting.Slot (EpochNo (..), EpochSize (..), SlotNo (..))
 import Control.Monad.IO.Class (liftIO)
@@ -181,6 +183,9 @@ dumpTo out g (TRC (env, st, stAnn)) res = liftIO $ do
           , "pparams" A..= A.toJSON (ledgerPp env)
           , "pre" A..= if prev == Just pre then A.String "follows_prev" else A.object ["fresh" A..= pairs pre]
           , "accounts_pre" A..= accountsJson st
+          , "certs_pre" A..= certsJson st
+          , "gov_pre" A..= govJson st
+          , "treasury" A..= unCoin (casTreasury (ledgerAccount env))
           , "outcome" A..= outcome
           , "ex_units" A..= map evaluationJson (Map.toList (evalTxExUnits (ledgerPp env) tx pre (epochInfo g) (systemStart g)))
           , "sub_ex_units" A..= map (map evaluationJson . Map.toList) (subTxExUnits (ledgerPp env) g pre stAnn)
@@ -190,6 +195,24 @@ dumpTo out g (TRC (env, st, stAnn)) res = liftIO $ do
   writeIORef lastPost (maybe (Just pre) Just post)
   BL8.appendFile out (A.encode line <> "\n")
   where
+    certsJson s = case A.toJSON (s ^. lsCertStateL) of
+      A.Object o -> A.Object (KM.delete "dstate" o)
+      other -> other
+    govJson s =
+      let gov = s ^. lsUTxOStateL . utxosGovStateL
+          GovRelation {grPParamUpdate, grHardFork, grCommittee, grConstitution} = gov ^. cgsProposalsL . pRootsL
+       in A.object
+            [ "proposals" A..= (gov ^. cgsProposalsL)
+            , "roots"
+                A..= A.object
+                  [ "pparam_update" A..= prRoot grPParamUpdate
+                  , "hard_fork" A..= prRoot grHardFork
+                  , "committee" A..= prRoot grCommittee
+                  , "constitution" A..= prRoot grConstitution
+                  ]
+            , "committee" A..= (gov ^. cgsCommitteeL)
+            , "constitution" A..= (gov ^. cgsConstitutionL)
+            ]
     evaluationJson :: Show e => (PlutusPurpose AsIx E, Either e ExUnits) -> A.Value
     evaluationJson (purpose, result) =
       A.object

@@ -13,4 +13,5 @@ pub mod record;
 pub mod refusal;
 pub mod row;
 pub mod run;
+pub mod state;
 pub mod verdict;
