@@ -185,6 +185,9 @@ supplement = describe "SUPPLEMENT" $ do
       locked <- sendCoinTo (Addr Testnet (ScriptHashObj script) StakeRefNull) (Coin 5_000_000)
       void $ trySubmitTx (atLevel level (mkBasicTxBody & inputsTxBodyL .~ [bootIn, locked]))
   decoderRules
+  -- (program 1.2.0 (lam ctx (con unit ())))
+  it "a V3 script at UPLC 1.2.0" $
+    spendWithV3 "450102002499"
 
 -- | Transactions whose bytes break one rule of the node's decoder, or one it reads differently from the CDDL, each case at a slot of its own.
 decoderRules :: SpecWith (ImpInit (LedgerSpec E))
@@ -262,6 +265,11 @@ decoderRules = describe "decoder rules" $
       , ("an empty direct deposits map", edited (body (setKey 25 (TMap []))))
       , ("an empty account balance intervals map", edited (body (setKey 26 (TMap []))))
       , ("a bootstrap witness with a 33 byte chain code at the top level", customBootstrapSpend Top (replicate 33 7) [0xa0])
+      , ( "a guard given twice at body key 14 at a sub transaction"
+        , do
+            guard <- KeyHashObj <$> freshKeyHash
+            subEdited (overKey 14 dupFirst) (guardsTxBodyL .~ [guard]) id
+        )
       ]
     plain :: Tx TopTx E
     plain = mkBasicTx mkBasicTxBody

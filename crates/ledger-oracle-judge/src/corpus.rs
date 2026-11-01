@@ -16,7 +16,7 @@ use crate::{
 pub const IC_SHA256: &str = "e541d1a3746d772279761f083fecd6a8b9e27eeb709709e1d6cd8dfdc46650e4";
 
 /// The sha256 of the decompressed supplement corpus.
-pub const SUPP_SHA256: &str = "c27521203db8fe223061a38e543bb646092e276f99404ffcf71ba217c2e31c93";
+pub const SUPP_SHA256: &str = "bd86f3ff9a82c733547db6c953103f3c3390c2a95a31f89bae9f33ba0a85e050";
 
 const IC_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/ic.jsonl.gz");
 const SUPP_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/supp.jsonl.gz");
@@ -278,7 +278,7 @@ mod tests {
         );
         assert_eq!(
             load(CorpusKind::Supp).unwrap().to_string(),
-            "CORPUS supp sha=c27521203db8fe22 records=119 runs=36 kept_runs=36 kept_records=119 excluded_epoch=0 excluded_pparams=0"
+            "CORPUS supp sha=bd86f3ff9a82c733 records=124 runs=38 kept_runs=38 kept_records=124 excluded_epoch=0 excluded_pparams=0"
         );
     }
 
@@ -419,6 +419,6 @@ mod tests {
             input_totals(CorpusKind::Ic),
             [10239, 467, 5162, 473, 475, 16, 474]
         );
-        assert_eq!(input_totals(CorpusKind::Supp), [144, 11, 1, 15, 18, 0, 18]);
+        assert_eq!(input_totals(CorpusKind::Supp), [150, 12, 1, 16, 19, 0, 19]);
     }
 }
