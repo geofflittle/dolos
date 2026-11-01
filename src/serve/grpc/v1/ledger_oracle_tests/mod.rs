@@ -1880,13 +1880,18 @@ async fn ledger_oracle_records() {
 
 #[test]
 fn manifests_within_records_keep_only_their_entries() {
-    let committed = Manifests::committed();
-    let (declared, _) = committed.declared.iter().next().expect("a declared record");
-    let ((_, known), _) = committed.known.iter().next().expect("a known record");
+    let known = manifest::parse_known("known.txt", "V25 validation ic#1971\nS18 accounts ic#551")
+        .unwrap_or_else(|e| panic!("{e}"));
+    let manifests = Manifests {
+        known: known.records,
+        ..Manifests::committed()
+    };
+    let (declared, _) = manifests.declared.iter().next().expect("a declared record");
+    let ((_, known), _) = manifests.known.iter().next().expect("a known record");
     let named = BTreeSet::from([*declared, *known]);
-    let within = committed.within(&named);
+    let within = manifests.within(&named);
     let kept: Vec<&RecordId> = within.declared.keys().collect();
-    let expected: Vec<&RecordId> = committed
+    let expected: Vec<&RecordId> = manifests
         .declared
         .keys()
         .filter(|id| named.contains(id))
@@ -1894,8 +1899,8 @@ fn manifests_within_records_keep_only_their_entries() {
     assert_eq!(kept, expected);
     assert!(within.known.keys().all(|(_, id)| named.contains(id)));
     assert!(within.known.keys().any(|(_, id)| id == known));
-    assert!(within.declared.len() < committed.declared.len());
-    assert!(within.known.len() < committed.known.len());
+    assert!(within.declared.len() < manifests.declared.len());
+    assert!(within.known.len() < manifests.known.len());
 }
 
 #[test]
