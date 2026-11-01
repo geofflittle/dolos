@@ -219,7 +219,8 @@ pub fn outcome(
         | (L::Accepted { .. }, Phase2::Invalid, D::Phase2Rejected, None) => {
             Outcome::Pass(Pass::Agree)
         }
-        // Under a false flag the ledger's tag mismatch means the scripts passed, which Dolos answers by accepting.
+        // Under a false flag the ledger's tag mismatch means the scripts
+        // passed, which Dolos answers by accepting.
         (L::Refused { failure_names, .. }, Phase2::Invalid, D::Accepted, None)
             if failure_names
                 .iter()
@@ -313,7 +314,8 @@ pub fn maker(id: RecordId, dolos: &DolosVerdict, outcome: &Outcome) -> Maker {
     use DolosVerdict as D;
     match (dolos, outcome) {
         (D::Accepted, Outcome::Pass(_) | Outcome::Fail(_) | Outcome::Cascade(_)) => Maker::Taken,
-        // An unsupported answer says nothing of the outputs, so later records spend the ledger's outputs.
+        // An unsupported answer says nothing of the outputs, so later records
+        // spend the ledger's outputs.
         (D::Phase2Rejected | D::Unsupported(_) | D::Refused { .. }, Outcome::Pass(_))
         | (D::Unsupported(_), Outcome::Fail(Fail::UnsupportedUnexpected { .. })) => {
             Maker::Seeds(SeedingMaker(id))

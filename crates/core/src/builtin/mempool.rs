@@ -22,7 +22,8 @@ type Seq = u64;
 
 #[derive(Default)]
 struct MempoolState {
-    /// Each transaction not yet finalized or dropped, with its admission position, at the stage the transaction holds.
+    /// Each transaction not yet finalized or dropped, with its admission
+    /// position, at the stage the transaction holds.
     live: HashMap<TxHash, (Seq, MempoolTx)>,
     finalized_log: VecDeque<MempoolTx>,
 }
@@ -36,7 +37,8 @@ impl MempoolState {
             .map_or(0, |seq| seq + 1)
     }
 
-    /// The hashes of the live transactions the filter admits, in admission order.
+    /// The hashes of the live transactions the filter admits, in admission
+    /// order.
     fn in_order(&self, admit: impl Fn(&MempoolTx) -> bool) -> Vec<TxHash> {
         let mut admitted: Vec<&(Seq, MempoolTx)> =
             self.live.values().filter(|(_, tx)| admit(tx)).collect();

@@ -21,11 +21,13 @@ pub struct MempoolTx {
     // this might be empty if the tx is cloned
     pub report: Option<EvalReport>,
 
-    /// The effects of the payload, decoded at the first read and shared by every clone.
+    /// The effects of the payload, decoded at the first read and shared by
+    /// every clone.
     effects: Arc<OnceLock<Option<TxEffects>>>,
 }
 
-/// The outputs a transaction and the sub transactions it lists make, and the inputs they spend.
+/// The outputs a transaction and the sub transactions it lists make, and the
+/// inputs they spend.
 #[derive(Debug, Default)]
 pub struct TxEffects {
     produced: Vec<(TxoRef, EraCbor)>,
@@ -89,7 +91,8 @@ impl MempoolTx {
         }
     }
 
-    /// A transaction read back from storage at a stage, with no evaluation report.
+    /// A transaction read back from storage at a stage, with no evaluation
+    /// report.
     pub fn restored(
         hash: TxHash,
         payload: EraCbor,
@@ -125,7 +128,8 @@ impl MempoolTx {
         self.payload
     }
 
-    /// The outputs the transaction makes and the inputs it spends, none when the payload does not decode.
+    /// The outputs the transaction makes and the inputs it spends, none when
+    /// the payload does not decode.
     pub fn effects(&self) -> Option<&TxEffects> {
         self.effects
             .get_or_init(|| TxEffects::of(&self.payload))
@@ -837,8 +841,8 @@ mod tests {
         assert!(matches!(poll_once(&mut filter, &mut cx), Poll::Ready(None)));
     }
 
-    // The transaction bd1b7336 of the block at slot 854292 lists the sub
-    // transaction ca42eb12, which spends d2fa6568#0 and makes one output.
+    // The fixture's transaction lists one sub transaction that spends one
+    // input and makes one output.
     const PARENT: &str = "bd1b7336a5a62005a2576658e64990fab684a641139095afc16865c371e637b4";
     const SUB: &str = "ca42eb1227f150670a8a8c7c82468ff10dd726b2aa08ac209a8b8b5530fb28c7";
     const SUB_SPENDS: &str = "d2fa6568066113f78eefdc89025b419a8e68db15eef70e9a8cbea3b4ed87d8b6";
@@ -947,7 +951,8 @@ mod tests {
         let mut stored = pending_with_sub();
         let mut first = HashSet::from([txo(SUB, 0)]);
         select_mempool_utxos(&mut first, &[stored.clone()]);
-        // A later read finds the output only when it decodes nothing, since these bytes do not decode.
+        // These bytes do not decode, so a read that still finds the output
+        // answers from the effects of the first read.
         stored.payload = undecodable();
         let mut refs = HashSet::from([txo(SUB, 0), txo(SUB_SPENDS, 0)]);
 

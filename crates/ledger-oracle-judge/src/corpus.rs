@@ -155,7 +155,8 @@ impl Corpus {
         })
     }
 
-    /// The corpus with only the kept runs that hold a record of this corpus the set names.
+    /// The corpus with only the kept runs that hold a record of this corpus
+    /// the set names.
     pub fn select(&self, named: &BTreeSet<RecordId>) -> Result<Corpus, NotKept> {
         let mine: BTreeSet<u32> = named
             .iter()

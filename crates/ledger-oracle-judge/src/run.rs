@@ -35,7 +35,8 @@ enum Made {
     Record(u32),
 }
 
-/// One output the UTxO of a run holds after some record, with the records that made and spent it.
+/// One output the UTxO of a run holds after some record, with the records that
+/// made and spent it.
 #[derive(Debug, Clone)]
 struct Life {
     entry: UtxoEntry,
@@ -44,7 +45,8 @@ struct Life {
 }
 
 impl Life {
-    /// Whether the UTxO holds the output at the start of some record numbered `first` to `last`.
+    /// Whether the UTxO holds the output at the start of some record numbered
+    /// `first` to `last`.
     fn held(&self, first: u32, last: u32) -> bool {
         let made = match self.made {
             Made::Seed => true,
@@ -54,7 +56,8 @@ impl Life {
     }
 }
 
-/// Every output the run's UTxO holds at some record, from its seed and the consumed and produced entries of each accepted record.
+/// Every output the run's UTxO holds at some record, from its seed and the
+/// consumed and produced entries of each accepted record.
 fn lives(seed: &[UtxoEntry], records: &[Record]) -> BTreeMap<TxIn, Life> {
     let mut lives: BTreeMap<TxIn, Life> = seed
         .iter()
@@ -171,7 +174,8 @@ impl KeptRun {
         made.collect()
     }
 
-    /// The origin of one input of a record, given the run's makers and the records of its slot group.
+    /// The origin of one input of a record, given the run's makers and the
+    /// records of its slot group.
     pub fn origin(
         &self,
         input: &TxIn,

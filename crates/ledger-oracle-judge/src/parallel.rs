@@ -5,7 +5,8 @@ use std::{
     thread,
 };
 
-/// The judgement of each item in item order, judged on `threads` threads that take the heaviest waiting item first.
+/// The judgement of each item in item order, judged on `threads` threads that
+/// take the heaviest waiting item first.
 pub fn in_parallel<T: Sync, R: Send>(
     items: &[T],
     threads: usize,

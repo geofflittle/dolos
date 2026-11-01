@@ -362,7 +362,8 @@ mod drift_tests {
         );
     }
 
-    /// Under the strict rule the same pots panic exactly when debug assertions are on.
+    /// Under the strict rule the same pots panic exactly when debug assertions
+    /// are on.
     #[test]
     fn strict_still_asserts_on_the_same_pots() {
         let (initial, ended) = boundary();

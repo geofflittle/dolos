@@ -107,7 +107,9 @@ impl Tip {
     }
 }
 
-/// A block at the slot whose parent is the tip, holding each transaction with its scripts flag, and the tip it makes, or the error of a transaction Dolos does not decode.
+/// A block at the slot whose parent is the tip, holding each transaction with
+/// its scripts flag, and the tip it makes, or the error of a transaction Dolos
+/// does not decode.
 pub(super) fn block(
     slot: u64,
     tip: Option<Tip>,
@@ -211,7 +213,8 @@ impl Group {
         Ok(hash)
     }
 
-    /// Validates one transaction against the group's stores and mempool without holding it.
+    /// Validates one transaction against the group's stores and mempool
+    /// without holding it.
     pub(super) fn check(&self, tx: &[u8]) -> Result<TxHash, DomainError> {
         let chain = self.domain.read_chain();
         self.domain.validate_tx(&chain, tx).map(|tx| tx.hash())

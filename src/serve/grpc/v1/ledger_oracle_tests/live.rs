@@ -142,7 +142,8 @@ fn compare_children(dir: &Path, tally: &mut Tally) {
     }
 }
 
-/// Counts the bytes of each served block against the node's immutable block at its slot.
+/// Counts the bytes of each served block against the node's immutable block at
+/// its slot.
 fn compare_blocks(dir: &Path, tally: &mut Tally) {
     let mut node = BTreeMap::new();
     for name in files(dir, "node-").iter().filter(|n| n.ends_with(".chunk")) {
@@ -179,7 +180,8 @@ fn compare_blocks(dir: &Path, tally: &mut Tally) {
     }
 }
 
-/// The value of a served output as named amounts, none when an amount is not a natural number.
+/// The value of a served output as named amounts, none when an amount is not a
+/// natural number.
 fn served_amounts(output: &cardano::TxOutput) -> Option<Amounts> {
     let amount = |value: Option<&cardano::BigInt>| Integer::served(value?)?.unsigned();
     let mut amounts = Amounts::from([("lovelace".to_string(), amount(output.coin.as_ref())?)]);
@@ -223,7 +225,9 @@ fn served_point(response: &q::ReadUtxosResponse, name: &str) -> Point {
     }
 }
 
-/// Counts the outputs of the served blocks by their values on Dolos and the node when both read them at one point, and returns how many neither holds, none when the reads name two points.
+/// Counts the outputs of the served blocks by their values on Dolos and the
+/// node when both read them at one point, and returns how many neither holds,
+/// none when the reads name two points.
 fn compare_served_utxos(dir: &Path, tally: &mut Tally) -> Option<usize> {
     let refs = fs::read_to_string(dir.join("refs.txt")).expect("LIVE refs.txt");
     let refs = refs.lines().map(|line| {

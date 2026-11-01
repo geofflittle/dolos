@@ -525,7 +525,8 @@ where
     }
 }
 
-/// The datum with this hash in the witnesses, on the outputs or in the redeemers of a transaction of the block.
+/// The datum with this hash in the witnesses, on the outputs or in the
+/// redeemers of a transaction of the block.
 fn datum_in_block(block: &MultiEraBlock, datum_hash: Hash<32>) -> Option<PlutusData> {
     for tx in block.txs() {
         let searched = crate::pallas_extras::for_each_applied_tx(&tx, |tx| {
@@ -773,7 +774,8 @@ mod tests {
         )
     }
 
-    /// A block whose transaction lists a sub transaction, with a datum added to the witnesses of the sub transaction only.
+    /// A block whose transaction lists a sub transaction, with a datum added to
+    /// the witnesses of the sub transaction only.
     fn block_with_sub_datum() -> (Vec<u8>, Hash<32>, PlutusData) {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../test_data/musashi-w36/ranking-sub-transaction.block");

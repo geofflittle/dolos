@@ -148,7 +148,8 @@ pub fn settle(tallies: &BTreeMap<LiveLocus, Tally>, known: &KnownLive) -> Settle
     settled
 }
 
-/// The bytes of one block the node's immutable database holds, with where its header is.
+/// The bytes of one block the node's immutable database holds, with where its
+/// header is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeBlock {
     pub slot: u64,
@@ -200,11 +201,14 @@ pub fn chunk_blocks(secondary: &[u8], chunk: &[u8]) -> Result<Vec<NodeBlock>, St
         .collect()
 }
 
-/// How the bytes of a block Dolos serves compare with the node's block at its slot.
+/// How the bytes of a block Dolos serves compare with the node's block at its
+/// slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockBytes {
     Same,
-    /// A block whose body holds a certificate, whose header bytes are the node's and whose body carries the endorsed transactions in place of the node's certificate body.
+    /// A block whose body holds a certificate, whose header bytes are the
+    /// node's and whose body carries the endorsed transactions in place of the
+    /// node's certificate body.
     SameHeader,
     NodeAbsent,
     HeaderDiffers,
@@ -229,7 +233,8 @@ impl BlockBytes {
     }
 }
 
-/// Compares the bytes Dolos serves for a block with the node's, the header alone for a block whose body holds a certificate.
+/// Compares the bytes Dolos serves for a block with the node's, the header
+/// alone for a block whose body holds a certificate.
 pub fn block_bytes(node: Option<&NodeBlock>, served: &[u8], certifying: bool) -> BlockBytes {
     let Some(node) = node else {
         return BlockBytes::NodeAbsent;
@@ -244,10 +249,12 @@ pub fn block_bytes(node: Option<&NodeBlock>, served: &[u8], certifying: bool) ->
     }
 }
 
-/// An output's value as named amounts, lovelace under `lovelace` and each asset under its policy and name in hex.
+/// An output's value as named amounts, lovelace under `lovelace` and each asset
+/// under its policy and name in hex.
 pub type Amounts = BTreeMap<String, u128>;
 
-/// The value of each output in the node's UTxO query answer, keyed by its reference as the query prints it.
+/// The value of each output in the node's UTxO query answer, keyed by its
+/// reference as the query prints it.
 pub fn node_amounts(answer: &serde_json::Value) -> Result<BTreeMap<String, Amounts>, String> {
     let outputs = answer
         .as_object()
@@ -305,7 +312,8 @@ pub struct Point {
     pub hash: Vec<u8>,
 }
 
-/// The points the node and Dolos held around one UTxO read on each, in the order they were read.
+/// The points the node and Dolos held around one UTxO read on each, in the
+/// order they were read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UtxoBracket {
     pub node_before: Point,
@@ -335,7 +343,8 @@ pub struct AtPoint<T> {
 }
 
 impl<T> AtPoint<T> {
-    /// Pairs the reads with the point all four bracket points name, none when two of them differ.
+    /// Pairs the reads with the point all four bracket points name, none when
+    /// two of them differ.
     pub fn new(bracket: &UtxoBracket, value: T) -> Option<Self> {
         let point = &bracket.node_before;
         let one = [
@@ -357,7 +366,8 @@ impl<T> AtPoint<T> {
     }
 }
 
-/// The outputs one UTxO read asked for, with the node's values and the values Dolos served, `None` where Dolos served one unreadably.
+/// The outputs one UTxO read asked for, with the node's values and the values
+/// Dolos served, `None` where Dolos served one unreadably.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UtxoReads {
     pub refs: Vec<String>,
@@ -365,7 +375,8 @@ pub struct UtxoReads {
     pub dolos: BTreeMap<String, Option<Amounts>>,
 }
 
-/// Counts each output asked for by its value on Dolos and the node, and returns how many neither holds.
+/// Counts each output asked for by its value on Dolos and the node, and
+/// returns how many neither holds.
 pub fn compare_utxos(reads: &AtPoint<UtxoReads>, tally: &mut Tally) -> usize {
     let slot = reads.point.slot;
     let UtxoReads { refs, node, dolos } = &reads.value;

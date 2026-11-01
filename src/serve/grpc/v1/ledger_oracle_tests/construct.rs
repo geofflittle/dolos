@@ -1,4 +1,5 @@
-//! The committed list of transaction constructs, each needing a judged record the ledger accepted.
+//! The committed list of transaction constructs, each needing a judged record
+//! the ledger accepted.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -13,7 +14,8 @@ use pallas::{
     },
 };
 
-/// The address type and spending data header that precede a bootstrap key and chain code in an address root preimage.
+/// The address type and spending data header that precede a bootstrap key and
+/// chain code in an address root preimage.
 const BOOTSTRAP_ROOT_HEADER: [u8; 6] = [0x83, 0x00, 0x82, 0x00, 0x58, 0x40];
 
 /// Whether a level is the top level body or a sub transaction body.
@@ -32,7 +34,8 @@ impl Depth {
     }
 }
 
-/// The guards and witnesses of the top level body or of one sub transaction body.
+/// The guards and witnesses of the top level body or of one sub transaction
+/// body.
 struct Level<'a> {
     guards: Option<&'a Guards>,
     required_top_level_guards: bool,
@@ -134,7 +137,8 @@ macro_rules! constructs {
         }
 
         impl Construct {
-            /// Every construct of the list at each depth where the ledger accepts it.
+            /// Every construct of the list at each depth where the ledger
+            /// accepts it.
             const ENTRIES: &'static [(Depth, Construct)] =
                 &[$($((Depth::$depth, Construct::$construct)),+),*];
 
@@ -156,7 +160,8 @@ macro_rules! constructs {
     };
 }
 
-// The ledger refuses a PlutusV1, V2 or V3 script in a sub transaction, so those witnesses are top level entries only.
+// The ledger refuses a PlutusV1, V2 or V3 script in a sub transaction, so those
+// witnesses are top level entries only.
 constructs! {
     VKeyWitness = "witness_vkey" at Top, Sub when |l| l.witnesses.vkeywitness.is_some(),
     NativeScriptWitness = "witness_native_script" at Top, Sub
@@ -222,7 +227,8 @@ pub(super) enum Answer {
     Declared { label: String },
 }
 
-/// For each construct at each depth, a judged record the ledger accepted that holds it, one Dolos agreed on when there is one.
+/// For each construct at each depth, a judged record the ledger accepted that
+/// holds it, one Dolos agreed on when there is one.
 #[derive(Debug, Default)]
 pub(super) struct Coverage(BTreeMap<(Depth, Construct), (Answer, RecordId)>);
 
@@ -246,7 +252,8 @@ impl Coverage {
         }
     }
 
-    /// The line of each construct at each depth, a count line, and whether every one has a record.
+    /// The line of each construct at each depth, a count line, and whether
+    /// every one has a record.
     pub(super) fn bar(&self) -> (Vec<String>, bool) {
         let mut lines = Vec::new();
         let (mut covered, mut agreed) = (0, 0);
@@ -363,7 +370,8 @@ mod tests {
         );
     }
 
-    /// The constructs each kept record of a corpus that pallas decodes holds, by record number.
+    /// The constructs each kept record of a corpus that pallas decodes holds,
+    /// by record number.
     fn held(kind: CorpusKind) -> Vec<(u32, BTreeSet<(Depth, Construct)>)> {
         let corpus = super::super::load(kind);
         let records = corpus.kept().flat_map(|run| run.records());

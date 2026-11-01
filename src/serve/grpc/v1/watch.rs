@@ -366,7 +366,8 @@ fn apply_predicate(predicate: &u5c::watch::TxPredicate, tx: &u5c::cardano::Tx) -
     tx_matches && !not_clause && and_clause && or_clause
 }
 
-/// The transactions of a block the request admits, each built when read, with the block mapped once and its bytes shared.
+/// The transactions of a block the request admits, each built when read, with
+/// the block mapped once and its bytes shared.
 fn block_to_txs<C: ChainReads>(
     block: &RawBlock,
     context: &C,

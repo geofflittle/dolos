@@ -89,7 +89,8 @@ pub enum CostSkip {
     Refused,
     /// The record has a declared unsupported row, so Dolos evaluates no script of it.
     Declared,
-    /// Dolos refused a maker of the record, so Dolos resolves its inputs to other outputs than the ledger.
+    /// Dolos refused a maker of the record, so Dolos resolves its inputs to
+    /// other outputs than the ledger.
     Cascade,
 }
 
@@ -124,7 +125,7 @@ impl CostTallies {
         }
     }
 
-    /// Counts the minimum fee of one record, kept when the node's differs or is missing from a record the ledger accepted, and counted apart when it is missing from a refused one or the ledger's decoder refused the bytes.
+    /// Counts the minimum fee of one record.
     pub fn add_fee(
         &mut self,
         id: impl fmt::Display,

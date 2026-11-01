@@ -147,7 +147,9 @@ pub fn estimate_tx_calls<D: Domain>(
     estimate_decoded::<D>(&tx, utxos, &pparams)
 }
 
-/// The minimum fee of a Dijkstra transaction under the active parameters, with the redeemers of its top level and sub transactions priced together, none outside Dijkstra.
+/// The minimum fee of a Dijkstra transaction under the active parameters,
+/// with the redeemers of its top level and sub transactions priced together,
+/// none outside Dijkstra.
 pub fn min_fee<D: Domain>(
     cbor: &[u8],
     utxos: &MempoolAwareUtxoStore<D>,
@@ -466,7 +468,8 @@ fn certificate_state<D: Domain>(
     use crate::model::AccountState;
     use pallas::ledger::primitives::dijkstra::Certificate;
     let mut state = CertState::default();
-    // Only withdrawals and registrations read the accounts pending transactions change.
+    // Withdrawals and registrations are the only checks that read account
+    // state pending transactions change.
     let reads_accounts = tx.as_dijkstra().filter(|native| {
         let body = &native.transaction_body;
         body.withdrawals.is_some()

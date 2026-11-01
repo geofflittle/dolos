@@ -163,7 +163,9 @@ fn parsed_differing(
     }
 }
 
-/// Counts each input and ledger entry where Dolos serves other parsed fields than the ledger, or other bytes than `written` holds there or else the ledger.
+/// Counts each input and ledger entry where Dolos serves other parsed fields
+/// than the ledger, or other bytes than `written` holds there or else the
+/// ledger.
 async fn compare_utxos<'a>(
     domain: &DomainAdapter,
     id: RecordId,
@@ -227,7 +229,8 @@ async fn read_params(domain: &DomainAdapter) -> cardano::PParams {
     }
 }
 
-/// The validation outcomes, state comparisons, cost comparisons, builtin and construct coverage, refusal inventory and manifest candidates of one corpus.
+/// The validation outcomes, state comparisons, cost comparisons, builtin and
+/// construct coverage, refusal inventory and manifest candidates of one corpus.
 #[derive(Debug, Default)]
 struct Judged {
     validation: ValidationTally,
@@ -239,7 +242,8 @@ struct Judged {
     candidates: Candidates,
 }
 
-/// The number of records each ledger failure leaf refuses that Dolos refused for the same class.
+/// The number of records each ledger failure leaf refuses that Dolos refused
+/// for the same class.
 #[derive(Debug, Default)]
 struct Inventory(BTreeMap<String, usize>);
 
@@ -302,7 +306,8 @@ impl Coverage {
     }
 }
 
-/// The audited builtins whose coverage decides the run, the rest of the audited set being reported only.
+/// The audited builtins whose coverage decides the run, the rest of the
+/// audited set being reported only.
 const ADDED_BUILTINS: [Builtin; 7] = [
     Builtin::QuotientInteger,
     Builtin::SliceByteString,
@@ -313,7 +318,8 @@ const ADDED_BUILTINS: [Builtin; 7] = [
     Builtin::DropList,
 ];
 
-/// The coverage line of each audited builtin, a count line, and whether every added builtin has a covering record.
+/// The coverage line of each audited builtin, a count line, and whether every
+/// added builtin has a covering record.
 fn builtin_bar(audited: &[Builtin], added: &[Builtin], coverage: &Coverage) -> (Vec<String>, bool) {
     let mut lines = Vec::new();
     let mut counts = [[0usize; 2]; 2];
@@ -411,7 +417,8 @@ fn node_costs(estimate: &Result<Vec<(TxEvalResult, Vec<Builtin>)>, ChainError>) 
     NodeCosts::Evaluated(evaluated.collect())
 }
 
-/// Counts the minimum fee Dolos computes for one record against the ledger's, and the redeemer evaluations of each level and the builtins each redeemer both ran alike in a phase two valid record, when the ledger accepted the record and no row declares it, each only when Dolos took every maker of the record.
+/// Counts the minimum fee and the redeemer evaluations Dolos computes for one
+/// record against the ledger's.
 fn compare_cost(
     group: &validate::Group,
     id: RecordId,
@@ -541,7 +548,9 @@ fn producible(id: RecordId, record: &Record) -> Vec<TxIn> {
     refs.collect()
 }
 
-/// The bytes of each output a record's transaction and sub transactions write, its collateral return at the index after its outputs, none when the transaction does not decode.
+/// The bytes of each output a record's transaction and sub transactions write,
+/// its collateral return at the index after its outputs, none when the
+/// transaction does not decode.
 fn written(record: &Record) -> BTreeMap<TxIn, Vec<u8>> {
     let Ok(tx) = MultiEraTx::decode_for_era(Era::Dijkstra, &record.tx.0) else {
         return BTreeMap::new();
@@ -614,7 +623,8 @@ fn missing_from_makers<'r>(
     missing
 }
 
-/// A block a run rolled, with the records it holds, their slot group, and its first record when Dolos accepted that record on submission.
+/// A block a run rolled, with the records it holds, their slot group, and its
+/// first record when Dolos accepted that record on submission.
 struct Rolled<'r> {
     point: ChainPoint,
     group: &'r [Record],
@@ -685,7 +695,8 @@ async fn validate_run<'r>(
             compare_cost(&group, id, record, declared, cascade, cost, coverage);
             let submit = |group: &validate::Group| match record.phase2_valid {
                 Phase2::Valid => group.receive(&record.tx.0),
-                // A submitted transaction carries no flag, so one the ledger reads under a false flag is validated and never held.
+                // A submitted transaction carries no flag, so one the ledger
+                // reads under a false flag is validated and never held.
                 Phase2::Invalid => group.check(&record.tx.0),
             };
             let dolos = validate::verdict(&submit(&group));
@@ -763,7 +774,8 @@ async fn validate_run<'r>(
                     cause,
                 });
                 blocks.push(GroupBlock::Failed);
-                // A failed block leaves the tip where it was, so the next block names that parent.
+                // A failed block leaves the tip where it was, so the next
+                // block names that parent.
                 continue;
             }
         };
@@ -1461,7 +1473,9 @@ fn hold_dependents(
     held
 }
 
-/// Queues the block's requeued record unvalidated, behind the held dependents, since the ledger accepted it in the state the rollback of that block restores.
+/// Queues the block's requeued record unvalidated, behind the held dependents,
+/// since the ledger accepted it in the state the rollback of that block
+/// restores.
 fn hold_undone(
     domain: &DomainAdapter,
     kind: CorpusKind,
@@ -1483,7 +1497,8 @@ fn hold_undone(
     Some((rid, hash))
 }
 
-/// Rolls a run back one block at a time to its seed point, counting what FollowTip and WatchTx serve for each undone input, what ReadUtxos serves for the inputs earlier blocks made, what revalidation keeps and drops, and the seed outputs and accounts Dolos holds at the end.
+/// Rolls a run back to its seed point one block at a time and adds what each
+/// step serves to `state`.
 async fn sweep(
     domain: &DomainAdapter,
     seed: &SeedPoint,
@@ -1601,7 +1616,8 @@ impl Default for Edits<'_> {
     }
 }
 
-/// The judgement of one kept run, the records it judged and the served output and account comparisons of each of its records.
+/// The judgement of one kept run, the records it judged and the served output
+/// and account comparisons of each of its records.
 #[derive(Default)]
 struct RunJudged {
     judged: Judged,
@@ -1681,7 +1697,8 @@ async fn judge_run(
     part
 }
 
-/// Judges every kept run of a corpus, each seeded from its first pre state, on one thread per core.
+/// Judges every kept run of a corpus, each seeded from its first pre state, on
+/// one thread per core.
 async fn judge(corpus: &Corpus, manifests: &Manifests, edits: &Edits<'_>) -> Judged {
     let genesis = seed::genesis(epoch_size(corpus));
     let runs: Vec<&KeptRun> = corpus.kept().collect();

@@ -110,7 +110,8 @@ impl gasket::framework::Worker<Stage> for Worker {
 /// The most housekeeping rounds one tick runs.
 const MAX_ROUNDS_PER_TICK: u64 = 10;
 
-/// The pruning one housekeeping tick does, at most `MAX_ROUNDS_PER_TICK` rounds.
+/// The pruning one housekeeping tick does, at most `MAX_ROUNDS_PER_TICK`
+/// rounds.
 fn housekeeping_tick<D: Domain>(domain: &D) -> Result<(), DomainError> {
     domain.drain_housekeeping(Some(MAX_ROUNDS_PER_TICK))?;
     Ok(())
@@ -126,7 +127,8 @@ mod tests {
 
     const MAX_ROLLBACK: u64 = 1_000;
 
-    /// A domain whose wal holds one entry for each slot in `slots`, with `max_rollback` set.
+    /// A domain whose wal holds one entry for each slot in `slots`, with
+    /// `max_rollback` set.
     fn domain_with_wal(slots: std::ops::Range<u64>) -> ToyDomain {
         let mut config = SyncConfig::default();
         config.max_rollback = Some(MAX_ROLLBACK);

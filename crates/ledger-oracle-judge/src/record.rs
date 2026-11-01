@@ -210,7 +210,8 @@ impl From<(TxIn, Bytes)> for UtxoEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Pre {
-    /// The UTxO, written whole because it is not the one the previous record left.
+    /// The UTxO, written whole because it is not the one the previous record
+    /// left.
     Fresh(Vec<UtxoEntry>),
     /// The UTxO the previous record left.
     FollowsPrev,
