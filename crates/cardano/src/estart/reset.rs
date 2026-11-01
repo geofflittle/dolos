@@ -362,14 +362,25 @@ mod drift_tests {
         );
     }
 
-    /// Under the strict rule the consistency assertion panics on the same
-    /// pots.
+    /// Under the strict rule the same pots panic exactly when debug assertions are on.
     #[test]
-    #[should_panic(expected = "is_consistent")]
     fn strict_still_asserts_on_the_same_pots() {
         let (initial, ended) = boundary();
 
-        report_drift(false, 42, &initial, &ended, || {});
+        let panic = std::panic::catch_unwind(|| report_drift(false, 42, &initial, &ended, || {}))
+            .err()
+            .map(|payload| match payload.downcast::<String>() {
+                Ok(message) => *message,
+                Err(payload) => payload
+                    .downcast::<&str>()
+                    .map(|message| message.to_string())
+                    .unwrap_or_default(),
+            });
+
+        if let Some(message) = &panic {
+            assert!(message.contains("is_consistent"), "{message}");
+        }
+        assert_eq!(panic.is_some(), cfg!(debug_assertions));
     }
 
     /// The guard the two epoch transition deltas assert through lets a drifted
