@@ -249,56 +249,26 @@ pub fn block_bytes(node: Option<&NodeBlock>, served: &[u8], certifying: bool) ->
     }
 }
 
-/// An output's value as named amounts, lovelace under `lovelace` and each asset
-/// under its policy and name in hex.
-pub type Amounts = BTreeMap<String, u128>;
-
-/// The value of each output in the node's UTxO query answer, keyed by its
-/// reference as the query prints it.
-pub fn node_amounts(answer: &serde_json::Value) -> Result<BTreeMap<String, Amounts>, String> {
-    let outputs = answer
-        .as_object()
-        .ok_or("the UTxO answer is not an object")?;
-    outputs
-        .iter()
-        .map(|(reference, output)| {
-            let value = output["value"]
-                .as_object()
-                .ok_or(format!("{reference} has no value"))?;
-            let mut amounts = Amounts::new();
-            for (key, amount) in value {
-                match amount {
-                    serde_json::Value::Number(n) => {
-                        let n = n.as_u64().ok_or(format!("{reference} {key}={n}"))?;
-                        amounts.insert(key.clone(), u128::from(n));
-                    }
-                    serde_json::Value::Object(assets) => {
-                        for (name, n) in assets {
-                            let n = n.as_u64().ok_or(format!("{reference} {key}.{name}={n}"))?;
-                            amounts.insert(format!("{key}.{name}"), u128::from(n));
-                        }
-                    }
-                    other => return Err(format!("{reference} {key}={other}")),
-                }
-            }
-            Ok((reference.clone(), amounts))
-        })
-        .collect()
-}
-
 /// How one output reference compares between Dolos and the node's UTxO query.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UtxoPresence {
-    Both { same: bool },
+    Both { differing: Vec<String> },
     NodeOnly,
     DolosOnly,
     Neither,
 }
 
-/// Compares an output Dolos serves with the node's, by value when both hold it.
-pub fn utxo_presence(node: Option<&Amounts>, dolos: Option<&Amounts>) -> UtxoPresence {
+/// Compares an output Dolos serves with the node's, by the fields `differing`
+/// names when both hold it.
+pub fn utxo_presence<N, D>(
+    node: Option<&N>,
+    dolos: Option<&D>,
+    differing: impl Fn(&N, &D) -> Vec<String>,
+) -> UtxoPresence {
     match (node, dolos) {
-        (Some(n), Some(d)) => UtxoPresence::Both { same: n == d },
+        (Some(n), Some(d)) => UtxoPresence::Both {
+            differing: differing(n, d),
+        },
         (Some(_), None) => UtxoPresence::NodeOnly,
         (None, Some(_)) => UtxoPresence::DolosOnly,
         (None, None) => UtxoPresence::Neither,
@@ -366,18 +336,22 @@ impl<T> AtPoint<T> {
     }
 }
 
-/// The outputs one UTxO read asked for, with the node's values and the values
+/// The outputs one UTxO read asked for, with the node's outputs and the outputs
 /// Dolos served, `None` where Dolos served one unreadably.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UtxoReads {
+pub struct UtxoReads<N, D> {
     pub refs: Vec<String>,
-    pub node: BTreeMap<String, Amounts>,
-    pub dolos: BTreeMap<String, Option<Amounts>>,
+    pub node: BTreeMap<String, N>,
+    pub dolos: BTreeMap<String, Option<D>>,
 }
 
-/// Counts each output asked for by its value on Dolos and the node, and
-/// returns how many neither holds.
-pub fn compare_utxos(reads: &AtPoint<UtxoReads>, tally: &mut Tally) -> usize {
+/// Counts each output asked for by the fields `differing` names between Dolos
+/// and the node, and returns how many neither holds.
+pub fn compare_utxos<N, D>(
+    reads: &AtPoint<UtxoReads<N, D>>,
+    tally: &mut Tally,
+    differing: impl Fn(&N, &D) -> Vec<String>,
+) -> usize {
     let slot = reads.point.slot;
     let UtxoReads { refs, node, dolos } = &reads.value;
     let mut neither = 0;
@@ -385,15 +359,17 @@ pub fn compare_utxos(reads: &AtPoint<UtxoReads>, tally: &mut Tally) -> usize {
         let show = |presence: &str| format!("utxo={key} {presence} point={slot}");
         let served = match dolos.get(key) {
             None => None,
-            Some(Some(amounts)) => Some(amounts),
+            Some(Some(output)) => Some(output),
             Some(None) => {
                 tally.add(false, || show("dolos=unreadable"));
                 continue;
             }
         };
-        match utxo_presence(node.get(key), served) {
+        match utxo_presence(node.get(key), served, &differing) {
             UtxoPresence::Neither => neither += 1,
-            UtxoPresence::Both { same } => tally.add(same, || show("values=differ")),
+            UtxoPresence::Both { differing } => tally.add(differing.is_empty(), || {
+                show(&format!("differing={}", differing.join(",")))
+            }),
             UtxoPresence::NodeOnly => tally.add(false, || show("dolos=absent")),
             UtxoPresence::DolosOnly => tally.add(false, || show("node=absent")),
         }
@@ -467,41 +443,30 @@ mod tests {
         assert!(!BlockBytes::NodeAbsent.agrees());
     }
 
-    #[test]
-    fn node_utxo_values_read_as_named_amounts() {
-        let answer = serde_json::json!({
-            "ab#0": {"address": "addr", "value": {"lovelace": 5, "cd": {"ef": 2, "": 1}}},
-            "ab#1": {"value": {"lovelace": 7}},
-        });
-        let amounts = node_amounts(&answer).unwrap();
-        assert_eq!(
-            amounts["ab#0"],
-            Amounts::from([
-                ("lovelace".into(), 5),
-                ("cd.ef".into(), 2),
-                ("cd.".into(), 1)
-            ])
-        );
-        assert_eq!(amounts["ab#1"], Amounts::from([("lovelace".into(), 7)]));
-        assert!(node_amounts(&serde_json::json!({"ab#0": {}})).is_err());
-        assert!(node_amounts(&serde_json::json!({"ab#0": {"value": {"lovelace": "x"}}})).is_err());
+    /// Names `coin` when two coins differ.
+    fn coin(node: &u64, dolos: &u64) -> Vec<String> {
+        if node == dolos {
+            Vec::new()
+        } else {
+            vec!["coin".to_string()]
+        }
     }
 
     #[test]
-    fn an_output_agrees_only_when_both_hold_the_same_value() {
-        let five = Amounts::from([("lovelace".into(), 5)]);
-        let six = Amounts::from([("lovelace".into(), 6)]);
+    fn an_output_both_hold_names_the_fields_that_differ() {
         assert_eq!(
-            utxo_presence(Some(&five), Some(&five)),
-            UtxoPresence::Both { same: true }
+            utxo_presence(Some(&5), Some(&5), coin),
+            UtxoPresence::Both { differing: vec![] }
         );
         assert_eq!(
-            utxo_presence(Some(&five), Some(&six)),
-            UtxoPresence::Both { same: false }
+            utxo_presence(Some(&5), Some(&6), coin),
+            UtxoPresence::Both {
+                differing: vec!["coin".to_string()]
+            }
         );
-        assert_eq!(utxo_presence(Some(&five), None), UtxoPresence::NodeOnly);
-        assert_eq!(utxo_presence(None, Some(&five)), UtxoPresence::DolosOnly);
-        assert_eq!(utxo_presence(None, None), UtxoPresence::Neither);
+        assert_eq!(utxo_presence(Some(&5), None, coin), UtxoPresence::NodeOnly);
+        assert_eq!(utxo_presence(None, Some(&5), coin), UtxoPresence::DolosOnly);
+        assert_eq!(utxo_presence(None, None, coin), UtxoPresence::Neither);
     }
 
     fn tip() -> NodeTip {
@@ -674,14 +639,10 @@ mod tests {
         );
     }
 
-    fn lovelace(n: u128) -> Amounts {
-        Amounts::from([("lovelace".into(), n)])
-    }
-
-    fn reads(node: &[(&str, u128)], dolos: &[(&str, Option<u128>)]) -> AtPoint<UtxoReads> {
+    fn reads(node: &[(&str, u64)], dolos: &[(&str, Option<u64>)]) -> AtPoint<UtxoReads<u64, u64>> {
         let refs = ["a#0", "a#1", "b#0"].map(String::from).to_vec();
-        let node = node.iter().map(|(r, n)| (r.to_string(), lovelace(*n)));
-        let dolos = dolos.iter().map(|(r, n)| (r.to_string(), n.map(lovelace)));
+        let node = node.iter().map(|(r, n)| (r.to_string(), *n));
+        let dolos = dolos.iter().map(|(r, n)| (r.to_string(), *n));
         let reads = UtxoReads {
             refs,
             node: node.collect(),
@@ -697,31 +658,31 @@ mod tests {
             &[("a#0", 5), ("b#0", 2)],
             &[("a#0", Some(5)), ("b#0", Some(2))],
         );
-        assert_eq!(compare_utxos(&both, &mut t), 1);
+        assert_eq!(compare_utxos(&both, &mut t, coin), 1);
         assert_eq!(t, tally(2, &[]));
     }
 
     #[test]
-    fn an_output_one_side_lacks_or_values_differently_disagrees() {
+    fn an_output_one_side_lacks_or_states_differently_disagrees() {
         let mut t = Tally::default();
         let read = reads(
             &[("a#0", 5), ("a#1", 3)],
             &[("a#0", Some(6)), ("b#0", Some(2)), ("a#1", None)],
         );
-        assert_eq!(compare_utxos(&read, &mut t), 0);
+        assert_eq!(compare_utxos(&read, &mut t, coin), 0);
         assert_eq!(
             t,
             tally(
                 3,
                 &[
-                    "utxo=a#0 values=differ point=9",
+                    "utxo=a#0 differing=coin point=9",
                     "utxo=a#1 dolos=unreadable point=9",
                     "utxo=b#0 node=absent point=9",
                 ]
             )
         );
         let mut t = Tally::default();
-        compare_utxos(&reads(&[("b#0", 2)], &[]), &mut t);
+        compare_utxos(&reads(&[("b#0", 2)], &[]), &mut t, coin);
         assert_eq!(t, tally(1, &["utxo=b#0 dolos=absent point=9"]));
     }
 }

@@ -5,13 +5,18 @@ use std::{
 };
 
 use ledger_oracle_judge::{
+    cbor::TxIn,
     compare::Tally,
     live::{
-        block_bytes, chunk_blocks, compare_utxos, era_name, node_amounts, settle, Aligned, Amounts,
-        AtPoint, NodeTip, Point, UtxoBracket, UtxoReads,
+        block_bytes, chunk_blocks, compare_utxos, era_name, settle, Aligned, AtPoint, NodeTip,
+        Point, UtxoBracket, UtxoReads,
     },
     manifest::{self, Candidates, Known, LiveLocus},
     record::PParams,
+};
+use pallas::{
+    codec::minicbor,
+    ledger::traverse::{self, Era, MultiEraTx},
 };
 use serde::de::DeserializeOwned;
 
@@ -21,8 +26,7 @@ use super::super::spec::{
     sync::{self as s, any_chain_block},
 };
 use super::{
-    output::Integer,
-    params,
+    output, params,
     serve::{add_block, add_tx, Served},
     show_input,
 };
@@ -180,22 +184,119 @@ fn compare_blocks(dir: &Path, tally: &mut Tally) {
     }
 }
 
-/// The value of a served output as named amounts, none when an amount is not a
-/// natural number.
-fn served_amounts(output: &cardano::TxOutput) -> Option<Amounts> {
-    let amount = |value: Option<&cardano::BigInt>| Integer::served(value?)?.unsigned();
-    let mut amounts = Amounts::from([("lovelace".to_string(), amount(output.coin.as_ref())?)]);
-    for policy in &output.assets {
-        for asset in &policy.assets {
-            let key = format!(
-                "{}.{}",
-                hex::encode(&policy.policy_id),
-                hex::encode(&asset.name)
-            );
-            amounts.insert(key, amount(asset.quantity.as_ref())?);
+/// The fields of a served output that state other values than the output
+/// bytes hold.
+fn fields(ledger: &[u8], served: &cardano::TxOutput) -> Vec<String> {
+    match output::differing(ledger, served) {
+        Ok(fields) => fields.iter().map(ToString::to_string).collect(),
+        Err(e) => vec![format!("undecodable({e})")],
+    }
+}
+
+/// The bytes of each output in the node's UTxO query answer, keyed by its
+/// reference as `hash#index`.
+fn node_outputs(cbor: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, minicbor::decode::Error> {
+    let mut d = minicbor::Decoder::new(cbor);
+    let len = d.map()?;
+    let mut outputs = BTreeMap::new();
+    let mut read = 0;
+    loop {
+        match len {
+            Some(len) if read == len => break,
+            None if d.datatype()? == minicbor::data::Type::Break => break,
+            _ => read += 1,
+        }
+        d.array()?;
+        let hash = hex::encode(d.bytes()?);
+        let index = d.u64()?;
+        let start = d.position();
+        d.skip()?;
+        let output = cbor[start..d.position()].to_vec();
+        outputs.insert(format!("{hash}#{index}"), output);
+    }
+    Ok(outputs)
+}
+
+/// The output bytes of a transaction and of each of its sub transactions,
+/// keyed by `hash#index` with each hash computed from the bytes.
+fn authenticated_outputs(native: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, traverse::Error> {
+    let tx = MultiEraTx::decode_for_era(Era::Dijkstra, native)
+        .or_else(|_| MultiEraTx::decode(native))?;
+    let mut outputs = BTreeMap::new();
+    for tx in std::iter::once(tx.clone()).chain(tx.sub_transactions()) {
+        let hash = hex::encode(tx.hash());
+        for (index, output) in tx.outputs().iter().enumerate() {
+            outputs.insert(format!("{hash}#{index}"), output.encode());
         }
     }
-    Some(amounts)
+    Ok(outputs)
+}
+
+/// The outputs the transactions in the producer reads hold, keyed by
+/// `hash#index` with each hash computed from the served bytes.
+fn producer_outputs(dir: &Path) -> BTreeMap<String, Vec<u8>> {
+    let mut outputs = BTreeMap::new();
+    for name in files(dir, "producer-") {
+        let response: q::ReadTxResponse = read(dir, &name);
+        let native = response.tx.map(|t| t.native_bytes).unwrap_or_default();
+        match authenticated_outputs(&native) {
+            Ok(read) => outputs.extend(read),
+            Err(e) => println!("LIVE {name} undecodable {e}"),
+        }
+    }
+    outputs
+}
+
+/// Counts one served `asOutput` against the output bytes its input names.
+fn judge_as_output(
+    producers: &BTreeMap<String, Vec<u8>>,
+    name: &str,
+    input: &TxIn,
+    served: &cardano::TxOutput,
+    tally: &mut Tally,
+) {
+    let key = show_input(input);
+    match producers.get(&key) {
+        None => tally.add(false, || format!("{name} input={key} producer=absent")),
+        Some(ledger) => {
+            let differing = fields(ledger, served);
+            tally.add(differing.is_empty(), || {
+                format!("{name} input={key} differing={}", differing.join(","))
+            });
+        }
+    }
+}
+
+/// Counts each output FetchBlock and ReadTx serve for an input of a batch
+/// transaction against the producing transaction's output bytes.
+fn compare_as_outputs(dir: &Path, tally: &mut Tally) {
+    let producers = producer_outputs(dir);
+    let mut reads = Vec::new();
+    for name in files(dir, "tx-") {
+        let response: q::ReadTxResponse = read(dir, &name);
+        let mut served = Served::new();
+        if let Some(any_chain_tx::Chain::Cardano(tx)) = response.tx.and_then(|t| t.chain) {
+            add_tx(&mut served, &tx);
+        }
+        reads.push((name, served));
+    }
+    for name in files(dir, "block-") {
+        let response: s::FetchBlockResponse = read(dir, &name);
+        let mut served = Served::new();
+        if let Some(block) = &response.block {
+            add_block(&mut served, block);
+            let batches = batch_hashes(block);
+            served.retain(|hash, _| batches.contains(hash));
+        }
+        reads.push((name, served));
+    }
+    for (name, served) in &reads {
+        for (input, output) in served.values().flatten() {
+            if let Some(output) = output {
+                judge_as_output(&producers, name, input, output, tally);
+            }
+        }
+    }
 }
 
 /// The point a node tip query names.
@@ -225,7 +326,7 @@ fn served_point(response: &q::ReadUtxosResponse, name: &str) -> Point {
     }
 }
 
-/// Counts the outputs of the served blocks by their values on Dolos and the
+/// Counts the outputs of the served blocks by their fields on Dolos and the
 /// node when both read them at one point, and returns how many neither holds,
 /// none when the reads name two points.
 fn compare_served_utxos(dir: &Path, tally: &mut Tally) -> Option<usize> {
@@ -237,7 +338,9 @@ fn compare_served_utxos(dir: &Path, tally: &mut Tally) -> Option<usize> {
         };
         format!("{hash}#{index}")
     });
-    let node = node_amounts(&read(dir, "node-utxo.json")).unwrap_or_else(|e| panic!("LIVE {e}"));
+    let hex_text = fs::read_to_string(dir.join("node-utxo.cbor")).expect("LIVE node-utxo.cbor");
+    let cbor = hex::decode(hex_text.trim()).unwrap_or_else(|e| panic!("LIVE node-utxo.cbor {e}"));
+    let node = node_outputs(&cbor).unwrap_or_else(|e| panic!("LIVE node-utxo.cbor {e}"));
     let served: q::ReadUtxosResponse = read(dir, "utxos.json");
     let bracket = UtxoBracket {
         node_before: node_point(dir, "node-utxo-tip-before.json"),
@@ -250,10 +353,9 @@ fn compare_served_utxos(dir: &Path, tally: &mut Tally) -> Option<usize> {
         let txo = item
             .txo_ref
             .expect("LIVE a served UTxO names its reference");
-        let output = match item.parsed_state {
-            Some(q::any_utxo_data::ParsedState::Cardano(output)) => served_amounts(&output),
-            None => None,
-        };
+        let output = item
+            .parsed_state
+            .map(|q::any_utxo_data::ParsedState::Cardano(output)| output);
         dolos.insert(format!("{}#{}", hex::encode(&txo.hash), txo.index), output);
     }
     let reads = UtxoReads {
@@ -262,7 +364,9 @@ fn compare_served_utxos(dir: &Path, tally: &mut Tally) -> Option<usize> {
         dolos,
     };
     match AtPoint::new(&bracket, reads) {
-        Some(reads) => Some(compare_utxos(&reads, tally)),
+        Some(reads) => Some(compare_utxos(&reads, tally, |node, served| {
+            fields(node, served)
+        })),
         None => {
             tally.add(false, || format!("utxo reads at two points {bracket}"));
             None
@@ -308,6 +412,7 @@ fn live() {
     let era = tallies.entry(LiveLocus::EraSummary).or_default();
     era.add(verdict.agrees(), || verdict.to_string());
     compare_children(&dir, tallies.entry(LiveLocus::ChildAsOutput).or_default());
+    compare_as_outputs(&dir, tallies.entry(LiveLocus::ChildAsOutput).or_default());
     compare_blocks(&dir, tallies.entry(LiveLocus::Block).or_default());
     let spent = compare_served_utxos(&dir, tallies.entry(LiveLocus::Utxo).or_default());
     println!(
@@ -336,4 +441,70 @@ fn live() {
     }
     println!("LIVE RESULT {}", if settled.pass { "PASS" } else { "FAIL" });
     assert!(settled.pass, "the live comparisons disagree");
+}
+
+#[cfg(test)]
+mod tests {
+    use ledger_oracle_judge::{corpus, record::CorpusKind};
+
+    use super::*;
+
+    const NODE_ANSWER: &str =
+        "a18258200021fc925172ee50e1b095d94d3460e9bfecbd5cbce8b7783fc3bb4d0dc25641\
+        0082581d60ee43965ca7686881c92d9b2ea91d9fee7fdd152e0b96643482f06dbf1b000000024e80d2c0";
+    const KEY: &str = "0021fc925172ee50e1b095d94d3460e9bfecbd5cbce8b7783fc3bb4d0dc25641#0";
+    const OUTPUT: &str =
+        "82581d60ee43965ca7686881c92d9b2ea91d9fee7fdd152e0b96643482f06dbf1b000000024e80d2c0";
+
+    #[test]
+    fn a_node_answer_keys_each_output_bytes_by_its_reference() {
+        let definite = hex::decode(NODE_ANSWER).unwrap();
+        let outputs = node_outputs(&definite).unwrap();
+        let expected = BTreeMap::from([(KEY.to_string(), hex::decode(OUTPUT).unwrap())]);
+        assert_eq!(outputs, expected);
+        let indefinite = [&[0xbf], &definite[1..], &[0xff]].concat();
+        assert_eq!(node_outputs(&indefinite).unwrap(), expected);
+        assert!(node_outputs(&definite[..definite.len() - 1]).is_err());
+    }
+
+    #[test]
+    fn a_served_output_agrees_only_with_the_fields_the_node_bytes_hold() {
+        let node = hex::decode(OUTPUT).unwrap();
+        let served = output::mapped(&node);
+        assert_eq!(fields(&node, &served), Vec::<String>::new());
+        let mut moved = served.clone();
+        moved.address = vec![0x60; 29].into();
+        assert_eq!(fields(&node, &moved), vec!["address"]);
+    }
+
+    #[test]
+    fn an_as_output_agrees_only_with_the_output_its_input_hash_authenticates() {
+        let corpus = corpus::load(CorpusKind::Supp).unwrap_or_else(|e| panic!("{e}"));
+        let record = corpus.kept().flat_map(|run| run.records()).next().unwrap();
+        let tx = MultiEraTx::decode_for_era(Era::Dijkstra, &record.tx.0).unwrap();
+        let producers = authenticated_outputs(&record.tx.0).unwrap();
+        let input = TxIn {
+            tx: *tx.hash(),
+            ix: 0,
+        };
+        let served = output::mapped(&producers[&show_input(&input)]);
+        let mut t = Tally::default();
+        judge_as_output(&producers, "block", &input, &served, &mut t);
+        assert_eq!((t.compared, t.disagree.len()), (1, 0));
+
+        let mut moved = served.clone();
+        moved.address = vec![0x60; 29].into();
+        judge_as_output(&producers, "block", &input, &moved, &mut t);
+        let unclaimed = TxIn { tx: [0; 32], ix: 0 };
+        judge_as_output(&producers, "block", &unclaimed, &served, &mut t);
+        let key = show_input(&input);
+        let zero = show_input(&unclaimed);
+        assert_eq!(
+            t.disagree,
+            [
+                format!("block input={key} differing=address"),
+                format!("block input={zero} producer=absent"),
+            ]
+        );
+    }
 }

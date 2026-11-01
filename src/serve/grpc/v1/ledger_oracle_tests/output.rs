@@ -39,7 +39,7 @@ impl fmt::Display for OutputField {
 
 /// An integer as CBOR states it, its sign and the big endian magnitude, without leading zeros, of the value when nonnegative or of minus one minus the value when negative.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct Integer {
+struct Integer {
     negative: bool,
     magnitude: Vec<u8>,
 }
@@ -62,23 +62,13 @@ impl Integer {
     }
 
     /// The integer a served big integer states, none when the message states none.
-    pub(super) fn served(value: &cardano::BigInt) -> Option<Self> {
+    fn served(value: &cardano::BigInt) -> Option<Self> {
         use cardano::big_int::BigInt as B;
         match value.big_int.as_ref()? {
             B::Int(i) => Some(Integer::of((*i).into())),
             B::BigUInt(bytes) => Some(Integer::from_bytes(false, bytes)),
             B::BigNInt(bytes) => Some(Integer::from_bytes(true, bytes)),
         }
-    }
-
-    /// The value of the integer when it is nonnegative and fits 128 bits.
-    pub(super) fn unsigned(&self) -> Option<u128> {
-        let fits = !self.negative && self.magnitude.len() <= 16;
-        let value = self
-            .magnitude
-            .iter()
-            .fold(0, |a, b| a << 8 | u128::from(*b));
-        fits.then_some(value)
     }
 }
 
@@ -391,33 +381,42 @@ pub(super) fn differing(
     Ok(differing.map(|(name, _)| name).collect())
 }
 
+/// A ledger context that resolves nothing.
+#[cfg(test)]
+#[derive(Clone)]
+struct Unresolved;
+
+#[cfg(test)]
+impl pallas::interop::utxorpc::LedgerContext for Unresolved {
+    fn get_utxos(
+        &self,
+        _: &[pallas::interop::utxorpc::TxoRef],
+    ) -> Option<pallas::interop::utxorpc::UtxoMap> {
+        None
+    }
+
+    fn get_slot_timestamp(&self, _: u64) -> Option<u64> {
+        None
+    }
+}
+
+/// The output Dolos serves for Dijkstra output bytes.
+#[cfg(test)]
+pub(super) fn mapped(bytes: &[u8]) -> cardano::TxOutput {
+    use pallas::ledger::traverse::{Era, MultiEraOutput};
+    let output = MultiEraOutput::decode(Era::Dijkstra, bytes).unwrap();
+    pallas::interop::utxorpc::v1::Mapper::new(Unresolved).map_tx_output(&output, None)
+}
+
 #[cfg(test)]
 mod tests {
     use ledger_oracle_judge::{
         corpus,
         record::{CorpusKind, LedgerOutcome},
     };
-    use pallas::{
-        interop::utxorpc::{v1::Mapper, LedgerContext, TxoRef, UtxoMap},
-        ledger::traverse::{Era, MultiEraOutput},
-    };
     use std::collections::BTreeSet;
 
     use super::*;
-
-    /// A ledger context that resolves nothing.
-    #[derive(Clone)]
-    struct Unresolved;
-
-    impl LedgerContext for Unresolved {
-        fn get_utxos(&self, _: &[TxoRef]) -> Option<UtxoMap> {
-            None
-        }
-
-        fn get_slot_timestamp(&self, _: u64) -> Option<u64> {
-            None
-        }
-    }
 
     /// Every output the accepted records of both corpora leave in the ledger state.
     fn ledger_outputs() -> Vec<Vec<u8>> {
@@ -444,11 +443,6 @@ mod tests {
         Some(cardano::BigInt {
             big_int: Some(value),
         })
-    }
-
-    fn mapped(bytes: &[u8]) -> cardano::TxOutput {
-        let output = MultiEraOutput::decode(Era::Dijkstra, bytes).unwrap();
-        Mapper::new(Unresolved).map_tx_output(&output, None)
     }
 
     /// The CBOR byte string of fewer than 256 bytes.

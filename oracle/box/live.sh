@@ -45,7 +45,14 @@ produced() {
     (.subTransactions[]? | "\(.hash) \(.outputs | length)")' "$1"
 }
 
-CHUNK_SLOTS=$((10 * $(jq -r .securityParam "$SERVE_CONFIG/shelley-genesis.json")))
+# The base64 hash of each transaction an input of a batch transaction of a served block names, once each.
+producers() {
+  jq -r '.block.cardano.body.tx[] | select(.subTransactions) |
+    (.common.inputs[]?, .common.referenceInputs[]?, .collateral.collateral[]?,
+      (.subTransactions[] | .inputs[]?, .referenceInputs[]?)) | .txHash' "$1" | sort -u
+}
+
+CHUNK_SLOTS=$((10 *$(jq -r .securityParam "$SERVE_CONFIG/shelley-genesis.json")))
 echo "$LABEL" >"$DIR/image.txt"
 query_node tip node-tip-before.json
 read_endpoint sync.SyncService/ReadTip '{}' tip.json
@@ -63,6 +70,14 @@ for slot in $BATCH_SLOTS; do
     read_endpoint query.QueryService/ReadTx "{\"hash\":\"$hash\"}" "tx-$slot-$n.json"
     n=$((n + 1))
   done
+  # The transactions that produced the outputs the batch transactions spend or
+  # reference, whose bytes the judge checks against their hashes.
+  for hash in $(producers "$DIR/block-$slot.json"); do
+    hex=$(printf '%s' "$hash" | base64 -d | od -An -v -tx1 | tr -d ' \n')
+    [ -f "$DIR/producer-$hex.json" ] ||
+      read_endpoint query.QueryService/ReadTx "{\"hash\":\"$hash\"}" "producer-$hex.json" ||
+      rm -f "$DIR/producer-$hex.json"
+  done
   produced "$DIR/block-$slot.json" | while read -r hash outputs; do
     hex=$(printf '%s' "$hash" | base64 -d | od -An -v -tx1 | tr -d ' \n')
     i=0
@@ -79,7 +94,9 @@ while :; do
   query_node tip node-utxo-tip-before.json
   read_endpoint query.QueryService/ReadUtxos '{"keys":[]}' utxos-tip-before.json
   read_endpoint query.QueryService/ReadUtxos "{\"keys\":[$keys]}" utxos.json
-  query_node utxo node-utxo.json --output-json $(awk '{ printf "--tx-in %s#%s ", $2, $3 }' "$DIR/refs.txt")
+  txins=$(awk '{ printf "--tx-in %s#%s ", $2, $3 }' "$DIR/refs.txt")
+  query_node utxo node-utxo.json --output-json $txins
+  query_node utxo node-utxo.cbor --output-cbor-hex $txins
   query_node tip node-utxo-tip-after.json
   slots=$(jq -r '.slot // .ledgerTip.slot' "$DIR/node-utxo-tip-before.json" "$DIR/utxos-tip-before.json" \
     "$DIR/utxos.json" "$DIR/node-utxo-tip-after.json" | sort -u | wc -l | tr -dc 0-9)
