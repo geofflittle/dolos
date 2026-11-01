@@ -20,6 +20,16 @@ case $OUT in
   "$ROOT"/*) ;;
   *) echo "REFUSED OUT=$OUT is outside $ROOT" ; exit 2 ;;
 esac
+# The tier runs the scripts and plants of the commit it judges, from that
+# commit's oracle/box in $OUT/box.
+if [ -z "${JUDGED:-}" ]; then
+  JUDGED=$(git -C "$ROOT/dolos.git" rev-parse --verify "$REV^{commit}")
+  mkdir -p "$OUT/box"
+  git -C "$ROOT/dolos.git" archive "$JUDGED" oracle/box | tar -x -C "$OUT/box"
+  REV=$JUDGED
+  export JUDGED REV ROOT OUT
+  exec sh "$OUT/box/oracle/box/run.sh" "$@"
+fi
 export ROOT REV MIN_FREE_G CANDIDATE_NEED_G OUT
 . "$HERE/lib.sh"
 
