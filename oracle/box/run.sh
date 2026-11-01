@@ -33,11 +33,15 @@ fi
 export ROOT REV MIN_FREE_G CANDIDATE_NEED_G OUT
 . "$HERE/lib.sh"
 
-# Exits when the test of the stale unit check fails.
+# Exits when the test of the stale unit check or of the field comparison fails.
 require_lib_test() {
-  mkdir -p "$OUT/lib-test"
+  mkdir -p "$OUT/lib-test" "$OUT/fields-test"
   if ! sh "$HERE/lib_test.sh" "$OUT/lib-test" >"$OUT/lib-test.log" 2>&1; then
     echo "REFUSED lib_test log=$OUT/lib-test.log"
+    exit 2
+  fi
+  if ! sh "$HERE/fields_test.sh" "$OUT/fields-test" >"$OUT/fields-test.log" 2>&1; then
+    echo "REFUSED fields_test log=$OUT/fields-test.log"
     exit 2
   fi
 }

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Prints each field the reads in <dir>/candidate and <dir>/serve hold differently, and fails when one differs.
+# Prints each field the reads in <dir>/candidate and <dir>/serve hold differently, and fails when one differs where the candidate does not hold the node's value.
 # Usage: fields.sh <dir>
 set -eu
 DIR=$1
@@ -44,6 +44,19 @@ spent() {
   done <"$DIR/spent.txt"
 }
 
+# The node's value of a field of a read as JSON, printed only for the current era summary's name when the node held one era across its two tip reads.
+node_value() {
+  case $1 in
+    era.json)
+      jq -r -n --arg path "$2" --slurpfile era "$DIR/candidate/era.json" \
+        --slurpfile before "$DIR/candidate/node-tip-before.json" \
+        --slurpfile after "$DIR/candidate/node-tip-after.json" '
+        select($path == "cardano.summaries.\(($era[0].cardano.summaries | length) - 1).name"
+          and $before[0].era == $after[0].era) | $before[0].era | ascii_downcase | tojson'
+      ;;
+  esac
+}
+
 spent
 differing=0
 compared=0
@@ -64,6 +77,11 @@ for name in params.json era.json utxos.json $(cd "$DIR/candidate" && ls block-*.
       $2 != $3 && $1 !~ /^ledgerTip\./ && !(name == "utxos.json" && part[1] == "items" && spent[part[2]])' \
     >"$DIR/differing.txt"
   while IFS="$TAB" read -r path candidate serve; do
+    node=$(node_value "$name" "$path")
+    if [ -n "$node" ] && [ "$candidate" = "$node" ]; then
+      echo "LIVE-FIELD-SETTLED $name $path candidate=$candidate serve=$serve node=$node" | cut -c1-400
+      continue
+    fi
     differing=$((differing + 1))
     echo "LIVE-FIELD $name $path candidate=$candidate serve=$serve" | cut -c1-400
   done <"$DIR/differing.txt"
