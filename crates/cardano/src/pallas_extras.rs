@@ -1,3 +1,4 @@
+pub use dolos_core::for_each_applied_tx;
 use dolos_core::BlockSlot;
 use pallas::codec::minicbor;
 use pallas::codec::utils::{MaybeIndefArray, Nullable};
@@ -560,19 +561,6 @@ pub fn tx_direct_deposits<'a>(tx: &'a MultiEraTx) -> Vec<(&'a [u8], Lovelace)> {
         .flatten()
         .map(|(account, amount)| (account.as_slice(), *amount))
         .collect()
-}
-
-/// Calls `f` on each sub transaction of `tx` and then on `tx`, the order in
-/// which the ledger applies them.
-pub fn for_each_applied_tx<E>(
-    tx: &MultiEraTx<'_>,
-    mut f: impl FnMut(&MultiEraTx<'_>) -> Result<(), E>,
-) -> Result<(), E> {
-    for sub in tx.sub_transactions() {
-        f(&sub)?;
-    }
-
-    f(tx)
 }
 
 /// A Dijkstra block with its transaction list replaced by `txs`, each the

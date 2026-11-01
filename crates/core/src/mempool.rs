@@ -4,6 +4,7 @@ use crate::TagDimension;
 pub use pallas::ledger::validate::phase2::EvalReport;
 
 use futures_core::Stream;
+use std::convert::Infallible;
 use std::pin::Pin;
 use std::sync::OnceLock;
 use tracing::{debug, warn};
@@ -36,7 +37,7 @@ impl TxEffects {
     fn of(payload: &EraCbor) -> Option<Self> {
         let top = MultiEraTx::try_from(payload).ok()?;
         let mut effects = Self::default();
-        for tx in applied(&top) {
+        let Ok(()) = for_each_applied_tx(&top, |tx| {
             let hash = tx.hash();
             for (idx, output) in tx.produces() {
                 let txoref = TxoRef::from((hash, idx as u32));
@@ -45,7 +46,8 @@ impl TxEffects {
             effects
                 .consumed
                 .extend(tx.consumes().iter().map(TxoRef::from));
-        }
+            Ok::<_, Infallible>(())
+        });
         Some(effects)
     }
 }
@@ -374,13 +376,6 @@ impl<D: Domain> MempoolAwareUtxoStore<'_, D> {
         all_txs.extend(self.mempool.peek_inflight());
         all_txs
     }
-}
-
-/// Each sub transaction the transaction lists, then the transaction, in the order the ledger applies them.
-fn applied<'t>(tx: &'t MultiEraTx<'t>) -> Vec<MultiEraTx<'t>> {
-    let mut txs = tx.sub_transactions();
-    txs.push(tx.clone());
-    txs
 }
 
 fn scan_mempool_utxos<F>(predicate: F, all_txs: &[MempoolTx]) -> HashSet<TxoRef>
