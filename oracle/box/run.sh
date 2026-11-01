@@ -1,7 +1,7 @@
 #!/bin/sh
-# Runs the oracle on the build box, its quick or done tier, its live leg alone or the regeneration of its committed manifests.
-# Usage: [REV=ref] [BASE=ref] run.sh quick|done|live|regen
-# The quick tier judges the head on both corpora, the control and each arm whose plant changes a file that differs between BASE and REV, a pallas arm when Cargo.toml or Cargo.lock differ, and runs no live leg. BASE defaults to the commit of the last done run that passed, and when there is none every arm runs. The done tier judges every arm while the live leg runs and records its commit when it passes.
+# Runs the oracle on the build box, its quick, done or ship tier, its live leg alone or the regeneration of its committed manifests.
+# Usage: [REV=ref] [BASE=ref] run.sh quick|done|ship|live|regen
+# The quick tier judges the head on both corpora, the control and each arm whose plant changes a file that differs between BASE and REV, a pallas arm when Cargo.toml or Cargo.lock differ. BASE defaults to the commit of the last done or ship run that passed, and when there is none every arm runs. The done tier judges the head, the control and every arm. The ship tier, run once before a rollout, is the done tier while the live leg runs. Only the ship tier and the live leg read the live node, and the done and ship tiers record their commit when they pass.
 # The live leg reads ENDPOINT, NODE, NODE_DB, GRPCURL, SERVE_CONFIG and CANDIDATE_GRPC from $LIVE_ENV.
 set -eu
 ROOT=${ROOT:-/opt/build/ledger-oracle-1027}
@@ -134,8 +134,21 @@ passed() {
   esac
 }
 
-# Builds the candidate, syncs it while the arms run, judges its reads, and records the commit when every verdict passes.
+# Judges the head, the control and every arm, and records the commit when every verdict passes.
 done_run() {
+  mkdir -p "$OUT"
+  require_free
+  reset_scratch
+  commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
+  sh "$HERE/breaks.sh" | tee "$OUT/breaks.out"
+  verdicts=$(sed -n 's/^ARMS \(.*\) logs=.*/\1/p' "$OUT/breaks.out")
+  echo "DONE tier=done $verdicts commit=$commit logs=$OUT"
+  passed "$verdicts"
+  echo "$commit" >"$LAST_DONE"
+}
+
+# Builds the candidate, syncs it while the arms run, judges its reads, and records the commit when every verdict passes.
+ship_run() {
   mkdir -p "$OUT"
   require_free
   reset_scratch
@@ -158,7 +171,7 @@ done_run() {
   cat "$OUT/live-leg.out"
   verdicts=$(sed -n 's/^ARMS \(.*\) logs=.*/\1/p' "$OUT/breaks.out")
   grep -E '^(LIVE|KNOWN|KNOWN_STALE|LIVE-DIFF|LIVE-GAP) ' "$OUT/live.log" | cut -c1-400 || true
-  echo "DONE tier=done $verdicts live=$live commit=$commit logs=$OUT"
+  echo "DONE tier=ship $verdicts live=$live commit=$commit logs=$OUT"
   passed "$verdicts live=$live"
   echo "$commit" >"$LAST_DONE"
 }
@@ -204,7 +217,8 @@ regen() {
 case ${1:-} in
   quick) quick_run ;;
   done) done_run ;;
+  ship) ship_run ;;
   live) live_run ;;
   regen) regen ;;
-  *) echo "usage: run.sh quick|done|live|regen" ; exit 2 ;;
+  *) echo "usage: run.sh quick|done|ship|live|regen" ; exit 2 ;;
 esac
