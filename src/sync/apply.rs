@@ -107,9 +107,12 @@ impl gasket::framework::Worker<Stage> for Worker {
     }
 }
 
-/// The pruning one housekeeping tick does, until no backlog is left.
+/// The most housekeeping rounds one tick runs.
+const MAX_ROUNDS_PER_TICK: u64 = 10;
+
+/// The pruning one housekeeping tick does, at most `MAX_ROUNDS_PER_TICK` rounds.
 fn housekeeping_tick<D: Domain>(domain: &D) -> Result<(), DomainError> {
-    domain.drain_housekeeping(None)?;
+    domain.drain_housekeeping(Some(MAX_ROUNDS_PER_TICK))?;
     Ok(())
 }
 
@@ -128,6 +131,12 @@ mod tests {
         let mut config = SyncConfig::default();
         config.max_rollback = Some(MAX_ROLLBACK);
         let domain = ToyDomain::new(None, None).with_sync_config(config);
+        append_slots(&domain, slots);
+        domain
+    }
+
+    /// Appends one wal entry for each slot in `slots`.
+    fn append_slots(domain: &ToyDomain, slots: std::ops::Range<u64>) {
         let entries: Vec<LogEntry<CardanoDelta>> = slots
             .map(|slot| {
                 let mut hash = [1u8; 32];
@@ -136,8 +145,9 @@ mod tests {
             })
             .collect();
         domain.wal().append_entries(&entries).unwrap();
-        domain
     }
+
+    const ROUND: u64 = <ToyDomain as Domain>::MAX_PRUNE_SLOTS_PER_HOUSEKEEPING;
 
     fn wal_span(domain: &ToyDomain) -> (u64, u64) {
         let start = domain.wal().find_start().unwrap().unwrap().0.slot();
@@ -159,6 +169,35 @@ mod tests {
         let tip = 3 * <ToyDomain as Domain>::MAX_PRUNE_SLOTS_PER_HOUSEKEEPING;
         let domain = domain_with_wal(1..tip + 1);
 
+        housekeeping_tick(&domain).unwrap();
+
+        assert_eq!(wal_span(&domain), (tip - MAX_ROLLBACK, tip));
+    }
+
+    #[test]
+    fn a_tick_prunes_at_most_its_rounds() {
+        let tip = 2 * MAX_ROUNDS_PER_TICK * ROUND;
+        let domain = domain_with_wal(1..tip + 1);
+        let (start, _) = wal_span(&domain);
+
+        housekeeping_tick(&domain).unwrap();
+
+        assert_eq!(
+            wal_span(&domain),
+            (start + MAX_ROUNDS_PER_TICK * ROUND, tip)
+        );
+    }
+
+    #[test]
+    fn ticks_bring_the_wal_inside_max_rollback_while_blocks_arrive() {
+        let mut tip = 25 * ROUND;
+        let domain = domain_with_wal(1..tip + 1);
+
+        for _ in 0..4 {
+            housekeeping_tick(&domain).unwrap();
+            append_slots(&domain, tip + 1..tip + 3 * ROUND + 1);
+            tip += 3 * ROUND;
+        }
         housekeeping_tick(&domain).unwrap();
 
         assert_eq!(wal_span(&domain), (tip - MAX_ROLLBACK, tip));
