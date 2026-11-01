@@ -270,6 +270,11 @@ decoderRules = describe "decoder rules" $
             guard <- KeyHashObj <$> freshKeyHash
             subEdited (overKey 14 dupFirst) (guardsTxBodyL .~ [guard]) id
         )
+      , ( "an output script reference under tag 24 over indefinite length bytes"
+        , do
+            out <- scriptRefOutput
+            submitEdited (body (overKey 1 (overFirst (overKey 3 indefinite)))) (mkBasicTx (mkBasicTxBody & outputsTxBodyL .~ [out]))
+        )
       ]
     plain :: Tx TopTx E
     plain = mkBasicTx mkBasicTxBody
@@ -296,6 +301,13 @@ inlineDatumOutput :: ImpTestM E (TxOut E)
 inlineDatumOutput = do
   holder <- freshKeyAddrNoPtr_
   pure (mkBasicTxOut holder (inject (Coin 5_000_000)) & datumTxOutL .~ Datum (dataToBinaryData (Data (PV1.I 42) :: Data E)))
+
+-- | An output to a fresh key address holding a V3 script as its reference script.
+scriptRefOutput :: ImpTestM E (TxOut E)
+scriptRefOutput = do
+  holder <- freshKeyAddrNoPtr_
+  plutus :: PlutusScript E <- expectJust $ mkBinaryPlutusScript PlutusV3 . PlutusBinary . toShort =<< either (const Nothing) Just (B16.decode "4901010023357369324d")
+  pure (mkBasicTxOut holder (inject (Coin 20_000_000)) & referenceScriptTxOutL .~ SJust (fromPlutusScript plutus))
 
 -- | Submits a top level transaction with one sub transaction that spends a fresh input, after the edit to the sub transaction body.
 subEdited :: (Term -> Term) -> (TxBody SubTx E -> TxBody SubTx E) -> (TxBody TopTx E -> TxBody TopTx E) -> ImpTestM E ()
