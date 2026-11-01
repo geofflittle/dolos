@@ -683,8 +683,13 @@ async fn validate_run<'r>(
             let declared = manifests.declared.get(&id);
             let cascade = !missing.failed_by.is_empty();
             compare_cost(&group, id, record, declared, cascade, cost, coverage);
-            let dolos = validate::verdict(&group.receive(&record.tx.0));
-            let inflight = validate::verdict(&relayed.receive(&record.tx.0));
+            let submit = |group: &validate::Group| match record.phase2_valid {
+                Phase2::Valid => group.receive(&record.tx.0),
+                // A submitted transaction carries no flag, so one the ledger reads under a false flag is validated and never held.
+                Phase2::Invalid => group.check(&record.tx.0),
+            };
+            let dolos = validate::verdict(&submit(&group));
+            let inflight = validate::verdict(&submit(&relayed));
             if matches!(dolos, DolosVerdict::Accepted) {
                 dolos_accepted.insert(record.n);
             }

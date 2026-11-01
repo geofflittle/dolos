@@ -219,6 +219,14 @@ pub fn outcome(
         | (L::Accepted { .. }, Phase2::Invalid, D::Phase2Rejected, None) => {
             Outcome::Pass(Pass::Agree)
         }
+        // Under a false flag the ledger's tag mismatch means the scripts passed, which Dolos answers by accepting.
+        (L::Refused { failure_names, .. }, Phase2::Invalid, D::Accepted, None)
+            if failure_names
+                .iter()
+                .all(|p| p.leaf() == "ValidationTagMismatch") =>
+        {
+            Outcome::Pass(Pass::Agree)
+        }
         (
             L::Refused { failure_names, .. },
             _,
@@ -771,6 +779,34 @@ mod tests {
             ),
             agree
         );
+    }
+
+    #[test]
+    fn a_tag_mismatch_disagrees_with_failing_scripts_another_failure_or_a_true_flag() {
+        let mismatch = refused("ValidationTagMismatch");
+        let with_inputs = refused_by(&["ValidationTagMismatch", "BadInputsUTxO"]);
+        for (ledger, phase2, dolos) in [
+            (&mismatch, Phase2::Invalid, DolosVerdict::Phase2Rejected),
+            (&with_inputs, Phase2::Invalid, DolosVerdict::Accepted),
+            (&mismatch, Phase2::Valid, DolosVerdict::Accepted),
+        ] {
+            let judged = outcome(ledger, phase2, &dolos, None);
+            assert!(
+                matches!(judged, Outcome::Fail(Fail::Disagree { .. })),
+                "{phase2:?} {dolos} {judged:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn scripts_that_pass_under_a_false_flag_agree_with_a_tag_mismatch() {
+        let judged = outcome(
+            &refused("ValidationTagMismatch"),
+            Phase2::Invalid,
+            &DolosVerdict::Accepted,
+            None,
+        );
+        assert_eq!(judged, Outcome::Pass(Pass::Agree));
     }
 
     #[test]
