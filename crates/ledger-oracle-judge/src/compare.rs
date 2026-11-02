@@ -155,6 +155,44 @@ impl StateTallies {
         agree && revalidated && self.known_stale.is_empty() && self.roll_fail.is_empty()
     }
 
+    /// Adds the comparisons of another arm part after this one's.
+    pub fn merge(&mut self, other: StateTallies) {
+        let StateTallies {
+            roll_fail,
+            utxo,
+            as_output,
+            sub_only,
+            seeded_unjudged,
+            accounts,
+            undo,
+            revalidate,
+            dependents,
+            params,
+            readtx,
+            script,
+            datum,
+            known,
+            known_fired,
+            known_stale,
+        } = other;
+        self.roll_fail.extend(roll_fail);
+        self.utxo.merge(utxo);
+        self.as_output.merge(as_output);
+        self.sub_only += sub_only;
+        self.seeded_unjudged += seeded_unjudged;
+        self.accounts.merge(accounts);
+        self.undo.merge(undo);
+        self.revalidate.merge(revalidate);
+        self.dependents += dependents;
+        self.params.merge(params);
+        self.readtx.merge(readtx);
+        self.script.merge(script);
+        self.datum.merge(datum);
+        self.known.extend(known);
+        self.known_fired.extend(known_fired);
+        self.known_stale.extend(known_stale);
+    }
+
     /// The count of records in slot groups whose block the node did not apply.
     pub fn rolled_failed(&self) -> usize {
         self.roll_fail.iter().map(|r| r.records).sum()
@@ -323,6 +361,82 @@ mod tests {
         state.script.add(true, String::new);
         state.datum.add(true, String::new);
         state
+    }
+
+    fn tally(lines: &[&str]) -> Tally {
+        Tally {
+            compared: 2 * lines.len(),
+            disagree: lines.iter().map(|l| l.to_string()).collect(),
+        }
+    }
+
+    fn roll_fail(n: u32) -> RollFail {
+        RollFail {
+            first: supp(n),
+            last: supp(n),
+            records: 1,
+            slot: n.into(),
+            cause: format!("cause{n}"),
+        }
+    }
+
+    fn part(n: u32, row: Row) -> StateTallies {
+        let line = format!("line{n}");
+        let lines = [line.as_str()];
+        StateTallies {
+            roll_fail: vec![roll_fail(n)],
+            utxo: tally(&lines),
+            as_output: tally(&lines),
+            sub_only: 1,
+            seeded_unjudged: 2,
+            accounts: tally(&lines),
+            undo: tally(&lines),
+            revalidate: tally(&lines),
+            dependents: 3,
+            params: tally(&lines),
+            readtx: tally(&lines),
+            script: tally(&lines),
+            datum: tally(&lines),
+            known: vec![line.clone()],
+            known_fired: BTreeMap::from([((Locus::Accounts, supp(n)), row)]),
+            known_stale: vec![line],
+        }
+    }
+
+    #[test]
+    fn a_merged_part_adds_every_count_and_keeps_every_line_after_the_first_part() {
+        let mut merged = part(0, Row::S1);
+        merged.merge(part(1, Row::S2));
+        let lines = ["line0", "line1"];
+        let both = StateTallies {
+            roll_fail: vec![roll_fail(0), roll_fail(1)],
+            utxo: tally(&lines),
+            as_output: tally(&lines),
+            sub_only: 2,
+            seeded_unjudged: 4,
+            accounts: tally(&lines),
+            undo: tally(&lines),
+            revalidate: tally(&lines),
+            dependents: 6,
+            params: tally(&lines),
+            readtx: tally(&lines),
+            script: tally(&lines),
+            datum: tally(&lines),
+            known: vec!["line0".to_string(), "line1".to_string()],
+            known_fired: BTreeMap::from([
+                ((Locus::Accounts, supp(0)), Row::S1),
+                ((Locus::Accounts, supp(1)), Row::S2),
+            ]),
+            known_stale: vec!["line0".to_string(), "line1".to_string()],
+        };
+        assert_eq!(merged, both);
+    }
+
+    #[test]
+    fn merging_an_empty_part_changes_nothing() {
+        let mut merged = part(0, Row::S1);
+        merged.merge(StateTallies::default());
+        assert_eq!(merged, part(0, Row::S1));
     }
 
     #[test]

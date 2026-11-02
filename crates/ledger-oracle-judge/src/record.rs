@@ -6,6 +6,7 @@ use crate::{
     accounts::LedgerAccounts,
     cbor::{self, Purpose, TxIn},
     refusal::RefusalClass,
+    state::{Certs, Gov},
 };
 
 /// The corpus a record comes from.
@@ -175,21 +176,18 @@ impl<'de> Deserialize<'de> for FailurePath {
 pub struct PParams(pub serde_json::Map<String, serde_json::Value>);
 
 /// Whether a transaction declares its scripts to pass.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(from = "bool")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase2 {
     Valid,
     Invalid,
 }
 
-impl From<bool> for Phase2 {
-    fn from(valid: bool) -> Self {
-        if valid {
-            Phase2::Valid
-        } else {
-            Phase2::Invalid
-        }
-    }
+/// The scripts' declared result, with the ledger's answer for the same transaction under a true flag when it declares they fail.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Declared {
+    Valid,
+    Invalid(LedgerOutcome),
 }
 
 /// One unspent output, its input key and its output bytes.
@@ -206,12 +204,24 @@ impl From<(TxIn, Bytes)> for UtxoEntry {
     }
 }
 
+/// The UTxO the ledger ran one record from.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Pre {
+    /// The UTxO, written whole because it is not the one the previous record
+    /// left.
+    Fresh(Vec<UtxoEntry>),
+    /// The UTxO the previous record left.
+    FollowsPrev,
+}
+
 /// The ledger's answer for one record.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "lowercase", deny_unknown_fields)]
 pub enum LedgerOutcome {
     Accepted {
-        post_utxo: Vec<UtxoEntry>,
+        consumed: Vec<TxIn>,
+        produced: Vec<UtxoEntry>,
         accounts_post: LedgerAccounts,
     },
     Refused {
@@ -236,15 +246,36 @@ pub struct Record {
     pub n: u32,
     pub slot: u64,
     pub epoch: Option<u64>,
-    pub follows_prev: bool,
-    pub phase2_valid: Phase2,
+    pub phase2: Declared,
     pub tx: Bytes,
     pub pparams: PParams,
-    pub pre_utxo: Vec<UtxoEntry>,
+    pub pre: Pre,
     pub accounts_pre: LedgerAccounts,
+    pub certs_pre: Certs,
+    pub gov_pre: Gov,
+    pub treasury: u64,
     pub outcome: LedgerOutcome,
     pub ex_units: Vec<LedgerRedeemer>,
-    pub min_fee: u64,
+    pub sub_ex_units: Vec<Vec<LedgerRedeemer>>,
+    pub min_fee: Option<u64>,
     #[serde(default)]
     pub globals: Option<Globals>,
+}
+
+impl Record {
+    /// Whether the transaction declares its scripts to pass.
+    pub fn flag(&self) -> Phase2 {
+        match self.phase2 {
+            Declared::Valid => Phase2::Valid,
+            Declared::Invalid(_) => Phase2::Invalid,
+        }
+    }
+
+    /// The ledger's answer for the transaction as a node receives it, under a true flag.
+    pub fn submitted(&self) -> &LedgerOutcome {
+        match &self.phase2 {
+            Declared::Valid => &self.outcome,
+            Declared::Invalid(submitted) => submitted,
+        }
+    }
 }

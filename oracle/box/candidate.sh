@@ -1,7 +1,7 @@
 #!/bin/sh
 # Syncs a candidate Dolos from the node beside the serving one, reads both and the node, prints each field the two serve differently, and removes the candidate.
 # Usage: CANDIDATE=<binary path or image reference> COMMIT=sha candidate.sh <dir>
-# Reads ROOT, NODE, ENDPOINT, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_NEED_G and GRPCURL from the environment.
+# Reads ROOT, NODE, NODE_DB, ENDPOINT, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_NEED_G, SAMPLE_MINUTES and GRPCURL from the environment.
 set -eu
 DIR=$1
 : "${CANDIDATE:?}" "${COMMIT:?}" "${ROOT:?}" "${NODE:?}" "${ENDPOINT:?}" "${SERVE_CONFIG:?}"
@@ -10,7 +10,8 @@ NEED_G=$CANDIDATE_NEED_G
 HERE=$(cd "$(dirname "$0")" && pwd)
 GRPCURL=${GRPCURL:-grpcurl}
 NAME=${CANDIDATE_NAME:-dolos-candidate-1028}
-SYNC_MINUTES=${SYNC_MINUTES:-90}
+SYNC_MINUTES=${SYNC_MINUTES:-150}
+SAMPLE_MINUTES=${SAMPLE_MINUTES:-5}
 FIXED_SLOTS="205422 368793 783572"
 STORE="$ROOT/candidate/$(date -u +%Y%m%dT%H%M%SZ)"
 
@@ -18,7 +19,7 @@ free_g() {
   df -BG --output=avail "$1" | tail -1 | tr -dc 0-9
 }
 
-if [ "$(free_g "$ROOT")" -lt $((NEED_G + 3)) ] || [ "$(free_g /)" -lt 30 ]; then
+if [ "$(free_g "$ROOT")" -lt $((NEED_G + 3)) ] || [ "$(free_g /)" -lt 10 ]; then
   echo "LIVE-CANDIDATE REFUSED free=$(free_g "$ROOT")G root_free=$(free_g /)G need=$((NEED_G + 3))G"
   exit 2
 fi
@@ -41,15 +42,16 @@ printf '[serve.grpc]\nlisten_address = "%s"\n' "$CANDIDATE_GRPC" >>"$STORE/dolos
 case $CANDIDATE in
   /*)
     cp "$CANDIDATE" "$STORE/dolos-candidate"
-    docker run -d --name "$NAME" --network host --log-opt max-size=100m --log-opt max-file=2 \
-      -v "$STORE:/run-dolos" -w /run-dolos --entrypoint /run-dolos/dolos-candidate \
-      dolos-build:1 -c dolos.toml daemon >/dev/null
+    IMAGE=dolos-build:1
+    ENTRY="--entrypoint /run-dolos/dolos-candidate"
     ;;
   *)
-    docker run -d --name "$NAME" --network host --log-opt max-size=100m --log-opt max-file=2 \
-      -v "$STORE:/run-dolos" -w /run-dolos "$CANDIDATE" -c dolos.toml daemon >/dev/null
+    IMAGE=$CANDIDATE
+    ENTRY=
     ;;
 esac
+docker run -d --name "$NAME" --network host --log-opt max-size=100m --log-opt max-file=2 \
+  -v "$STORE:/run-dolos" -w /run-dolos $ENTRY "$IMAGE" -c dolos.toml daemon >/dev/null
 echo "LIVE-CANDIDATE started name=$NAME commit=$COMMIT candidate=$CANDIDATE grpc=$CANDIDATE_GRPC"
 
 candidate_slot() {
@@ -62,6 +64,7 @@ node_slot() {
 }
 
 start=$(date +%s)
+sampled=$start
 while :; do
   slot=$(candidate_slot || true)
   slot=${slot:-0}
@@ -73,6 +76,10 @@ while :; do
     echo "LIVE-CANDIDATE REFUSED free=$(free_g "$ROOT")G during sync slot=$slot node=$node store=$(du -sh "$STORE" | cut -f1)"
     exit 2
   fi
+  if [ $(($(date +%s) - sampled)) -ge $((SAMPLE_MINUTES * 60)) ]; then
+    echo "LIVE-CANDIDATE wal slot=$slot node=$node wal_bytes=$(du -sb "$STORE/data/wal" | cut -f1)"
+    sampled=$(date +%s)
+  fi
   if [ $(($(date +%s) - start)) -gt $((SYNC_MINUTES * 60)) ]; then
     echo "LIVE-CANDIDATE sync_timeout slot=$slot node=$node minutes=$SYNC_MINUTES"
     exit 1
@@ -80,14 +87,22 @@ while :; do
   sleep 30
 done
 echo "LIVE-CANDIDATE synced slot=$slot node=$node seconds=$(($(date +%s) - start)) store=$(du -sh "$STORE" | cut -f1)"
+# The bytes of each part of the store and the height of its tip, which divide into bytes per block.
+height=$("$GRPCURL" -plaintext -max-msg-sz 200000000 \
+  -d "{\"ref\":[{\"slot\":$slot}],\"fieldMask\":{\"paths\":[\"cardano.header\"]}}" \
+  "$CANDIDATE_GRPC" utxorpc.v1.sync.SyncService/FetchBlock | jq -r '.block.cardano.header.height // 0')
+du -sb "$STORE"/data/archive/* "$STORE/data/state" "$STORE/data/wal" | while read -r bytes path; do
+  echo "LIVE-CANDIDATE store part=${path#"$STORE"/data/} bytes=$bytes height=$height"
+done
 
-# The last block of the candidate's recent history whose body holds a certificate.
+# The last block whose body holds a certificate among the candidate's blocks from 6000 to 3000 slots back, which the node holds in its immutable database.
 recent=$("$GRPCURL" -plaintext -max-msg-sz 200000000 \
-  -d "{\"startToken\":{\"slot\":$((slot - 2000))},\"maxItems\":100,\"fieldMask\":{\"paths\":[\"cardano.header\"]}}" \
+  -d "{\"startToken\":{\"slot\":$((slot - 6000))},\"maxItems\":100,\"fieldMask\":{\"paths\":[\"cardano.header\"]}}" \
   "$CANDIDATE_GRPC" utxorpc.v1.sync.SyncService/DumpHistory |
-  jq -r '[.block[].cardano.header | select(.bodyContainsLeiosCertificate) | .slot] | last // empty')
+  jq -r --argjson end $((slot - 3000)) \
+    '[.block[].cardano.header | select(.bodyContainsLeiosCertificate and (.slot | tonumber) < $end) | .slot] | last // empty')
 if [ -z "$recent" ]; then
-  echo "LIVE-CANDIDATE no_certifying_block from=$((slot - 2000))"
+  echo "LIVE-CANDIDATE no_certifying_block from=$((slot - 6000)) to=$((slot - 3000))"
   exit 1
 fi
 echo "LIVE-CANDIDATE certifying_slot=$recent"

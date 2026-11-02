@@ -1,0 +1,12 @@
+diff --git a/pallas-validate/src/phase1/dijkstra.rs b/pallas-validate/src/phase1/dijkstra.rs
+index 39707551..69efae3f 100644
+--- a/pallas-validate/src/phase1/dijkstra.rs
++++ b/pallas-validate/src/phase1/dijkstra.rs
+@@ -500,7 +500,6 @@ fn check_signatures(w: &WitnessSet<'_>, body: &[u8], mut required: Keys) -> Vali
+         {
+             return Err(PostAlonzo(VKWrongSignature));
+         }
+-        required.remove(&super::conway::bootstrap_wit_root(witness));
+     }
+     if !required.is_empty() {
+         return Err(PostAlonzo(VKWitnessMissing));

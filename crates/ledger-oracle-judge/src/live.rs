@@ -148,9 +148,326 @@ pub fn settle(tallies: &BTreeMap<LiveLocus, Tally>, known: &KnownLive) -> Settle
     settled
 }
 
+/// The bytes of one block the node's immutable database holds, with where its
+/// header is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeBlock {
+    pub slot: u64,
+    pub header: Range<usize>,
+    pub bytes: Vec<u8>,
+}
+
+/// The size of one entry of an immutable chunk's secondary index.
+const SECONDARY_ENTRY: usize = 56;
+
+/// The blocks of one immutable chunk, by the entries of its secondary index.
+pub fn chunk_blocks(secondary: &[u8], chunk: &[u8]) -> Result<Vec<NodeBlock>, String> {
+    let entries = secondary.chunks(SECONDARY_ENTRY);
+    let entries: Vec<(usize, Range<usize>, u64)> = entries
+        .map(|e| {
+            let e: &[u8; SECONDARY_ENTRY] = e
+                .try_into()
+                .map_err(|_| format!("secondary entry of {} bytes", e.len()))?;
+            let offset = u64::from_be_bytes(e[0..8].try_into().unwrap());
+            let header_offset = u16::from_be_bytes(e[8..10].try_into().unwrap());
+            let header_size = u16::from_be_bytes(e[10..12].try_into().unwrap());
+            let slot = u64::from_be_bytes(e[48..56].try_into().unwrap());
+            let start = usize::from(header_offset);
+            Ok((
+                offset as usize,
+                start..start + usize::from(header_size),
+                slot,
+            ))
+        })
+        .collect::<Result<_, String>>()?;
+    let ends = entries
+        .iter()
+        .skip(1)
+        .map(|(offset, ..)| *offset)
+        .chain([chunk.len()]);
+    entries
+        .iter()
+        .zip(ends)
+        .map(|((offset, header, slot), end)| {
+            let bytes = chunk
+                .get(*offset..end)
+                .ok_or(format!("slot {slot} bytes {offset}..{end} past the chunk"))?;
+            Ok(NodeBlock {
+                slot: *slot,
+                header: header.clone(),
+                bytes: bytes.to_vec(),
+            })
+        })
+        .collect()
+}
+
+/// How the bytes of a block Dolos serves compare with the node's block at its
+/// slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockBytes {
+    Same,
+    /// A block whose body holds a certificate, whose header bytes are the
+    /// node's and whose body carries the endorsed transactions in place of the
+    /// node's certificate body.
+    SameHeader,
+    NodeAbsent,
+    HeaderDiffers,
+    BytesDiffer,
+}
+
+impl BlockBytes {
+    /// Whether the served bytes agree with the node's.
+    pub fn agrees(self) -> bool {
+        matches!(self, BlockBytes::Same | BlockBytes::SameHeader)
+    }
+
+    /// The name printed in judgement lines.
+    pub fn name(self) -> &'static str {
+        match self {
+            BlockBytes::Same => "same",
+            BlockBytes::SameHeader => "same_header",
+            BlockBytes::NodeAbsent => "node_absent",
+            BlockBytes::HeaderDiffers => "header_differs",
+            BlockBytes::BytesDiffer => "bytes_differ",
+        }
+    }
+}
+
+/// Compares the bytes Dolos serves for a block with the node's, the header
+/// alone for a block whose body holds a certificate.
+pub fn block_bytes(node: Option<&NodeBlock>, served: &[u8], certifying: bool) -> BlockBytes {
+    let Some(node) = node else {
+        return BlockBytes::NodeAbsent;
+    };
+    if served.get(node.header.clone()) != node.bytes.get(node.header.clone()) {
+        return BlockBytes::HeaderDiffers;
+    }
+    match (served == node.bytes.as_slice(), certifying) {
+        (true, _) => BlockBytes::Same,
+        (false, true) => BlockBytes::SameHeader,
+        (false, false) => BlockBytes::BytesDiffer,
+    }
+}
+
+/// How one output reference compares between Dolos and the node's UTxO query.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UtxoPresence {
+    Both { differing: Vec<String> },
+    NodeOnly,
+    DolosOnly,
+    Neither,
+}
+
+/// Compares an output Dolos serves with the node's, by the fields `differing`
+/// names when both hold it.
+pub fn utxo_presence<N, D>(
+    node: Option<&N>,
+    dolos: Option<&D>,
+    differing: impl Fn(&N, &D) -> Vec<String>,
+) -> UtxoPresence {
+    match (node, dolos) {
+        (Some(n), Some(d)) => UtxoPresence::Both {
+            differing: differing(n, d),
+        },
+        (Some(_), None) => UtxoPresence::NodeOnly,
+        (None, Some(_)) => UtxoPresence::DolosOnly,
+        (None, None) => UtxoPresence::Neither,
+    }
+}
+
+/// A chain point as its slot and block hash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Point {
+    pub slot: u64,
+    pub hash: Vec<u8>,
+}
+
+/// The points the node and Dolos held around one UTxO read on each, in the
+/// order they were read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UtxoBracket {
+    pub node_before: Point,
+    pub dolos_before: Point,
+    pub dolos_after: Point,
+    pub node_after: Point,
+}
+
+impl fmt::Display for UtxoBracket {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "node_before={} dolos_before={} dolos_after={} node_after={}",
+            self.node_before.slot,
+            self.dolos_before.slot,
+            self.dolos_after.slot,
+            self.node_after.slot
+        )
+    }
+}
+
+/// Reads the node and Dolos both took at one chain point.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AtPoint<T> {
+    point: Point,
+    value: T,
+}
+
+impl<T> AtPoint<T> {
+    /// Pairs the reads with the point all four bracket points name, none when
+    /// two of them differ.
+    pub fn new(bracket: &UtxoBracket, value: T) -> Option<Self> {
+        let point = &bracket.node_before;
+        let one = [
+            &bracket.dolos_before,
+            &bracket.dolos_after,
+            &bracket.node_after,
+        ]
+        .iter()
+        .all(|other| *other == point);
+        one.then(|| AtPoint {
+            point: point.clone(),
+            value,
+        })
+    }
+
+    /// The point the reads were taken at.
+    pub fn point(&self) -> &Point {
+        &self.point
+    }
+}
+
+/// The outputs one UTxO read asked for, with the node's outputs and the outputs
+/// Dolos served, `None` where Dolos served one unreadably.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UtxoReads<N, D> {
+    pub refs: Vec<String>,
+    pub node: BTreeMap<String, N>,
+    pub dolos: BTreeMap<String, Option<D>>,
+}
+
+/// Counts each output asked for by the fields `differing` names between Dolos
+/// and the node, and returns how many neither holds.
+pub fn compare_utxos<N, D>(
+    reads: &AtPoint<UtxoReads<N, D>>,
+    tally: &mut Tally,
+    differing: impl Fn(&N, &D) -> Vec<String>,
+) -> usize {
+    let slot = reads.point.slot;
+    let UtxoReads { refs, node, dolos } = &reads.value;
+    let mut neither = 0;
+    for key in refs {
+        let show = |presence: &str| format!("utxo={key} {presence} point={slot}");
+        let served = match dolos.get(key) {
+            None => None,
+            Some(Some(output)) => Some(output),
+            Some(None) => {
+                tally.add(false, || show("dolos=unreadable"));
+                continue;
+            }
+        };
+        match utxo_presence(node.get(key), served, &differing) {
+            UtxoPresence::Neither => neither += 1,
+            UtxoPresence::Both { differing } => tally.add(differing.is_empty(), || {
+                show(&format!("differing={}", differing.join(",")))
+            }),
+            UtxoPresence::NodeOnly => tally.add(false, || show("dolos=absent")),
+            UtxoPresence::DolosOnly => tally.add(false, || show("node=absent")),
+        }
+    }
+    neither
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn entry(offset: u64, header: (u16, u16), slot: u64) -> Vec<u8> {
+        let mut e = offset.to_be_bytes().to_vec();
+        e.extend(header.0.to_be_bytes());
+        e.extend(header.1.to_be_bytes());
+        e.extend([0u8; 4 + 32]);
+        e.extend(slot.to_be_bytes());
+        e
+    }
+
+    #[test]
+    fn a_chunk_splits_into_its_blocks_by_the_secondary_index() {
+        let secondary = [entry(0, (1, 2), 16), entry(5, (1, 3), 20)].concat();
+        let chunk = b"aHHbbcHHHd";
+        let blocks = chunk_blocks(&secondary, chunk).unwrap();
+        assert_eq!(
+            blocks,
+            vec![
+                NodeBlock {
+                    slot: 16,
+                    header: 1..3,
+                    bytes: b"aHHbb".to_vec()
+                },
+                NodeBlock {
+                    slot: 20,
+                    header: 1..4,
+                    bytes: b"cHHHd".to_vec()
+                },
+            ]
+        );
+        assert!(chunk_blocks(&secondary[..55], chunk).is_err());
+        assert!(chunk_blocks(&entry(11, (0, 0), 1), chunk).is_err());
+    }
+
+    #[test]
+    fn served_block_bytes_agree_only_with_the_node_bytes_or_its_header_when_certifying() {
+        let node = NodeBlock {
+            slot: 7,
+            header: 1..3,
+            bytes: b"aHHbb".to_vec(),
+        };
+        assert_eq!(block_bytes(Some(&node), b"aHHbb", false), BlockBytes::Same);
+        assert_eq!(block_bytes(Some(&node), b"aHHbb", true), BlockBytes::Same);
+        assert_eq!(
+            block_bytes(Some(&node), b"aHHxxxx", true),
+            BlockBytes::SameHeader
+        );
+        assert_eq!(
+            block_bytes(Some(&node), b"aHHxxxx", false),
+            BlockBytes::BytesDiffer
+        );
+        assert_eq!(
+            block_bytes(Some(&node), b"aHXbb", true),
+            BlockBytes::HeaderDiffers
+        );
+        assert_eq!(
+            block_bytes(Some(&node), b"aH", true),
+            BlockBytes::HeaderDiffers
+        );
+        assert_eq!(block_bytes(None, b"aHHbb", false), BlockBytes::NodeAbsent);
+        assert!(!BlockBytes::NodeAbsent.agrees());
+    }
+
+    /// Names `coin` when two coins differ.
+    fn coin(node: &u64, dolos: &u64) -> Vec<String> {
+        if node == dolos {
+            Vec::new()
+        } else {
+            vec!["coin".to_string()]
+        }
+    }
+
+    #[test]
+    fn an_output_both_hold_names_the_fields_that_differ() {
+        assert_eq!(
+            utxo_presence(Some(&5), Some(&5), coin),
+            UtxoPresence::Both { differing: vec![] }
+        );
+        assert_eq!(
+            utxo_presence(Some(&5), Some(&6), coin),
+            UtxoPresence::Both {
+                differing: vec!["coin".to_string()]
+            }
+        );
+        assert_eq!(utxo_presence(Some(&5), None, coin), UtxoPresence::NodeOnly);
+        assert_eq!(utxo_presence(None, Some(&5), coin), UtxoPresence::DolosOnly);
+        assert_eq!(utxo_presence(None, None, coin), UtxoPresence::Neither);
+    }
 
     fn tip() -> NodeTip {
         NodeTip {
@@ -201,6 +518,8 @@ mod tests {
             (LiveLocus::EraSummary, era),
             (LiveLocus::Params, params),
             (LiveLocus::ChildAsOutput, child),
+            (LiveLocus::Block, tally(4, &[])),
+            (LiveLocus::Utxo, tally(9, &[])),
         ])
     }
 
@@ -281,5 +600,89 @@ mod tests {
             era_name(&names(&[]), "Dijkstra").to_string(),
             "name=none node=Dijkstra"
         );
+    }
+
+    fn point(slot: u64) -> Point {
+        Point {
+            slot,
+            hash: vec![slot as u8; 32],
+        }
+    }
+
+    fn bracket(slots: [u64; 4]) -> UtxoBracket {
+        let [node_before, dolos_before, dolos_after, node_after] = slots.map(point);
+        UtxoBracket {
+            node_before,
+            dolos_before,
+            dolos_after,
+            node_after,
+        }
+    }
+
+    #[test]
+    fn utxo_reads_bracketed_by_one_point_are_paired_with_it() {
+        let reads = AtPoint::new(&bracket([7, 7, 7, 7]), ()).unwrap();
+        assert_eq!(reads.point(), &point(7));
+    }
+
+    #[test]
+    fn utxo_reads_bracketed_by_two_points_are_not_paired() {
+        for slots in [[7, 7, 7, 8], [7, 7, 8, 8], [7, 8, 8, 8], [6, 7, 7, 7]] {
+            assert_eq!(AtPoint::new(&bracket(slots), ()), None, "{slots:?}");
+        }
+        let mut fork = bracket([7, 7, 7, 7]);
+        fork.dolos_after.hash = vec![0; 32];
+        assert_eq!(AtPoint::new(&fork, ()), None);
+        assert_eq!(
+            bracket([1213053, 1213053, 1213099, 1213099]).to_string(),
+            "node_before=1213053 dolos_before=1213053 dolos_after=1213099 node_after=1213099"
+        );
+    }
+
+    fn reads(node: &[(&str, u64)], dolos: &[(&str, Option<u64>)]) -> AtPoint<UtxoReads<u64, u64>> {
+        let refs = ["a#0", "a#1", "b#0"].map(String::from).to_vec();
+        let node = node.iter().map(|(r, n)| (r.to_string(), *n));
+        let dolos = dolos.iter().map(|(r, n)| (r.to_string(), *n));
+        let reads = UtxoReads {
+            refs,
+            node: node.collect(),
+            dolos: dolos.collect(),
+        };
+        AtPoint::new(&bracket([9, 9, 9, 9]), reads).unwrap()
+    }
+
+    #[test]
+    fn outputs_held_at_one_value_on_both_sides_agree() {
+        let mut t = Tally::default();
+        let both = reads(
+            &[("a#0", 5), ("b#0", 2)],
+            &[("a#0", Some(5)), ("b#0", Some(2))],
+        );
+        assert_eq!(compare_utxos(&both, &mut t, coin), 1);
+        assert_eq!(t, tally(2, &[]));
+    }
+
+    #[test]
+    fn an_output_one_side_lacks_or_states_differently_disagrees() {
+        let mut t = Tally::default();
+        let read = reads(
+            &[("a#0", 5), ("a#1", 3)],
+            &[("a#0", Some(6)), ("b#0", Some(2)), ("a#1", None)],
+        );
+        assert_eq!(compare_utxos(&read, &mut t, coin), 0);
+        assert_eq!(
+            t,
+            tally(
+                3,
+                &[
+                    "utxo=a#0 differing=coin point=9",
+                    "utxo=a#1 dolos=unreadable point=9",
+                    "utxo=b#0 node=absent point=9",
+                ]
+            )
+        );
+        let mut t = Tally::default();
+        compare_utxos(&reads(&[("b#0", 2)], &[]), &mut t, coin);
+        assert_eq!(t, tally(1, &["utxo=b#0 dolos=absent point=9"]));
     }
 }

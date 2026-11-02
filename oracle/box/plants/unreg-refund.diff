@@ -1,0 +1,13 @@
+diff --git a/pallas-validate/src/phase1/dijkstra_ledger.rs b/pallas-validate/src/phase1/dijkstra_ledger.rs
+index 67fb1a3d..053cbfad 100644
+--- a/pallas-validate/src/phase1/dijkstra_ledger.rs
++++ b/pallas-validate/src/phase1/dijkstra_ledger.rs
+@@ -493,7 +493,7 @@ fn certificate<S: DijkstraLedgerState + ?Sized>(
+                 return Err(DijkstraInvalidCertificate("account balance is not zero"));
+             }
+             state.delta.accounts.insert(c.clone(), None);
+-            flows.consume(*refund)
++            flows.consume(0)
+         }
+         Certificate::StakeDelegation(c, pool) => {
+             registered(state, c)?;

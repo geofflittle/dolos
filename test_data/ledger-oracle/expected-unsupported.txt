@@ -1,263 +1,59 @@
-ic#22 account or governance state
-ic#65 stateful or scripted subtransaction
-ic#68 stateful or scripted subtransaction
-ic#95 stateful or scripted subtransaction
-ic#97 stateful or scripted subtransaction
-ic#100 stateful or scripted subtransaction
-ic#105 scripted or stateful batch
-ic#107 account or governance state
-ic#110 stateful or scripted subtransaction
-ic#112 account or governance state
-ic#115 stateful or scripted subtransaction
-ic#118 stateful or scripted subtransaction
-ic#121 stateful or scripted subtransaction
-ic#124 stateful or scripted subtransaction
-ic#127 account or governance state
-ic#129 account or governance state
-ic#131 stateful or scripted subtransaction
-ic#134 stateful or scripted subtransaction
-ic#139 scripted or stateful batch
-ic#142 stateful or scripted subtransaction
-ic#144 stateful or scripted subtransaction
-ic#147 stateful or scripted subtransaction
-ic#149 stateful or scripted subtransaction
-ic#151 account or governance state
-ic#156 scripted or stateful batch
-ic#159 stateful or scripted subtransaction
-ic#161 stateful or scripted subtransaction
-ic#164 stateful or scripted subtransaction
-ic#172 stateful or scripted subtransaction
-ic#177 scripted or stateful batch
-ic#179 account or governance state
-ic#182 stateful or scripted subtransaction
-ic#184 stateful or scripted subtransaction
-ic#185 account or governance state
-ic#195 scripted or stateful batch
-ic#197 account or governance state
-ic#205 account or governance state
-ic#214 account or governance state
-ic#229 stateful or scripted subtransaction
-ic#233 stateful or scripted subtransaction
-ic#286 scripted or stateful batch
-ic#293 scripted or stateful batch
-ic#300 scripted or stateful batch
-ic#302 account or governance state
-ic#307 account or governance state
-ic#315 account or governance state
-ic#320 account or governance state
-ic#321 account or governance state
-ic#322 account or governance state
-ic#324 stateful or scripted subtransaction
-ic#326 account or governance state
-ic#329 account or governance state
-ic#334 account or governance state
-ic#336 account or governance state
-ic#337 account or governance state
-ic#339 account or governance state
-ic#342 stateful or scripted subtransaction
-ic#344 account or governance state
-ic#347 account or governance state
-ic#351 account or governance state
-ic#354 stateful or scripted subtransaction
-ic#359 account or governance state
-ic#398 account or governance state
-ic#403 account or governance state
-ic#408 account or governance state
-ic#409 certificate kind
-ic#411 account or governance state
-ic#415 account or governance state
-ic#419 account or governance state
-ic#422 certificate kind
-ic#424 certificate kind
-ic#426 account or governance state
-ic#435 certificate kind
-ic#437 account or governance state
-ic#440 certificate kind
-ic#442 account or governance state
-ic#446 certificate kind
-ic#448 certificate kind
-ic#450 account or governance state
-ic#455 stateful or scripted subtransaction
-ic#458 stateful or scripted subtransaction
-ic#473 stateful or scripted subtransaction
-ic#474 certificate kind
-ic#476 certificate kind
-ic#478 account or governance state
-ic#480 stateful or scripted subtransaction
-ic#484 account or governance state
-ic#489 stateful or scripted subtransaction
-ic#493 stateful or scripted subtransaction
-ic#494 certificate kind
-ic#496 certificate kind
-ic#500 stateful or scripted subtransaction
-ic#501 certificate kind
-ic#503 certificate kind
-ic#508 certificate kind
-ic#510 certificate kind
-ic#513 account or governance state
-ic#514 certificate kind
-ic#516 certificate kind
-ic#518 account or governance state
-ic#521 stateful or scripted subtransaction
-ic#526 stateful or scripted subtransaction
-ic#527 certificate kind
-ic#529 account or governance state
-ic#531 stateful or scripted subtransaction
-ic#533 certificate kind
-ic#535 certificate kind
-ic#537 account or governance state
-ic#539 stateful or scripted subtransaction
-ic#541 account or governance state
-ic#543 stateful or scripted subtransaction
-ic#544 certificate kind
-ic#546 certificate kind
-ic#548 account or governance state
-ic#549 account or governance state
-ic#551 stateful or scripted subtransaction
-ic#552 certificate kind
-ic#554 certificate kind
-ic#556 account or governance state
-ic#559 stateful or scripted subtransaction
-ic#564 scripted or stateful batch
-ic#567 stateful or scripted subtransaction
-ic#570 stateful or scripted subtransaction
-ic#572 stateful or scripted subtransaction
-ic#589 stateful or scripted subtransaction
-ic#592 stateful or scripted subtransaction
-ic#595 stateful or scripted subtransaction
-ic#602 stateful or scripted subtransaction
-ic#605 stateful or scripted subtransaction
-ic#607 certificate kind
-ic#610 stateful or scripted subtransaction
-ic#628 stateful or scripted subtransaction
-ic#631 stateful or scripted subtransaction
-ic#635 certificate kind
-ic#722 certificate kind
-ic#724 certificate kind
-ic#733 certificate kind
-ic#734 certificate kind
-ic#736 certificate kind
-ic#737 certificate kind
-ic#753 certificate kind
-ic#754 certificate kind
-ic#755 certificate kind
-ic#761 certificate kind
-ic#763 certificate kind
-ic#765 certificate kind
-ic#767 certificate kind
-ic#769 certificate kind
-ic#770 certificate kind
-ic#771 account or governance state
-ic#780 certificate kind
-ic#781 certificate kind
-ic#783 certificate kind
-ic#785 certificate kind
-ic#786 certificate kind
-ic#787 account or governance state
-ic#790 account or governance state
-ic#791 account or governance state
-ic#792 account or governance state
-ic#793 account or governance state
-ic#825 certificate kind
-ic#827 certificate kind
-ic#829 certificate kind
-ic#830 certificate kind
-ic#831 certificate kind
-ic#833 certificate kind
-ic#835 certificate kind
-ic#836 certificate kind
-ic#837 certificate kind
-ic#839 certificate kind
-ic#841 certificate kind
-ic#842 certificate kind
-ic#843 certificate kind
-ic#845 certificate kind
-ic#847 certificate kind
-ic#848 certificate kind
 ic#886 new script language (requires V3)
-ic#890 stateful or scripted subtransaction
+ic#890 reference script language (requires V3)
 ic#894 new script language (requires V3)
 ic#896 new script language (requires V3)
-ic#898 stateful or scripted subtransaction
 ic#900 witness fields
-ic#906 registration with subtransactions
-ic#915 registration with subtransactions
-ic#920 registration with subtransactions
-ic#931 registration with subtransactions
-ic#945 registration with subtransactions
-ic#955 registration with subtransactions
-ic#958 stateful or scripted subtransaction
-ic#964 scripted or stateful batch
-ic#967 scripted or stateful batch
-ic#969 certificate kind
-ic#973 registration with subtransactions
-ic#975 certificate kind
-ic#982 registration with subtransactions
-ic#984 certificate kind
-ic#988 registration with subtransactions
-ic#993 stateful or scripted subtransaction
-ic#1001 scripted or stateful batch
-ic#1005 scripted or stateful batch
-ic#1010 registration with subtransactions
-ic#1018 registration with subtransactions
-ic#1023 registration with subtransactions
-ic#1026 certificate kind
-ic#1027 certificate kind
-ic#1030 stateful or scripted subtransaction
-ic#1033 stateful or scripted subtransaction
-ic#1036 registration with subtransactions
-ic#1039 certificate kind
-ic#1040 certificate kind
-ic#1043 stateful or scripted subtransaction
-ic#1045 account or governance state
-ic#1051 registration with subtransactions
-ic#1054 certificate kind
-ic#1055 certificate kind
-ic#1057 account or governance state
-ic#1060 stateful or scripted subtransaction
-ic#1064 registration with subtransactions
-ic#1066 certificate kind
-ic#1068 stateful or scripted subtransaction
-ic#1070 certificate kind
-ic#1075 scripted or stateful batch
-ic#1077 certificate kind
-ic#1079 scripted or stateful batch
-ic#1081 registration with subtransactions
-ic#1090 account or governance state
-ic#1093 stateful or scripted subtransaction
-ic#1096 account or governance state
-ic#1101 scripted or stateful batch
-ic#1104 account or governance state
-ic#1108 scripted or stateful batch
-ic#1111 account or governance state
-ic#1114 stateful or scripted subtransaction
-ic#1117 account or governance state
-ic#1126 stateful or scripted subtransaction
-ic#1133 stateful or scripted subtransaction
-ic#1142 stateful or scripted subtransaction
-ic#1149 stateful or scripted subtransaction
-ic#1159 stateful or scripted subtransaction
-ic#1168 stateful or scripted subtransaction
-ic#1172 stateful or scripted subtransaction
-ic#1176 stateful or scripted subtransaction
-ic#1182 scripted or stateful batch
-ic#1185 account or governance state
-ic#1188 stateful or scripted subtransaction
-ic#1244 bootstrap or reward address
-ic#1255 scripted or stateful batch
-ic#1273 certificate kind
-ic#1275 certificate kind
-ic#1277 account or governance state
-ic#1280 certificate kind
-ic#1282 account or governance state
-ic#1286 certificate kind
-ic#1288 account or governance state
-ic#1291 bootstrap or reward address
-ic#1305 certificate kind
-ic#1307 account or governance state
-ic#1332 stateful or scripted subtransaction
-ic#1335 stateful or scripted subtransaction
-ic#1344 scripted or stateful batch
-supp#14 stateful or scripted subtransaction
-supp#20 overlapping spending and reference inputs
-supp#22 account or governance state
+ic#1344 witness fields
+ic#1896 witness fields
+ic#1898 witness fields
+ic#1900 witness fields
+ic#1902 witness fields
+ic#1904 witness fields
+ic#1906 witness fields
+ic#1908 witness fields
+ic#1910 witness fields
+ic#1912 witness fields
+ic#1914 witness fields
+ic#1916 witness fields
+ic#1918 witness fields
+ic#1920 witness fields
+ic#1922 witness fields
+ic#1924 witness fields
+ic#1926 witness fields
+ic#1928 witness fields
+ic#1930 witness fields
+ic#1932 witness fields
+ic#1934 witness fields
+ic#1936 witness fields
+ic#2076 witness fields
+ic#2079 witness fields
+ic#2082 witness fields
+ic#2085 witness fields
+ic#2088 witness fields
+ic#2095 witness fields
+ic#2098 witness fields
+ic#2101 witness fields
+ic#2107 witness fields
+ic#2109 witness fields
+ic#2111 witness fields
+ic#2113 witness fields
+ic#2160 witness fields
+ic#2165 witness fields
+ic#2167 witness fields
+ic#2169 witness fields
+ic#2294 new script language (requires V3)
+ic#2296 reference script language (requires V3)
+ic#2297 new script language (requires V3)
+ic#2299 reference script language (requires V3)
+ic#2300 new script language (requires V3)
+ic#2302 reference script language (requires V3)
+ic#2339 new script language (requires V3)
+ic#9675 new script language (requires V3)
+ic#9677 reference script language (requires V3)
+ic#9678 new script language (requires V3)
+ic#9680 reference script language (requires V3)
+ic#9681 new script language (requires V3)
+ic#9684 new script language (requires V3)
+ic#9686 reference script language (requires V3)
+ic#9820 witness fields
+ic#9846 witness fields
