@@ -101,22 +101,26 @@ impl ChainSummary {
         }
     }
 
-    /// Historical era times and the validation-slot basis used by native Plutus.
+    /// Historical era times bounded by the forecast horizon of a ledger at `tip`.
     pub fn to_pallas_time_context(
         &self,
-        validation_slot: u64,
+        tip: BlockSlot,
+        stability_window: u64,
     ) -> Result<pallas::ledger::validate::utils::DijkstraTimeContext, ChainError> {
-        use pallas::ledger::validate::utils::{DijkstraTimeContext, EraTime};
+        use pallas::ledger::validate::utils::{DijkstraTimeContext, EraTime, ForecastHorizon};
         let milliseconds = |seconds: u64| {
             seconds.checked_mul(MS_PER_SECOND).ok_or_else(|| {
                 ChainError::InvalidConfig("chain time overflows POSIX milliseconds".into())
             })
         };
-        let eras = self
+        let known = self
             .past
             .iter()
             .chain(self.edge.iter())
             .filter(|era| era.end.as_ref().is_none_or(|end| end.slot > era.start.slot))
+            .collect::<Vec<_>>();
+        let eras = known
+            .iter()
             .map(|era| {
                 Ok(EraTime {
                     start_slot: era.start.slot,
@@ -125,10 +129,18 @@ impl ChainSummary {
                 })
             })
             .collect::<Result<Vec<_>, ChainError>>()?;
-        // Convert with each known era's slot length, just as earlier-era
-        // SlotConfig conversion does. Epoch boundaries do not limit conversion;
-        // a full consensus forecast is a separate concern.
-        DijkstraTimeContext::new(eras, validation_slot).map_err(|error| {
+        // The ledger forecasts up to the first epoch start at or after the slot one stability window past the tip.
+        let forecast = tip.saturating_add(1).saturating_add(stability_window);
+        let era = known
+            .iter()
+            .rev()
+            .find(|era| era.start.slot <= forecast)
+            .ok_or_else(|| ChainError::InvalidConfig("no era holds the forecast horizon".into()))?;
+        let horizon = (forecast - era.start.slot)
+            .div_ceil(era.epoch_length)
+            .saturating_mul(era.epoch_length)
+            .saturating_add(era.start.slot);
+        DijkstraTimeContext::new(eras, ForecastHorizon::Slot(horizon)).map_err(|error| {
             ChainError::InvalidConfig(format!("invalid chain time history: {error}"))
         })
     }
@@ -347,6 +359,7 @@ pub fn load_active_era<D: Domain>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pallas::ledger::validate::utils::DijkstraTimeError;
 
     #[test]
     fn slot_config_is_in_milliseconds() {
@@ -408,8 +421,7 @@ mod tests {
         summary.append_era(2, past);
         summary.append_era(12, current);
         summary.append_era(13, future);
-        let time = summary.to_pallas_time_context(250).unwrap();
-        assert_eq!(time.validation_slot(), 250);
+        let time = summary.to_pallas_time_context(250, 1000).unwrap();
         assert_eq!(
             time.validity_bounds(Some(150), Some(299)).unwrap(),
             (Some(4_000_000), Some(5_099_000))
@@ -418,11 +430,56 @@ mod tests {
         assert_eq!(time.slot_to_posix_ms(400).unwrap(), 5_200_000);
         assert_eq!(time.slot_to_posix_ms(450).unwrap(), 5_300_000);
         assert_eq!(time.slot_to_posix_ms(1000).unwrap(), 6_400_000);
+        assert_eq!(time.slot_to_posix_ms(1299).unwrap(), 6_998_000);
+        assert_eq!(
+            time.slot_to_posix_ms(1300),
+            Err(DijkstraTimeError::PastHorizon {
+                slot: 1300,
+                horizon: 1300
+            })
+        );
+    }
+
+    fn single_era(epoch_length: u64) -> ChainSummary {
+        let mut summary = ChainSummary::default();
+        summary.append_era(
+            12,
+            EraSummary {
+                start: EraBoundary {
+                    epoch: 0,
+                    slot: 0,
+                    timestamp: 1000,
+                },
+                end: None,
+                epoch_length,
+                slot_length: 1,
+                protocol: 12,
+            },
+        );
+        summary
+    }
+
+    fn horizon_of(summary: &ChainSummary, tip: u64, window: u64) -> Option<u64> {
+        let time = summary.to_pallas_time_context(tip, window).unwrap();
+        match time.slot_to_posix_ms(u64::MAX / 2000) {
+            Err(DijkstraTimeError::PastHorizon { horizon, .. }) => Some(horizon),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn plutus_time_horizon_is_the_epoch_bound_past_the_stability_window() {
+        let summary = single_era(21_600);
+        assert_eq!(horizon_of(&summary, 1_344_412, 6480), Some(1_360_800));
+        assert_eq!(horizon_of(&summary, 15_119, 6480), Some(21_600));
+        assert_eq!(horizon_of(&summary, 15_120, 6480), Some(43_200));
     }
 
     #[test]
     fn plutus_time_rejects_missing_history_zero_slot_length_and_overflow() {
-        assert!(ChainSummary::default().to_pallas_time_context(0).is_err());
+        assert!(ChainSummary::default()
+            .to_pallas_time_context(0, 1)
+            .is_err());
         for (timestamp, slot_length) in [(1000, 0), (u64::MAX, 1)] {
             let mut summary = ChainSummary::default();
             summary.append_era(
@@ -440,7 +497,7 @@ mod tests {
                 },
             );
             assert!(matches!(
-                summary.to_pallas_time_context(1),
+                summary.to_pallas_time_context(1, 1),
                 Err(ChainError::InvalidConfig(_))
             ));
         }

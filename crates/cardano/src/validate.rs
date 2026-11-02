@@ -64,7 +64,7 @@ pub fn validate_tx<D: Domain>(
     let time = if era == Era::Dijkstra && requests_scripts(&tx) {
         Some(
             crate::eras::load_era_summary::<D>(utxos.state())?
-                .to_pallas_time_context(env.block_slot)?,
+                .to_pallas_time_context(env.block_slot, crate::utils::stability_window(genesis))?,
         )
     } else {
         None
@@ -104,7 +104,8 @@ pub fn validate_tx<D: Domain>(
         }
     }
 
-    let report = evaluate_decoded::<D>(&tx, utxos, &env.prot_params, false, time.as_ref())?;
+    let report =
+        evaluate_decoded::<D>(&tx, utxos, genesis, &env.prot_params, false, time.as_ref())?;
 
     for eval in report.iter() {
         if !eval.success {
@@ -160,11 +161,12 @@ pub fn phase_one_utxos(matches: &UtxoMap) -> Result<pallas_validate::utils::UTxO
 pub fn evaluate_tx<D: Domain>(
     cbor: &[u8],
     utxos: &MempoolAwareUtxoStore<D>,
+    genesis: &Genesis,
 ) -> Result<pallas_validate::phase2::EvalReport, ChainError> {
     let active = crate::load_effective_pparams::<D>(utxos.state())?;
     let tx = decode_submission(submission_era(active.ensure_protocol_version()?)?, cbor)?;
     let pparams = validation_parameters(&active)?;
-    evaluate_decoded::<D>(&tx, utxos, &pparams, false, None)
+    evaluate_decoded::<D>(&tx, utxos, genesis, &pparams, false, None)
 }
 
 /// Estimate native script costs independently of signatures and declared budgets.
@@ -174,22 +176,24 @@ pub fn evaluate_tx<D: Domain>(
 pub fn estimate_tx<D: Domain>(
     cbor: &[u8],
     utxos: &MempoolAwareUtxoStore<D>,
+    genesis: &Genesis,
 ) -> Result<pallas_validate::phase2::EvalReport, ChainError> {
     let active = crate::load_effective_pparams::<D>(utxos.state())?;
     let tx = decode_submission(submission_era(active.ensure_protocol_version()?)?, cbor)?;
     let pparams = validation_parameters(&active)?;
-    evaluate_decoded::<D>(&tx, utxos, &pparams, true, None)
+    evaluate_decoded::<D>(&tx, utxos, genesis, &pparams, true, None)
 }
 
 /// [`estimate_tx`] of a Dijkstra transaction, with the builtins each redeemer's evaluation called in order of first call.
 pub fn estimate_tx_calls<D: Domain>(
     cbor: &[u8],
     utxos: &MempoolAwareUtxoStore<D>,
+    genesis: &Genesis,
 ) -> Result<Vec<(TxEvalResult, Vec<Builtin>)>, ChainError> {
     let active = crate::load_effective_pparams::<D>(utxos.state())?;
     let tx = decode_submission(submission_era(active.ensure_protocol_version()?)?, cbor)?;
     let pparams = validation_parameters(&active)?;
-    estimate_decoded::<D>(&tx, utxos, &pparams, None)
+    estimate_decoded::<D>(&tx, utxos, genesis, &pparams, None)
 }
 
 /// The minimum fee of a Dijkstra transaction under the active parameters,
@@ -216,18 +220,19 @@ pub fn min_fee<D: Domain>(
 fn evaluate_decoded<D: Domain>(
     tx: &MultiEraTx<'_>,
     utxos: &MempoolAwareUtxoStore<D>,
+    genesis: &Genesis,
     pparams: &MultiEraProtocolParameters,
     estimate: bool,
     admission_time: Option<&pallas_validate::utils::DijkstraTimeContext>,
 ) -> Result<pallas_validate::phase2::EvalReport, ChainError> {
     if estimate && tx.era() == Era::Dijkstra {
-        let estimates = estimate_decoded::<D>(tx, utxos, pparams, admission_time)?;
+        let estimates = estimate_decoded::<D>(tx, utxos, genesis, pparams, admission_time)?;
         return Ok(estimates.into_iter().map(|(result, _)| result).collect());
     }
     if !requests_scripts(tx) {
         return Ok(vec![]);
     }
-    let (utxos, slot_config, time) = evaluation_inputs::<D>(tx, utxos, admission_time)?;
+    let (utxos, slot_config, time) = evaluation_inputs::<D>(tx, utxos, genesis, admission_time)?;
     if let Some(time) = time {
         pallas_validate::phase2::evaluate_tx_with_time(tx, pparams, &utxos, &time)
     } else {
@@ -239,13 +244,14 @@ fn evaluate_decoded<D: Domain>(
 fn estimate_decoded<D: Domain>(
     tx: &MultiEraTx<'_>,
     utxos: &MempoolAwareUtxoStore<D>,
+    genesis: &Genesis,
     pparams: &MultiEraProtocolParameters,
     admission_time: Option<&pallas_validate::utils::DijkstraTimeContext>,
 ) -> Result<Vec<(TxEvalResult, Vec<Builtin>)>, ChainError> {
     if !requests_scripts(tx) {
         return Ok(vec![]);
     }
-    let (utxos, slot_config, time) = evaluation_inputs::<D>(tx, utxos, admission_time)?;
+    let (utxos, slot_config, time) = evaluation_inputs::<D>(tx, utxos, genesis, admission_time)?;
     if let Some(time) = time {
         pallas_validate::phase2::estimate_tx_calls_with_time(tx, pparams, &utxos, &time)
     } else {
@@ -258,6 +264,7 @@ fn estimate_decoded<D: Domain>(
 fn evaluation_inputs<D: Domain>(
     tx: &MultiEraTx<'_>,
     utxos: &MempoolAwareUtxoStore<D>,
+    genesis: &Genesis,
     admission_time: Option<&pallas_validate::utils::DijkstraTimeContext>,
 ) -> Result<
     (
@@ -283,7 +290,7 @@ fn evaluation_inputs<D: Domain>(
                     .read_cursor()?
                     .ok_or(ChainError::NoActiveEpoch)?
                     .slot();
-                eras.to_pallas_time_context(slot)?
+                eras.to_pallas_time_context(slot, crate::utils::stability_window(genesis))?
             }
         })
     } else {

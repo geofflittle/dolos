@@ -149,7 +149,7 @@ fn captured_ttl_admission_evaluation_and_estimation() {
 }
 
 #[test]
-fn cross_epoch_signed_spend_admits_evaluates_and_estimates() {
+fn cross_epoch_signed_spend_past_the_horizon_is_refused() {
     let case = root().join("cross-epoch-ttl");
     let replay: Value =
         serde_json::from_slice(&std::fs::read(case.join("replay.json")).unwrap()).unwrap();
@@ -157,24 +157,58 @@ fn cross_epoch_signed_spend_admits_evaluates_and_estimates() {
     assert!(
         number(&replay["validation_slot"]) / epoch_length < number(&replay["ttl"]) / epoch_length
     );
-    assert_admission_evaluation_and_estimation(&case);
+    let (domain, bytes) = fixture_from(&case);
+    let genesis = domain.genesis();
+    let utxos = MempoolAwareUtxoStore::<ToyDomain>::new(domain.state(), domain.mempool());
+    let evaluations = [
+        format!(
+            "{:?}",
+            dolos_cardano::validate::evaluate_tx(&bytes, &utxos, &genesis)
+        ),
+        format!(
+            "{:?}",
+            dolos_cardano::validate::estimate_tx(&bytes, &utxos, &genesis)
+        ),
+        format!(
+            "{:?}",
+            dolos_cardano::validate::estimate_tx_calls(&bytes, &utxos, &genesis)
+        ),
+    ];
+    for refusal in evaluations {
+        assert!(
+            refusal.starts_with("Err(")
+                && refusal.contains("slot 900481 is at or past the forecast horizon 885600"),
+            "{refusal}"
+        );
+    }
+    let admission = format!(
+        "{:?}",
+        domain.receive_tx("historical TTL capture", &domain.read_chain(), &bytes)
+    );
+    assert!(
+        admission.starts_with("Err(")
+            && admission.contains("PastHorizon { slot: 900481, horizon: 885600 }"),
+        "{admission}"
+    );
+    assert!(domain.mempool().peek_pending().is_empty());
 }
 
 fn assert_admission_evaluation_and_estimation(case: &Path) {
     let (domain, bytes) = fixture_from(case);
+    let genesis = domain.genesis();
     let context: Value =
         serde_json::from_slice(&std::fs::read(case.join("replay.json")).unwrap()).unwrap();
     let expected = units(&context["reference_execution_units"]);
     let utxos = MempoolAwareUtxoStore::<ToyDomain>::new(domain.state(), domain.mempool());
     for report in [
-        dolos_cardano::validate::evaluate_tx(&bytes, &utxos).unwrap(),
-        dolos_cardano::validate::estimate_tx(&bytes, &utxos).unwrap(),
+        dolos_cardano::validate::evaluate_tx(&bytes, &utxos, &genesis).unwrap(),
+        dolos_cardano::validate::estimate_tx(&bytes, &utxos, &genesis).unwrap(),
     ] {
         assert_eq!(report.len(), 1);
         assert!(report[0].success, "{report:?}");
         assert_eq!(report[0].units, expected);
     }
-    let calls = dolos_cardano::validate::estimate_tx_calls(&bytes, &utxos).unwrap();
+    let calls = dolos_cardano::validate::estimate_tx_calls(&bytes, &utxos, &genesis).unwrap();
     assert_eq!(calls.len(), 1);
     assert!(calls[0].0.success);
     assert_eq!(calls[0].0.units, expected);

@@ -29,7 +29,7 @@ use pallas::{
         traverse::MultiEraBlock,
         validate::{
             phase2::{tx::TxEvalResult, Builtin},
-            utils::{PostAlonzoError, ValidationError},
+            utils::{DijkstraTimeError, PostAlonzoError, ValidationError},
         },
     },
 };
@@ -225,7 +225,7 @@ impl Group {
         &self,
         tx: &[u8],
     ) -> Result<Vec<(TxEvalResult, Vec<Builtin>)>, ChainError> {
-        dolos_cardano::validate::estimate_tx_calls(tx, &self.utxos())
+        dolos_cardano::validate::estimate_tx_calls(tx, &self.utxos(), &self.domain.genesis)
     }
 
     /// The minimum fee Dolos computes for one transaction against the group's stores and mempool.
@@ -418,7 +418,9 @@ fn validation_class(v: &ValidationError) -> DolosClass {
         | V::DijkstraInvalidGovernance(_)
         | V::DijkstraTreasuryValueMismatch => C::CertificateAndGovernance,
         V::DijkstraScriptContext(_) => C::Script,
-        V::DijkstraUnsupported(_)
+        V::DijkstraTime(DijkstraTimeError::PastHorizon { .. }) => C::Script,
+        V::DijkstraTime(_)
+        | V::DijkstraUnsupported(_)
         | V::DijkstraMissingParameters(_)
         | V::DijkstraLedgerStateUnavailable(_)
         | V::TxAndProtParamsDiffer

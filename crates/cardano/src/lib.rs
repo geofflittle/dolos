@@ -573,9 +573,9 @@ impl dolos_core::ChainLogic for CardanoLogic {
         &self,
         cbor: &[u8],
         utxos: &MempoolAwareUtxoStore<D>,
-        _genesis: &Genesis,
+        genesis: &Genesis,
     ) -> Result<dolos_core::mempool::EvalReport, ChainError> {
-        validate::estimate_tx(cbor, utxos)
+        validate::estimate_tx(cbor, utxos, genesis)
     }
 
     fn validate_tx<D: Domain>(
