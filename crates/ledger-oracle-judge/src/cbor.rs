@@ -222,6 +222,82 @@ impl<'b> Reader<'b> {
     }
 }
 
+/// The slot and epoch at the start or end of an era.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EraBound {
+    pub slot: u64,
+    pub epoch: u64,
+}
+
+/// One era of a node's era history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NodeEra {
+    pub start: EraBound,
+    pub end: EraBound,
+    pub epoch_size: u64,
+    pub slot_length_ms: u64,
+}
+
+impl Reader<'_> {
+    /// Reads an array, calling `f` with each item's index, and returns the item count.
+    fn items(&mut self, mut f: impl FnMut(&mut Self, u64) -> Result<()>) -> Result<u64> {
+        let len = self.array()?;
+        let mut n = 0;
+        self.each(len, |r| {
+            f(r, n)?;
+            n += 1;
+            Ok(())
+        })?;
+        Ok(n)
+    }
+
+    fn era_bound(&mut self) -> Result<EraBound> {
+        let (mut slot, mut epoch) = (None, None);
+        self.items(|r, i| match i {
+            1 => r.uint().map(|n| slot = Some(n)),
+            2 => r.uint().map(|n| epoch = Some(n)),
+            _ => r.skip(),
+        })?;
+        match (slot, epoch) {
+            (Some(slot), Some(epoch)) => Ok(EraBound { slot, epoch }),
+            _ => self.fail("expected an era bound"),
+        }
+    }
+
+    fn node_era(&mut self) -> Result<NodeEra> {
+        let (mut start, mut end, mut epoch_size, mut slot_length_ms) = (None, None, None, None);
+        self.items(|r, i| match i {
+            0 => r.era_bound().map(|b| start = Some(b)),
+            1 => r.era_bound().map(|b| end = Some(b)),
+            2 => r
+                .items(|r, i| match i {
+                    0 => r.uint().map(|n| epoch_size = Some(n)),
+                    1 => r.uint().map(|n| slot_length_ms = Some(n)),
+                    _ => r.skip(),
+                })
+                .map(|_| ()),
+            _ => r.skip(),
+        })?;
+        match (start, end, epoch_size, slot_length_ms) {
+            (Some(start), Some(end), Some(epoch_size), Some(slot_length_ms)) => Ok(NodeEra {
+                start,
+                end,
+                epoch_size,
+                slot_length_ms,
+            }),
+            _ => self.fail("expected an era summary"),
+        }
+    }
+}
+
+/// Decodes the eras of a node's era history query answer.
+pub fn era_history(raw: &[u8]) -> Result<Vec<NodeEra>> {
+    let mut r = Reader::new(raw);
+    let mut eras = Vec::new();
+    r.items(|r, _| r.node_era().map(|e| eras.push(e)))?;
+    Ok(eras)
+}
+
 /// Decodes one output reference from its CBOR bytes.
 pub fn txin(raw: &[u8]) -> Result<TxIn> {
     Reader::new(raw).txin()
@@ -400,5 +476,45 @@ mod tests {
             ],
         };
         assert_eq!(inputs.sub_only(), BTreeSet::from([&i(4), &i(5)]));
+    }
+
+    const ERA_HISTORY: &str = concat!(
+        "9f838400000000840000000084190438194e20830018d8810018d88384000000008400000000841954601903e8830019",
+        "195081001919508384000000008400000000841954601903e88300191950810019195083840000000084000000008419",
+        "54601903e8830019195081001919508384000000008400000000841954601903e8830019195081001919508384000000",
+        "008400000000841954601903e8830019195081001919508384000000008400000000841954601903e883001919508100",
+        "191950838400000000841b12e28863e25a00001a0014c3a0183f193b10851954601903e883001919508100191950185a",
+        "ff",
+    );
+
+    #[test]
+    fn era_history_reads_each_era_bound_and_its_epoch_and_slot_lengths() {
+        let raw = hex::decode(ERA_HISTORY).unwrap();
+        let eras = era_history(&raw).unwrap();
+        let zero = EraBound { slot: 0, epoch: 0 };
+        assert_eq!(eras.len(), 8);
+        assert_eq!(
+            eras[0],
+            NodeEra {
+                start: zero,
+                end: zero,
+                epoch_size: 1080,
+                slot_length_ms: 20000,
+            }
+        );
+        assert_eq!(
+            eras[7],
+            NodeEra {
+                start: zero,
+                end: EraBound {
+                    slot: 1360800,
+                    epoch: 63,
+                },
+                epoch_size: 21600,
+                slot_length_ms: 1000,
+            }
+        );
+        let short = &raw[..raw.len() - 2];
+        assert!(era_history(short).is_err());
     }
 }

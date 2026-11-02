@@ -176,7 +176,7 @@ pub fn coverage(row: Row) -> Coverage {
         Row::S16 => Partial(
             EraSummary,
             &[],
-            "the name of the last era only, starts and slot lengths are not compared",
+            "the era summary serves no epoch length or forecast horizon, so neither is compared",
         ),
         Row::S17 => Uncovered("stake distribution changes only across an epoch change"),
         Row::S18 => Partial(

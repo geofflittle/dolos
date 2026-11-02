@@ -25,10 +25,20 @@ query_node() {
   out=$2
   shift 2
   case $query in
-    tip | protocol-parameters | utxo) ;;
+    tip | protocol-parameters | utxo | era-history | slot-number) ;;
     *) echo "LIVE refused node query $query" >&2 ; exit 2 ;;
   esac
   docker exec "$NODE" cardano-cli latest query "$query" "$@" >"$DIR/$out"
+}
+
+# Writes the slot the node holds at a POSIX second, or past-horizon when it translates none, once per second.
+node_slot() {
+  out=node-slot-$1.txt
+  [ -f "$DIR/$out" ] && return 0
+  if ! query_node slot-number "$out" "$(date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ)" 2>"$DIR/node-slot-$1.err"; then
+    grep -q 'Past horizon' "$DIR/node-slot-$1.err"
+    echo past-horizon >"$DIR/$out"
+  fi
 }
 
 # Copies the immutable chunk holding a slot and its secondary index, once per chunk.
@@ -59,6 +69,13 @@ read_endpoint sync.SyncService/ReadTip '{}' tip.json
 read_endpoint query.QueryService/ReadParams '{}' params.json
 query_node protocol-parameters node-params.json
 read_endpoint query.QueryService/ReadEraSummary '{}' era.json
+query_node era-history node-era-history.json
+for ms in $(jq -r '.cardano.summaries[-1].start.time // empty' "$DIR/era.json") \
+  $(jq -r '.tip.timestamp // empty' "$DIR/tip.json"); do
+  node_slot $((ms / 1000 - 1))
+  node_slot $((ms / 1000))
+  node_slot $((ms / 1000 + 1))
+done
 query_node tip node-tip-after.json
 
 : >"$DIR/refs.txt"

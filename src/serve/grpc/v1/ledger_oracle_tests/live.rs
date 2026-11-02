@@ -5,11 +5,11 @@ use std::{
 };
 
 use ledger_oracle_judge::{
-    cbor::TxIn,
+    cbor::{self, EraBound, NodeEra, TxIn},
     compare::Tally,
     live::{
-        block_bytes, chunk_blocks, compare_utxos, era_name, settle, Aligned, AtPoint, NodeTip,
-        Point, UtxoBracket, UtxoReads,
+        block_bytes, chunk_blocks, compare_era_summary, compare_utxos, settle, Aligned, AtPoint,
+        NodeSlot, NodeTime, NodeTip, Point, ServedEra, ServedTime, UtxoBracket, UtxoReads,
     },
     manifest::{self, Candidates, Known, LiveLocus},
     record::PParams,
@@ -59,13 +59,54 @@ fn served_params(response: q::ReadParamsResponse) -> (cardano::PParams, u64) {
     }
 }
 
-fn era_names(response: q::ReadEraSummaryResponse) -> Vec<String> {
+fn served_eras(response: q::ReadEraSummaryResponse) -> Vec<ServedEra> {
+    let bound = |b: &cardano::EraBoundary| EraBound {
+        slot: b.slot,
+        epoch: b.epoch,
+    };
     match response.summary {
-        Some(read_era_summary_response::Summary::Cardano(eras)) => {
-            eras.summaries.into_iter().map(|e| e.name).collect()
-        }
+        Some(read_era_summary_response::Summary::Cardano(eras)) => eras
+            .summaries
+            .into_iter()
+            .map(|e| {
+                let start = e
+                    .start
+                    .unwrap_or_else(|| panic!("LIVE era.json era {} serves no start", e.name));
+                ServedEra {
+                    start: bound(&start),
+                    start_ms: start.time,
+                    end: e.end.as_ref().map(bound),
+                    name: e.name,
+                }
+            })
+            .collect(),
         None => Vec::new(),
     }
+}
+
+/// The node's era history from its query answer.
+fn node_eras(dir: &Path) -> Vec<NodeEra> {
+    #[derive(serde::Deserialize)]
+    struct Envelope {
+        #[serde(rename = "cborHex")]
+        cbor_hex: String,
+    }
+    let envelope: Envelope = read(dir, "node-era-history.json");
+    let raw = hex::decode(&envelope.cbor_hex).expect("LIVE node-era-history.json is hex");
+    cbor::era_history(&raw).unwrap_or_else(|e| panic!("LIVE node-era-history.json {e}"))
+}
+
+/// The node's slot at each second it was asked to translate, keyed by the second.
+fn node_slots(dir: &Path) -> BTreeMap<u64, NodeSlot> {
+    let names = files(dir, "node-slot-");
+    let answers = names.iter().filter_map(|name| {
+        let second = name.strip_prefix("node-slot-")?.strip_suffix(".txt")?;
+        let second = second.parse().unwrap_or_else(|e| panic!("LIVE {name} {e}"));
+        let text = fs::read_to_string(dir.join(name)).unwrap_or_else(|e| panic!("LIVE {name} {e}"));
+        let slot = text.parse().unwrap_or_else(|e| panic!("LIVE {name} {e}"));
+        Some((second, slot))
+    });
+    answers.collect()
 }
 
 /// The hashes of the transactions in a served block that contain sub transactions.
@@ -390,7 +431,9 @@ fn live() {
         "LIVE image={} node_tip={} dolos_tip={} params_slot={params_slot} aligned={}",
         image.trim(),
         before.slot,
-        tip.tip.map_or("none".to_string(), |t| t.slot.to_string()),
+        tip.tip
+            .as_ref()
+            .map_or("none".to_string(), |t| t.slot.to_string()),
         aligned
             .as_ref()
             .map_or("no".to_string(), |a| format!("epoch={}", a.epoch())),
@@ -407,10 +450,32 @@ fn live() {
             tallies.entry(LiveLocus::Params).or_default(),
         );
     }
-    let names = era_names(read(&dir, "era.json"));
-    let verdict = era_name(&names, &before.era);
+    let history = node_eras(&dir);
+    let current = history
+        .last()
+        .expect("LIVE the node's era history holds an era");
+    println!(
+        "LIVE era_history eras={} epoch_size={} horizon={} served=no_epoch_size,no_horizon",
+        history.len(),
+        current.epoch_size,
+        current.end.slot
+    );
+    let tip_time = tip.tip.as_ref().map(|t| ServedTime {
+        slot: t.slot,
+        ms: t.timestamp,
+    });
+    let slots = node_slots(&dir);
+    let node = NodeTime {
+        era: &before.era,
+        history: &history,
+        slots: &slots,
+    };
+    let eras = served_eras(read(&dir, "era.json"));
     let era = tallies.entry(LiveLocus::EraSummary).or_default();
-    era.add(verdict.agrees(), || verdict.to_string());
+    match tip_time {
+        Some(tip_time) => compare_era_summary(&eras, tip_time, &node, era),
+        None => era.add(false, || "tip=none".to_string()),
+    }
     compare_children(&dir, tallies.entry(LiveLocus::ChildAsOutput).or_default());
     compare_as_outputs(&dir, tallies.entry(LiveLocus::ChildAsOutput).or_default());
     compare_blocks(&dir, tallies.entry(LiveLocus::Block).or_default());

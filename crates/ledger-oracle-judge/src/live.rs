@@ -1,8 +1,9 @@
-use std::{collections::BTreeMap, fmt, ops::Range};
+use std::{collections::BTreeMap, fmt, ops::Range, str::FromStr};
 
 use serde::Deserialize;
 
 use crate::{
+    cbor::{EraBound, NodeEra},
     compare::Tally,
     manifest::{KnownLive, LiveLocus},
     row::{judged_by, Row},
@@ -95,6 +96,136 @@ pub fn era_name(served: &[String], node: &str) -> EraName {
             node: node.to_string(),
         },
     }
+}
+
+/// The slot a node translates a POSIX second to, or past its horizon when it translates none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeSlot {
+    Slot(u64),
+    PastHorizon,
+}
+
+impl FromStr for NodeSlot {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "past-horizon" => Ok(NodeSlot::PastHorizon),
+            n => n
+                .parse()
+                .map(NodeSlot::Slot)
+                .map_err(|_| format!("bad node slot {n}")),
+        }
+    }
+}
+
+impl fmt::Display for NodeSlot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NodeSlot::Slot(n) => write!(f, "{n}"),
+            NodeSlot::PastHorizon => f.write_str("past-horizon"),
+        }
+    }
+}
+
+/// One era Dolos serves, with the POSIX milliseconds it serves for its start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServedEra {
+    pub name: String,
+    pub start: EraBound,
+    pub start_ms: u64,
+    pub end: Option<EraBound>,
+}
+
+/// A slot Dolos serves with the POSIX milliseconds it serves for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServedTime {
+    pub slot: u64,
+    pub ms: u64,
+}
+
+/// The node's era, era history and translations of the seconds the served times name.
+#[derive(Debug, Clone, Copy)]
+pub struct NodeTime<'a> {
+    pub era: &'a str,
+    pub history: &'a [NodeEra],
+    pub slots: &'a BTreeMap<u64, NodeSlot>,
+}
+
+fn show_bound(bound: Option<EraBound>) -> String {
+    bound.map_or("none".to_string(), |b| format!("{}/{}", b.slot, b.epoch))
+}
+
+/// Counts the served eras against the node's eras that hold a slot, the start and tip times against the node's translation, and the slot length between them against the node's.
+pub fn compare_era_summary(
+    served: &[ServedEra],
+    tip: ServedTime,
+    node: &NodeTime,
+    tally: &mut Tally,
+) {
+    let names: Vec<String> = served.iter().map(|e| e.name.clone()).collect();
+    let verdict = era_name(&names, node.era);
+    tally.add(verdict.agrees(), || verdict.to_string());
+    let eras: Vec<&NodeEra> = node
+        .history
+        .iter()
+        .filter(|e| e.end.slot > e.start.slot)
+        .collect();
+    tally.add(served.len() == eras.len(), || {
+        format!("eras served={} node={}", served.len(), eras.len())
+    });
+    for (i, (s, n)) in served.iter().zip(&eras).enumerate() {
+        tally.add(s.start == n.start, || {
+            let (served, node) = (show_bound(Some(s.start)), show_bound(Some(n.start)));
+            format!("era={} start served={served} node={node}", s.name)
+        });
+        // The node's end of its current era is the forecast horizon, which is not an era end.
+        let end = (i + 1 < eras.len()).then_some(n.end);
+        tally.add(s.end == end, || {
+            let (served, node) = (show_bound(s.end), show_bound(end));
+            format!("era={} end served={served} node={node}", s.name)
+        });
+    }
+    let (Some(era), Some(node_era)) = (served.last(), eras.last()) else {
+        return;
+    };
+    let show = |slot: Option<&NodeSlot>| slot.map_or("not_queried".to_string(), |s| s.to_string());
+    let mut translated = |label: String, time: ServedTime| {
+        let second = time.ms / 1000;
+        let at = node.slots.get(&second);
+        let before = second.checked_sub(1).and_then(|b| node.slots.get(&b));
+        let slot = NodeSlot::Slot(time.slot);
+        let agrees =
+            time.ms.is_multiple_of(1000) && at == Some(&slot) && before.is_some_and(|b| *b != slot);
+        tally.add(agrees, || {
+            format!(
+                "{label} slot={} time={} node_slot={} node_slot_before={}",
+                time.slot,
+                time.ms,
+                show(at),
+                show(before)
+            )
+        });
+    };
+    let start = ServedTime {
+        slot: era.start.slot,
+        ms: era.start_ms,
+    };
+    translated(format!("era={} start_time", era.name), start);
+    translated("tip".to_string(), tip);
+    let length = tip
+        .slot
+        .checked_sub(start.slot)
+        .filter(|slots| *slots > 0)
+        .and_then(|slots| {
+            let ms = tip.ms.checked_sub(start.ms)?;
+            ms.is_multiple_of(slots).then_some(ms / slots)
+        });
+    tally.add(length == Some(node_era.slot_length_ms), || {
+        let served = length.map_or("underived".to_string(), |n| n.to_string());
+        let node = node_era.slot_length_ms;
+        format!("era={} slot_length served={served} node={node}", era.name)
+    });
 }
 
 /// The lines and verdict of the live comparisons, judged against the known list.
@@ -600,6 +731,159 @@ mod tests {
             era_name(&names(&[]), "Dijkstra").to_string(),
             "name=none node=Dijkstra"
         );
+    }
+
+    const START_MS: u64 = 1_792_281_600_000;
+    const TIP: u64 = 1_354_846;
+
+    fn node_slots(served: &[ServedTime]) -> BTreeMap<u64, NodeSlot> {
+        let start = START_MS / 1000;
+        let translate = |second: u64| match second.checked_sub(start) {
+            Some(slot) => NodeSlot::Slot(slot),
+            None => NodeSlot::PastHorizon,
+        };
+        let seconds = served.iter().flat_map(|t| [t.ms / 1000 - 1, t.ms / 1000]);
+        seconds.map(|s| (s, translate(s))).collect()
+    }
+
+    fn history() -> Vec<NodeEra> {
+        let zero = EraBound { slot: 0, epoch: 0 };
+        let empty = NodeEra {
+            start: zero,
+            end: zero,
+            epoch_size: 21600,
+            slot_length_ms: 1000,
+        };
+        let current = NodeEra {
+            end: EraBound {
+                slot: 1382400,
+                epoch: 64,
+            },
+            ..empty
+        };
+        vec![empty, empty, current]
+    }
+
+    fn served(start_ms: u64) -> Vec<ServedEra> {
+        vec![ServedEra {
+            name: "dijkstra".to_string(),
+            start: EraBound { slot: 0, epoch: 0 },
+            start_ms,
+            end: None,
+        }]
+    }
+
+    fn era_disagreements(served: &[ServedEra], tip: ServedTime) -> (usize, Vec<String>) {
+        let start = ServedTime {
+            slot: 0,
+            ms: served[0].start_ms,
+        };
+        let slots = node_slots(&[start, tip]);
+        let history = history();
+        let node = NodeTime {
+            era: "Dijkstra",
+            history: &history,
+            slots: &slots,
+        };
+        let mut tally = Tally::default();
+        compare_era_summary(served, tip, &node, &mut tally);
+        (tally.compared, tally.disagree)
+    }
+
+    fn tip_at(slot_ms: u64, shift_ms: u64) -> ServedTime {
+        ServedTime {
+            slot: TIP,
+            ms: START_MS + shift_ms + TIP * slot_ms,
+        }
+    }
+
+    #[test]
+    fn served_eras_and_times_the_node_translates_alike_agree() {
+        let (compared, disagree) = era_disagreements(&served(START_MS), tip_at(1000, 0));
+        assert_eq!((compared, disagree), (7, Vec::<String>::new()));
+    }
+
+    #[test]
+    fn a_served_time_one_second_late_disagrees_at_the_start_and_the_tip() {
+        let (_, disagree) = era_disagreements(&served(START_MS + 1000), tip_at(1000, 1000));
+        let start = START_MS + 1000;
+        let tip = START_MS + 1000 + TIP * 1000;
+        assert_eq!(
+            disagree,
+            [
+                format!(
+                    "era=dijkstra start_time slot=0 time={start} node_slot=1 node_slot_before=0"
+                ),
+                format!(
+                    "tip slot={TIP} time={tip} node_slot={} node_slot_before={TIP}",
+                    TIP + 1
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_served_slot_length_other_than_the_node_s_disagrees() {
+        let (_, disagree) = era_disagreements(&served(START_MS), tip_at(2000, 0));
+        let tip = START_MS + TIP * 2000;
+        assert_eq!(
+            disagree,
+            [
+                format!(
+                    "tip slot={TIP} time={tip} node_slot={} node_slot_before={}",
+                    2 * TIP,
+                    2 * TIP - 1
+                ),
+                "era=dijkstra slot_length served=2000 node=1000".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_served_end_or_start_other_than_the_node_s_disagrees() {
+        let mut moved = served(START_MS);
+        moved[0].end = Some(EraBound {
+            slot: 1382400,
+            epoch: 64,
+        });
+        moved[0].start.epoch = 1;
+        let (compared, disagree) = era_disagreements(&moved, tip_at(1000, 0));
+        assert_eq!(compared, 7);
+        assert_eq!(
+            disagree,
+            [
+                "era=dijkstra start served=0/1 node=0/0",
+                "era=dijkstra end served=1382400/64 node=none",
+            ]
+        );
+        let two = [served(START_MS), served(START_MS)].concat();
+        let (_, disagree) = era_disagreements(&two, tip_at(1000, 0));
+        assert_eq!(disagree, ["eras served=2 node=1"]);
+    }
+
+    #[test]
+    fn a_served_time_the_node_was_not_asked_to_translate_disagrees() {
+        let history = history();
+        let slots = BTreeMap::new();
+        let node = NodeTime {
+            era: "Dijkstra",
+            history: &history,
+            slots: &slots,
+        };
+        let mut tally = Tally::default();
+        compare_era_summary(&served(START_MS), tip_at(1000, 0), &node, &mut tally);
+        assert_eq!(tally.disagree.len(), 2);
+        assert!(tally.disagree[0].ends_with("node_slot=not_queried node_slot_before=not_queried"));
+    }
+
+    #[test]
+    fn a_node_slot_reads_a_slot_or_past_horizon() {
+        assert_eq!("17\n".parse::<NodeSlot>(), Ok(NodeSlot::Slot(17)));
+        assert_eq!(
+            "past-horizon\n".parse::<NodeSlot>(),
+            Ok(NodeSlot::PastHorizon)
+        );
+        assert!("Error".parse::<NodeSlot>().is_err());
     }
 
     fn point(slot: u64) -> Point {
