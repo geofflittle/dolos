@@ -26,9 +26,10 @@ fn captured_validity_third_relay_era() {
         .receive_tx("derived-validity-third", &domain.read_chain(), &bytes)
         .unwrap();
     let stored = domain.mempool().peek_pending().remove(0);
-    assert_eq!(stored.payload.1, bytes);
+    assert_eq!(stored.payload().1, bytes);
     assert_eq!(
-        stored.payload.0, 8,
+        stored.payload().0,
+        8,
         "active Dijkstra era must survive submission"
     );
 }
@@ -218,8 +219,8 @@ fn earlier_conway_submission_still_accepts_original_signed_transaction() {
     let result = domain.receive_tx("conway-control", &domain.read_chain(), &bytes);
     assert_eq!(result.unwrap(), tx.hash());
     let stored = domain.mempool().peek_pending().remove(0);
-    assert_eq!(stored.payload.0, 7);
-    assert_eq!(stored.payload.1, bytes);
+    assert_eq!(stored.payload().0, 7);
+    assert_eq!(stored.payload().1, bytes);
 }
 
 #[test]
@@ -234,9 +235,9 @@ fn accepted_validity_third_wrapper_preserves_bytes_and_false_rejects() {
             .receive_tx("derived-validity-third", &domain.read_chain(), &bytes)
             .unwrap();
         let stored = domain.mempool().peek_pending().remove(0);
-        assert_eq!(stored.hash, id);
-        assert_eq!(stored.payload.1, bytes);
-        assert_eq!(stored.payload.0, 8);
+        assert_eq!(stored.hash(), id);
+        assert_eq!(stored.payload().1, bytes);
+        assert_eq!(stored.payload().0, 8);
         let last = bytes.len() - 2;
         bytes[last] = 0xf4;
         assert!(evaluate(&domain, &bytes).is_err());
@@ -411,7 +412,7 @@ fn pending_registration_reserves_credential_without_changing_ledger_state() {
         let mut accepted = domain.mempool().peek_pending();
         accepted.extend(domain.mempool().peek_inflight());
         assert_eq!(accepted.len(), 1);
-        assert_eq!(accepted[0].payload.1, first);
+        assert_eq!(accepted[0].payload().1, first);
     }
 }
 
@@ -517,7 +518,7 @@ fn indefinite_native_envelopes_preserve_bytes_but_extra_fields_reject() {
     domain
         .receive_tx("indefinite-native", &domain.read_chain(), &bytes)
         .unwrap();
-    assert_eq!(domain.mempool().peek_pending()[0].payload.1, bytes);
+    assert_eq!(domain.mempool().peek_pending()[0].payload().1, bytes);
     bytes.insert(bytes.len() - 1, 0xf6);
     assert!(evaluate(&domain, &bytes).is_err());
 }

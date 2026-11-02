@@ -1,6 +1,6 @@
 use std::{
-    borrow::Cow,
     collections::{HashMap, HashSet},
+    convert::Infallible,
     sync::Arc,
 };
 
@@ -29,31 +29,32 @@ pub struct BlockRefMeta {
     pub tx_index: TxOrder,
 }
 
-/// Each transaction of a block in the ledger's application order, every sub
-/// transaction before the top level transaction that lists it, paired with
-/// the top level transaction's index in the block.
-pub fn applied_txs<'b>(block: &'b MultiEraBlock<'_>) -> Vec<(TxOrder, MultiEraTx<'b>)> {
-    block
-        .txs()
-        .into_iter()
-        .enumerate()
-        .flat_map(|(index, tx)| {
-            let subs: Vec<MultiEraTx<'b>> = match &tx {
-                MultiEraTx::Dijkstra(x) => x
-                    .transaction_body
-                    .sub_transactions
-                    .iter()
-                    .flat_map(|subs| subs.iter())
-                    .map(|sub| {
-                        MultiEraTx::DijkstraSub(Box::new(Cow::Owned(sub.clone())), x.success)
-                    })
-                    .collect(),
-                _ => vec![],
-            };
+/// Calls `f` on each sub transaction of `tx` and then on `tx`, the order in
+/// which the ledger applies them.
+pub fn for_each_applied_tx<'b, E>(
+    tx: &MultiEraTx<'b>,
+    mut f: impl FnMut(&MultiEraTx<'b>) -> Result<(), E>,
+) -> Result<(), E> {
+    for sub in tx.sub_transactions() {
+        f(&sub)?;
+    }
 
-            subs.into_iter().chain([tx]).map(move |tx| (index, tx))
-        })
-        .collect()
+    f(tx)
+}
+
+/// Each transaction of a block in the order the ledger applies them, paired
+/// with the index of the top level transaction that lists it.
+pub fn applied_txs<'b>(block: &'b MultiEraBlock<'_>) -> Vec<(TxOrder, MultiEraTx<'b>)> {
+    let mut applied = vec![];
+
+    for (index, tx) in block.txs().into_iter().enumerate() {
+        let Ok(()) = for_each_applied_tx(&tx, |tx| {
+            applied.push((index, tx.clone()));
+            Ok::<_, Infallible>(())
+        });
+    }
+
+    applied
 }
 
 /// The transaction of a block whose hash is the one given, a sub transaction

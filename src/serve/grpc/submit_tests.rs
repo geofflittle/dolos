@@ -215,7 +215,7 @@ async fn estimation_rpc_request_errors_and_submission_validation() {
     );
     assert!(!domain.mempool().has_pending());
     service.submit_tx(submit(bytes.clone())).await.unwrap();
-    assert_eq!(domain.mempool().peek_pending()[0].payload.1, bytes);
+    assert_eq!(domain.mempool().peek_pending()[0].payload().1, bytes);
 }
 
 #[tokio::test]
@@ -306,7 +306,7 @@ async fn estimation_rpc_resolves_pending_and_inflight_outputs_without_mutation()
         let mut remaining = domain.mempool().peek_pending();
         remaining.extend(domain.mempool().peek_inflight());
         assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].payload.1, payload);
+        assert_eq!(remaining[0].payload().1, payload);
     }
 }
 

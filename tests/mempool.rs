@@ -27,7 +27,7 @@ fn test_point(slot: u64) -> ChainPoint {
 
 /// Move a tx from Pending -> Acknowledged so it's eligible for `confirm()`.
 fn advance_to_acknowledged<S: MempoolStore>(store: &S, tx: MempoolTx) {
-    let hash = tx.hash;
+    let hash = tx.hash();
     store.receive(tx).unwrap();
     store.mark_inflight(&[hash]).unwrap();
     store.mark_acknowledged(&[hash]).unwrap();
@@ -35,7 +35,7 @@ fn advance_to_acknowledged<S: MempoolStore>(store: &S, tx: MempoolTx) {
 
 /// Move a tx from Pending -> Propagated (inflight but NOT acknowledged).
 fn advance_to_propagated<S: MempoolStore>(store: &S, tx: MempoolTx) {
-    let hash = tx.hash;
+    let hash = tx.hash();
     store.receive(tx).unwrap();
     store.mark_inflight(&[hash]).unwrap();
 }
@@ -43,7 +43,7 @@ fn advance_to_propagated<S: MempoolStore>(store: &S, tx: MempoolTx) {
 /// Find a tx in the finalized log by hash.
 fn find_in_finalized<S: MempoolStore>(store: &S, hash: &TxHash) -> Option<MempoolTx> {
     let page = store.dump_finalized(0, 1000);
-    page.items.into_iter().find(|t| t.hash == *hash)
+    page.items.into_iter().find(|t| t.hash() == *hash)
 }
 
 // ---------------------------------------------------------------------------
@@ -53,7 +53,7 @@ fn find_in_finalized<S: MempoolStore>(store: &S, hash: &TxHash) -> Option<Mempoo
 /// Acknowledged tx seen in 6 consecutive blocks -> Finalized.
 fn assert_finalize_after_threshold<S: MempoolStore>(store: &S) {
     let tx = test_tx(1);
-    let hash = tx.hash;
+    let hash = tx.hash();
     advance_to_acknowledged(store, tx);
 
     for slot in 1..=FINALIZE_THRESHOLD as u64 {
@@ -83,7 +83,7 @@ fn assert_finalize_after_threshold<S: MempoolStore>(store: &S) {
 /// Acknowledged tx absent from 2 consecutive blocks -> Dropped.
 fn assert_drop_after_threshold<S: MempoolStore>(store: &S) {
     let tx = test_tx(2);
-    let hash = tx.hash;
+    let hash = tx.hash();
     advance_to_acknowledged(store, tx);
 
     // tx not in seen_txs or unseen_txs -> mark_stale each time
@@ -116,7 +116,7 @@ fn assert_drop_after_threshold<S: MempoolStore>(store: &S) {
 /// `non_confirmations` to 0, preventing premature drop.
 fn assert_confirm_resets_non_confirmations<S: MempoolStore>(store: &S) {
     let tx = test_tx(3);
-    let hash = tx.hash;
+    let hash = tx.hash();
     advance_to_acknowledged(store, tx);
 
     // One non-confirmation (not in seen or unseen)
@@ -166,7 +166,7 @@ fn assert_confirm_resets_non_confirmations<S: MempoolStore>(store: &S) {
 /// counters reset.
 fn assert_rollback_to_pending<S: MempoolStore>(store: &S) {
     let tx = test_tx(4);
-    let hash = tx.hash;
+    let hash = tx.hash();
     advance_to_acknowledged(store, tx);
 
     // Confirm once
@@ -214,7 +214,7 @@ fn assert_rollback_to_pending<S: MempoolStore>(store: &S) {
 /// A rolled-back tx can be re-submitted and finalized through the full cycle.
 fn assert_re_confirm_after_rollback<S: MempoolStore>(store: &S) {
     let tx = test_tx(5);
-    let hash = tx.hash;
+    let hash = tx.hash();
     advance_to_acknowledged(store, tx);
 
     // Confirm twice then rollback
@@ -275,7 +275,7 @@ fn assert_re_confirm_after_rollback<S: MempoolStore>(store: &S) {
 /// the 6th confirmation finalizes it.
 fn assert_not_finalized_before_threshold<S: MempoolStore>(store: &S) {
     let tx = test_tx(6);
-    let hash = tx.hash;
+    let hash = tx.hash();
     advance_to_acknowledged(store, tx);
 
     for slot in 1..FINALIZE_THRESHOLD as u64 {
@@ -322,7 +322,7 @@ fn assert_not_finalized_before_threshold<S: MempoolStore>(store: &S) {
 /// drops it.
 fn assert_not_dropped_before_threshold<S: MempoolStore>(store: &S) {
     let tx = test_tx(7);
-    let hash = tx.hash;
+    let hash = tx.hash();
     advance_to_acknowledged(store, tx);
 
     // 1 non-confirmation
@@ -358,9 +358,9 @@ fn assert_mixed_confirm<S: MempoolStore>(store: &S) {
     let tx_a = test_tx(10);
     let tx_b = test_tx(11);
     let tx_c = test_tx(12);
-    let hash_a = tx_a.hash;
-    let hash_b = tx_b.hash;
-    let hash_c = tx_c.hash;
+    let hash_a = tx_a.hash();
+    let hash_b = tx_b.hash();
+    let hash_c = tx_c.hash();
 
     advance_to_acknowledged(store, tx_a);
     advance_to_acknowledged(store, tx_b);
@@ -498,7 +498,7 @@ fn redb_mixed_confirm() {
 /// single block that includes it. All later blocks see it in neither list.
 fn assert_confirmed_tx_finalizes_across_blocks<S: MempoolStore>(store: &S) {
     let tx = test_tx(20);
-    let hash = tx.hash;
+    let hash = tx.hash();
     advance_to_acknowledged(store, tx);
 
     // Block N: tx appears in seen_txs → first confirmation
@@ -570,7 +570,7 @@ fn assert_confirmed_tx_finalizes_across_blocks<S: MempoolStore>(store: &S) {
 /// Ensures the fix for confirmed txs didn't break the drop path.
 fn assert_unconfirmed_tx_still_drops<S: MempoolStore>(store: &S) {
     let tx = test_tx(21);
-    let hash = tx.hash;
+    let hash = tx.hash();
     advance_to_acknowledged(store, tx);
 
     // Two blocks pass without the tx appearing anywhere → should be dropped
@@ -619,7 +619,7 @@ fn redb_unconfirmed_tx_still_drops() {
 /// be confirmed and eventually finalized — it must not sit as a zombie.
 fn assert_propagated_tx_confirms_and_finalizes<S: MempoolStore>(store: &S) {
     let tx = test_tx(30);
-    let hash = tx.hash;
+    let hash = tx.hash();
     advance_to_propagated(store, tx);
 
     // First block: tx appears in seen_txs → confirmed
@@ -666,7 +666,7 @@ fn assert_propagated_tx_confirms_and_finalizes<S: MempoolStore>(store: &S) {
 /// dropped rather than sitting forever with 0 confirmations.
 fn assert_propagated_tx_drops_when_unseen<S: MempoolStore>(store: &S) {
     let tx = test_tx(31);
-    let hash = tx.hash;
+    let hash = tx.hash();
     advance_to_propagated(store, tx);
 
     for slot in 400..400 + DROP_THRESHOLD as u64 {
