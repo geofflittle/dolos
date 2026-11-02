@@ -1489,6 +1489,7 @@ mod tests {
             deregistered_at: None,
             credential: StakeCredential::AddrKeyhash(Hash::from([2u8; 28])),
             retired_pool: Some(target_pool),
+            deposit: None,
         };
 
         let metrics = reduce_account_chunk(&[account], target_pool, &ActivePools::default());
@@ -1522,6 +1523,7 @@ mod tests {
                 deregistered_at: None,
                 credential: StakeCredential::AddrKeyhash(Hash::from([2u8; 28])),
                 retired_pool: None,
+                deposit: None,
             },
             AccountState {
                 registered_at: Some(1),
@@ -1538,6 +1540,7 @@ mod tests {
                 deregistered_at: None,
                 credential: StakeCredential::AddrKeyhash(Hash::from([3u8; 28])),
                 retired_pool: None,
+                deposit: None,
             },
             AccountState {
                 registered_at: Some(1),
@@ -1554,6 +1557,7 @@ mod tests {
                 deregistered_at: None,
                 credential: StakeCredential::AddrKeyhash(Hash::from([4u8; 28])),
                 retired_pool: Some(retired_pool),
+                deposit: None,
             },
             AccountState {
                 registered_at: Some(1),
@@ -1570,6 +1574,7 @@ mod tests {
                 deregistered_at: None,
                 credential: StakeCredential::AddrKeyhash(Hash::from([5u8; 28])),
                 retired_pool: None,
+                deposit: None,
             },
             AccountState {
                 registered_at: Some(1),
@@ -1586,6 +1591,7 @@ mod tests {
                 deregistered_at: Some(2),
                 credential: StakeCredential::AddrKeyhash(Hash::from([6u8; 28])),
                 retired_pool: None,
+                deposit: None,
             },
         ];
 
@@ -1618,6 +1624,7 @@ mod tests {
             deregistered_at: None,
             credential: StakeCredential::AddrKeyhash(Hash::from([2u8; 28])),
             retired_pool: Some(target_pool),
+            deposit: None,
         };
 
         let metrics = reduce_account_chunk(&[account], target_pool, &ActivePools::default());

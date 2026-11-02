@@ -127,6 +127,10 @@ pub struct AccountState {
     #[n(7)]
     #[cbor(default)]
     pub retired_pool: Option<PoolHash>,
+
+    #[n(8)]
+    #[cbor(default)]
+    pub deposit: Option<u64>,
 }
 
 entity_boilerplate!(AccountState, "accounts");
@@ -181,6 +185,7 @@ pub(crate) mod testing {
             drep in any_epoch_value(any_drep_delegation().boxed()),
             vote_delegated_at in prop::option::of((root::any_slot(), root::any_tx_order())),
             retired_pool in prop::option::of(root::any_pool_hash()),
+            deposit in prop::option::of(root::any_lovelace()),
         ) -> AccountState {
             // ESTART rotates stake/pool/drep in lockstep, so a healthy account
             // has all three at the same epoch. The `strict` feature asserts
@@ -194,6 +199,7 @@ pub(crate) mod testing {
                 drep: crate::model::epoch_value::testing::rebase(drep, epoch),
                 vote_delegated_at,
                 retired_pool,
+                deposit,
             }
         }
     }
@@ -210,6 +216,7 @@ impl AccountState {
             vote_delegated_at: None,
             deregistered_at: None,
             retired_pool: None,
+            deposit: None,
         }
     }
 
@@ -397,6 +404,7 @@ pub struct StakeRegistration {
     pub(crate) was_new: bool,
     pub(crate) prev_registered_at: Option<u64>,
     pub(crate) prev_deregistered_at: Option<u64>,
+    pub(crate) prev_deposit: Option<u64>,
 }
 
 impl StakeRegistration {
@@ -409,6 +417,7 @@ impl StakeRegistration {
             was_new: false,
             prev_registered_at: None,
             prev_deregistered_at: None,
+            prev_deposit: None,
         }
     }
 }
@@ -429,6 +438,7 @@ impl dolos_core::EntityDelta for StakeRegistration {
         // save undo info
         self.prev_registered_at = entity.registered_at;
         self.prev_deregistered_at = entity.deregistered_at;
+        self.prev_deposit = entity.deposit;
 
         tracing::debug!(
             slot = self.slot,
@@ -438,6 +448,7 @@ impl dolos_core::EntityDelta for StakeRegistration {
 
         entity.registered_at = Some(self.slot);
         entity.deregistered_at = None;
+        entity.deposit = Some(self.deposit);
     }
 
     fn undo(&self, entity: &mut Option<AccountState>) {
@@ -448,6 +459,7 @@ impl dolos_core::EntityDelta for StakeRegistration {
         let entity = entity.as_mut().expect("existing account");
         entity.registered_at = self.prev_registered_at;
         entity.deregistered_at = self.prev_deregistered_at;
+        entity.deposit = self.prev_deposit;
     }
 }
 
@@ -1259,6 +1271,16 @@ mod prop_tests {
             delta in any_stake_registration(),
         ) {
             assert_delta_roundtrip(entity, delta);
+        }
+
+        #[test]
+        fn stake_registration_stores_its_deposit(
+            entity in prop::option::of(any_account_state()),
+            mut delta in any_stake_registration(),
+        ) {
+            let mut entity = entity;
+            dolos_core::EntityDelta::apply(&mut delta, &mut entity);
+            prop_assert_eq!(entity.and_then(|x| x.deposit), Some(delta.deposit));
         }
 
         #[test]
