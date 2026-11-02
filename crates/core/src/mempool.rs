@@ -939,7 +939,7 @@ mod tests {
         let mtx = MempoolTx::new(PARENT.parse().unwrap(), undecodable(), vec![]);
         let mut refs = HashSet::from([txo(SUB, 0), txo(SUB_SPENDS, 0)]);
 
-        exclude_inflight_stxis(&mut refs, &[mtx.clone()]);
+        exclude_inflight_stxis(&mut refs, std::slice::from_ref(&mtx));
         let selected = select_mempool_utxos(&mut refs, &[mtx]);
 
         assert!(selected.is_empty());
