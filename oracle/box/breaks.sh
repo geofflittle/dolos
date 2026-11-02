@@ -10,8 +10,6 @@ MIN_FREE_G=${MIN_FREE_G:-6}
 HERE=$(cd "$(dirname "$0")" && pwd)
 IMAGE="$HERE/in-image.sh"
 SCRATCH=scratch/dolos
-# The pallas commit the rob arm reverts f3419a3a on, one where no later change touches the lines of that merge.
-ROB_BASE=${ROB_BASE:-362f5e0e2610686382752b1392fde02c84eb3b50}
 TEST=serve::grpc::v1::ledger_oracle_tests::ledger_oracle
 OUT=${OUT:-"$ROOT/runs/$(date -u +%Y%m%dT%H%M%SZ)"}
 mkdir -p "$OUT"
@@ -75,11 +73,8 @@ pallas_tree() {
       "$ROOT/$SCRATCH/Cargo.toml"
 }
 
-plant_rob() {
-  pallas_tree "$ROB_BASE" &&
-    git -C "$ROOT/$PALLAS" revert -m 1 --no-commit f3419a3a &&
-    # Adds the pallas items Dolos names that this commit lacks, with every refusal message unchanged.
-    git -C "$ROOT/$PALLAS" apply "$HERE/plants/rob-surface.diff"
+plant_drep_deposit() {
+  git -C "$ROOT/$SCRATCH" apply "$HERE/plants/drep-deposit.diff"
 }
 
 plant_cost() {
@@ -107,7 +102,7 @@ caught() {
     revalidate) pattern='^DIFF revalidate [a-z]+#[0-9]+ kept_after_rollback_to=' ;;
     revalidate-drops) pattern='^DIFF revalidate [a-z]+#[0-9]+ dropped_after_rollback_to=' ;;
     subouts) pattern='^DIFF (undo|as_output) [a-z]+#[0-9]+ ' ;;
-    byron-attrs | byron-signer | byron-guard | chaincode | emptyguards | tag24 | tag24-ref) pattern='^DISAGREE [a-z]+#[0-9]+ ' ;;
+    byron-attrs | byron-signer | byron-guard | chaincode | emptyguards | tag24 | tag24-ref | unreg-refund | drep-deposit) pattern='^DISAGREE [a-z]+#[0-9]+ ' ;;
     byron-out) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=(bootstrap or reward address|output address)' ;;
     minfee-subtx) pattern='^DIFF fee [a-z]+#[0-9]+ ledger=[0-9]+ dolos=[0-9]+$' ;;
     v1v2) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=new script language ' ;;
@@ -169,9 +164,9 @@ for arm in $ARMS; do
     revalidate-drops) plant=plant_revalidate_drops ;;
     subouts) plant=plant_subouts ;;
     rodrigo-reverted) plant=plant_rodrigo ;;
-    rob-reverted) plant=plant_rob ;;
+    drep-deposit) plant=plant_drep_deposit ;;
     cost) plant=plant_cost ;;
-    byron-attrs | byron-signer | byron-guard | chaincode | minfee-subtx | emptyguards | tag24 | v1v2 | byron-out | tag24-ref) plant="plant_pallas $arm" ;;
+    rob-reverted | byron-attrs | byron-signer | byron-guard | chaincode | minfee-subtx | emptyguards | tag24 | v1v2 | byron-out | tag24-ref | unreg-refund) plant="plant_pallas $arm" ;;
     *) echo "unknown arm $arm" ; exit 2 ;;
   esac
   if ! $plant >"$OUT/$arm.plant" 2>&1; then
@@ -181,9 +176,7 @@ for arm in $ARMS; do
   fi
   source=$(pallas_source)
   pallas_rev=$pin_short
-  if [ "$arm" = rob-reverted ]; then
-    pallas_rev="$(echo "$ROB_BASE" | cut -c1-7)-reverted-f3419a3a"
-  elif pallas_arm "$arm"; then
+  if pallas_arm "$arm"; then
     pallas_rev="$pin_short-$arm"
   fi
   if [ -z "$locked" ] && [ "$source" != "/w/$PALLAS/pallas-validate" ]; then

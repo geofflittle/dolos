@@ -1,13 +1,15 @@
 diff --git a/pallas-validate/src/phase2/native_evaluator.rs b/pallas-validate/src/phase2/native_evaluator.rs
-index b56fd906..2ed79019 100644
+index 75898ce6..38c90d17 100644
 --- a/pallas-validate/src/phase2/native_evaluator.rs
 +++ b/pallas-validate/src/phase2/native_evaluator.rs
-@@ -55,6 +55,9 @@ pub(crate) fn eval_native_v3(
-             .map_err(|_| Error::DijkstraInvalid("CPU budget overflow"))?,
+@@ -63,6 +63,11 @@ pub(crate) fn eval_native(
+         Language::PlutusV2 => PlutusVersion::V2,
+         Language::PlutusV3 => PlutusVersion::V3,
      };
-     let program = program.apply(&arena, plutus_data_to_term(&arena, context));
 +    let mut costs = costs.to_vec();
-+    costs[173] /= 2;
++    if language == Language::PlutusV3 {
++        costs[173] /= 2;
++    }
 +    let costs = &costs[..];
      let mut calls = Vec::new();
      let result = run(
