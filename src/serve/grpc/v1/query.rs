@@ -770,17 +770,9 @@ fn map_era_boundary(boundary: &dolos_cardano::EraBoundary) -> u5c::cardano::EraB
     }
 }
 
-fn protocol_to_era_name(protocol: u16) -> &'static str {
-    match protocol {
-        0..=1 => "byron",
-        2 => "shelley",
-        3 => "allegra",
-        4 => "mary",
-        5..=6 => "alonzo",
-        7..=8 => "babbage",
-        9..=10 => "conway",
-        _ => "unknown",
-    }
+fn protocol_to_era_name(protocol: u16) -> String {
+    dolos_cardano::validate::protocol_era(protocol.into())
+        .map_or_else(|| "unknown".into(), |era| era.to_string().to_lowercase())
 }
 
 fn map_era_summary(
@@ -789,7 +781,7 @@ fn map_era_summary(
     active_params: &u5c::cardano::PParams,
 ) -> u5c::cardano::EraSummary {
     u5c::cardano::EraSummary {
-        name: protocol_to_era_name(era.protocol).into(),
+        name: protocol_to_era_name(era.protocol),
         start: Some(map_era_boundary(&era.start)),
         end: era.end.as_ref().map(map_era_boundary),
         protocol_params: (era.protocol == active_protocol).then(|| active_params.clone()),
@@ -1993,6 +1985,9 @@ mod tests {
         assert_eq!(protocol_to_era_name(8), "babbage");
         assert_eq!(protocol_to_era_name(10), "conway");
         assert_eq!(protocol_to_era_name(42), "unknown");
+        assert_eq!(protocol_to_era_name(13), "unknown");
+        assert_eq!(protocol_to_era_name(11), "conway");
+        assert_eq!(protocol_to_era_name(12), "dijkstra");
     }
 
     #[tokio::test]

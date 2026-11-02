@@ -305,19 +305,27 @@ fn requests_scripts(tx: &MultiEraTx<'_>) -> bool {
 /// versions select an era; unknown future versions must not inherit this
 /// subset.
 pub fn submission_era(protocol: (u64, u64)) -> Result<Era, ChainError> {
-    match protocol {
-        (0..=1, _) => Ok(Era::Byron),
-        (2, _) => Ok(Era::Shelley),
-        (3, _) => Ok(Era::Allegra),
-        (4, _) => Ok(Era::Mary),
-        (5..=6, _) => Ok(Era::Alonzo),
-        (7..=8, _) => Ok(Era::Babbage),
-        (9..=11, _) => Ok(Era::Conway),
-        (12, 0) => Ok(Era::Dijkstra),
-        _ => Err(ChainError::InvalidConfig(format!(
+    match (protocol_era(protocol.0), protocol.1) {
+        (Some(Era::Dijkstra), 1..) | (None, _) => Err(ChainError::InvalidConfig(format!(
             "unsupported submission protocol {}.{}",
             protocol.0, protocol.1
         ))),
+        (Some(era), _) => Ok(era),
+    }
+}
+
+/// The era whose major protocol versions, by the ledger's bounds, include `major`.
+pub fn protocol_era(major: u64) -> Option<Era> {
+    match major {
+        0..=1 => Some(Era::Byron),
+        2 => Some(Era::Shelley),
+        3 => Some(Era::Allegra),
+        4 => Some(Era::Mary),
+        5..=6 => Some(Era::Alonzo),
+        7..=8 => Some(Era::Babbage),
+        9..=11 => Some(Era::Conway),
+        12 => Some(Era::Dijkstra),
+        _ => None,
     }
 }
 
@@ -785,6 +793,20 @@ mod batch_tests {
         let native = tx.as_dijkstra().unwrap();
         assert!(native.transaction_body.sub_transactions.is_some());
         assert!(!requests_scripts(&tx));
+    }
+}
+
+#[cfg(test)]
+mod era_tests {
+    use super::*;
+
+    #[test]
+    fn a_submission_selects_the_era_of_its_major_only_at_a_known_minor() {
+        assert!(submission_era((12, 1)).is_err());
+        assert!(submission_era((13, 0)).is_err());
+        assert_eq!(submission_era((12, 0)).unwrap(), Era::Dijkstra);
+        assert_eq!(submission_era((11, 3)).unwrap(), Era::Conway);
+        assert_eq!(submission_era((0, 0)).unwrap(), Era::Byron);
     }
 }
 

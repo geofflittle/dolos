@@ -23,17 +23,8 @@ use utils::{
 /// era to a client that has no way of telling it is wrong, so a caller with no
 /// index refuses.
 fn era_index_for_protocol(protocol: u16) -> Option<u16> {
-    match protocol {
-        0..=1 => Some(0),  // Byron
-        2 => Some(1),      // Shelley
-        3 => Some(2),      // Allegra
-        4 => Some(3),      // Mary
-        5..=6 => Some(4),  // Alonzo
-        7..=8 => Some(5),  // Babbage
-        9..=11 => Some(6), // Conway, including the Van Rossem intra-era fork at 11
-        12 => Some(7),     // Dijkstra
-        _ => None,
-    }
+    // The reply numbers Byron zero and the era tag numbers it one.
+    dolos_cardano::validate::protocol_era(protocol.into()).map(|era| u16::from(era) - 1)
 }
 
 pub struct Session<D: Domain> {
