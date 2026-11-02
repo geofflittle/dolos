@@ -178,6 +178,7 @@ pub fn account_state() -> AccountState {
         deregistered_at: Some(33_333),
         credential: StakeCredential::AddrKeyhash(hash28(0x70)),
         retired_pool: Some(hash28(0x71)),
+        deposit: Some(2_000_000),
     }
 }
 

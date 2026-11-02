@@ -150,10 +150,16 @@ pub fn registry() -> Vec<Entry> {
             enc_accounts,
             AccountState,
             canaries::account_state,
-            &[Pinned {
-                rev: 1,
-                hex: include_str!("goldens/accounts.rev1.hex"),
-            }]
+            &[
+                Pinned {
+                    rev: 1,
+                    hex: include_str!("goldens/accounts.rev1.hex"),
+                },
+                Pinned {
+                    rev: 2,
+                    hex: include_str!("goldens/accounts.rev2.hex"),
+                },
+            ]
         ),
         entity_entry!(
             enc_assets,

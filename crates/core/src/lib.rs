@@ -571,9 +571,6 @@ pub enum ChainError {
     #[error("phase-1 script rejected the transaction: {0}")]
     Phase1ValidationRejected(#[from] pallas::ledger::validate::utils::ValidationError),
 
-    #[error("Dijkstra withdrawal for {account} conflicts with pending withdrawals; retry after confirmation or removal")]
-    DijkstraWithdrawalConflict { account: String },
-
     #[error("couldn't evaluate phase-2 script: {0}")]
     Phase2EvaluationError(String),
 

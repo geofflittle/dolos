@@ -148,6 +148,7 @@ fn registered_credential_rejects_and_validation_does_not_commit_state() {
         .is_none());
     let mut account = AccountState::new(64, credential.clone());
     account.registered_at = Some(1401000);
+    account.deposit = Some(2_000_000);
     let writer = domain.state().start_writer().unwrap();
     writer.write_entity_typed(&key, &account).unwrap();
     writer.commit().unwrap();
@@ -162,7 +163,7 @@ fn registered_credential_rejects_and_validation_does_not_commit_state() {
 }
 
 #[test]
-fn unsupported_unregistration_rejects_explicitly() {
+fn unregistration_of_an_unregistered_credential_rejects() {
     let (domain, bytes) = support::fixture(true);
     let tx = MultiEraTx::decode_for_era(Era::Dijkstra, &bytes).unwrap();
     let mut native = tx.as_dijkstra().unwrap().clone();
@@ -177,15 +178,14 @@ fn unsupported_unregistration_rejects_explicitly() {
     );
     native.transaction_body = KeepRaw::from(body);
     let mutated = minicbor::to_vec(native.to_mempool_transaction()).unwrap();
-    let e = evaluate(&domain, &mutated).unwrap_err();
-    assert!(
-        format!("{e:?}").contains("certificate kind (requires Reg)"),
-        "{e:?}"
-    );
+    evaluate(&domain, &mutated).unwrap();
     let e = domain
         .validate_tx(&domain.read_chain(), &mutated)
         .unwrap_err();
-    assert!(format!("{e:?}").contains("certificate kind"), "{e:?}");
+    assert!(
+        format!("{e:?}").contains("stake credential not registered"),
+        "{e:?}"
+    );
 }
 
 #[test]
@@ -439,14 +439,26 @@ fn v4_reference_script_is_rejected_by_native_evaluation() {
         vec![0].into(),
     ))));
     *inner = KeepRaw::from(changed);
+    let extra = n::TransactionInput {
+        transaction_id: [121; 32].into(),
+        index: 0,
+    };
     let mut delta = UtxoSetDelta::default();
-    delta
-        .produced_utxo
-        .insert(key, Arc::new(EraCbor(8, minicbor::to_vec(output).unwrap())));
+    delta.produced_utxo.insert(
+        TxoRef(extra.transaction_id, 0),
+        Arc::new(EraCbor(raw.0, minicbor::to_vec(output).unwrap())),
+    );
     let writer = domain.state().start_writer().unwrap();
     writer.apply_utxoset(&delta).unwrap();
     writer.commit().unwrap();
-    let error = evaluate(&domain, &bytes).unwrap_err();
+    let mut native = tx.as_dijkstra().unwrap().clone();
+    let mut body = (*native.transaction_body).clone();
+    let mut references: Vec<_> = body.reference_inputs.iter().flatten().cloned().collect();
+    references.push(extra);
+    body.reference_inputs = n::NonEmptySet::from_vec(references);
+    native.transaction_body = KeepRaw::from(body);
+    let mutated = minicbor::to_vec(native.to_mempool_transaction()).unwrap();
+    let error = evaluate(&domain, &mutated).unwrap_err();
     assert!(
         format!("{error:?}").contains("reference script language (requires V3)"),
         "{error:?}"
@@ -476,7 +488,7 @@ fn scripted_subtransaction_is_explicitly_outside_native_evaluation() {
     )
     .unwrap_err();
     assert!(
-        format!("{error:?}").contains("subtransactions"),
+        format!("{error:?}").contains("subtransaction redeemers"),
         "{error:?}"
     );
 }

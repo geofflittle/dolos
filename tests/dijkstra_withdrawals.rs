@@ -105,6 +105,7 @@ fn get_account(domain: &WithdrawalDomain, credential: &n::StakeCredential) -> Op
 fn registered(credential: n::StakeCredential, balance: u64) -> AccountState {
     let mut a = AccountState::new(64, credential);
     a.registered_at = Some(1400000);
+    a.deposit = Some(2_000_000);
     // Spendable rewards must exclude delegated UTxO stake and prior withdrawals.
     a.stake = EpochValue::with_live(
         64,
@@ -157,6 +158,7 @@ fn captured() -> (WithdrawalDomain, Vec<u8>, Vec<n::StakeCredential>) {
         assert_eq!(account["balance"], 0);
         let mut a = AccountState::new(epoch_number, credential.clone());
         a.registered_at = Some(1401321);
+        a.deposit = Some(2_000_000);
         // Historical fixture has no prior reward or withdrawal value.
         put_account(&domain, &a);
         credentials.push(credential);
@@ -224,6 +226,7 @@ fn captured_zero_withdrawal_requires_registered_zero_balance() {
     ] {
         let mut a = AccountState::new(65, credentials[0].clone());
         a.registered_at = registered_at;
+        a.deposit = Some(2_000_000);
         a.stake.unwrap_live_mut().rewards_sum = balance;
         put_account(&domain, &a);
         assert_rejected(&domain, &raw, error);
@@ -305,11 +308,7 @@ fn key_withdrawals_allow_zero_partial_and_full_but_not_stake_or_overdraft() {
         domain.validate_tx(&domain.read_chain(), tx).unwrap();
     }
     for tx in &txs[3..] {
-        assert_rejected(
-            &domain,
-            tx,
-            "amount does not match available account balance",
-        );
+        assert_rejected(&domain, tx, "amount exceeds the original balance");
     }
     assert_eq!(get_account(&domain, &credential), before);
 }
@@ -360,19 +359,11 @@ fn pending_and_inflight_withdrawals_reserve_only_available_rewards() {
         if stage >= 2 {
             domain.mempool().mark_acknowledged(&[hash]).unwrap();
         }
-        assert_rejected(
-            &domain,
-            &txs[2],
-            "amount does not match available account balance",
-        );
+        assert_rejected(&domain, &txs[2], "amount exceeds the original balance");
         domain
             .receive_tx("remaining", &domain.read_chain(), &txs[1])
             .unwrap();
-        assert_rejected(
-            &domain,
-            &txs[3],
-            "amount does not match available account balance",
-        );
+        assert_rejected(&domain, &txs[3], "amount exceeds the original balance");
         assert_eq!(get_account(&domain, &credential), before);
     }
 }
@@ -399,11 +390,7 @@ fn confirmation_rollback_and_drop_update_withdrawal_reservations() {
         MempoolTxStage::Confirmed
     );
     domain.validate_tx(&domain.read_chain(), &txs[1]).unwrap(); // no double subtraction
-    assert_rejected(
-        &domain,
-        &txs[2],
-        "amount does not match available account balance",
-    );
+    assert_rejected(&domain, &txs[2], "amount exceeds the original balance");
     withdrawal.undo(&mut account);
     assert_eq!(account, original);
     put_account(&domain, account.as_ref().unwrap());
@@ -415,11 +402,7 @@ fn confirmation_rollback_and_drop_update_withdrawal_reservations() {
         domain.mempool().check_status(&hash).stage,
         MempoolTxStage::Pending
     );
-    assert_rejected(
-        &domain,
-        &txs[2],
-        "amount does not match available account balance",
-    );
+    assert_rejected(&domain, &txs[2], "amount exceeds the original balance");
     domain.mempool().mark_inflight(&[hash]).unwrap();
     domain
         .mempool()
@@ -496,7 +479,7 @@ fn registration(
 fn revalidation_keeps_pending_transactions_the_ledger_still_accepts() {
     let (domain, txs, credential) = synthetic(&[0], 0);
     let register = registration(&domain, &txs, &credential);
-    assert_rejected(&domain, &txs[0], "unregistered account");
+    assert_rejected(&domain, &txs[0], "account missing from the original state");
     let a = domain
         .receive_tx("register", &domain.read_chain(), &register)
         .unwrap();
@@ -659,15 +642,15 @@ fn absent_deregistered_and_unreadable_accounts_do_not_become_zero_balances() {
     let w = domain.state().start_writer().unwrap();
     w.delete_entity(AccountState::NS, &key).unwrap();
     w.commit().unwrap();
-    assert_rejected(&domain, &txs[0], "unregistered account");
+    assert_rejected(&domain, &txs[0], "account missing from the original state");
     let mut a = registered(credential, 0);
     a.deregistered_at = Some(1400001);
     put_account(&domain, &a);
-    assert_rejected(&domain, &txs[0], "unregistered account");
+    assert_rejected(&domain, &txs[0], "account missing from the original state");
     let w = domain.state().start_writer().unwrap();
     w.write_entity(AccountState::NS, &key, &vec![0xff]).unwrap();
     w.commit().unwrap();
-    assert_rejected(&domain, &txs[0], "EntityDecodingError");
+    assert_rejected(&domain, &txs[0], "entity decoding error");
 }
 
 #[test]
@@ -724,7 +707,7 @@ fn simultaneous_submissions_cannot_overdraw_one_account() {
     assert_eq!(results.iter().filter(|x| x.is_ok()).count(), 1);
     let error = results.into_iter().find_map(Result::err).unwrap();
     assert!(
-        format!("{error:?}").contains("amount does not match available account balance"),
+        format!("{error:?}").contains("amount exceeds the original balance"),
         "{error:?}"
     );
     assert_eq!(domain.mempool().peek_pending().len(), 1);

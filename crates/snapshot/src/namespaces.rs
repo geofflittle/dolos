@@ -66,11 +66,12 @@ pub const NAMESPACES: [Namespace; 14] = [
 /// which was a `HashSet` whose per-instance iteration order made the
 /// namespace's bytes irreproducible across publishers of identical state.
 /// Revision 3 appended `RollingStats::direct_deposits`. `pools` is at 2, which
-/// appended `PoolParams::bls_key`. Kept beside [`NAMESPACES`], in the same
+/// appended `PoolParams::bls_key`. `accounts` is at 2, which appended
+/// `AccountState::deposit`. Kept beside [`NAMESPACES`], in the same
 /// order, and held to it by `every_namespace_has_a_schema_rev` below.
 pub const SCHEMA_REVS: [(Namespace, u64); 14] = [
     (AccountEpochLog::NS, 1),
-    (AccountState::NS, 1),
+    (AccountState::NS, 2),
     (AssetState::NS, 1),
     (DatumState::NS, 1),
     (DRepState::NS, 1),
