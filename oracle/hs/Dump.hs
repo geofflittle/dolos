@@ -48,7 +48,10 @@ import Data.List (dropWhileEnd, isSuffixOf)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
-import Lens.Micro ((^.))
+import Cardano.Ledger.Shelley.API.Mempool (ApplyTx (mkStAnnTx))
+import Control.Monad.Reader (runReader)
+import Control.State.Transition.Extended (applySTS)
+import Lens.Micro ((&), (.~), (^.))
 import qualified PlutusLedgerApi.Common as P
 import System.IO.Unsafe (unsafePerformIO)
 import Test.Cardano.Ledger.Dijkstra.ImpTest
@@ -56,7 +59,7 @@ import Test.Cardano.Ledger.Dijkstra.ImpTest
 type E = DijkstraEra
 
 {-# NOINLINE lastPost #-}
-lastPost :: IORef (Maybe (UTxO E))
+lastPost :: IORef (Maybe (UTxO E, A.Value, A.Value))
 lastPost = unsafePerformIO (newIORef Nothing)
 
 {-# NOINLINE editedBytes #-}
@@ -158,10 +161,11 @@ dumpTo out g (TRC (env, st, stAnn)) res = liftIO $ do
       refused shown names =
         A.object ["refused" A..= A.object ["failures" A..= take 300 shown, "failure_names" A..= names]]
       decoded = decodeTx (pvMajor (ledgerPp env ^. ppProtocolVersionL)) bytes
-      (outcome, post) = case (decoded, res) of
+      (outcome, post) = outcomeOf (fmap fst res)
+      outcomeOf result = case (decoded, result) of
         (Left e, _) -> (refused (show e) [failurePath (show e)], Nothing)
         (Right _, Left fs) -> (refused (show (NE.toList fs)) (map (failurePath . show) (NE.toList fs)), Nothing)
-        (Right _, Right (st', _)) ->
+        (Right _, Right st') ->
           let p = st' ^. lsUTxOStateL . utxoL
            in ( A.object
                   [ "accepted"
@@ -171,17 +175,17 @@ dumpTo out g (TRC (env, st, stAnn)) res = liftIO $ do
                         , "accounts_post" A..= accountsJson st'
                         ]
                   ]
-              , Just p
+              , Just st'
               )
       line =
         A.object $
           [ "n" A..= n
           , "slot" A..= unSlotNo (ledgerSlotNo env)
           , "epoch" A..= fmap unEpochNo epoch
-          , "phase2_valid" A..= valid
+          , "phase2" A..= if valid then A.String "valid" else A.object ["invalid" A..= submitted]
           , "tx" A..= hex bytes
           , "pparams" A..= A.toJSON (ledgerPp env)
-          , "pre" A..= if prev == Just pre then A.String "follows_prev" else A.object ["fresh" A..= pairs pre]
+          , "pre" A..= if prev == Just (continuity st) then A.String "follows_prev" else A.object ["fresh" A..= pairs pre]
           , "accounts_pre" A..= accountsJson st
           , "certs_pre" A..= certsJson st
           , "gov_pre" A..= govJson st
@@ -192,9 +196,15 @@ dumpTo out g (TRC (env, st, stAnn)) res = liftIO $ do
           , "min_fee" A..= either (const Nothing) (\t -> Just (unCoin (getMinFeeTxUtxo (ledgerPp env) t pre))) decoded
           ]
             ++ [ "globals" A..= globalsJson g e | n == 0, Just e <- [epoch] ]
-  writeIORef lastPost (maybe (Just pre) Just post)
+      -- The ledger's outcome for the same transaction under a true flag, the form a node receives it in.
+      submitted =
+        let flagged = tx & isPhase2ValidTxL .~ Phase2Valid
+            annotated = mkStAnnTx (epochInfo g) (systemStart g) (ledgerPp env) pre mempty flagged
+         in fst (outcomeOf (runReader (applySTS @(EraRule "LEDGER" E) (TRC (env, st, annotated))) g))
+  writeIORef lastPost (Just (continuity (fromMaybe st post)))
   BL8.appendFile out (A.encode line <> "\n")
   where
+    continuity s = (s ^. lsUTxOStateL . utxoL, certsJson s, govJson s)
     certsJson s = case A.toJSON (s ^. lsCertStateL) of
       A.Object o -> A.Object (KM.delete "dstate" o)
       other -> other

@@ -13,10 +13,10 @@ use crate::{
 };
 
 /// The sha256 of the decompressed Imp spec corpus.
-pub const IC_SHA256: &str = "3b827e089ddf10c8bffdecbdf28576c52c320271b9e354fa4698993e0545bf90";
+pub const IC_SHA256: &str = "015e7b932273eb86c6ccb10c503913c86afabaf5ea7d7a34480ddb7af3176353";
 
 /// The sha256 of the decompressed supplement corpus.
-pub const SUPP_SHA256: &str = "4ae6592ad757c9f3648b887f59f69f9c7017a562905aacaa5dc8316dc8d9fde0";
+pub const SUPP_SHA256: &str = "7ca1ea0e4444845e84493280faf6d06016432a1472adf8836c50c0e6236d6c71";
 
 const IC_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/ic.jsonl.gz");
 const SUPP_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/supp.jsonl.gz");
@@ -263,11 +263,11 @@ mod tests {
     fn committed_corpora_load_into_their_runs() {
         assert_eq!(
             load(CorpusKind::Ic).unwrap().to_string(),
-            "CORPUS ic sha=3b827e089ddf10c8 records=9853 runs=886 kept_records=9853"
+            "CORPUS ic sha=015e7b932273eb86 records=9853 runs=892 kept_records=9853"
         );
         assert_eq!(
             load(CorpusKind::Supp).unwrap().to_string(),
-            "CORPUS supp sha=4ae6592ad757c9f3 records=125 runs=39 kept_records=125"
+            "CORPUS supp sha=7ca1ea0e4444845e records=125 runs=39 kept_records=125"
         );
     }
 
@@ -279,7 +279,7 @@ mod tests {
         let e = verify(CorpusKind::Ic, &bytes, IC_SHA256).unwrap_err();
         assert!(e
             .to_string()
-            .starts_with("CORPUS ic sha mismatch expected=3b827e08"));
+            .starts_with("CORPUS ic sha mismatch expected=015e7b93"));
     }
 
     #[test]

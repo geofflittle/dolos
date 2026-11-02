@@ -176,21 +176,18 @@ impl<'de> Deserialize<'de> for FailurePath {
 pub struct PParams(pub serde_json::Map<String, serde_json::Value>);
 
 /// Whether a transaction declares its scripts to pass.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(from = "bool")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase2 {
     Valid,
     Invalid,
 }
 
-impl From<bool> for Phase2 {
-    fn from(valid: bool) -> Self {
-        if valid {
-            Phase2::Valid
-        } else {
-            Phase2::Invalid
-        }
-    }
+/// The scripts' declared result, with the ledger's answer for the same transaction under a true flag when it declares they fail.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Declared {
+    Valid,
+    Invalid(LedgerOutcome),
 }
 
 /// One unspent output, its input key and its output bytes.
@@ -249,7 +246,7 @@ pub struct Record {
     pub n: u32,
     pub slot: u64,
     pub epoch: Option<u64>,
-    pub phase2_valid: Phase2,
+    pub phase2: Declared,
     pub tx: Bytes,
     pub pparams: PParams,
     pub pre: Pre,
@@ -263,4 +260,22 @@ pub struct Record {
     pub min_fee: Option<u64>,
     #[serde(default)]
     pub globals: Option<Globals>,
+}
+
+impl Record {
+    /// Whether the transaction declares its scripts to pass.
+    pub fn flag(&self) -> Phase2 {
+        match self.phase2 {
+            Declared::Valid => Phase2::Valid,
+            Declared::Invalid(_) => Phase2::Invalid,
+        }
+    }
+
+    /// The ledger's answer for the transaction as a node receives it, under a true flag.
+    pub fn submitted(&self) -> &LedgerOutcome {
+        match &self.phase2 {
+            Declared::Valid => &self.outcome,
+            Declared::Invalid(submitted) => submitted,
+        }
+    }
 }

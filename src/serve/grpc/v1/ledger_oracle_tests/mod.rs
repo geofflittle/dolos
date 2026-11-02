@@ -439,7 +439,7 @@ fn compare_cost(
         Err(e) => Err(e.to_string()),
     };
     cost.add_fee(id, record.min_fee, fee, &record.outcome);
-    let skip = match (&record.outcome, declared) {
+    let skip = match (record.submitted(), declared) {
         (LedgerOutcome::Refused { .. }, _) => Some(CostSkip::Refused),
         (LedgerOutcome::Accepted { .. }, Some(_)) => Some(CostSkip::Declared),
         (LedgerOutcome::Accepted { .. }, None) => None,
@@ -455,7 +455,7 @@ fn compare_cost(
     let estimate = group.estimate(&record.tx.0);
     let costs = cost::pair(&record.ex_units, &node_costs(&estimate));
     cost.add_units(id, &costs);
-    if let (Ok(results), Phase2::Valid) = (&estimate, record.phase2_valid) {
+    if let (Ok(results), Phase2::Valid) = (&estimate, record.flag()) {
         for alike in costs.iter().filter(|c| c.ran_alike().is_some()) {
             let calls = results.iter().filter(|(r, _)| purpose(r) == alike.purpose);
             for (_, calls) in calls {
@@ -694,7 +694,7 @@ async fn validate_run<'r>(
             let declared = manifests.declared.get(&id);
             let cascade = !missing.failed_by.is_empty();
             compare_cost(&group, id, record, declared, cascade, cost, coverage);
-            let submit = |group: &validate::Group| match record.phase2_valid {
+            let submit = |group: &validate::Group| match record.flag() {
                 Phase2::Valid => group.receive(&record.tx.0),
                 // A submitted transaction carries no flag, so one the ledger
                 // reads under a false flag is validated and never held.
@@ -705,11 +705,11 @@ async fn validate_run<'r>(
             if matches!(dolos, DolosVerdict::Accepted) {
                 dolos_accepted.insert(record.n);
             }
-            if let Some(feature) = declares(&record.outcome, &dolos) {
+            if let Some(feature) = declares(record.submitted(), &dolos) {
                 candidates.declared.insert(id, feature);
             }
             let judgement = match one_answer(&dolos, &inflight) {
-                Ok(dolos) => outcome(&record.outcome, record.phase2_valid, dolos, declared),
+                Ok(dolos) => outcome(record.submitted(), dolos, declared),
                 Err(fail) => Outcome::Fail(fail),
             };
             let judgement = with_failing_makers(judgement, &dolos, missing.failed_by);
@@ -751,7 +751,7 @@ async fn validate_run<'r>(
             continue;
         };
         let included: Vec<(&Record, Phase2)> = accepted
-            .filter_map(|(r, ..)| Some((r, (edits.block_tx)(id_of(r), r.phase2_valid)?)))
+            .filter_map(|(r, ..)| Some((r, (edits.block_tx)(id_of(r), r.flag())?)))
             .collect();
         let txs: Vec<_> = included
             .iter()
@@ -1101,7 +1101,7 @@ async fn compare_read_tx(
                 slot: record.slot,
                 block,
                 tx: &record.tx.0,
-                phase2: record.phase2_valid,
+                phase2: record.flag(),
             }),
             LedgerOutcome::Refused { .. } => None,
         };
@@ -2244,7 +2244,7 @@ async fn supp8_written_as_phase2_valid_leaves_the_input_of_supp9_missing() {
         .flat_map(KeptRun::records)
         .find(|r| r.n == 8)
         .expect("supp#8 is in a kept run");
-    assert_eq!(supp8.phase2_valid, Phase2::Invalid);
+    assert_eq!(supp8.flag(), Phase2::Invalid);
     assert!(matches!(supp8.outcome, LedgerOutcome::Accepted { .. }));
     let manifests = Manifests::committed();
     let line = "\nDISAGREE supp#9 ";
