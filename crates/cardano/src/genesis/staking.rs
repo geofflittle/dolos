@@ -118,6 +118,7 @@ fn parse_delegation(
         vote_delegated_at: None,
         deregistered_at: None,
         retired_pool: None,
+        deposit: Some(genesis.shelley.protocol_params.key_deposit),
 
         stake: EpochValue::with_live(0, stake),
     }

@@ -127,6 +127,7 @@ fn seed_accounts(domain: &DomainAdapter, slot: u64, epoch: u64, accounts: &Ledge
             .unwrap();
         let mut account = read.unwrap_or_else(|| AccountState::new(epoch, stake));
         account.registered_at = Some(slot);
+        account.deposit = Some(ledger.deposit);
         let mut balance = account.stake.live().cloned().unwrap_or_default();
         balance.rewards_sum = ledger.balance;
         account.stake = EpochValue::with_live(epoch, balance);

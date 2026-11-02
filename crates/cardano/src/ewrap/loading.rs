@@ -1677,6 +1677,7 @@ mod tests {
             deregistered_at: None,
             credential: credential.clone(),
             retired_pool: None,
+            deposit: None,
         });
 
         ControlledAmountInc::new(credential.clone(), false, 100, 5).apply(&mut account);
@@ -1787,6 +1788,7 @@ mod tests {
             deregistered_at: None,
             credential,
             retired_pool: None,
+            deposit: None,
         }
     }
 
@@ -2419,6 +2421,7 @@ mod tests {
             drep: EpochValue::new(live_epoch),
             vote_delegated_at: None,
             retired_pool: None,
+            deposit: None,
         }
     }
 
@@ -2724,6 +2727,7 @@ mod ratification_tests {
             deregistered_at: None,
             credential,
             retired_pool: None,
+            deposit: None,
         }
     }
 

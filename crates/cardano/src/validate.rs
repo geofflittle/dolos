@@ -889,6 +889,7 @@ mod pending_tests {
             deregistered_at: None,
             credential: credential(byte),
             retired_pool: None,
+            deposit: None,
         }
     }
 
