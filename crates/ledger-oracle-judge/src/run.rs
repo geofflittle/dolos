@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::{
     accounts::LedgerAccounts,
     cbor::TxIn,
-    record::{CorpusKind, LedgerOutcome, PParams, Pre, Record, RecordId, UtxoEntry},
+    record::{CorpusKind, EraTime, LedgerOutcome, PParams, Pre, Record, RecordId, UtxoEntry},
 };
 
 /// The point in a run where an output enters the UTxO.
@@ -81,11 +81,12 @@ fn lives(seed: &[UtxoEntry], records: &[Record]) -> BTreeMap<TxIn, Life> {
     lives
 }
 
-/// A run of records in one epoch under one parameter set, each starting from the state the previous left.
+/// A run of records in one epoch under one parameter set and one era time map, each starting from the state the previous left.
 #[derive(Debug, Clone)]
 pub struct KeptRun {
     epoch: Option<u64>,
     pparams: PParams,
+    era: EraTime,
     seed: Vec<UtxoEntry>,
     records: Vec<Record>,
     lives: BTreeMap<TxIn, Life>,
@@ -126,6 +127,11 @@ impl KeptRun {
     /// The protocol parameters every record of the run ran under.
     pub fn pparams(&self) -> &PParams {
         &self.pparams
+    }
+
+    /// The era time map every record of the run ran under.
+    pub fn era(&self) -> &EraTime {
+        &self.era
     }
 
     /// The records in ledger order, at least one.
@@ -189,11 +195,12 @@ fn accounts_left(record: &Record) -> &LedgerAccounts {
     }
 }
 
-/// Whether a record starts from the epoch, parameters and accounts the previous record left.
+/// Whether a record starts from the epoch, parameters, era time map and accounts the previous record left.
 fn continues(prev: &Record, next: &Record) -> bool {
     next.epoch == prev.epoch
         && next.pparams == prev.pparams
         && next.accounts_pre == *accounts_left(prev)
+        && next.time.era == prev.time.era
 }
 
 /// Cuts records that share one UTxO history into runs at each record that does not continue the previous, each run seeded with the UTxO its first record starts from.
@@ -219,6 +226,7 @@ fn cut(records: Vec<Record>) -> Vec<KeptRun> {
             KeptRun {
                 epoch: records[0].epoch,
                 pparams: records[0].pparams.clone(),
+                era: records[0].time.era.clone(),
                 lives: lives(&seed, &records),
                 seed,
                 records,
@@ -312,7 +320,7 @@ mod tests {
     fn records_in_one_epoch_under_one_parameter_set_stay_in_one_run() {
         let records = written(CorpusKind::Supp);
         let fresh = records.iter().filter(|r| r.pre != Pre::FollowsPrev).count();
-        assert_eq!(fresh, 39);
+        assert_eq!(fresh, 43);
         assert_eq!(split(records).len(), fresh);
     }
 
@@ -352,5 +360,21 @@ mod tests {
         let mut moved = next.clone();
         moved.accounts_pre.clear();
         assert!(!continues(prev, &moved));
+    }
+
+    #[test]
+    fn a_record_under_another_era_time_map_does_not_continue_and_another_horizon_does() {
+        let records = written(CorpusKind::Supp);
+        let (prev, next) = records
+            .windows(2)
+            .find(|w| continues(&w[0], &w[1]))
+            .map(|w| (&w[0], &w[1]))
+            .unwrap();
+        let mut bounded = next.clone();
+        bounded.time.horizon_slot = Some(next.slot + 1);
+        assert!(continues(prev, &bounded));
+        let mut shifted = next.clone();
+        shifted.time.era.system_start_ms += 1000;
+        assert!(!continues(prev, &shifted));
     }
 }

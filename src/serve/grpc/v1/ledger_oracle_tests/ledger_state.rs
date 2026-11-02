@@ -342,7 +342,7 @@ mod tests {
     use ledger_oracle_judge::record::{CorpusKind, Record};
 
     use super::{
-        super::{epoch_size, load, seed},
+        super::{load, seed},
         *,
     };
 
@@ -357,7 +357,7 @@ mod tests {
     fn read_after_seeding(seeded: &Record, named: &Record) -> Read {
         let corpus = load(CorpusKind::Ic);
         let run = corpus.kept().next().unwrap();
-        let genesis = seed::genesis(epoch_size(&corpus));
+        let genesis = seed::genesis(run.era());
         let domain = seed::seed(
             &genesis,
             run.epoch().unwrap(),

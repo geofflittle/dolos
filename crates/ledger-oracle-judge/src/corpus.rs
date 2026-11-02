@@ -8,15 +8,15 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
-    record::{CorpusKind, Globals, Record, RecordId},
+    record::{CorpusKind, Record, RecordId},
     run::{self, KeptRun},
 };
 
 /// The sha256 of the decompressed Imp spec corpus.
-pub const IC_SHA256: &str = "015e7b932273eb86c6ccb10c503913c86afabaf5ea7d7a34480ddb7af3176353";
+pub const IC_SHA256: &str = "e02bc987d159d02c4ea3be5b7cf4e05b15ff10c7698e43c2ad9db6c050b2e090";
 
 /// The sha256 of the decompressed supplement corpus.
-pub const SUPP_SHA256: &str = "7ca1ea0e4444845e84493280faf6d06016432a1472adf8836c50c0e6236d6c71";
+pub const SUPP_SHA256: &str = "847b342318da732cca5332c081b3d324601c9a95db8c54eb8e8bae35f33c2f85";
 
 const IC_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/ic.jsonl.gz");
 const SUPP_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/supp.jsonl.gz");
@@ -130,19 +130,16 @@ pub struct Corpus {
     pub kind: CorpusKind,
     pub sha256: String,
     pub records: usize,
-    pub globals: Option<Globals>,
     pub runs: Vec<KeptRun>,
 }
 
 impl Corpus {
     /// Splits loaded records into runs.
     pub fn new(v: Verified, records: Vec<Record>) -> Self {
-        let globals = records.iter().find_map(|r| r.globals.clone());
         Corpus {
             kind: v.kind,
             sha256: hex::encode(Sha256::digest(v.bytes)),
             records: records.len(),
-            globals,
             runs: run::split(records),
         }
     }
@@ -178,7 +175,6 @@ impl Corpus {
             kind: self.kind,
             sha256: self.sha256.clone(),
             records: held.len(),
-            globals: self.globals.clone(),
             runs: kept.into_iter().cloned().collect(),
         })
     }
@@ -263,11 +259,11 @@ mod tests {
     fn committed_corpora_load_into_their_runs() {
         assert_eq!(
             load(CorpusKind::Ic).unwrap().to_string(),
-            "CORPUS ic sha=015e7b932273eb86 records=9853 runs=892 kept_records=9853"
+            "CORPUS ic sha=e02bc987d159d02c records=9853 runs=892 kept_records=9853"
         );
         assert_eq!(
             load(CorpusKind::Supp).unwrap().to_string(),
-            "CORPUS supp sha=7ca1ea0e4444845e records=125 runs=39 kept_records=125"
+            "CORPUS supp sha=847b342318da732c records=137 runs=43 kept_records=137"
         );
     }
 
@@ -279,7 +275,7 @@ mod tests {
         let e = verify(CorpusKind::Ic, &bytes, IC_SHA256).unwrap_err();
         assert!(e
             .to_string()
-            .starts_with("CORPUS ic sha mismatch expected=015e7b93"));
+            .starts_with("CORPUS ic sha mismatch expected=e02bc987"));
     }
 
     #[test]
@@ -416,6 +412,6 @@ mod tests {
             input_totals(CorpusKind::Ic),
             [10239, 467, 5162, 473, 475, 16, 474]
         );
-        assert_eq!(input_totals(CorpusKind::Supp), [151, 12, 1, 16, 19, 0, 19]);
+        assert_eq!(input_totals(CorpusKind::Supp), [167, 16, 1, 16, 19, 0, 19]);
     }
 }

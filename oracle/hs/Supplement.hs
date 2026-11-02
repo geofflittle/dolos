@@ -17,7 +17,7 @@ import Cardano.Crypto.Hashing (unsafeAbstractHashFromBytes)
 import Cardano.Ledger.Address (Addr (..), BootstrapAddress (..), Withdrawals (..), bootstrapKeyHash)
 import Cardano.Ledger.Alonzo.Scripts (AsIx (..), PlutusBinary (..), mkBinaryPlutusScript, pattern SpendingPurpose)
 import Cardano.Ledger.Alonzo.TxWits (Redeemers (..), TxDats (..))
-import Cardano.Ledger.BaseTypes (Network (..), StrictMaybe (..), natVersion)
+import Cardano.Ledger.BaseTypes (Globals (..), Network (..), StrictMaybe (..), epochInfoPure, natVersion)
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Credential (Credential (..), StakeReference (..))
 import Cardano.Ledger.Dijkstra.Core
@@ -33,8 +33,13 @@ import Cardano.Ledger.Shelley.Scripts (pattern RequireSignature)
 import Cardano.Ledger.Tools (setMinCoinTxOut)
 import Cardano.Ledger.TxIn (mkTxInPartial)
 import Cardano.Ledger.Val (inject)
+import Cardano.Slotting.EpochInfo (EpochInfo (..), epochInfoEpoch, epochInfoSize, epochInfoSlotLength)
+import Cardano.Slotting.Slot (EpochSize (..), SlotNo (..))
+import Cardano.Slotting.Time (SystemStart (..), slotLengthToMillisec)
 import Codec.CBOR.Term (Term (..))
-import Control.Monad (forM_, replicateM_, void)
+import Control.Monad (forM_, replicateM_, void, when, (<=<))
+import Data.Functor.Identity (runIdentity)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Base16 as B16
@@ -44,10 +49,11 @@ import Data.Maybe (listToMaybe)
 import qualified Data.OMap.Strict as OMap
 import Data.Primitive.ByteArray (byteArrayFromList)
 import Data.Typeable (Typeable)
-import Data.Word (Word8)
+import Data.Word (Word64, Word8)
 import Dump (E, dumpTo)
 import Edit
 import Lens.Micro ((%~), (&), (.~), (^.))
+import Lens.Micro.Mtl (use, (%=))
 import qualified PlutusLedgerApi.V1 as PV1
 import Test.Cardano.Ledger.Core.KeyPair (ByronKeyPair (..))
 import Test.Cardano.Ledger.Core.Utils (txInAt)
@@ -188,6 +194,65 @@ supplement = describe "SUPPLEMENT" $ do
   -- (program 1.2.0 (lam ctx (con unit ())))
   it "a V3 script at UPLC 1.2.0" $
     spendWithV3 "450102002499"
+  validityBounds
+
+-- | Spends at a validator that succeeds when the transaction's validity range equals its redeemer, each case with the range the ledger is expected to build.
+validityBounds :: SpecWith (ImpInit (LedgerSpec E))
+validityBounds = describe "validity bounds" $ do
+  it "a V3 script sees an exclusive upper bound" $ do
+    g <- use impGlobalsL
+    SlotNo s <- use impCurSlotNoG
+    let u = SlotNo (s + 10)
+    spendInRange submitTx_ (ValidityInterval SNothing (SJust u)) (PV1.Interval (PV1.LowerBound PV1.NegInf True) (PV1.strictUpperBound (posixAt g u)))
+  it "a V3 script sees a closed lower bound" $ do
+    g <- use impGlobalsL
+    s <- use impCurSlotNoG
+    spendInRange submitTx_ (ValidityInterval (SJust s) SNothing) (PV1.Interval (PV1.lowerBound (posixAt g s)) (PV1.UpperBound PV1.PosInf True))
+  it "a V3 script with its upper bound at the slot before the forecast horizon" $
+    uptoHorizon 1 submitTx_
+  it "a V3 script with its upper bound at the forecast horizon" $
+    uptoHorizon 0 (void . expectLeft <=< trySubmitTx)
+
+-- (program 1.1.0 (lam ctx [(lam fields [(lam info (force [[[(force (builtin ifThenElse)) [[(builtin equalsData) [(force (builtin headList)) [(force (builtin tailList)) [(force (builtin tailList)) [(force (builtin tailList)) [(force (builtin tailList)) [(force (builtin tailList)) [(force (builtin tailList)) [(force (builtin tailList)) [(force (force (builtin sndPair))) [(builtin unConstrData) info]]]]]]]]]]] [(force (builtin headList)) [(force (builtin tailList)) fields]]]] (delay (con unit ()))] (delay (error))])) [(force (builtin headList)) fields]]) [(force (force (builtin sndPair))) [(builtin unConstrData) ctx]]]))
+
+-- | A V3 validator that succeeds when its transaction's validity range equals its redeemer.
+rangeIsRedeemer :: ByteString
+rangeIsRedeemer = "5839010100232325333573466ebcd5d09aba2357446ae88d5d11aba2357446ae88d55cf1baa001357426ae8800852616357420026aae78dd500081"
+
+-- | Submits a spend at the range checking validator whose upper bound is the given number of slots before the forecast horizon of a node validating at the current slot, under globals that translate no slot from that horizon on.
+uptoHorizon :: Word64 -> (Tx TopTx E -> ImpTestM E ()) -> ImpTestM E ()
+uptoHorizon before submit = do
+  g <- use impGlobalsL
+  let fixed = epochInfoPure g
+      window = stabilityWindow g
+      size at = unEpochSize (runIdentity (epochInfoEpoch fixed at >>= epochInfoSize fixed))
+  SlotNo s0 <- use impCurSlotNoG
+  when ((s0 + window) `mod` size (SlotNo s0) == 0) passTick
+  current <- use impCurSlotNoG
+  let SlotNo s = current
+      horizon = SlotNo (((s + window) `div` size current + 1) * size current)
+      u = SlotNo (unSlotNo horizon - before)
+  impGlobalsL %= bounded horizon
+  spendInRange submit (ValidityInterval SNothing (SJust u)) (PV1.Interval (PV1.LowerBound PV1.NegInf True) (PV1.strictUpperBound (posixAt g u)))
+
+-- | The globals with an epoch info that translates no slot at or past the horizon.
+bounded :: SlotNo -> Globals -> Globals
+bounded horizon g = g {epochInfo = ei {epochInfoSlotToRelativeTime_ = translate}}
+  where
+    ei = epochInfo g
+    translate s
+      | s >= horizon = Left "past the forecast horizon"
+      | otherwise = epochInfoSlotToRelativeTime_ ei s
+
+-- | The POSIX time of a slot at the system start and slot length of the globals.
+posixAt :: Globals -> SlotNo -> PV1.POSIXTime
+posixAt g s = PV1.POSIXTime (floor (utcTimeToPOSIXSeconds start * 1000) + toInteger (unSlotNo s) * slotLengthToMillisec (runIdentity (epochInfoSlotLength (epochInfoPure g) s)))
+  where
+    SystemStart start = systemStart g
+
+-- | Locks coin at the range checking validator, then submits a spend of it with the validity interval and the range as its redeemer.
+spendInRange :: (Tx TopTx E -> ImpTestM E ()) -> ValidityInterval -> PV1.POSIXTimeRange -> ImpTestM E ()
+spendInRange submit interval range = spendWithV3In submit interval (Data (PV1.toData range)) rangeIsRedeemer
 
 -- | Transactions whose bytes break one rule of the node's decoder, or one it reads differently from the CDDL, each case at a slot of its own.
 decoderRules :: SpecWith (ImpInit (LedgerSpec E))
@@ -362,7 +427,11 @@ spendWithV3 = spendWithV3Using submitTx_
 
 -- | Locks coin at a V3 script given as its CBOR hex, then submits a spend of it with that script and no datum.
 spendWithV3Using :: (Tx TopTx E -> ImpTestM E ()) -> ByteString -> ImpTestM E ()
-spendWithV3Using submit hex = do
+spendWithV3Using submit = spendWithV3In submit (ValidityInterval SNothing SNothing) (Data (PV1.I 0))
+
+-- | Locks coin at a V3 script given as its CBOR hex, then submits a spend of it with that script, the validity interval, the redeemer and no datum.
+spendWithV3In :: (Tx TopTx E -> ImpTestM E ()) -> ValidityInterval -> Data E -> ByteString -> ImpTestM E ()
+spendWithV3In submit interval redeemer hex = do
   plutus :: PlutusScript E <- expectJust $ mkBinaryPlutusScript PlutusV3 . PlutusBinary . toShort =<< either (const Nothing) Just (B16.decode hex)
   let script = fromPlutusScript plutus
       hash = hashScript script
@@ -370,9 +439,9 @@ spendWithV3Using submit hex = do
   collateral <- makeCollateralInput
   let tx :: Tx TopTx E
       tx =
-        mkBasicTx (mkBasicTxBody & inputsTxBodyL .~ [locked] & collateralInputsTxBodyL .~ [collateral] & feeTxBodyL .~ Coin 400_000)
+        mkBasicTx (mkBasicTxBody & inputsTxBodyL .~ [locked] & collateralInputsTxBodyL .~ [collateral] & feeTxBodyL .~ Coin 400_000 & vldtTxBodyL .~ interval)
           & witsTxL . scriptTxWitsL .~ [(hash, script)]
-          & witsTxL . rdmrsTxWitsL .~ Redeemers [(SpendingPurpose (AsIx 0), (Data (PV1.I 0), ExUnits 1_000_000 1_000_000_000))]
+          & witsTxL . rdmrsTxWitsL .~ Redeemers [(SpendingPurpose (AsIx 0), (redeemer, ExUnits 1_000_000 1_000_000_000))]
   submit tx
 
 main :: IO ()

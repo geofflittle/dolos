@@ -12,10 +12,7 @@ mod validate;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::atomic::{AtomicBool, Ordering},
     thread,
 };
 
@@ -25,9 +22,8 @@ use dolos_cardano::{
     FixedNamespace as _,
 };
 use dolos_core::{
-    AsyncQueryFacade, BlockHash, ChainError, ChainPoint, Domain as _, EraCbor, Genesis,
-    MempoolStore as _, MempoolTx, RawBlock, StateStore as _, SubmitExt as _, SyncExt as _, TxHash,
-    TxoRef,
+    AsyncQueryFacade, BlockHash, ChainError, ChainPoint, Domain as _, EraCbor, MempoolStore as _,
+    MempoolTx, RawBlock, StateStore as _, SubmitExt as _, SyncExt as _, TxHash, TxoRef,
 };
 use itertools::Itertools as _;
 use ledger_oracle_judge::{
@@ -82,14 +78,6 @@ use crate::adapters::DomainAdapter;
 
 fn load(kind: CorpusKind) -> Corpus {
     corpus::load(kind).unwrap_or_else(|e| panic!("{e}"))
-}
-
-fn epoch_size(corpus: &Corpus) -> u64 {
-    corpus
-        .globals
-        .as_ref()
-        .unwrap_or_else(|| panic!("CORPUS {} has no globals", corpus.kind.name()))
-        .epoch_size
 }
 
 /// The datum bytes Dolos serves through ReadUtxos for each input it holds.
@@ -1630,7 +1618,6 @@ struct RunJudged {
 /// Judges one kept run of a corpus seeded from its first pre state.
 async fn judge_run(
     kind: CorpusKind,
-    genesis: &Arc<Genesis>,
     run: &KeptRun,
     manifests: &Manifests,
     edits: &Edits<'_>,
@@ -1652,7 +1639,7 @@ async fn judge_run(
         .unwrap_or_else(|| panic!("RUN {id} has no epoch"));
     let pparams = params::seed_values(run.pparams()).unwrap_or_else(|e| panic!("{e}"));
     let seeded = seed::seed(
-        genesis,
+        &seed::genesis(run.era()),
         epoch,
         &pparams,
         &(edits.pre)(id, run.seed()),
@@ -1702,7 +1689,6 @@ async fn judge_run(
 /// Judges every kept run of a corpus, each seeded from its first pre state, on
 /// one thread per core.
 async fn judge(corpus: &Corpus, manifests: &Manifests, edits: &Edits<'_>) -> Judged {
-    let genesis = seed::genesis(epoch_size(corpus));
     let runs: Vec<&KeptRun> = corpus.kept().collect();
     let threads = thread::available_parallelism().map_or(1, usize::from);
     let handle = Handle::current();
@@ -1711,7 +1697,7 @@ async fn judge(corpus: &Corpus, manifests: &Manifests, edits: &Edits<'_>) -> Jud
             &runs,
             threads,
             |run| run.records().len(),
-            |run| handle.block_on(judge_run(corpus.kind, &genesis, run, manifests, edits)),
+            |run| handle.block_on(judge_run(corpus.kind, run, manifests, edits)),
         )
     });
     let mut judged = Judged::default();
@@ -2303,7 +2289,6 @@ async fn an_output_dolos_holds_that_the_ledger_never_made_prints_utxo_disagree()
 #[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn a_tx_received_in_one_group_is_absent_from_the_next() {
     let corpus = load(CorpusKind::Supp);
-    let genesis = seed::genesis(epoch_size(&corpus));
     let mut checked = 0;
     for run in corpus.kept() {
         let groups: Vec<_> = run.groups().collect();
@@ -2312,7 +2297,7 @@ async fn a_tx_received_in_one_group_is_absent_from_the_next() {
         };
         let pparams = params::seed_values(run.pparams()).unwrap();
         let seeded = seed::seed(
-            &genesis,
+            &seed::genesis(run.era()),
             run.epoch().unwrap(),
             &pparams,
             run.seed(),
@@ -2646,7 +2631,7 @@ async fn a_seed_output_compared_as_bytes_names_the_first_differing_byte() {
     let corpus = load(CorpusKind::Supp);
     let run = corpus.kept().next().unwrap();
     let first = &run.records()[0];
-    let genesis = seed::genesis(epoch_size(&corpus));
+    let genesis = seed::genesis(run.era());
     let seeded = seed::seed(
         &genesis,
         run.epoch().unwrap(),
@@ -2716,7 +2701,7 @@ async fn a_seed_output_compared_as_bytes_names_the_first_differing_byte() {
 async fn the_seed_point_is_a_rollback_target() {
     let corpus = load(CorpusKind::Supp);
     let run = corpus.kept().next().unwrap();
-    let genesis = seed::genesis(epoch_size(&corpus));
+    let genesis = seed::genesis(run.era());
     let seeded = seed::seed(
         &genesis,
         run.epoch().unwrap(),

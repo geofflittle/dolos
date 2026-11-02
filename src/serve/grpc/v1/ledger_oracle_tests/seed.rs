@@ -16,7 +16,7 @@ use dolos_testing::toy_domain::ToyDomain;
 use ledger_oracle_judge::{
     accounts::{Credential, DRep, LedgerAccounts},
     cbor::TxIn,
-    record::{Record, UtxoEntry},
+    record::{EraTime, Record, UtxoEntry},
 };
 use pallas::{
     codec::minicbor,
@@ -37,16 +37,35 @@ pub(super) const DIJKSTRA: u16 = 8;
 /// The protocol version of the corpus chain.
 const PROTOCOL: u16 = 12;
 
-/// The devnet genesis with the corpus epoch length and protocol version 12.
-pub(super) fn genesis(epoch_size: u64) -> Arc<Genesis> {
+/// The devnet genesis with the era time map of a run and protocol version 12.
+pub(super) fn genesis(era: &EraTime) -> Arc<Genesis> {
     let mut genesis = dolos_cardano::include::devnet::load()
         .with_dijkstra(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/crates/core/test_data/proto-devnet/dijkstra-genesis.json"
         ))
         .expect("the devnet Dijkstra genesis loads");
+    let seconds = |ms: u64| {
+        assert_eq!(
+            ms % 1000,
+            0,
+            "a genesis holds whole seconds, the run has {ms} ms"
+        );
+        ms / 1000
+    };
+    let start = i64::try_from(seconds(era.system_start_ms)).expect("the system start fits");
+    let start = chrono::DateTime::from_timestamp(start, 0).expect("the system start is a time");
+    genesis.shelley.system_start = Some(start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    genesis.shelley.slot_length =
+        Some(u32::try_from(seconds(era.slot_length_ms)).expect("the slot length fits"));
     genesis.shelley.epoch_length =
-        Some(u32::try_from(epoch_size).expect("the corpus epoch size fits a genesis epoch length"));
+        Some(u32::try_from(era.epoch_size).expect("the epoch size fits a genesis epoch length"));
+    genesis.shelley.security_param =
+        Some(u32::try_from(era.security_param).expect("the security parameter fits"));
+    genesis.byron.protocol_consts.k =
+        usize::try_from(era.security_param).expect("the security parameter fits");
+    let (numerator, denominator) = era.active_slot_coeff;
+    genesis.shelley.active_slots_coeff = Some(numerator as f32 / denominator.get() as f32);
     genesis.force_protocol = Some(PROTOCOL.into());
     Arc::new(genesis)
 }

@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, num::NonZeroU64};
 
 use serde::{de::Error as _, Deserialize, Deserializer};
 
@@ -230,13 +230,23 @@ pub enum LedgerOutcome {
     },
 }
 
-/// The chain values the ledger ran the corpus under, written on its first record.
+/// The slot to time map of the era the ledger ran a record in.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Globals {
-    pub network: String,
+pub struct EraTime {
+    pub system_start_ms: u64,
+    pub slot_length_ms: u64,
     pub epoch_size: u64,
     pub security_param: u64,
+    pub active_slot_coeff: (u64, NonZeroU64),
+}
+
+/// The time the ledger read a record under, with the first slot it could not translate when one was within two epochs past the stability window.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Time {
+    pub era: EraTime,
+    pub horizon_slot: Option<u64>,
 }
 
 /// One LEDGER rule run as the extractor wrote it.
@@ -258,8 +268,7 @@ pub struct Record {
     pub ex_units: Vec<LedgerRedeemer>,
     pub sub_ex_units: Vec<Vec<LedgerRedeemer>>,
     pub min_fee: Option<u64>,
-    #[serde(default)]
-    pub globals: Option<Globals>,
+    pub time: Time,
 }
 
 impl Record {

@@ -17,7 +17,7 @@ import Cardano.Ledger.Alonzo.Scripts (AsIx, PlutusPurpose, hoistPlutusPurpose, t
 import Cardano.Ledger.Alonzo.Tx (IsPhase2Valid (..), isPhase2ValidTxL)
 import Cardano.Ledger.Alonzo.TxWits (rdmrsTxWitsL, unRedeemersL)
 import Cardano.Ledger.Alonzo.UTxO (resolveNeededPlutusScriptsWithPurpose)
-import Cardano.Ledger.BaseTypes (Globals (..), Network, TxIx (..), epochInfoPure, pvMajor, unNonZero)
+import Cardano.Ledger.BaseTypes (Globals (..), TxIx (..), activeSlotVal, epochInfoPure, pvMajor, unNonZero, unboundRational)
 import Cardano.Ledger.Binary (DecCBOR (decCBOR), DecoderError, Version, decodeFullAnnotator, serialize')
 import Cardano.Ledger.Coin (Coin (..))
 import Cardano.Ledger.Core
@@ -33,8 +33,12 @@ import Cardano.Ledger.Shelley.LedgerState (lsCertStateL, lsUTxOStateL, utxosGovS
 import Cardano.Ledger.Shelley.Rules (LedgerEnv (..))
 import qualified Data.Aeson.KeyMap as KM
 import Cardano.Ledger.State (ChainAccountState (..), UTxO (..), accountsL, certDStateL, getMinFeeTxUtxo, utxoL)
-import Cardano.Slotting.EpochInfo (epochInfoSize)
+import Cardano.Slotting.EpochInfo (epochInfoEpoch, epochInfoSize, epochInfoSlotLength, epochInfoSlotToRelativeTime)
 import Cardano.Slotting.Slot (EpochNo (..), EpochSize (..), SlotNo (..))
+import Cardano.Slotting.Time (SystemStart (..), slotLengthToMillisec)
+import Data.Either (isRight)
+import Data.Ratio (denominator, numerator)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Control.Monad.IO.Class (liftIO)
 import Control.State.Transition.Extended (STS (..), TRC (..))
 import qualified Data.Aeson as A
@@ -132,13 +136,35 @@ stringLit ('"' : ys) = ("\"", ys)
 stringLit (y : ys) = let (lit, rest) = stringLit ys in (y : lit, rest)
 stringLit [] = ([], [])
 
-globalsJson :: Globals -> EpochNo -> A.Value
-globalsJson g e =
+-- | The slot to time map the ledger reads at the slot, and the first slot it cannot translate when one is within two epochs past the stability window.
+timeJson :: Globals -> SlotNo -> A.Value
+timeJson g s =
   A.object
-    [ "network" A..= show (networkId g :: Network)
-    , "epoch_size" A..= unEpochSize (runIdentity (epochInfoSize (epochInfoPure g) e))
-    , "security_param" A..= unNonZero (securityParameter g)
+    [ "era"
+        A..= A.object
+          [ "system_start_ms" A..= startMs
+          , "slot_length_ms" A..= slotLengthToMillisec (runIdentity (epochInfoSlotLength fixed s))
+          , "epoch_size" A..= size
+          , "security_param" A..= unNonZero (securityParameter g)
+          , "active_slot_coeff" A..= [numerator f, denominator f]
+          ]
+    , "horizon_slot" A..= horizon
     ]
+  where
+    fixed = epochInfoPure g
+    SystemStart start = systemStart g
+    startMs = floor (utcTimeToPOSIXSeconds start * 1000) :: Integer
+    f = unboundRational (activeSlotVal (activeSlotCoeff g))
+    size = unEpochSize (runIdentity (epochInfoEpoch fixed s >>= epochInfoSize fixed))
+    translates x = isRight (epochInfoSlotToRelativeTime (epochInfo g) (SlotNo x))
+    top = unSlotNo s + stabilityWindow g + 2 * size
+    horizon = if translates top then Nothing else Just (firstPast (unSlotNo s) top)
+    firstPast lo hi
+      | lo >= hi = hi
+      | translates mid = firstPast (mid + 1) hi
+      | otherwise = firstPast lo mid
+      where
+        mid = lo + (hi - lo) `div` 2
 
 dumpTo ::
   FilePath ->
@@ -194,8 +220,8 @@ dumpTo out g (TRC (env, st, stAnn)) res = liftIO $ do
           , "ex_units" A..= map evaluationJson (Map.toList (evalTxExUnits (ledgerPp env) tx pre (epochInfo g) (systemStart g)))
           , "sub_ex_units" A..= map (map evaluationJson . Map.toList) (subTxExUnits (ledgerPp env) g pre stAnn)
           , "min_fee" A..= either (const Nothing) (\t -> Just (unCoin (getMinFeeTxUtxo (ledgerPp env) t pre))) decoded
+          , "time" A..= timeJson g (ledgerSlotNo env)
           ]
-            ++ [ "globals" A..= globalsJson g e | n == 0, Just e <- [epoch] ]
       -- The ledger's outcome for the same transaction under a true flag, the form a node receives it in.
       submitted =
         let flagged = tx & isPhase2ValidTxL .~ Phase2Valid
