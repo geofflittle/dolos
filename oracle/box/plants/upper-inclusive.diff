@@ -1,0 +1,13 @@
+diff --git a/pallas-validate/src/phase2/to_plutus_data.rs b/pallas-validate/src/phase2/to_plutus_data.rs
+index 990f7cda..0131f8df 100644
+--- a/pallas-validate/src/phase2/to_plutus_data.rs
++++ b/pallas-validate/src/phase2/to_plutus_data.rs
+@@ -891,7 +891,7 @@ impl ToPlutusData for TimeRange {
+                     vec![
+                         wrap_with_constr(1, x.to_plutus_data()),
+                         // NOTE: Finite lower bounds are always inclusive, unlike upper bounds.
+-                        is_lower.to_plutus_data(),
++                        true.to_plutus_data(),
+                     ],
+                 ),
+                 None => wrap_multiple_with_constr(

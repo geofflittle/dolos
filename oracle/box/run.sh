@@ -90,6 +90,27 @@ judge_live() {
       >"$OUT/live.log" 2>&1
 }
 
+# Judges a copy of the candidate's reads with the served era start and tip one second late, the reads of a system start one second late, and prints the verdict of the arm that requires both times to disagree with the node.
+live_shift() {
+  shifted="$OUT/live/shifted"
+  rm -rf "$shifted"
+  verdict=MISSED
+  if cp -R "$OUT/live/candidate" "$shifted" &&
+    jq '.cardano.summaries[-1].start.time |= (tonumber + 1000 | tostring)' \
+      "$OUT/live/candidate/era.json" >"$shifted/era.json" &&
+    jq '.tip.timestamp |= (tonumber + 1000 | tostring)' "$OUT/live/candidate/tip.json" >"$shifted/tip.json"; then
+    LIVE_DIR="/w/${OUT#"$ROOT"/}/live/shifted" sh "$HERE/in-image.sh" "${OUT#"$ROOT"/}" \
+      "/w/${OUT#"$ROOT"/}/bin/judge" "$TEST::live::live" --exact --ignored --nocapture \
+      >"$OUT/live-shift.log" 2>&1 || true
+    times='slot=[0-9]+ time=[0-9]+ node_slot=[0-9]+ '
+    if grep -E "^LIVE-DIFF row=[^ ]* locus=era_summary era=[a-z]+ start_time $times" "$OUT/live-shift.log" &&
+      grep -E "^LIVE-DIFF row=[^ ]* locus=era_summary tip $times" "$OUT/live-shift.log"; then
+      verdict=CAUGHT
+    fi
+  fi
+  echo "live-shift=$verdict"
+}
+
 # Builds the candidate and the live judge, syncs the candidate and judges its reads.
 live_leg() {
   build_candidate && build_live_judge || return 1
@@ -110,8 +131,9 @@ live_run() {
     live=PASS
   fi
   grep -E '^(LIVE|KNOWN|KNOWN_STALE|LIVE-DIFF|LIVE-GAP) ' "$OUT/live.log" | cut -c1-400 || true
-  echo "LIVE-LEG live=$live commit=$commit logs=$OUT"
-  [ "$live" = PASS ]
+  shift_verdict=$(live_shift | tail -1)
+  echo "LIVE-LEG live=$live $shift_verdict commit=$commit logs=$OUT"
+  [ "$live" = PASS ] && [ "$shift_verdict" = live-shift=CAUGHT ]
 }
 
 # The arms whose plant changes a file that differs between the commits $1 and $2 of the scratch tree, one per line.
@@ -198,8 +220,9 @@ ship_run() {
   cat "$OUT/live-leg.out"
   verdicts=$(sed -n 's/^ARMS \(.*\) logs=.*/\1/p' "$OUT/breaks.out")
   grep -E '^(LIVE|KNOWN|KNOWN_STALE|LIVE-DIFF|LIVE-GAP) ' "$OUT/live.log" | cut -c1-400 || true
-  echo "DONE tier=ship $verdicts live=$live commit=$commit logs=$OUT"
-  passed "$verdicts live=$live"
+  shift_verdict=$(live_shift | tail -1)
+  echo "DONE tier=ship $verdicts $shift_verdict live=$live commit=$commit logs=$OUT"
+  passed "$verdicts $shift_verdict live=$live"
   echo "$commit" >"$LAST_DONE"
 }
 

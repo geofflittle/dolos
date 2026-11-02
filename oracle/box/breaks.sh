@@ -56,6 +56,20 @@ plant_subouts() {
   git -C "$ROOT/$SCRATCH" apply "$HERE/plants/subouts.diff"
 }
 
+# Applies the named Dolos plant over the scratch tree.
+plant_dolos() {
+  git -C "$ROOT/$SCRATCH" apply "$HERE/plants/$1.diff"
+}
+
+# Builds and runs the crate test of an arm over the scratch trees as they stand, its output in $2.
+run_crate_test() {
+  if ! built=$(build_checked "$2.build" test --release $(crate_test "$1") --no-run $locked); then
+    echo "BUILD_REFUSED $built" >"$2"
+    return
+  fi
+  RUST_BACKTRACE=0 sh "$IMAGE" "$SCRATCH" "$(executable "$2.build")" --nocapture >"$2" 2>&1 || true
+}
+
 # Checks pallas out at a commit into the scratch pallas tree and points the scratch tree's pallas crates at it.
 pallas_tree() {
   if [ ! -d "$ROOT/$PALLAS/.git" ]; then
@@ -102,7 +116,8 @@ caught() {
     revalidate) pattern='^DIFF revalidate [a-z]+#[0-9]+ kept_after_rollback_to=' ;;
     revalidate-drops) pattern='^DIFF revalidate [a-z]+#[0-9]+ dropped_after_rollback_to=' ;;
     subouts) pattern='^DIFF (undo|as_output) [a-z]+#[0-9]+ ' ;;
-    byron-attrs | byron-signer | byron-guard | chaincode | emptyguards | tag24 | tag24-ref | unreg-refund | drep-deposit) pattern='^DISAGREE [a-z]+#[0-9]+ ' ;;
+    byron-attrs | byron-signer | byron-guard | chaincode | emptyguards | tag24 | tag24-ref | unreg-refund | drep-deposit | upper-inclusive | slot-off-by-one | horizon-removed | system-start) pattern='^DISAGREE [a-z]+#[0-9]+ ' ;;
+    cost-models) pattern="^thread 'musashi_bootstrap_uses_the_published_cost_models' \([0-9]+\) panicked at crates/cardano/tests/musashi_cost_models.rs:32:" ;;
     byron-out) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=(bootstrap or reward address|output address)' ;;
     minfee-subtx) pattern='^DIFF fee [a-z]+#[0-9]+ ledger=[0-9]+ dolos=[0-9]+$' ;;
     v1v2) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=new script language ' ;;
@@ -137,7 +152,15 @@ control_clean() {
   clean=0
   mkdir -p "$OUT/control"
   for a in $PLANTED_ARMS; do
-    if caught "$a" "$OUT/control.log" "$OUT/control/$a" >/dev/null; then
+    log=$OUT/control.log
+    if crate_test "$a" >/dev/null; then
+      log=$OUT/control-$a.log
+      if ! grep -q '^test result: ok\. 1 passed' "$log"; then
+        echo "ARM control CRATE_TEST_FAILED arm=$a log=$log"
+        clean=1
+      fi
+    fi
+    if caught "$a" "$log" "$OUT/control/$a" >/dev/null; then
       echo "ARM control FIRED arm=$a lines=$OUT/control/$a.new"
       clean=1
     fi
@@ -166,7 +189,8 @@ for arm in $ARMS; do
     rodrigo-reverted) plant=plant_rodrigo ;;
     drep-deposit) plant=plant_drep_deposit ;;
     cost) plant=plant_cost ;;
-    rob-reverted | byron-attrs | byron-signer | byron-guard | chaincode | minfee-subtx | emptyguards | tag24 | v1v2 | byron-out | tag24-ref | unreg-refund) plant="plant_pallas $arm" ;;
+    rob-reverted | byron-attrs | byron-signer | byron-guard | chaincode | minfee-subtx | emptyguards | tag24 | v1v2 | byron-out | tag24-ref | unreg-refund | upper-inclusive | slot-off-by-one | horizon-removed | cost-models) plant="plant_pallas $arm" ;;
+    system-start) plant="plant_dolos $arm" ;;
     *) echo "unknown arm $arm" ; exit 2 ;;
   esac
   if ! $plant >"$OUT/$arm.plant" 2>&1; then
@@ -187,6 +211,18 @@ for arm in $ARMS; do
   dolos_rev=$(git -C "$ROOT/$SCRATCH" rev-parse --short HEAD)
   echo "ARM $arm dolos=$dolos_rev pallas=$pallas_rev pallas_source=$source"
   started=$(date +%s)
+  if crate_test "$arm" >/dev/null; then
+    run_crate_test "$arm" "$OUT/$arm.log"
+    echo "ARM $arm test=$(crate_test "$arm" | sed 's/.* //') seconds=$(($(date +%s) - started))"
+    if caught "$arm" "$OUT/$arm.log" "$OUT/$arm"; then
+      echo "$arm=CAUGHT"
+      verdicts="$verdicts $arm=CAUGHT"
+    else
+      echo "$arm=MISSED"
+      verdicts="$verdicts $arm=MISSED"
+    fi
+    continue
+  fi
   if ! built=$(build_judge "$OUT/$arm.build" $locked); then
     echo "ARM $arm BUILD_REFUSED $built"
     verdicts="$verdicts $arm=MISSED"
@@ -195,7 +231,7 @@ for arm in $ARMS; do
   judge=$(executable "$OUT/$arm.build")
   case $arm in
     head) test=$TEST records= ;;
-    control) test=${TEST}_records records=$(for a in $PLANTED_ARMS; do cat "$HERE/plants/$a.records"; done | sort -u | paste -sd, -) ;;
+    control) test=${TEST}_records records=$(for a in $PLANTED_ARMS; do crate_test "$a" >/dev/null || cat "$HERE/plants/$a.records"; done | sort -u | paste -sd, -) ;;
     *) test=${TEST}_records records=$(paste -sd, "$HERE/plants/$arm.records") ;;
   esac
   echo "ARM $arm test=${test##*::} records=$(echo "$records" | tr , '\n' | grep -c . || true) build_seconds=$(($(date +%s) - started))"
@@ -204,6 +240,11 @@ for arm in $ARMS; do
     --exact --ignored --nocapture >"$OUT/$arm.log" 2>&1 || true
   echo "ARM $arm judge_seconds=$(($(date +%s) - started))"
   if [ "$arm" = control ]; then
+    for a in $PLANTED_ARMS; do
+      if crate_test "$a" >/dev/null; then
+        run_crate_test "$a" "$OUT/control-$a.log"
+      fi
+    done
     if control_clean; then
       echo "control=CLEAN"
       verdicts="$verdicts control=CLEAN"

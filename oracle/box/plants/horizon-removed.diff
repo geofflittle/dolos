@@ -1,0 +1,16 @@
+diff --git a/pallas-validate/src/utils/dijkstra_time.rs b/pallas-validate/src/utils/dijkstra_time.rs
+index 06748a4f..60700a74 100644
+--- a/pallas-validate/src/utils/dijkstra_time.rs
++++ b/pallas-validate/src/utils/dijkstra_time.rs
+@@ -73,11 +73,6 @@ impl DijkstraTimeContext {
+     }
+ 
+     pub fn slot_to_posix_ms(&self, slot: u64) -> Result<u64, DijkstraTimeError> {
+-        if let ForecastHorizon::Slot(horizon) = self.horizon
+-            && slot >= horizon
+-        {
+-            return Err(DijkstraTimeError::PastHorizon { slot, horizon });
+-        }
+         let era = self
+             .eras
+             .iter()

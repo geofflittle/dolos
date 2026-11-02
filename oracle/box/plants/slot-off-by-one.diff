@@ -1,0 +1,13 @@
+diff --git a/pallas-validate/src/utils/dijkstra_time.rs b/pallas-validate/src/utils/dijkstra_time.rs
+index 06748a4f..1a3ded7a 100644
+--- a/pallas-validate/src/utils/dijkstra_time.rs
++++ b/pallas-validate/src/utils/dijkstra_time.rs
+@@ -87,7 +87,7 @@ impl DijkstraTimeContext {
+                 slot,
+                 first_slot: self.eras[0].start_slot,
+             })?;
+-        era.translate(slot)
++        era.translate(slot + 1)
+     }
+ 
+     pub fn validity_bounds(

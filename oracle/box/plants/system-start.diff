@@ -1,0 +1,13 @@
+diff --git a/crates/cardano/src/forks.rs b/crates/cardano/src/forks.rs
+index dbabe5f2..3aab01a6 100644
+--- a/crates/cardano/src/forks.rs
++++ b/crates/cardano/src/forks.rs
+@@ -106,7 +106,7 @@ pub fn from_shelley_genesis(shelley: &shelley::GenesisFile) -> PParamsSet {
+     let version = &shelley.protocol_version;
+ 
+     PParamsSet::default()
+-        .with(Val::SystemStart(system_start.timestamp() as u64))
++        .with(Val::SystemStart(system_start.timestamp() as u64 + 1))
+         .with(Val::ProtocolVersion(version.clone().into()))
+         .with(Val::EpochLength(epoch_length as u64))
+         .with(Val::SlotLength(slot_length as u64))

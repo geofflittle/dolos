@@ -1,0 +1,17 @@
+diff --git a/pallas-configs/src/alonzo.rs b/pallas-configs/src/alonzo.rs
+index c933fa0b..2d234f98 100644
+--- a/pallas-configs/src/alonzo.rs
++++ b/pallas-configs/src/alonzo.rs
+@@ -232,7 +232,11 @@ fn cost_model_values(
+     use serde_json::Value;
+ 
+     match value {
+-        Value::Array(arr) => Ok(arr.iter().map(|v| v.as_i64().unwrap_or_default()).collect()),
++        Value::Array(arr) => Ok(arr
++            .iter()
++            .take(initial_names(language_number).len())
++            .map(|v| v.as_i64().unwrap_or_default())
++            .collect()),
+         Value::Object(map) => initial_names(language_number)
+             .iter()
+             .map(|name| match map.get(*name) {
