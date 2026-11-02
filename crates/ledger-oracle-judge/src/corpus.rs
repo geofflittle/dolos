@@ -1,18 +1,22 @@
-use std::{collections::BTreeMap, fmt, io::Read};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    io::Read,
+};
 
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
-    record::{CorpusKind, Globals, Record},
-    run::{self, Run},
+    record::{CorpusKind, Globals, Record, RecordId},
+    run::{self, KeptRun},
 };
 
 /// The sha256 of the decompressed Imp spec corpus.
-pub const IC_SHA256: &str = "50d342b65ffbc133b2ce2ab675f13194ec6e3d5545853644856443394242e746";
+pub const IC_SHA256: &str = "015e7b932273eb86c6ccb10c503913c86afabaf5ea7d7a34480ddb7af3176353";
 
 /// The sha256 of the decompressed supplement corpus.
-pub const SUPP_SHA256: &str = "0232f30a1ab92a4ac285899f7da5acb607f0251a6fadf0757c1e0aa8c4f1b556";
+pub const SUPP_SHA256: &str = "7ca1ea0e4444845e84493280faf6d06016432a1472adf8836c50c0e6236d6c71";
 
 const IC_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/ic.jsonl.gz");
 const SUPP_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/supp.jsonl.gz");
@@ -127,7 +131,7 @@ pub struct Corpus {
     pub sha256: String,
     pub records: usize,
     pub globals: Option<Globals>,
-    pub runs: Vec<Run>,
+    pub runs: Vec<KeptRun>,
 }
 
 impl Corpus {
@@ -144,33 +148,57 @@ impl Corpus {
     }
 
     /// The runs kept for judgement.
-    pub fn kept(&self) -> impl Iterator<Item = &run::KeptRun> {
-        self.runs.iter().filter_map(|r| match r {
-            Run::Kept(k) => Some(k),
-            Run::Excluded { .. } => None,
+    pub fn kept(&self) -> impl Iterator<Item = &KeptRun> {
+        self.runs.iter()
+    }
+
+    /// The corpus with only the kept runs that hold a record of this corpus
+    /// the set names.
+    pub fn select(&self, named: &BTreeSet<RecordId>) -> Result<Corpus, NotKept> {
+        let mine: BTreeSet<u32> = named
+            .iter()
+            .filter(|id| id.corpus == self.kind)
+            .map(|id| id.n)
+            .collect();
+        let kept: Vec<&KeptRun> = self
+            .kept()
+            .filter(|run| run.records().iter().any(|r| mine.contains(&r.n)))
+            .collect();
+        let held: BTreeSet<u32> = kept
+            .iter()
+            .flat_map(|run| run.records().iter().map(|r| r.n))
+            .collect();
+        if let Some(n) = mine.difference(&held).next() {
+            return Err(NotKept(RecordId {
+                corpus: self.kind,
+                n: *n,
+            }));
+        }
+        Ok(Corpus {
+            kind: self.kind,
+            sha256: self.sha256.clone(),
+            records: held.len(),
+            globals: self.globals.clone(),
+            runs: kept.into_iter().cloned().collect(),
         })
     }
 }
 
+/// A named record that no kept run of its corpus holds.
+#[derive(Debug, Error, PartialEq, Eq)]
+#[error("SELECTION {0} is in no kept run")]
+pub struct NotKept(pub RecordId);
+
 impl fmt::Display for Corpus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let excluded = |test: fn(run::ExcludeReason) -> bool| {
-            self.runs
-                .iter()
-                .filter(|r| matches!(r, Run::Excluded { reason, .. } if test(*reason)))
-                .count()
-        };
         write!(
             f,
-            "CORPUS {} sha={} records={} runs={} kept_runs={} kept_records={} excluded_epoch={} excluded_pparams={}",
+            "CORPUS {} sha={} records={} runs={} kept_records={}",
             self.kind.name(),
             &self.sha256[..16],
             self.records,
             self.runs.len(),
-            self.kept().count(),
             self.kept().map(|k| k.records().len()).sum::<usize>(),
-            excluded(run::ExcludeReason::epoch),
-            excluded(run::ExcludeReason::pparams),
         )
     }
 }
@@ -235,11 +263,11 @@ mod tests {
     fn committed_corpora_load_into_their_runs() {
         assert_eq!(
             load(CorpusKind::Ic).unwrap().to_string(),
-            "CORPUS ic sha=50d342b65ffbc133 records=1405 runs=261 kept_runs=236 kept_records=1188 excluded_epoch=19 excluded_pparams=8"
+            "CORPUS ic sha=015e7b932273eb86 records=9853 runs=892 kept_records=9853"
         );
         assert_eq!(
             load(CorpusKind::Supp).unwrap().to_string(),
-            "CORPUS supp sha=0232f30a1ab92a4a records=54 runs=17 kept_runs=17 kept_records=54 excluded_epoch=0 excluded_pparams=0"
+            "CORPUS supp sha=7ca1ea0e4444845e records=125 runs=39 kept_records=125"
         );
     }
 
@@ -251,13 +279,13 @@ mod tests {
         let e = verify(CorpusKind::Ic, &bytes, IC_SHA256).unwrap_err();
         assert!(e
             .to_string()
-            .starts_with("CORPUS ic sha mismatch expected=50d342b6"));
+            .starts_with("CORPUS ic sha mismatch expected=015e7b93"));
     }
 
     #[test]
     fn a_record_without_pparams_fails_the_load() {
         let unchanged = edit_line(3, |_| {});
-        assert_eq!(reload(CorpusKind::Ic, &unchanged).unwrap().len(), 1405);
+        assert_eq!(reload(CorpusKind::Ic, &unchanged).unwrap().len(), 9853);
         let missing = edit_line(3, |v| {
             v.as_object_mut().unwrap().remove("pparams");
         });
@@ -266,6 +294,22 @@ mod tests {
             e.to_string(),
             "CORPUS ic load error records=1 first_line=4 reason=missing field `pparams`"
         );
+    }
+
+    #[test]
+    fn a_record_without_its_pool_vote_or_governance_state_fails_the_load() {
+        for field in ["certs_pre", "gov_pre", "treasury"] {
+            let missing = edit_line(3, |v| {
+                v.as_object_mut().unwrap().remove(field);
+            });
+            let e = reload(CorpusKind::Ic, &missing).unwrap_err();
+            assert_eq!(
+                e.to_string(),
+                format!(
+                    "CORPUS ic load error records=1 first_line=4 reason=missing field `{field}`"
+                )
+            );
+        }
     }
 
     #[test]
@@ -300,6 +344,56 @@ mod tests {
         assert!(reason.contains("unclassified ledger leaf Nil"), "{reason}");
     }
 
+    fn numbers(corpus: &Corpus) -> Vec<u32> {
+        let kept = corpus.kept();
+        kept.flat_map(|run| run.records().iter().map(|r| r.n))
+            .collect()
+    }
+
+    #[test]
+    fn a_record_in_no_kept_run_is_refused() {
+        let corpus = load(CorpusKind::Ic).unwrap();
+        let named = BTreeSet::from([RecordId {
+            corpus: CorpusKind::Ic,
+            n: 9853,
+        }]);
+        assert_eq!(
+            corpus.select(&named).unwrap_err().to_string(),
+            "SELECTION ic#9853 is in no kept run"
+        );
+    }
+
+    #[test]
+    fn a_record_of_the_other_corpus_selects_no_run() {
+        let corpus = load(CorpusKind::Supp).unwrap();
+        let named = BTreeSet::from([RecordId {
+            corpus: CorpusKind::Ic,
+            n: 9,
+        }]);
+        let selected = corpus.select(&named).unwrap();
+        assert_eq!(selected.runs.len(), 0);
+        assert_eq!(selected.records, 0);
+    }
+
+    #[test]
+    fn a_selection_keeps_every_record_of_each_named_run_and_no_other_run() {
+        let corpus = load(CorpusKind::Supp).unwrap();
+        let named = BTreeSet::from([RecordId {
+            corpus: CorpusKind::Supp,
+            n: 9,
+        }]);
+        let selected = corpus.select(&named).unwrap();
+        let run = corpus
+            .kept()
+            .find(|run| run.records().iter().any(|r| r.n == 9))
+            .unwrap();
+        let whole: Vec<u32> = run.records().iter().map(|r| r.n).collect();
+        assert!(whole.contains(&8), "{whole:?}");
+        assert_eq!(numbers(&selected), whole);
+        assert_eq!(selected.records, whole.len());
+        assert_eq!(selected.sha256, corpus.sha256);
+    }
+
     fn input_totals(kind: CorpusKind) -> [usize; 7] {
         let bytes = gunzip(kind.gz()).unwrap();
         let mut t = [0usize; 7];
@@ -320,8 +414,8 @@ mod tests {
     fn cbor_reader_input_totals_equal_an_independent_reader() {
         assert_eq!(
             input_totals(CorpusKind::Ic),
-            [1476, 83, 3, 376, 378, 16, 377]
+            [10239, 467, 5162, 473, 475, 16, 474]
         );
-        assert_eq!(input_totals(CorpusKind::Supp), [69, 10, 1, 6, 8, 0, 8]);
+        assert_eq!(input_totals(CorpusKind::Supp), [151, 12, 1, 16, 19, 0, 19]);
     }
 }

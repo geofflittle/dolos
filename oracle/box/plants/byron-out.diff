@@ -1,0 +1,120 @@
+diff --git a/pallas-validate/src/phase1/dijkstra.rs b/pallas-validate/src/phase1/dijkstra.rs
+index 97b21b8c..cd954bd9 100644
+--- a/pallas-validate/src/phase1/dijkstra.rs
++++ b/pallas-validate/src/phase1/dijkstra.rs
+@@ -10,12 +10,10 @@ use crate::utils::{
+     dijkstra_state::{DijkstraLedgerDelta, DijkstraLedgerOverlay, DijkstraLedgerState},
+     verify_signature,
+ };
+-use pallas_addresses::{
+-    Address, Network, ShelleyDelegationPart, ShelleyPaymentPart, byron::ByronAddress,
+-};
++use pallas_addresses::{Address, ShelleyDelegationPart, ShelleyPaymentPart};
+ use pallas_codec::{
+     minicbor,
+-    utils::{KeepRaw, Nullable, decode_bytes_def_or_indef},
++    utils::{KeepRaw, Nullable},
+ };
+ use pallas_crypto::hash::{Hash, Hasher};
+ use pallas_primitives::{conway::LanguageViews, dijkstra::*};
+@@ -486,47 +484,14 @@ fn spender(output: &MultiEraOutput<'_>) -> Result<Spender, ValidationError> {
+             ShelleyPaymentPart::Script(hash) => Spender::Script(*hash),
+         }),
+         Address::Byron(address) => Ok(Spender::Key(
+-            byron_payload(&address)
++            address
++                .decode()
+                 .map_err(|_| PostAlonzo(InputDecoding))?
+                 .root,
+         )),
+         Address::Stake(_) => Err(PostAlonzo(InputDecoding)),
+     }
+ }
+-/// What the ledger reads from a Byron address payload.
+-struct ByronPayload {
+-    root: Hash<28>,
+-    network: u8,
+-    attributes_size: usize,
+-}
+-/// Reads the root, the network and the attribute size of a Byron address, keeping attributes of any key.
+-fn byron_payload(address: &ByronAddress) -> Result<ByronPayload, minicbor::decode::Error> {
+-    let mut d = minicbor::Decoder::new(&address.payload.0);
+-    d.array()?;
+-    let root = d.decode()?;
+-    let mut network = Network::Mainnet.value();
+-    let mut attributes_size = 0;
+-    let entries = d.map()?;
+-    let mut read = 0;
+-    while entries.map_or(d.datatype()? != minicbor::data::Type::Break, |n| read < n) {
+-        let key = d.u8()?;
+-        let value = decode_bytes_def_or_indef(&mut d, &mut ())?;
+-        match key {
+-            1 => {
+-                let path = decode_bytes_def_or_indef(&mut minicbor::Decoder::new(&value), &mut ())?;
+-                attributes_size += path.len();
+-            }
+-            2 => network = Network::Testnet.value(),
+-            _ => attributes_size += value.len(),
+-        }
+-        read += 1;
+-    }
+-    Ok(ByronPayload {
+-        root,
+-        network,
+-        attributes_size,
+-    })
+-}
+ fn check_signatures(w: &WitnessSet<'_>, body: &[u8], mut required: Keys) -> ValidationResult {
+     let hash = Hasher::<256>::hash(body);
+     for witness in w.vkeywitness.iter().flat_map(|x| x.iter()) {
+@@ -572,21 +537,15 @@ fn check_outputs(
+     for output in outputs {
+         let view = MultiEraOutput::from_dijkstra(output);
+         let coin = view.value().coin();
++        payment(&view)?;
+         if let Some(script) = view.multi_era_script_ref() {
+             check_new_script(&script)?;
+         }
+-        let network = match view.address().map_err(|_| PostAlonzo(AddressDecoding))? {
+-            Address::Shelley(address) => address.network().value(),
+-            Address::Byron(address) => {
+-                let payload = byron_payload(&address).map_err(|_| PostAlonzo(AddressDecoding))?;
+-                if payload.attributes_size > 64 {
+-                    return Err(DijkstraBootstrapAttributesTooLarge);
+-                }
+-                payload.network
+-            }
+-            Address::Stake(_) => return Err(PostAlonzo(AddressDecoding)),
++        let Address::Shelley(address) = view.address().map_err(|_| PostAlonzo(AddressDecoding))?
++        else {
++            return Err(DijkstraUnsupported("output address"));
+         };
+-        if network != *network_id {
++        if address.network().value() != *network_id {
+             return Err(PostAlonzo(OutputWrongNetworkID));
+         }
+         // Sized TxOut counts the original serialization, not just the value.
+@@ -1126,7 +1085,7 @@ fn check_scripts(
+         let output = utxos
+             .get(&MultiEraInput::from_alonzo_compatible(input))
+             .ok_or(PostAlonzo(CollateralNotInUTxO))?;
+-        let Spender::Key(key) = spender(output)? else {
++        let ShelleyPaymentPart::Key(key) = payment(output)? else {
+             return Err(PostAlonzo(CollateralNotVKeyLocked));
+         };
+         keys.insert(key);
+@@ -1238,6 +1197,14 @@ fn reference_fee(mut bytes: u64, p: &DijkstraProtParams) -> Result<u64, Validati
+     u64::try_from(total.0 / total.1).map_err(|_| PostAlonzo(NegativeValue))
+ }
+ 
++fn payment(output: &MultiEraOutput<'_>) -> Result<ShelleyPaymentPart, ValidationError> {
++    let Address::Shelley(address) = output.address().map_err(|_| PostAlonzo(AddressDecoding))?
++    else {
++        return Err(DijkstraUnsupported("bootstrap or reward address"));
++    };
++    Ok(address.payment().clone())
++}
++
+ fn check_auxiliary(
+     hash: Option<Hash<32>>,
+     auxiliary: &Nullable<KeepRaw<'_, AuxiliaryData>>,

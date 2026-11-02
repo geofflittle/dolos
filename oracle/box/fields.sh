@@ -1,5 +1,5 @@
 #!/bin/sh
-# Prints each field the reads in <dir>/candidate and <dir>/serve hold differently, and fails when one differs.
+# Prints each field the reads in <dir>/candidate and <dir>/serve hold differently, and fails when one differs where the candidate does not hold the node's value.
 # Usage: fields.sh <dir>
 set -eu
 DIR=$1
@@ -7,14 +7,60 @@ TAB=$(printf '\t')
 export LC_ALL=C
 
 # Each scalar of a read as one line, its dotted path, a tab, then its value.
+# ReadUtxos answers in the order of a hash map, so its items are keyed by output reference.
 leaves() {
-  jq -r 'paths(scalars) as $p | "\($p | map(tostring) | join("."))\t\(getpath($p) | tojson)"' "$1" |
+  jq -r '(if has("items") then .items |= (map({key: "\(.txoRef.hash)#\(.txoRef.index // 0)", value: .}) | from_entries) else . end) |
+    paths(scalars) as $p | "\($p | map(tostring) | join("."))\t\(getpath($p) | tojson)"' "$1" |
     sort -t "$TAB" -k1,1
 }
 
+# The slot all four points around a side's UTxO reads name, or null when two differ.
+point() {
+  jq -n --slurpfile a "$1/node-utxo-tip-before.json" --slurpfile b "$1/utxos-tip-before.json" \
+    --slurpfile c "$1/utxos.json" --slurpfile d "$1/node-utxo-tip-after.json" \
+    '[$a[0].slot, $b[0].ledgerTip.slot, $c[0].ledgerTip.slot, $d[0].slot] | map(tonumber) | unique |
+      if length == 1 then .[0] else null end' 2>/dev/null || echo null
+}
+
+# Each output one read holds and the other does not, when each side read at one point and the node held it at the first point and not at the later second.
+spent() {
+  jq -r -n --rawfile refs "$DIR/candidate/refs.txt" \
+    --slurpfile c "$DIR/candidate/utxos.json" --slurpfile s "$DIR/serve/utxos.json" \
+    --slurpfile cn "$DIR/candidate/node-utxo.json" --slurpfile sn "$DIR/serve/node-utxo.json" \
+    --argjson cp "$(point "$DIR/candidate")" --argjson sp "$(point "$DIR/serve")" '
+    def held($read): [$read.items[] | {key: "\(.txoRef.hash)#\(.txoRef.index // 0)", value: true}] | from_entries;
+    {candidate: {held: held($c[0]), node: $cn[0], tip: $cp},
+     serve: {held: held($s[0]), node: $sn[0], tip: $sp}} as $side |
+    select($cp != null and $sp != null) |
+    $refs | split("\n")[] | select(. != "") | split(" ") |
+    {ref: "\(.[0])#\(.[2])", node: "\(.[1])#\(.[2])"} as $r |
+    select(($side.candidate.held | has($r.ref)) != ($side.serve.held | has($r.ref))) |
+    (if $side.candidate.held | has($r.ref) then ["candidate", "serve"] else ["serve", "candidate"] end) as [$on, $off] |
+    select(($side[$on].node | has($r.node)) and ($side[$off].node | has($r.node) | not)
+      and $side[$off].tip > $side[$on].tip) |
+    "\($r.ref)\t\($on)\t\($side[$on].tip)\t\($off)\t\($side[$off].tip)"' >"$DIR/spent.txt"
+  while IFS="$TAB" read -r ref on on_tip off off_tip; do
+    echo "LIVE-FIELD-SPENT utxos.json ref=$ref held_by=$on ledger_tip=$on_tip spent_for=$off ledger_tip=$off_tip node=held_then_spent"
+  done <"$DIR/spent.txt"
+}
+
+# The node's value of a field of a read as JSON, printed only for the current era summary's name when the node held one era across its two tip reads.
+node_value() {
+  case $1 in
+    era.json)
+      jq -r -n --arg path "$2" --slurpfile era "$DIR/candidate/era.json" \
+        --slurpfile before "$DIR/candidate/node-tip-before.json" \
+        --slurpfile after "$DIR/candidate/node-tip-after.json" '
+        select($path == "cardano.summaries.\(($era[0].cardano.summaries | length) - 1).name"
+          and $before[0].era == $after[0].era) | $before[0].era | ascii_downcase | tojson'
+      ;;
+  esac
+}
+
+spent
 differing=0
 compared=0
-for name in params.json era.json $(cd "$DIR/candidate" && ls block-*.json tx-*.json 2>/dev/null); do
+for name in params.json era.json utxos.json $(cd "$DIR/candidate" && ls block-*.json tx-*.json 2>/dev/null); do
   if [ ! -f "$DIR/serve/$name" ]; then
     echo "LIVE-FIELD $name serve=absent"
     differing=$((differing + 1))
@@ -25,12 +71,21 @@ for name in params.json era.json $(cd "$DIR/candidate" && ls block-*.json tx-*.j
   compared=$((compared + $(wc -l <"$DIR/candidate.leaves")))
   # The ledger tip of a response is the tip each endpoint held when it answered.
   join -t "$TAB" -a 1 -a 2 -e none -o 0,1.2,2.2 "$DIR/candidate.leaves" "$DIR/serve.leaves" |
-    awk -F '\t' '$2 != $3 && $1 !~ /^ledgerTip\./' >"$DIR/differing.txt"
+    awk -F '\t' -v name="$name" -v spentfile="$DIR/spent.txt" '
+      BEGIN { while ((getline line <spentfile) > 0) { split(line, f, "\t"); spent[f[1]] = 1 } }
+      { split($1, part, ".") }
+      $2 != $3 && $1 !~ /^ledgerTip\./ && !(name == "utxos.json" && part[1] == "items" && spent[part[2]])' \
+    >"$DIR/differing.txt"
   while IFS="$TAB" read -r path candidate serve; do
+    node=$(node_value "$name" "$path")
+    if [ -n "$node" ] && [ "$candidate" = "$node" ]; then
+      echo "LIVE-FIELD-SETTLED $name $path candidate=$candidate serve=$serve node=$node" | cut -c1-400
+      continue
+    fi
     differing=$((differing + 1))
     echo "LIVE-FIELD $name $path candidate=$candidate serve=$serve" | cut -c1-400
   done <"$DIR/differing.txt"
 done
-rm -f "$DIR/candidate.leaves" "$DIR/serve.leaves" "$DIR/differing.txt"
+rm -f "$DIR/candidate.leaves" "$DIR/serve.leaves" "$DIR/differing.txt" "$DIR/spent.txt"
 echo "LIVE-FIELDS compared=$compared differing=$differing"
 [ "$differing" -eq 0 ]

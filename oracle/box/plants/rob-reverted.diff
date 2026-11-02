@@ -1,0 +1,18 @@
+diff --git a/pallas-validate/src/phase1/dijkstra.rs b/pallas-validate/src/phase1/dijkstra.rs
+index 24f8fabd..a29a8c47 100644
+--- a/pallas-validate/src/phase1/dijkstra.rs
++++ b/pallas-validate/src/phase1/dijkstra.rs
+@@ -730,6 +730,13 @@ fn check_witness_fields(w: &KeepRaw<'_, WitnessSet<'_>>) -> ValidationResult {
+ }
+ fn check_sub_supported(tx: &SubTransaction<'_>) -> ValidationResult {
+     let b = &tx.sub_transaction_body;
++    if b.reference_inputs.is_some() {
++        return Err(DijkstraUnsupported("stateful or scripted subtransaction"));
++    }
++    let w = &tx.transaction_witness_set;
++    if w.native_script.is_some() || w.bootstrap_witness.is_some() {
++        return Err(DijkstraUnsupported("non-vkey witnesses"));
++    }
+     let raw = encode(b)?;
+     let mut allowed = vec![0, 1, 3, 8, 15];
+     for (key, present) in [

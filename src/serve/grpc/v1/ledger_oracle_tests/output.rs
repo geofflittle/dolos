@@ -381,47 +381,61 @@ pub(super) fn differing(
     Ok(differing.map(|(name, _)| name).collect())
 }
 
+/// A ledger context that resolves nothing.
+#[cfg(test)]
+#[derive(Clone)]
+struct Unresolved;
+
+#[cfg(test)]
+impl pallas::interop::utxorpc::LedgerContext for Unresolved {
+    fn get_utxos(
+        &self,
+        _: &[pallas::interop::utxorpc::TxoRef],
+    ) -> Option<pallas::interop::utxorpc::UtxoMap> {
+        None
+    }
+
+    fn get_slot_timestamp(&self, _: u64) -> Option<u64> {
+        None
+    }
+}
+
+/// The output Dolos serves for Dijkstra output bytes.
+#[cfg(test)]
+pub(super) fn mapped(bytes: &[u8]) -> cardano::TxOutput {
+    use pallas::ledger::traverse::{Era, MultiEraOutput};
+    let output = MultiEraOutput::decode(Era::Dijkstra, bytes).unwrap();
+    pallas::interop::utxorpc::v1::Mapper::new(Unresolved).map_tx_output(&output, None)
+}
+
 #[cfg(test)]
 mod tests {
     use ledger_oracle_judge::{
         corpus,
         record::{CorpusKind, LedgerOutcome},
     };
-    use pallas::{
-        interop::utxorpc::{v1::Mapper, LedgerContext, TxoRef, UtxoMap},
-        ledger::traverse::{Era, MultiEraOutput},
-    };
+    use std::collections::BTreeSet;
 
     use super::*;
 
-    /// A ledger context that resolves nothing.
-    #[derive(Clone)]
-    struct Unresolved;
-
-    impl LedgerContext for Unresolved {
-        fn get_utxos(&self, _: &[TxoRef]) -> Option<UtxoMap> {
-            None
-        }
-
-        fn get_slot_timestamp(&self, _: u64) -> Option<u64> {
-            None
-        }
-    }
-
     /// Every output the accepted records of both corpora leave in the ledger state.
     fn ledger_outputs() -> Vec<Vec<u8>> {
-        let mut outputs = Vec::new();
+        let mut outputs = BTreeSet::new();
         for kind in [CorpusKind::Ic, CorpusKind::Supp] {
             let corpus = corpus::load(kind).unwrap_or_else(|e| panic!("{e}"));
-            for record in corpus.kept().flat_map(|run| run.records()) {
-                if let LedgerOutcome::Accepted { post_utxo, .. } = &record.outcome {
-                    outputs.extend(post_utxo.iter().map(|e| e.output.0.clone()));
+            for run in corpus.kept() {
+                for record in run.records() {
+                    if let LedgerOutcome::Accepted { .. } = &record.outcome {
+                        for entry in run.post(record) {
+                            if !outputs.contains(&entry.output.0) {
+                                outputs.insert(entry.output.0.clone());
+                            }
+                        }
+                    }
                 }
             }
         }
-        outputs.sort();
-        outputs.dedup();
-        outputs
+        outputs.into_iter().collect()
     }
 
     fn bigint(value: i64) -> Option<cardano::BigInt> {
@@ -429,11 +443,6 @@ mod tests {
         Some(cardano::BigInt {
             big_int: Some(value),
         })
-    }
-
-    fn mapped(bytes: &[u8]) -> cardano::TxOutput {
-        let output = MultiEraOutput::decode(Era::Dijkstra, bytes).unwrap();
-        Mapper::new(Unresolved).map_tx_output(&output, None)
     }
 
     /// The CBOR byte string of fewer than 256 bytes.

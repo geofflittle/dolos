@@ -107,23 +107,28 @@ impl Tip {
     }
 }
 
-/// A block at the slot whose parent is the tip, holding each transaction with its scripts flag, and the tip it makes.
-pub(super) fn block(slot: u64, tip: Option<Tip>, txs: &[(&[u8], Phase2)]) -> (Tip, RawBlock) {
+/// A block at the slot whose parent is the tip, holding each transaction with
+/// its scripts flag, and the tip it makes, or the error of a transaction Dolos
+/// does not decode.
+pub(super) fn block(
+    slot: u64,
+    tip: Option<Tip>,
+    txs: &[(&[u8], Phase2)],
+) -> Result<(Tip, RawBlock), minicbor::decode::Error> {
     let transactions = txs
         .iter()
         .map(|(raw, phase2)| {
-            let tx: MempoolTransaction =
-                minicbor::decode(raw).expect("a corpus transaction decodes");
+            let tx: MempoolTransaction = minicbor::decode(raw)?;
             let success = match phase2 {
                 Phase2::Valid => true,
                 Phase2::Invalid => false,
             };
-            BlockTransaction {
+            Ok(BlockTransaction {
                 success,
                 ..BlockTransaction::from(tx)
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
     let number = tip.map_or(1, |t| t.number + 1);
     let header = Header {
         header_body: HeaderBody {
@@ -162,7 +167,7 @@ pub(super) fn block(slot: u64, tip: Option<Tip>, txs: &[(&[u8], Phase2)]) -> (Ti
     let hash = MultiEraBlock::decode(&raw)
         .expect("a written block decodes")
         .hash();
-    (Tip { hash, number }, Arc::new(raw))
+    Ok((Tip { hash, number }, Arc::new(raw)))
 }
 
 /// The mempool state a group puts each transaction it accepts in.
@@ -206,6 +211,13 @@ impl Group {
             Relay::Inflight => self.domain.mempool().mark_inflight(&[hash])?,
         }
         Ok(hash)
+    }
+
+    /// Validates one transaction against the group's stores and mempool
+    /// without holding it.
+    pub(super) fn check(&self, tx: &[u8]) -> Result<TxHash, DomainError> {
+        let chain = self.domain.read_chain();
+        self.domain.validate_tx(&chain, tx).map(|tx| tx.hash())
     }
 
     /// The redeemer evaluations Dolos estimates for one transaction against the group's stores and mempool, with the builtins each called.
@@ -291,6 +303,10 @@ pub(super) fn verdict(result: &Result<TxHash, DomainError>) -> DolosVerdict {
         kind: kind.to_string(),
         class: DolosClass::NoRule,
     };
+    let decoding = |kind: &str| DolosVerdict::Refused {
+        kind: kind.to_string(),
+        class: DolosClass::Rule(RefusalClass::Decoding),
+    };
     let e = match result {
         Ok(_) => return DolosVerdict::Accepted,
         Err(DomainError::ChainError(e)) => e,
@@ -314,8 +330,8 @@ pub(super) fn verdict(result: &Result<TxHash, DomainError>) -> DolosVerdict {
         }
         ChainError::CantReceiveBlock(_) => refused("CantReceiveBlock"),
         ChainError::BrokenInvariant(_) => refused("BrokenInvariant"),
-        ChainError::DecodingError(_) => refused("DecodingError"),
-        ChainError::CborDecodingError(_) => refused("CborDecodingError"),
+        ChainError::DecodingError(_) => decoding("DecodingError"),
+        ChainError::CborDecodingError(_) => decoding("CborDecodingError"),
         ChainError::InvalidNamespace(_) => refused("InvalidNamespace"),
         ChainError::AddressDecoding(_) => refused("AddressDecoding"),
         ChainError::StateError(_) => refused("StateError"),
@@ -359,7 +375,10 @@ fn post_alonzo_class(e: &PostAlonzoError) -> DolosClass {
         | P::ScriptIntegrityHash
         | P::RedeemerMissing
         | P::UnneededRedeemer
-        | P::UnneededNativeScript => C::Script,
+        | P::UnneededNativeScript
+        | P::UnneededPlutusV1Script
+        | P::UnneededPlutusV2Script
+        | P::UnneededPlutusV3Script => C::Script,
         P::DatumMissing | P::UnneededDatum => C::Datum,
         P::MetadataHash => C::Metadata,
         P::BlockPrecedesValInt | P::BlockExceedsValInt => C::Interval,
@@ -371,15 +390,11 @@ fn post_alonzo_class(e: &PostAlonzoError) -> DolosClass {
         | P::TooManyCollaterals
         | P::CollateralNotVKeyLocked
         | P::CollateralAnnotation => C::Collateral,
+        P::InputDecoding | P::AddressDecoding => C::Decoding,
         P::UnsupportedNativeScript
-        | P::InputDecoding
         | P::CollateralWrongAssets
-        | P::AddressDecoding
         | P::TxExUnitsExceeded
         | P::MintingLacksPolicy(_)
-        | P::UnneededPlutusV1Script
-        | P::UnneededPlutusV2Script
-        | P::UnneededPlutusV3Script
         | P::ReqSignerWrongSig
         | P::UnsupportedPlutusLanguage => return DolosClass::NoRule,
         _ => return DolosClass::Unknown,
@@ -395,8 +410,9 @@ fn validation_class(v: &ValidationError) -> DolosClass {
         V::PostAlonzo(e) => return post_alonzo_class(e),
         V::DijkstraInputAlreadySpent | V::DijkstraInputWithoutDatum => C::Inputs,
         V::DijkstraReferenceScriptsTooLarge => C::FeeAndSize,
+        V::DijkstraBootstrapAttributesTooLarge => C::Value,
         V::DijkstraMalformedScript => C::Script,
-        V::DijkstraInvalidMetadata => C::Metadata,
+        V::DijkstraMalformed(_) | V::DijkstraInvalidMetadata => C::Decoding,
         V::DijkstraInvalidWithdrawal(_) | V::DijkstraInvalidAccount(_) => C::AccountAndWithdrawal,
         V::DijkstraInvalidCertificate(_)
         | V::DijkstraInvalidGovernance(_)

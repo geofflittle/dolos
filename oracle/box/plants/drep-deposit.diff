@@ -1,0 +1,13 @@
+diff --git a/crates/cardano/src/validate/ledger.rs b/crates/cardano/src/validate/ledger.rs
+index 42a31b71..35f1d417 100644
+--- a/crates/cardano/src/validate/ledger.rs
++++ b/crates/cardano/src/validate/ledger.rs
+@@ -201,7 +201,7 @@ impl<D: Domain> DijkstraLedgerState for StoredLedger<'_, D> {
+             .map_err(unavailable)?;
+         Ok(drep
+             .filter(|x| x.registered_at.is_some() && !x.is_unregistered())
+-            .map(|x| DijkstraDRep { deposit: x.deposit }))
++            .map(|_| DijkstraDRep { deposit: 0 }))
+     }
+ 
+     fn committee(&self) -> Result<Option<BTreeMap<StakeCredential, Epoch>>, ValidationError> {

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use dolos_cardano::{
     model::{
-        AccountState, DRepDelegation, EpochState, EpochValue, EraProtocol, PParamValue,
+        AccountState, DRepDelegation, EpochState, EpochValue, EraProtocol, PParamKind, PParamValue,
         PoolDelegation,
     },
     pallas_extras, CardanoDelta, ControlledAmountInc, FixedNamespace as _, SingletonEntity as _,
@@ -16,7 +16,7 @@ use dolos_testing::toy_domain::ToyDomain;
 use ledger_oracle_judge::{
     accounts::{Credential, DRep, LedgerAccounts},
     cbor::TxIn,
-    record::UtxoEntry,
+    record::{Record, UtxoEntry},
 };
 use pallas::{
     codec::minicbor,
@@ -26,6 +26,7 @@ use pallas::{
     },
 };
 
+use super::ledger_state;
 use crate::adapters::{
     ArchiveStoreBackend, DomainAdapter, MempoolBackend, StateStoreBackend, WalAdapter,
 };
@@ -126,6 +127,7 @@ fn seed_accounts(domain: &DomainAdapter, slot: u64, epoch: u64, accounts: &Ledge
             .unwrap();
         let mut account = read.unwrap_or_else(|| AccountState::new(epoch, stake));
         account.registered_at = Some(slot);
+        account.deposit = Some(ledger.deposit);
         let mut balance = account.stake.live().cloned().unwrap_or_default();
         balance.rewards_sum = ledger.balance;
         account.stake = EpochValue::with_live(epoch, balance);
@@ -161,13 +163,14 @@ pub(super) struct Seeded {
     _toy: ToyDomain,
 }
 
-/// Seeds a domain with the given parameters, outputs and accounts at the first slot of the epoch.
+/// Seeds a domain with the given parameters, outputs and accounts, and the record's pools, votes, governance and treasury, at the first slot of the epoch.
 pub(super) fn seed(
     genesis: &Arc<Genesis>,
     epoch: u64,
     pparams: &[PParamValue],
     pre: &[UtxoEntry],
     accounts: &LedgerAccounts,
+    record: &Record,
 ) -> Seeded {
     let delta = UtxoSetDelta {
         produced_utxo: pre
@@ -190,10 +193,19 @@ pub(super) fn seed(
     let mut state = dolos_cardano::load_epoch::<ToyDomain>(toy.state()).unwrap();
     state.number = epoch;
     let live = state.pparams.unwrap_live_mut();
+    // The ledger holds a cost model only for the languages it names, so the seed starts from none.
+    for kind in [
+        PParamKind::CostModelsPlutusV1,
+        PParamKind::CostModelsPlutusV2,
+        PParamKind::CostModelsPlutusV3,
+    ] {
+        live.clear(kind);
+    }
     for value in pparams {
         live.set(value.clone());
     }
     state.pparams = EpochValue::with_live(epoch, live.clone());
+    state.initial_pots.treasury = record.treasury;
     let writer = toy.state().start_writer().unwrap();
     writer
         .write_entity_typed(&EpochState::singleton_key(), &state)
@@ -226,6 +238,9 @@ pub(super) fn seed(
     save_entities::<DomainAdapter>(&writer, &entities).unwrap();
     writer.commit().unwrap();
     seed_accounts(&domain, slot, epoch, accounts);
+    let network = dolos_cardano::network_from_genesis(genesis);
+    let (certs, gov) = (&record.certs_pre, &record.gov_pre);
+    ledger_state::seed(&domain, network, slot, epoch, certs, gov);
     domain.wal().reset_to(&point).unwrap();
     Seeded {
         domain,

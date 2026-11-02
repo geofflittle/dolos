@@ -1,0 +1,15 @@
+diff --git a/pallas-primitives/src/babbage/model.rs b/pallas-primitives/src/babbage/model.rs
+index 752fbf2b..1c866025 100644
+--- a/pallas-primitives/src/babbage/model.rs
++++ b/pallas-primitives/src/babbage/model.rs
+@@ -361,7 +361,9 @@ where
+     d.tag()?;
+     let script = match pallas_codec::utils::decode_bytes_def_or_indef(d, ctx)? {
+         std::borrow::Cow::Borrowed(cbor) => minicbor::decode_with(cbor, ctx)?,
+-        std::borrow::Cow::Owned(cbor) => S::decode_joined(&cbor, ctx)?,
++        std::borrow::Cow::Owned(_) => {
++            return Err(minicbor::decode::Error::message("indefinite script reference"));
++        }
+     };
+     Ok(Some(CborWrap(script)))
+ }

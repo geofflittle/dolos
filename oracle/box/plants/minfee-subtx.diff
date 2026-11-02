@@ -1,0 +1,14 @@
+diff --git a/pallas-validate/src/phase1/dijkstra.rs b/pallas-validate/src/phase1/dijkstra.rs
+index 39707551..da26275c 100644
+--- a/pallas-validate/src/phase1/dijkstra.rs
++++ b/pallas-validate/src/phase1/dijkstra.rs
+@@ -309,8 +309,8 @@ fn declared_units(tx: &BlockTransaction<'_>) -> Result<(u64, u64), ValidationErr
+         .flat_map(|x| x.iter())
+         .map(|sub| &sub.transaction_witness_set);
+     let mut units = (0, 0);
++    let _ = subs;
+     for (_, value) in std::iter::once(&tx.transaction_witness_set)
+-        .chain(subs)
+         .flat_map(|w| w.redeemer.iter())
+         .flat_map(|x| x.iter())
+     {
