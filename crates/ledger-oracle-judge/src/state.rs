@@ -314,8 +314,16 @@ mod tests {
         let read = |s: &str| serde_json::from_str::<GovAction>(s).unwrap();
         let id = r#"{"govActionIx": 0, "txId": "a7a83e6f62d0018de0c6484a85833b520d6dadcf41acd05179f592d0efa96d46"}"#;
         assert!(matches!(
-            read(&format!(r#"{{"contents": [{id}, {{"major": 12, "minor": 1}}], "tag": "HardForkInitiation"}}"#)),
-            GovAction::HardForkInitiation(Some(_), ProtocolVersion { major: 12, minor: 1 })
+            read(&format!(
+                r#"{{"contents": [{id}, {{"major": 12, "minor": 1}}], "tag": "HardForkInitiation"}}"#
+            )),
+            GovAction::HardForkInitiation(
+                Some(_),
+                ProtocolVersion {
+                    major: 12,
+                    minor: 1
+                }
+            )
         ));
         assert_eq!(read(r#"{"tag": "InfoAction"}"#), GovAction::InfoAction);
         assert_eq!(
@@ -330,7 +338,13 @@ mod tests {
         };
         assert!(removed.is_empty());
         assert_eq!(added.values().copied().collect::<Vec<_>>(), vec![1209]);
-        assert_eq!(threshold, Fraction { numerator: 1, denominator: 2 });
+        assert_eq!(
+            threshold,
+            Fraction {
+                numerator: 1,
+                denominator: 2
+            }
+        );
     }
 
     #[test]

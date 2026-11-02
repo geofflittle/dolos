@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use dolos_cardano::{
     model::{
-        AccountState, DRepDelegation, EpochState, EpochValue, EraProtocol, PParamKind,
-        PParamValue, PoolDelegation,
+        AccountState, DRepDelegation, EpochState, EpochValue, EraProtocol, PParamKind, PParamValue,
+        PoolDelegation,
     },
     pallas_extras, CardanoDelta, ControlledAmountInc, FixedNamespace as _, SingletonEntity as _,
 };

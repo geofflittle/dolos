@@ -169,7 +169,11 @@ mod tests {
         assert_eq!(
             Canon::of_json("k", &units),
             Ok(Canon::Map(
-                [("memory".into(), Canon::Int(2)), ("steps".into(), Canon::Int(3))].into()
+                [
+                    ("memory".into(), Canon::Int(2)),
+                    ("steps".into(), Canon::Int(3))
+                ]
+                .into()
             ))
         );
         let ratio: Value = serde_json::from_str(r#"{"denominator": 3, "numerator": 2}"#).unwrap();

@@ -305,7 +305,9 @@ mod tests {
             let e = reload(CorpusKind::Ic, &missing).unwrap_err();
             assert_eq!(
                 e.to_string(),
-                format!("CORPUS ic load error records=1 first_line=4 reason=missing field `{field}`")
+                format!(
+                    "CORPUS ic load error records=1 first_line=4 reason=missing field `{field}`"
+                )
             );
         }
     }

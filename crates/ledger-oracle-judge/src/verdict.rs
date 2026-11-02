@@ -173,7 +173,11 @@ pub enum Outcome {
 }
 
 /// The outcome of one record from the ledger's answer under a true flag, Dolos's answer and the feature it is declared unsupported for.
-pub fn outcome(ledger: &LedgerOutcome, dolos: &DolosVerdict, declared: Option<&Feature>) -> Outcome {
+pub fn outcome(
+    ledger: &LedgerOutcome,
+    dolos: &DolosVerdict,
+    declared: Option<&Feature>,
+) -> Outcome {
     use DolosVerdict as D;
     use LedgerOutcome as L;
     let disagree = || {
@@ -648,11 +652,7 @@ mod tests {
             ("InputNotInUTxO", RefusalClass::Inputs),
         ] {
             assert_eq!(
-                outcome(
-                    &ledger,
-                    &dolos_refused(kind, DolosClass::Rule(class)),
-                    None
-                ),
+                outcome(&ledger, &dolos_refused(kind, DolosClass::Rule(class)), None),
                 Outcome::Pass(Pass::Agree),
                 "{kind}"
             );
@@ -672,7 +672,7 @@ mod tests {
             (6, "DijkstraMissingParameters", DolosClass::NoRule),
         ] {
             let dolos = dolos_refused(kind, class);
-            tally.add(supp(n), outcome(&ledger,&dolos, None));
+            tally.add(supp(n), outcome(&ledger, &dolos, None));
         }
         assert!(!tally.pass());
         let text = tally.to_string();
@@ -700,7 +700,7 @@ mod tests {
                 DolosClass::Rule(RefusalClass::Value),
                 DolosClass::Rule(RefusalClass::Inputs),
             ] {
-                let judged = outcome(&ledger,&dolos_refused("Named", class), None);
+                let judged = outcome(&ledger, &dolos_refused("Named", class), None);
                 assert!(
                     !matches!(judged, Outcome::Fail(Fail::UnknownRefusal { .. })),
                     "{class:?} {judged:?}"
@@ -716,7 +716,7 @@ mod tests {
             dolos: "refused[FutureVariant]".into(),
         });
         for ledger in [accepted(), refused("BadInputsUTxO")] {
-            let judged = outcome(&ledger,&unknown, None);
+            let judged = outcome(&ledger, &unknown, None);
             assert_eq!(judged, expected);
             assert_eq!(with_known(judged, Some(&Row::V2)), expected);
         }
@@ -744,16 +744,9 @@ mod tests {
     #[test]
     fn matching_answers_agree() {
         let agree = Outcome::Pass(Pass::Agree);
+        assert_eq!(outcome(&accepted(), &DolosVerdict::Accepted, None), agree);
         assert_eq!(
-            outcome(&accepted(), &DolosVerdict::Accepted, None),
-            agree
-        );
-        assert_eq!(
-            outcome(
-                &refused("BadInputsUTxO"),
-                &input_refusal(),
-                None
-            ),
+            outcome(&refused("BadInputsUTxO"), &input_refusal(), None),
             agree
         );
     }
@@ -774,7 +767,10 @@ mod tests {
     #[test]
     fn failing_scripts_agree_only_with_a_tag_mismatch_alone() {
         let agree = Outcome::Pass(Pass::Agree);
-        for ledger in [accepted(), refused_by(&["ValidationTagMismatch", "BadInputsUTxO"])] {
+        for ledger in [
+            accepted(),
+            refused_by(&["ValidationTagMismatch", "BadInputsUTxO"]),
+        ] {
             let judged = outcome(&ledger, &DolosVerdict::Phase2Rejected, None);
             assert!(
                 matches!(judged, Outcome::Fail(Fail::Disagree { .. })),
@@ -790,11 +786,7 @@ mod tests {
 
     #[test]
     fn opposite_answers_disagree_and_name_both_sides() {
-        let o = outcome(
-            &refused("BadInputsUTxO"),
-            &DolosVerdict::Accepted,
-            None,
-        );
+        let o = outcome(&refused("BadInputsUTxO"), &DolosVerdict::Accepted, None);
         let mut tally = ValidationTally::default();
         tally.add(supp(5), o);
         assert!(!tally.pass());
@@ -823,17 +815,13 @@ mod tests {
             })
         );
         assert_eq!(
-            outcome(
-                &accepted(),
-                &unsupported,
-                Some(&feature("pointer address"))
-            ),
+            outcome(&accepted(), &unsupported, Some(&feature("pointer address"))),
             Outcome::Fail(Fail::UnsupportedUnexpected {
                 label: "certificate kind".into()
             })
         );
         assert_eq!(
-            outcome(&accepted(),&unsupported, None),
+            outcome(&accepted(), &unsupported, None),
             Outcome::Fail(Fail::UnsupportedUnexpected {
                 label: "certificate kind".into()
             })
@@ -858,7 +846,7 @@ mod tests {
     #[test]
     fn a_known_record_passes_while_it_fails_and_fails_once_it_agrees() {
         let row = Row::V2;
-        let failing = outcome(&accepted(),&input_refusal(), None);
+        let failing = outcome(&accepted(), &input_refusal(), None);
         assert_eq!(
             with_known(failing.clone(), None),
             failing,
@@ -886,7 +874,7 @@ mod tests {
             &unsupported,
             Some(&feature("certificate kind")),
         );
-        let unexpected = outcome(&accepted(),&unsupported, None);
+        let unexpected = outcome(&accepted(), &unsupported, None);
         let stale = outcome(
             &accepted(),
             &input_refusal(),
@@ -928,30 +916,22 @@ mod tests {
     #[test]
     fn a_dependent_refused_for_another_rule_or_with_no_failing_maker_keeps_its_outcome() {
         let value = dolos_refused("PreservationOfValue", DolosClass::Rule(RefusalClass::Value));
-        let refused_for_value = outcome(&accepted(),&value, None);
+        let refused_for_value = outcome(&accepted(), &value, None);
         assert_eq!(
             with_failing_makers(refused_for_value.clone(), &value, failing(&[1])),
             refused_for_value
         );
-        let refused_for_inputs = outcome(&accepted(),&input_refusal(), None);
+        let refused_for_inputs = outcome(&accepted(), &input_refusal(), None);
         assert_eq!(
             with_failing_makers(refused_for_inputs.clone(), &input_refusal(), failing(&[])),
             refused_for_inputs
         );
-        let agree = outcome(
-            &refused("BadInputsUTxO"),
-            &input_refusal(),
-            None,
-        );
+        let agree = outcome(&refused("BadInputsUTxO"), &input_refusal(), None);
         assert_eq!(
             with_failing_makers(agree.clone(), &input_refusal(), failing(&[1])),
             agree
         );
-        let accepted_by_dolos = outcome(
-            &refused("BadInputsUTxO"),
-            &DolosVerdict::Accepted,
-            None,
-        );
+        let accepted_by_dolos = outcome(&refused("BadInputsUTxO"), &DolosVerdict::Accepted, None);
         assert_eq!(
             with_failing_makers(
                 accepted_by_dolos.clone(),
@@ -976,7 +956,7 @@ mod tests {
             None,
         );
         tally.add(supp(1), maker_outcome);
-        let disagree = outcome(&accepted(),&input_refusal(), None);
+        let disagree = outcome(&accepted(), &input_refusal(), None);
         tally.add(
             supp(2),
             with_failing_makers(disagree, &input_refusal(), failing(&[1])),
@@ -1017,7 +997,7 @@ mod tests {
 
     #[test]
     fn a_cascade_is_a_failing_maker_and_a_known_row_holds_it() {
-        let disagree = outcome(&accepted(),&input_refusal(), None);
+        let disagree = outcome(&accepted(), &input_refusal(), None);
         let cascade = with_failing_makers(disagree, &input_refusal(), failing(&[1]));
         assert_eq!(
             maker(supp(2), &input_refusal(), &cascade),

@@ -4,9 +4,9 @@ use std::collections::BTreeMap;
 
 use dolos_cardano::{
     model::{
-        drep_to_entity_key, Committee, CommitteeAuthorization, Constitution, DRepExpiry,
-        DRepState, EpochValue, GovRoots, GovState, PParamsSet, PoolParams, PoolSnapshot,
-        PoolState, ProposalAction, ProposalState,
+        drep_to_entity_key, Committee, CommitteeAuthorization, Constitution, DRepExpiry, DRepState,
+        EpochValue, GovRoots, GovState, PParamsSet, PoolParams, PoolSnapshot, PoolState,
+        ProposalAction, ProposalState,
     },
     FixedNamespace as _, SingletonEntity as _,
 };
@@ -375,10 +375,8 @@ mod tests {
             Credential::Script(h) => conway::DRep::Script((*h).into()),
         };
         let proposal = named.gov_pre.proposals[0].action_id;
-        let proposal = ProposalState::build_entity_key(
-            proposal.tx_id.0.into(),
-            proposal.gov_action_ix,
-        );
+        let proposal =
+            ProposalState::build_entity_key(proposal.tx_id.0.into(), proposal.gov_action_ix);
         Read {
             pool: state
                 .read_entity_typed(PoolState::NS, &EntityKey::from(pool.0.as_slice()))
