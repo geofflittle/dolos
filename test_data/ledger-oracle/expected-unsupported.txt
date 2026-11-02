@@ -30,7 +30,6 @@ ic#2079 witness fields
 ic#2082 witness fields
 ic#2085 witness fields
 ic#2088 witness fields
-ic#2092 witness fields
 ic#2095 witness fields
 ic#2098 witness fields
 ic#2101 witness fields
@@ -39,18 +38,15 @@ ic#2109 witness fields
 ic#2111 witness fields
 ic#2113 witness fields
 ic#2160 witness fields
-ic#2162 witness fields
 ic#2165 witness fields
 ic#2167 witness fields
 ic#2169 witness fields
-ic#2252 witness fields
 ic#2294 new script language (requires V3)
 ic#2296 reference script language (requires V3)
 ic#2297 new script language (requires V3)
 ic#2299 reference script language (requires V3)
 ic#2300 new script language (requires V3)
 ic#2302 reference script language (requires V3)
-ic#2338 witness fields
 ic#2339 new script language (requires V3)
 ic#9675 new script language (requires V3)
 ic#9677 reference script language (requires V3)

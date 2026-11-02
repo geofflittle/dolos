@@ -203,10 +203,11 @@ pub fn outcome(
         (L::Accepted { .. }, D::Unsupported(l), _) => {
             Outcome::Fail(Fail::UnsupportedUnexpected { label: l.clone() })
         }
-        (L::Refused { .. }, D::Unsupported(l), _) => {
+        (L::Refused { .. }, D::Unsupported(l), None) => {
             Outcome::Pass(Pass::RefuseUnsupported { label: l.clone() })
         }
-        (_, D::Accepted | D::Phase2Rejected | D::Refused { .. }, Some(f)) => {
+        (L::Refused { .. }, D::Unsupported(_), Some(f))
+        | (_, D::Accepted | D::Phase2Rejected | D::Refused { .. }, Some(f)) => {
             Outcome::Fail(Fail::StaleManifest {
                 declared: f.to_string(),
                 dolos: dolos.to_string(),
@@ -839,6 +840,25 @@ mod tests {
             Outcome::Fail(Fail::StaleManifest {
                 declared: "certificate kind".into(),
                 dolos: "accepted".into()
+            })
+        );
+    }
+
+    #[test]
+    fn a_declared_record_the_ledger_refuses_is_a_stale_manifest() {
+        let unsupported = DolosVerdict::Unsupported("witness fields".into());
+        let ledger = refused("MissingVKeyWitnessesUTXOW");
+        assert_eq!(
+            outcome(&ledger, &unsupported, None),
+            Outcome::Pass(Pass::RefuseUnsupported {
+                label: "witness fields".into()
+            })
+        );
+        assert_eq!(
+            outcome(&ledger, &unsupported, Some(&feature("witness fields"))),
+            Outcome::Fail(Fail::StaleManifest {
+                declared: "witness fields".into(),
+                dolos: "unsupported[witness fields]".into()
             })
         );
     }
