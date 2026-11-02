@@ -4,13 +4,15 @@ use crate::TagDimension;
 pub use pallas::ledger::validate::phase2::EvalReport;
 
 use futures_core::Stream;
+use std::convert::Infallible;
 use std::pin::Pin;
+use std::sync::OnceLock;
 use tracing::{debug, warn};
 
 #[derive(Debug)]
 pub struct MempoolTx {
-    pub hash: TxHash,
-    pub payload: EraCbor,
+    hash: TxHash,
+    payload: EraCbor,
     pub stage: MempoolTxStage,
     pub confirmations: u32,
     pub non_confirmations: u32,
@@ -18,6 +20,38 @@ pub struct MempoolTx {
 
     // this might be empty if the tx is cloned
     pub report: Option<EvalReport>,
+
+    /// The effects of the payload, decoded at the first read and shared by
+    /// every clone.
+    effects: Arc<OnceLock<Option<TxEffects>>>,
+}
+
+/// The outputs a transaction and the sub transactions it lists make, and the
+/// inputs they spend.
+#[derive(Debug, Default)]
+pub struct TxEffects {
+    produced: Vec<(TxoRef, EraCbor)>,
+    consumed: Vec<TxoRef>,
+}
+
+impl TxEffects {
+    /// The effects of an encoded transaction, none when it does not decode.
+    fn of(payload: &EraCbor) -> Option<Self> {
+        let top = MultiEraTx::try_from(payload).ok()?;
+        let mut effects = Self::default();
+        let Ok(()) = for_each_applied_tx(&top, |tx| {
+            let hash = tx.hash();
+            for (idx, output) in tx.produces() {
+                let txoref = TxoRef::from((hash, idx as u32));
+                effects.produced.push((txoref, EraCbor::from(output)));
+            }
+            effects
+                .consumed
+                .extend(tx.consumes().iter().map(TxoRef::from));
+            Ok::<_, Infallible>(())
+        });
+        Some(effects)
+    }
 }
 
 impl PartialEq for MempoolTx {
@@ -38,6 +72,7 @@ impl Clone for MempoolTx {
             non_confirmations: self.non_confirmations,
             confirmed_at: self.confirmed_at.clone(),
             report: None,
+            effects: self.effects.clone(),
         }
     }
 }
@@ -52,7 +87,53 @@ impl MempoolTx {
             non_confirmations: 0,
             confirmed_at: None,
             report: Some(report),
+            effects: Arc::default(),
         }
+    }
+
+    /// A transaction read back from storage at a stage, with no evaluation
+    /// report.
+    pub fn restored(
+        hash: TxHash,
+        payload: EraCbor,
+        stage: MempoolTxStage,
+        confirmations: u32,
+        non_confirmations: u32,
+        confirmed_at: Option<ChainPoint>,
+    ) -> Self {
+        Self {
+            hash,
+            payload,
+            stage,
+            confirmations,
+            non_confirmations,
+            confirmed_at,
+            report: None,
+            effects: Arc::default(),
+        }
+    }
+
+    /// The hash the transaction was admitted under.
+    pub fn hash(&self) -> TxHash {
+        self.hash
+    }
+
+    /// The encoded transaction.
+    pub fn payload(&self) -> &EraCbor {
+        &self.payload
+    }
+
+    /// The encoded transaction, taken from the entry.
+    pub fn into_payload(self) -> EraCbor {
+        self.payload
+    }
+
+    /// The outputs the transaction makes and the inputs it spends, none when
+    /// the payload does not decode.
+    pub fn effects(&self) -> Option<&TxEffects> {
+        self.effects
+            .get_or_init(|| TxEffects::of(&self.payload))
+            .as_ref()
     }
 
     pub fn confirm(&mut self, point: &ChainPoint) {
@@ -316,25 +397,24 @@ impl<D: Domain> MempoolAwareUtxoStore<'_, D> {
     }
 }
 
-fn scan_mempool_utxos<F>(predicate: F, all_txs: Vec<MempoolTx>) -> HashSet<TxoRef>
+fn scan_mempool_utxos<F>(predicate: F, all_txs: &[MempoolTx]) -> HashSet<TxoRef>
 where
     F: Fn(&MultiEraOutput<'_>) -> bool,
 {
     let mut refs = HashSet::new();
 
     for mtx in all_txs {
-        let era_cbor = &mtx.payload;
-        let Some(tx) = MultiEraTx::try_from(era_cbor).ok() else {
+        let Some(effects) = mtx.effects() else {
             continue;
         };
 
-        debug!(tx = %tx.hash(), "scanning mempool tx");
-
-        for (idx, inflight) in tx.produces() {
+        for (txoref, era_cbor) in &effects.produced {
+            let Ok(inflight) = MultiEraOutput::try_from(era_cbor) else {
+                continue;
+            };
             if predicate(&inflight) {
-                let txoref = TxoRef::from((tx.hash(), idx as u32));
                 debug!(txoref = %txoref, "mempool utxo matches predicate");
-                refs.insert(txoref);
+                refs.insert(txoref.clone());
             }
         }
     }
@@ -342,47 +422,35 @@ where
     refs
 }
 
-fn exclude_inflight_stxis(refs: &mut HashSet<TxoRef>, all_txs: Vec<MempoolTx>) {
+fn exclude_inflight_stxis(refs: &mut HashSet<TxoRef>, all_txs: &[MempoolTx]) {
     debug!("excluding inflight stxis");
 
     for mtx in all_txs {
-        let era_cbor = &mtx.payload;
-        let Some(tx) = MultiEraTx::try_from(era_cbor).ok() else {
+        let Some(effects) = mtx.effects() else {
             warn!("invalid inflight tx");
             continue;
         };
 
-        debug!(tx = %tx.hash(), "checking inflight tx");
-
-        for locked in tx.consumes() {
-            let txoref = TxoRef::from(&locked);
-            if refs.remove(&txoref) {
+        for txoref in &effects.consumed {
+            if refs.remove(txoref) {
                 debug!(txoref = %txoref, "excluded stxi");
             }
         }
     }
 }
 
-fn select_mempool_utxos(refs: &mut HashSet<TxoRef>, all_txs: Vec<MempoolTx>) -> UtxoMap {
+fn select_mempool_utxos(refs: &mut HashSet<TxoRef>, all_txs: &[MempoolTx]) -> UtxoMap {
     let mut map = HashMap::new();
 
     for mtx in all_txs {
-        let era_cbor = &mtx.payload;
-        let Some(tx) = MultiEraTx::try_from(era_cbor).ok() else {
+        let Some(effects) = mtx.effects() else {
             continue;
         };
 
-        debug!(tx = %tx.hash(), "checking mempool tx");
-
-        for (idx, inflight) in tx.produces() {
-            let txoref = TxoRef::from((tx.hash(), idx as u32));
-            debug!(txoref = %txoref, "checking mempool utxo");
-
-            if refs.contains(&txoref) {
-                let era_cbor = EraCbor::from(inflight);
+        for (txoref, era_cbor) in &effects.produced {
+            if refs.remove(txoref) {
                 debug!(txoref = %txoref, "selected utxo available inmempool tx");
-                refs.remove(&txoref);
-                map.insert(txoref, Arc::new(era_cbor));
+                map.insert(txoref.clone(), Arc::new(era_cbor.clone()));
             }
         }
     }
@@ -434,21 +502,25 @@ impl<'a, D: Domain> MempoolAwareUtxoStore<'a, D> {
     where
         F: Fn(&MultiEraOutput<'_>) -> bool,
     {
-        let from_mempool = scan_mempool_utxos(predicate, self.unconfirmed());
+        let unconfirmed = self.unconfirmed();
+
+        let from_mempool = scan_mempool_utxos(predicate, &unconfirmed);
 
         let mut utxos = self.inner.utxos_by_tag(dimension, key)?;
 
         utxos.extend(from_mempool);
 
-        exclude_inflight_stxis(&mut utxos, self.unconfirmed());
+        exclude_inflight_stxis(&mut utxos, &unconfirmed);
 
         Ok(utxos)
     }
 
     pub fn get_utxos(&self, mut refs: HashSet<TxoRef>) -> Result<UtxoMap, StateError> {
-        exclude_inflight_stxis(&mut refs, self.unconfirmed());
+        let unconfirmed = self.unconfirmed();
 
-        let from_mempool = select_mempool_utxos(&mut refs, self.unconfirmed());
+        exclude_inflight_stxis(&mut refs, &unconfirmed);
+
+        let from_mempool = select_mempool_utxos(&mut refs, &unconfirmed);
 
         let mut utxos = self.inner.get_utxos(Vec::from_iter(refs))?;
 
@@ -767,5 +839,130 @@ mod tests {
 
         // Fourth poll: stream done.
         assert!(matches!(poll_once(&mut filter, &mut cx), Poll::Ready(None)));
+    }
+
+    // The fixture's transaction lists one sub transaction that spends one
+    // input and makes one output.
+    const PARENT: &str = "bd1b7336a5a62005a2576658e64990fab684a641139095afc16865c371e637b4";
+    const SUB: &str = "ca42eb1227f150670a8a8c7c82468ff10dd726b2aa08ac209a8b8b5530fb28c7";
+    const SUB_SPENDS: &str = "d2fa6568066113f78eefdc89025b419a8e68db15eef70e9a8cbea3b4ed87d8b6";
+
+    fn txo(hash: &str, index: u32) -> TxoRef {
+        TxoRef(hash.parse().unwrap(), index)
+    }
+
+    /// The transaction that lists a sub transaction, as a pending entry.
+    fn pending_with_sub() -> MempoolTx {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test_data/musashi-w36/ranking-sub-transaction.block");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let cbor = hex::decode(text.trim()).unwrap();
+        let block = pallas::ledger::traverse::MultiEraBlock::decode(&cbor).unwrap();
+        let tx = block
+            .txs()
+            .into_iter()
+            .find(|tx| tx.hash() == PARENT.parse::<TxHash>().unwrap())
+            .unwrap();
+        MempoolTx::new(tx.hash(), EraCbor(tx.era().into(), tx.encode()), vec![])
+    }
+
+    /// The output reference one past the last output of the listing transaction.
+    fn past_parent_outputs(mtx: &MempoolTx) -> TxoRef {
+        let tx = MultiEraTx::try_from(&mtx.payload).unwrap();
+        txo(PARENT, tx.outputs().len() as u32)
+    }
+
+    #[test]
+    fn a_sub_transaction_output_is_not_selected_under_the_listing_hash() {
+        let mtx = pending_with_sub();
+        let past = past_parent_outputs(&mtx);
+        let mut refs = HashSet::from([past.clone()]);
+
+        let selected = select_mempool_utxos(&mut refs, &[mtx]);
+
+        assert!(selected.is_empty());
+        assert_eq!(refs, HashSet::from([past]));
+    }
+
+    #[test]
+    fn a_sub_transaction_output_is_selected_under_its_own_hash() {
+        let mtx = pending_with_sub();
+        let mut refs = HashSet::from([txo(SUB, 0)]);
+
+        let selected = select_mempool_utxos(&mut refs, &[mtx]);
+
+        assert_eq!(
+            selected.keys().cloned().collect::<HashSet<_>>(),
+            HashSet::from([txo(SUB, 0)])
+        );
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn an_input_no_pending_transaction_spends_is_kept() {
+        let mtx = pending_with_sub();
+        let mut refs = HashSet::from([txo(PARENT, 0)]);
+
+        exclude_inflight_stxis(&mut refs, &[mtx]);
+
+        assert_eq!(refs, HashSet::from([txo(PARENT, 0)]));
+    }
+
+    #[test]
+    fn an_input_a_pending_sub_transaction_spends_is_excluded() {
+        let mtx = pending_with_sub();
+        let mut refs = HashSet::from([txo(SUB_SPENDS, 0)]);
+
+        exclude_inflight_stxis(&mut refs, &[mtx]);
+
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn a_tag_scan_finds_a_sub_transaction_output_under_its_own_hash() {
+        let mtx = pending_with_sub();
+        let past = past_parent_outputs(&mtx);
+
+        let found = scan_mempool_utxos(|_| true, &[mtx]);
+
+        assert!(found.contains(&txo(SUB, 0)));
+        assert!(!found.contains(&past));
+    }
+
+    /// Bytes that decode as no transaction.
+    fn undecodable() -> EraCbor {
+        EraCbor(7, vec![0x80])
+    }
+
+    #[test]
+    fn an_entry_whose_payload_does_not_decode_makes_and_spends_nothing() {
+        let mtx = MempoolTx::new(PARENT.parse().unwrap(), undecodable(), vec![]);
+        let mut refs = HashSet::from([txo(SUB, 0), txo(SUB_SPENDS, 0)]);
+
+        exclude_inflight_stxis(&mut refs, &[mtx.clone()]);
+        let selected = select_mempool_utxos(&mut refs, &[mtx]);
+
+        assert!(selected.is_empty());
+        assert_eq!(refs, HashSet::from([txo(SUB, 0), txo(SUB_SPENDS, 0)]));
+    }
+
+    #[test]
+    fn a_read_after_the_first_decodes_no_payload() {
+        let mut stored = pending_with_sub();
+        let mut first = HashSet::from([txo(SUB, 0)]);
+        select_mempool_utxos(&mut first, &[stored.clone()]);
+        // These bytes do not decode, so a read that still finds the output
+        // answers from the effects of the first read.
+        stored.payload = undecodable();
+        let mut refs = HashSet::from([txo(SUB, 0), txo(SUB_SPENDS, 0)]);
+
+        exclude_inflight_stxis(&mut refs, &[stored.clone()]);
+        let selected = select_mempool_utxos(&mut refs, &[stored]);
+
+        assert_eq!(
+            selected.keys().cloned().collect::<HashSet<_>>(),
+            HashSet::from([txo(SUB, 0)])
+        );
+        assert!(refs.is_empty());
     }
 }

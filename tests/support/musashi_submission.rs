@@ -166,12 +166,12 @@ pub fn assert_submission(settings: bool, alternate: bool) -> MempoolTx {
         expected
     );
     let tx = domain.mempool().peek_pending().remove(0);
-    assert_eq!(tx.payload.0, 8);
-    assert_eq!(tx.payload.1, cbor);
-    assert_eq!(tx.hash, expected);
+    assert_eq!(tx.payload().0, 8);
+    assert_eq!(tx.payload().1, cbor);
+    assert_eq!(tx.hash(), expected);
     // Phase one verifies the original signatures; the body and witness slices
     // also remain byte-identical after the storage round trip.
-    let decoded = MultiEraTx::decode_for_era(Era::Dijkstra, &tx.payload.1).unwrap();
+    let decoded = MultiEraTx::decode_for_era(Era::Dijkstra, &tx.payload().1).unwrap();
     let before = MultiEraTx::decode_for_era(Era::Dijkstra, &cbor).unwrap();
     assert_eq!(
         minicbor::to_vec(decoded.as_dijkstra().unwrap()).unwrap(),

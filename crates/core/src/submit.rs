@@ -80,7 +80,7 @@ pub trait SubmitExt: Domain {
         };
 
         let tx = self.validate_tx(chain, cbor)?;
-        let hash = tx.hash;
+        let hash = tx.hash();
 
         debug!(tx.hash = %hash, source=source, "tx received");
 
@@ -112,11 +112,11 @@ pub trait SubmitExt: Domain {
                 self.mempool(),
                 kept.clone(),
             );
-            match chain.validate_tx(&tx.payload.1, &utxos, tip.clone(), &genesis) {
+            match chain.validate_tx(&tx.payload().1, &utxos, tip.clone(), &genesis) {
                 Ok(_) => kept.push(tx),
                 Err(error) => {
-                    debug!(tx.hash = %tx.hash, %error, "pending tx refused on revalidation");
-                    refused.push(tx.hash);
+                    debug!(tx.hash = %tx.hash(), %error, "pending tx refused on revalidation");
+                    refused.push(tx.hash());
                 }
             }
         }

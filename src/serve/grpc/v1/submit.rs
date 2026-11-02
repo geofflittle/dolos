@@ -42,8 +42,8 @@ fn tx_stage_to_u5c(stage: MempoolTxStage) -> i32 {
 fn event_to_watch_mempool_response(event: MempoolEvent) -> WatchMempoolResponse {
     WatchMempoolResponse {
         tx: TxInMempool {
-            r#ref: event.tx.hash.to_vec().into(),
-            native_bytes: event.tx.payload.cbor().to_vec().into(),
+            r#ref: event.tx.hash().to_vec().into(),
+            native_bytes: event.tx.payload().cbor().to_vec().into(),
             stage: tx_stage_to_u5c(event.tx.stage.clone()),
             parsed_state: None, // TODO
         }
@@ -54,7 +54,7 @@ fn event_to_watch_mempool_response(event: MempoolEvent) -> WatchMempoolResponse 
 fn event_to_wait_for_tx_response(event: MempoolEvent) -> WaitForTxResponse {
     WaitForTxResponse {
         stage: tx_stage_to_u5c(event.tx.stage.clone()),
-        r#ref: event.tx.hash.to_vec().into(),
+        r#ref: event.tx.hash().to_vec().into(),
     }
 }
 

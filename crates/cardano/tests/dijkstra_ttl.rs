@@ -194,10 +194,10 @@ fn assert_admission_evaluation_and_estimation(case: &Path) {
         .unwrap();
     assert_eq!(hash.to_string(), context["txid"].as_str().unwrap());
     let stored = domain.mempool().peek_pending().remove(0);
-    assert_eq!(stored.payload.0, 8);
-    assert_eq!(stored.payload.1, bytes);
+    assert_eq!(stored.payload().0, 8);
+    assert_eq!(stored.payload().1, bytes);
     assert_eq!(
-        MultiEraTx::decode_for_era(Era::Dijkstra, &stored.payload.1)
+        MultiEraTx::decode_for_era(Era::Dijkstra, &stored.payload().1)
             .unwrap()
             .hash(),
         hash
