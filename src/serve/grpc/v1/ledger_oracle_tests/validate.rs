@@ -328,7 +328,6 @@ pub(super) fn verdict(result: &Result<TxHash, DomainError>) -> DolosVerdict {
         ChainError::Phase2EvaluationUnsupported(unsupported) => {
             DolosVerdict::Unsupported(unsupported.0.to_string())
         }
-        ChainError::DijkstraWithdrawalConflict { .. } => refused("DijkstraWithdrawalConflict"),
         ChainError::CantReceiveBlock(_) => refused("CantReceiveBlock"),
         ChainError::BrokenInvariant(_) => refused("BrokenInvariant"),
         ChainError::DecodingError(_) => decoding("DecodingError"),
@@ -409,18 +408,19 @@ fn validation_class(v: &ValidationError) -> DolosClass {
     use ValidationError as V;
     let class = match v {
         V::PostAlonzo(e) => return post_alonzo_class(e),
-        V::DijkstraInputAlreadySpent => C::Inputs,
+        V::DijkstraInputAlreadySpent | V::DijkstraInputWithoutDatum => C::Inputs,
         V::DijkstraReferenceScriptsTooLarge => C::FeeAndSize,
         V::DijkstraBootstrapAttributesTooLarge => C::Value,
         V::DijkstraMalformedScript => C::Script,
         V::DijkstraMalformed(_) | V::DijkstraInvalidMetadata => C::Decoding,
-        V::DijkstraInvalidWithdrawal(_) | V::DijkstraCertificateStateUnavailable => {
-            C::AccountAndWithdrawal
-        }
-        V::DijkstraInvalidCertificate(_) => C::CertificateAndGovernance,
+        V::DijkstraInvalidWithdrawal(_) | V::DijkstraInvalidAccount(_) => C::AccountAndWithdrawal,
+        V::DijkstraInvalidCertificate(_)
+        | V::DijkstraInvalidGovernance(_)
+        | V::DijkstraTreasuryValueMismatch => C::CertificateAndGovernance,
+        V::DijkstraScriptContext(_) => C::Script,
         V::DijkstraUnsupported(_)
         | V::DijkstraMissingParameters(_)
-        | V::DijkstraAccountStateUnavailable(_)
+        | V::DijkstraLedgerStateUnavailable(_)
         | V::TxAndProtParamsDiffer
         | V::PParamsByronDoesntNeedAccountState
         | V::EnvMissingAccountState
