@@ -921,4 +921,29 @@ mod tests {
                 != std::cmp::Ordering::Equal
         );
     }
+
+    #[test]
+    fn an_inline_datum_over_indefinite_bytes_is_stored_as_sent() {
+        let sent = hex::decode(format!(
+            "a300581d60{}011a000f4240028201d8185f419f41ffff",
+            "11".repeat(28)
+        ))
+        .unwrap();
+        let era = pallas::ledger::traverse::Era::Dijkstra;
+        let output = MultiEraOutput::decode(era, &sent).unwrap();
+
+        let stored = EraCbor::from(output);
+        assert_eq!(stored.1, sent);
+
+        let read = MultiEraOutput::try_from(&stored).unwrap();
+        let Some(pallas::ledger::primitives::conway::DatumOption::Data(datum)) = read.datum()
+        else {
+            panic!("the output has no inline datum");
+        };
+        assert_eq!(datum.0.raw_cbor(), [0x9f, 0xff]);
+        assert_eq!(
+            pallas::ledger::traverse::OriginalHash::original_hash(&datum.0),
+            Hasher::<256>::hash(&[0x9f, 0xff])
+        );
+    }
 }

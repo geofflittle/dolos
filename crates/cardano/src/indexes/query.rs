@@ -449,29 +449,7 @@ where
             datum_hash.as_slice().to_vec(),
             0,
             end_slot,
-            |block| {
-                for tx in block.txs() {
-                    // Check witnesses
-                    if let Some(plutus_data) = tx.find_plutus_data(&datum_hash) {
-                        return Some(plutus_data.clone().unwrap());
-                    }
-                    // Check inline datums
-                    for (_, output) in tx.produces() {
-                        if let Some(DatumOption::Data(data)) = output.datum() {
-                            if data.original_hash() == datum_hash {
-                                return Some(data.clone().unwrap().unwrap());
-                            }
-                        }
-                    }
-                    // Check redeemer data
-                    for redeemer in tx.redeemers() {
-                        if redeemer.data().compute_hash() == datum_hash {
-                            return Some(redeemer.data().clone());
-                        }
-                    }
-                }
-                None
-            },
+            |block| datum_in_block(block, datum_hash),
         )
         .await
     }
@@ -545,6 +523,39 @@ where
         )
         .await
     }
+}
+
+/// The datum with this hash in the witnesses, on the outputs or in the
+/// redeemers of a transaction of the block.
+fn datum_in_block(block: &MultiEraBlock, datum_hash: Hash<32>) -> Option<PlutusData> {
+    for tx in block.txs() {
+        let searched = crate::pallas_extras::for_each_applied_tx(&tx, |tx| {
+            // Check witnesses
+            if let Some(plutus_data) = tx.find_plutus_data(&datum_hash) {
+                return Err(plutus_data.clone().unwrap());
+            }
+            // Check inline datums
+            for (_, output) in tx.produces() {
+                if let Some(DatumOption::Data(data)) = output.datum() {
+                    if data.original_hash() == datum_hash {
+                        return Err(data.clone().unwrap().unwrap());
+                    }
+                }
+            }
+            // Check redeemer data
+            for redeemer in tx.redeemers() {
+                if redeemer.data().compute_hash() == datum_hash {
+                    return Err(redeemer.data().clone());
+                }
+            }
+            Ok(())
+        });
+
+        if let Err(found) = searched {
+            return Some(found);
+        }
+    }
+    None
 }
 
 /// The script with this hash in the witnesses or on the outputs of a transaction of the block.
@@ -763,17 +774,67 @@ mod tests {
         )
     }
 
-    /// The script hashes the archive index tags the block with.
-    fn tagged_scripts(block: &MultiEraBlock) -> Vec<Vec<u8>> {
+    /// A block whose transaction lists a sub transaction, with a datum added to
+    /// the witnesses of the sub transaction only.
+    fn block_with_sub_datum() -> (Vec<u8>, Hash<32>, PlutusData) {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test_data/musashi-w36/ranking-sub-transaction.block");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let cbor = hex::decode(text.trim()).unwrap();
+        let (era, mut block): (u16, dijkstra::Block) = minicbor::decode(&cbor).unwrap();
+
+        let datum = PlutusData::BoundedBytes(vec![5, 6, 7].into());
+        let datum_hash = Hasher::<256>::hash(&minicbor::to_vec(&datum).unwrap());
+
+        let mut txs: Vec<_> = block.block_body.transactions.to_vec();
+        let carrier = txs
+            .iter_mut()
+            .find(|tx| tx.transaction_body.sub_transactions.is_some())
+            .expect("a transaction lists a sub transaction");
+        let mut body = (*carrier.transaction_body).clone();
+        let mut subs = body.sub_transactions.take().unwrap().into_vec();
+        let mut witnesses = (*subs[0].transaction_witness_set).clone();
+        witnesses.plutus_data =
+            dijkstra::NonEmptySet::from_vec(vec![KeepRaw::from(datum.clone())]).map(KeepRaw::from);
+        subs[0].transaction_witness_set = witnesses.into();
+        body.sub_transactions = dijkstra::NonEmptySet::from_vec(subs);
+        carrier.transaction_body = body.into();
+        block.block_body.transactions = MaybeIndefArray::Def(txs);
+
+        (minicbor::to_vec((era, block)).unwrap(), datum_hash, datum)
+    }
+
+    /// The keys the archive index tags the block with in one dimension.
+    fn tagged(block: &MultiEraBlock, dimension: TagDimension) -> Vec<Vec<u8>> {
         let mut builder = CardanoIndexDeltaBuilder::new();
         builder.index_block(block, &HashMap::new());
         builder
             .build()
             .into_iter()
             .flat_map(|delta| delta.tags)
-            .filter(|tag| tag.dimension == archive::SCRIPT)
+            .filter(|tag| tag.dimension == dimension)
             .map(|tag| tag.key)
             .collect()
+    }
+
+    #[test]
+    fn a_datum_the_block_does_not_carry_is_neither_found_nor_tagged() {
+        let (cbor, _, _) = block_with_sub_datum();
+        let block = MultiEraBlock::decode(&cbor).unwrap();
+        let absent = Hash::new([7; 32]);
+
+        assert_eq!(datum_in_block(&block, absent), None);
+        assert!(!tagged(&block, archive::DATUM).contains(&absent.to_vec()));
+    }
+
+    #[test]
+    fn a_sub_transaction_datum_is_found_and_tagged() {
+        let (cbor, datum_hash, datum) = block_with_sub_datum();
+        let block = MultiEraBlock::decode(&cbor).unwrap();
+        let found = datum_in_block(&block, datum_hash);
+        let tagged = tagged(&block, archive::DATUM).contains(&datum_hash.to_vec());
+
+        assert_eq!((found, tagged), (Some(datum), true));
     }
 
     #[test]
@@ -783,7 +844,7 @@ mod tests {
         let absent = Hash::new([7; 28]);
 
         assert_eq!(script_in_block(&block, absent), None);
-        assert!(!tagged_scripts(&block).contains(&absent.to_vec()));
+        assert!(!tagged(&block, archive::SCRIPT).contains(&absent.to_vec()));
     }
 
     #[test]
@@ -791,7 +852,7 @@ mod tests {
         let (cbor, native, _) = block_with_scripts();
         let block = MultiEraBlock::decode(&cbor).unwrap();
         let found = script_in_block(&block, native).map(|s| s.language);
-        let tagged = tagged_scripts(&block).contains(&native.to_vec());
+        let tagged = tagged(&block, archive::SCRIPT).contains(&native.to_vec());
 
         assert_eq!((found, tagged), (Some(ScriptLanguage::Native), true));
     }
@@ -801,7 +862,7 @@ mod tests {
         let (cbor, _, v4) = block_with_scripts();
         let block = MultiEraBlock::decode(&cbor).unwrap();
         let found = script_in_block(&block, v4);
-        let tagged = tagged_scripts(&block).contains(&v4.to_vec());
+        let tagged = tagged(&block, archive::SCRIPT).contains(&v4.to_vec());
         let expected = ScriptData {
             language: ScriptLanguage::PlutusV4,
             script: vec![1, 2, 3],
