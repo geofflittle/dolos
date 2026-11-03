@@ -220,8 +220,8 @@ readme = "README.md"
 authors = ["TxPipe <hello@txpipe.io>"]
 
 [workspace.dependencies]
-pallas-validate = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "37957be2d805213c58b808e9d5c9db8d95e2a1c6", features = ["phase2", "unstable"] }
-pallas = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "37957be2d805213c58b808e9d5c9db8d95e2a1c6", features = ["hardano", "phase2", "unstable", "network2"] }
+pallas-validate = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "631c50c82b6d4ab9bcc64e1cb4e3611ec75f57c5", features = ["phase2", "unstable"] }
+pallas = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "631c50c82b6d4ab9bcc64e1cb4e3611ec75f57c5", features = ["hardano", "phase2", "unstable", "network2"] }
 # pallas = { version = "1.3.0", features = ["hardano", "phase2", "unstable"] }
 # pallas = { git = "https://github.com/txpipe/pallas.git", rev = "a7b5a86", features = ["hardano", "phase2", "unstable"] }
 # pallas = { path = "../pallas/pallas", features = ["hardano", "phase2", "unstable"] }
@@ -272,17 +272,17 @@ tracing-opentelemetry = "0.33"
 minicbor = { version = "0.26", features = ["std"] }
 
 [patch.crates-io]
-pallas = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "37957be2d805213c58b808e9d5c9db8d95e2a1c6" }
-pallas-addresses = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "37957be2d805213c58b808e9d5c9db8d95e2a1c6" }
-pallas-codec = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "37957be2d805213c58b808e9d5c9db8d95e2a1c6" }
-pallas-configs = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "37957be2d805213c58b808e9d5c9db8d95e2a1c6" }
-pallas-crypto = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "37957be2d805213c58b808e9d5c9db8d95e2a1c6" }
-pallas-network = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "37957be2d805213c58b808e9d5c9db8d95e2a1c6" }
-pallas-primitives = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "37957be2d805213c58b808e9d5c9db8d95e2a1c6" }
-pallas-traverse = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "37957be2d805213c58b808e9d5c9db8d95e2a1c6" }
-pallas-txbuilder = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "37957be2d805213c58b808e9d5c9db8d95e2a1c6" }
-pallas-utxorpc = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "37957be2d805213c58b808e9d5c9db8d95e2a1c6" }
-pallas-validate = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "37957be2d805213c58b808e9d5c9db8d95e2a1c6" }
+pallas = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "631c50c82b6d4ab9bcc64e1cb4e3611ec75f57c5" }
+pallas-addresses = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "631c50c82b6d4ab9bcc64e1cb4e3611ec75f57c5" }
+pallas-codec = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "631c50c82b6d4ab9bcc64e1cb4e3611ec75f57c5" }
+pallas-configs = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "631c50c82b6d4ab9bcc64e1cb4e3611ec75f57c5" }
+pallas-crypto = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "631c50c82b6d4ab9bcc64e1cb4e3611ec75f57c5" }
+pallas-network = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "631c50c82b6d4ab9bcc64e1cb4e3611ec75f57c5" }
+pallas-primitives = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "631c50c82b6d4ab9bcc64e1cb4e3611ec75f57c5" }
+pallas-traverse = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "631c50c82b6d4ab9bcc64e1cb4e3611ec75f57c5" }
+pallas-txbuilder = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "631c50c82b6d4ab9bcc64e1cb4e3611ec75f57c5" }
+pallas-utxorpc = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "631c50c82b6d4ab9bcc64e1cb4e3611ec75f57c5" }
+pallas-validate = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "631c50c82b6d4ab9bcc64e1cb4e3611ec75f57c5" }
 utxorpc-spec = { git = "https://github.com/SundaeSwap-finance/utxorpc-spec", rev = "4bef71401bae7e9fc80b9d24379be0f9078b0ff5" }
 
 [workspace.metadata.release]
