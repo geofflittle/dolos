@@ -1,9 +1,8 @@
 #!/bin/sh
 # Runs the oracle on the build box, its quick, done or ship tier, its live leg alone or the regeneration of its committed manifests.
 # Usage: [REV=ref] [BASE=ref] run.sh quick|done|ship|live|regen
-# The quick tier judges the head on both corpora, the control and each arm whose plant changes a file that differs between BASE and REV, a pallas arm when the pallas entries of Cargo.toml or Cargo.lock differ. BASE defaults to the commit of the last done or ship run that passed, and when there is none every arm runs. The done tier judges the head, the control and every arm. The ship tier, run once before a rollout, is the done tier while the live leg runs. Only the ship tier and the live leg read the live node, and the done and ship tiers record their commit when they pass.
+# The quick tier judges the head on both corpora, the control and each arm whose plant changes a file that differs between BASE and REV, a pallas arm when the pallas entries of Cargo.toml or Cargo.lock differ. BASE defaults to the commit of the last done or ship run that passed, and when there is none every arm runs. The done tier, run per change, judges the head, the control and every arm. The ship tier, run before a rollout of the dolos-serve image, is the done tier while the live leg syncs a candidate from genesis. Only the ship tier and the live leg read the live node. The done and ship tiers record their commit in runs/last-done when they pass, and the ship tier and the live leg record theirs in runs/last-ship when the live leg passes.
 # The live leg reads ENDPOINT, NODE, NODE_DB, GRPCURL, SERVE_CONFIG and CANDIDATE_GRPC from $LIVE_ENV.
-# The live leg starts its candidate from the store the last passing live leg kept, or from an empty store when LIVE_FROM is genesis, a path that unbuilt_path does not accept differs since that store's commit, or a config file of that store is missing or differs from the candidate's.
 set -eu
 ROOT=${ROOT:-/opt/build/ledger-oracle-1027}
 REV=${REV:-feat/ledger-oracle}
@@ -11,6 +10,7 @@ BASE=${BASE:-}
 MIN_FREE_G=${MIN_FREE_G:-6}
 CANDIDATE_NEED_G=${CANDIDATE_NEED_G:-12}
 LAST_DONE="$ROOT/runs/last-done"
+LAST_SHIP="$ROOT/runs/last-ship"
 HERE=$(cd "$(dirname "$0")" && pwd)
 LIVE_ENV=${LIVE_ENV:-$ROOT/live.env}
 REGEN_DIR=${REGEN_DIR:-$ROOT/regen}
@@ -33,11 +33,10 @@ if [ -z "${JUDGED:-}" ]; then
 fi
 export ROOT REV MIN_FREE_G CANDIDATE_NEED_G OUT
 . "$HERE/lib.sh"
-. "$HERE/snapshot.sh"
 
-# Exits when the test of the stale unit check, of the field comparison or of the kept candidate store fails.
+# Exits when the test of the box functions or of the field comparison fails.
 require_lib_test() {
-  mkdir -p "$OUT/lib-test" "$OUT/fields-test" "$OUT/snapshot-test"
+  mkdir -p "$OUT/lib-test" "$OUT/fields-test"
   if ! sh "$HERE/lib_test.sh" "$OUT/lib-test" >"$OUT/lib-test.log" 2>&1; then
     echo "REFUSED lib_test log=$OUT/lib-test.log"
     exit 2
@@ -46,10 +45,11 @@ require_lib_test() {
     echo "REFUSED fields_test log=$OUT/fields-test.log"
     exit 2
   fi
-  if ! sh "$HERE/snapshot_test.sh" "$OUT/snapshot-test" >"$OUT/snapshot-test.log" 2>&1; then
-    echo "REFUSED snapshot_test log=$OUT/snapshot-test.log"
-    exit 2
-  fi
+}
+
+# Records in runs/last-ship the commit, the tier $1, the verdicts $2 and the UTC time of a run whose live leg passed.
+record_ship() {
+  echo "commit=$commit tier=$1 verdicts=\"$2\" time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$LAST_SHIP"
 }
 
 # Builds Dolos from the scratch tree into $OUT/bin/dolos.
@@ -82,7 +82,7 @@ sync_candidate() {
   fields=0
   CANDIDATE="$OUT/bin/dolos" COMMIT=$commit sh "$HERE/candidate.sh" "$OUT/live" \
     >"$OUT/candidate.log" 2>&1 || fields=$?
-  grep -E '^(LIVE-CANDIDATE|LIVE-FIELD|LIVE-FIELD-SPENT|LIVE-FIELDS|LIVE) ' "$OUT/candidate.log" |
+  grep -E '^(LIVE-CANDIDATE|LIVE-IO|LIVE-FIELD|LIVE-FIELD-SPENT|LIVE-FIELDS|LIVE) ' "$OUT/candidate.log" |
     cut -c1-400 || true
   return "$fields"
 }
@@ -117,25 +117,20 @@ live_shift() {
   echo "live-shift=$verdict"
 }
 
-# Builds the candidate and the live judge, syncs the candidate, judges its reads and keeps its store when they pass.
+# Builds the candidate and the live judge, syncs the candidate and judges its reads.
 live_leg() {
   build_candidate && build_live_judge || return 1
   fields=0
   sync_candidate || fields=$?
-  live=FAIL
-  if judge_live && [ "$fields" -eq 0 ]; then
-    live=PASS
-  fi
-  settle_held "$live"
-  [ "$live" = PASS ]
+  judge_live && [ "$fields" -eq 0 ]
 }
 
-# Runs the live leg alone at REV.
+# Runs the live leg alone at REV, and records the commit in runs/last-ship when it passes.
 live_run() {
   mkdir -p "$OUT"
   require_free
   require_lib_test
-  live_from >/dev/null || exit 2
+  candidate_fsync >/dev/null || exit 2
   reset_scratch
   commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
   live=FAIL
@@ -145,7 +140,8 @@ live_run() {
   grep -E '^(LIVE|KNOWN|KNOWN_STALE|LIVE-DIFF|LIVE-GAP) ' "$OUT/live.log" | cut -c1-400 || true
   shift_verdict=$(live_shift | tail -1)
   echo "LIVE-LEG live=$live $shift_verdict commit=$commit logs=$OUT"
-  [ "$live" = PASS ] && [ "$shift_verdict" = live-shift=CAUGHT ]
+  [ "$live" = PASS ] && [ "$shift_verdict" = live-shift=CAUGHT ] || return 1
+  record_ship live "live=$live $shift_verdict"
 }
 
 # The arms whose plant changes a file that differs between the commits $1 and $2 of the scratch tree, one per line.
@@ -207,12 +203,12 @@ done_run() {
   echo "$commit" >"$LAST_DONE"
 }
 
-# Builds the candidate, syncs it while the arms run, judges its reads, keeps its store when they pass, and records the commit when every verdict passes.
+# Builds the candidate, syncs it while the arms run, judges its reads, and records the commit in runs/last-done and runs/last-ship when every verdict passes.
 ship_run() {
   mkdir -p "$OUT"
   require_free
   require_lib_test
-  live_from >/dev/null || exit 2
+  candidate_fsync >/dev/null || exit 2
   reset_scratch
   commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
   sync=
@@ -230,7 +226,6 @@ ship_run() {
   if judge_live && [ "$fields" -eq 0 ]; then
     live=PASS
   fi
-  settle_held "$live" >>"$OUT/live-leg.out"
   cat "$OUT/live-leg.out"
   verdicts=$(sed -n 's/^ARMS \(.*\) logs=.*/\1/p' "$OUT/breaks.out")
   grep -E '^(LIVE|KNOWN|KNOWN_STALE|LIVE-DIFF|LIVE-GAP) ' "$OUT/live.log" | cut -c1-400 || true
@@ -238,13 +233,14 @@ ship_run() {
   echo "DONE tier=ship $verdicts $shift_verdict live=$live commit=$commit logs=$OUT"
   passed "$verdicts $shift_verdict live=$live"
   echo "$commit" >"$LAST_DONE"
+  record_ship ship "$verdicts $shift_verdict live=$live"
 }
 
-regen() {
+regen_run() {
   mkdir -p "$OUT"
   require_free
   require_lib_test
-  live_from >/dev/null || exit 2
+  candidate_fsync >/dev/null || exit 2
   reset_scratch
   commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
   if ! built=$(build_judge "$OUT/head.build" --locked); then
@@ -285,10 +281,8 @@ regen() {
 }
 
 case ${1:-} in
-  quick) quick_run ;;
-  done) done_run ;;
-  ship) ship_run ;;
-  live) live_run ;;
-  regen) regen ;;
+  quick | done | ship | live | regen) ;;
   *) echo "usage: run.sh quick|done|ship|live|regen" ; exit 2 ;;
 esac
+take_lock
+"${1}_run"

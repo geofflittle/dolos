@@ -1,7 +1,7 @@
 #!/bin/sh
-# Syncs a candidate Dolos from the node beside the serving one, reads both and the node, prints each field the two serve differently, and holds the candidate's store when every field agrees.
+# Syncs a candidate Dolos from the node beside the serving one, reads both and the node, prints each field the two serve differently, and removes the candidate.
 # Usage: CANDIDATE=<binary path or image reference> COMMIT=sha candidate.sh <dir>
-# Reads ROOT, NODE, NODE_DB, ENDPOINT, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_NEED_G, SNAPSHOT_GROW_G, LIVE_FROM, SAMPLE_MINUTES and GRPCURL from the environment.
+# Reads ROOT, NODE, NODE_DB, ENDPOINT, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_NEED_G, CANDIDATE_FSYNC, the IO_ limits, SAMPLE_MINUTES and GRPCURL from the environment.
 set -eu
 DIR=$1
 : "${CANDIDATE:?}" "${COMMIT:?}" "${ROOT:?}" "${NODE:?}" "${ENDPOINT:?}" "${SERVE_CONFIG:?}"
@@ -15,55 +15,24 @@ SAMPLE_MINUTES=${SAMPLE_MINUTES:-5}
 FIXED_SLOTS="205422 368793 783572"
 STORE="$ROOT/candidate/$(date -u +%Y%m%dT%H%M%SZ)"
 . "$HERE/lib.sh"
-. "$HERE/snapshot.sh"
 
-MODE=$(live_from)
+FSYNC=$(candidate_fsync) || exit 2
 mkdir -p "$DIR/config"
 write_config "$DIR/config"
-if [ "$MODE" = snapshot ]; then
-  if ! meta=$(snapshot_meta "$SNAPSHOT"); then
-    echo "LIVE-CANDIDATE SNAPSHOT-UNUSABLE reason=missing snapshot=$SNAPSHOT"
-    exit 1
-  fi
-  rule=$(snapshot_start "$ROOT/dolos.git" "${meta% *}" "$COMMIT" "$SNAPSHOT" "$DIR/config")
-  case $rule in
-    snapshot\ *) echo "LIVE-CANDIDATE snapshot_usable ${rule#snapshot } snapshot_commit=${meta% *} commit=$COMMIT" ;;
-    *)
-      echo "LIVE-CANDIDATE GENESIS ${rule#genesis } snapshot_commit=${meta% *} commit=$COMMIT"
-      MODE=genesis
-      ;;
-  esac
-fi
-drop_stale "$MODE"
-FROM=0
-START="start=genesis"
-if [ "$MODE" = snapshot ]; then
-  FROM=${meta#* }
-  START="start=snapshot snapshot_commit=${meta% *} snapshot_slot=$FROM"
-  # The snapshot holds every block up to its slot, so the store grows only by the blocks since.
-  NEED_G=${SNAPSHOT_GROW_G:-4}
-fi
 
 if [ "$(free_g "$ROOT")" -lt $((NEED_G + 3)) ] || [ "$(free_g /)" -lt 10 ]; then
-  echo "LIVE-CANDIDATE REFUSED free=$(free_g "$ROOT")G root_free=$(free_g /)G need=$((NEED_G + 3))G $START"
+  echo "LIVE-CANDIDATE REFUSED free=$(free_g "$ROOT")G root_free=$(free_g /)G need=$((NEED_G + 3))G"
   exit 2
 fi
 
-candidate_slot() {
-  "$GRPCURL" -plaintext -d '{}' "$CANDIDATE_GRPC" utxorpc.v1.sync.SyncService/ReadTip 2>/dev/null |
-    jq -r '.tip.slot // 0'
-}
-
 cleanup() {
-  status=$?
-  stopped=$(candidate_slot || true)
-  docker stop -t 120 "$NAME" >/dev/null 2>&1 || true
   docker rm -f "$NAME" >/dev/null 2>&1 || true
-  hold_store "$status" "$STORE" "$COMMIT" "$stopped"
+  rm -rf "$STORE"
+  echo "LIVE-CANDIDATE removed name=$NAME store=$STORE"
 }
 trap cleanup EXIT
 
-start_store "$MODE" "$STORE"
+mkdir -p "$STORE"
 cp "$DIR/config/"* "$STORE/"
 
 case $CANDIDATE in
@@ -77,9 +46,27 @@ case $CANDIDATE in
     ENTRY=
     ;;
 esac
-docker run -d --name "$NAME" --network host --log-opt max-size=100m --log-opt max-file=2 \
+PRELOAD=
+if [ "$FSYNC" = off ]; then
+  PRELOAD="-v /usr/lib/x86_64-linux-gnu/libeatmydata.so.1:/opt/eatmydata.so:ro -e LD_PRELOAD=/opt/eatmydata.so"
+fi
+docker run -d --name "$NAME" --network host --log-opt max-size=100m --log-opt max-file=2 $PRELOAD \
   -v "$STORE:/run-dolos" -w /run-dolos $ENTRY "$IMAGE" -c dolos.toml daemon >/dev/null
-echo "LIVE-CANDIDATE started name=$NAME commit=$COMMIT candidate=$CANDIDATE grpc=$CANDIDATE_GRPC $START"
+echo "LIVE-CANDIDATE started name=$NAME commit=$COMMIT candidate=$CANDIDATE grpc=$CANDIDATE_GRPC"
+pid=$(docker inspect -f '{{.State.Pid}}' "$NAME")
+state=$(fsync_state "/proc/$pid/maps")
+tries=1
+while [ "$state" = fsync=unknown ] && [ "$tries" -lt 10 ]; do
+  sleep 1
+  state=$(fsync_state "/proc/$pid/maps")
+  tries=$((tries + 1))
+done
+echo "LIVE-CANDIDATE $state candidate_fsync=$FSYNC pid=$pid tries=$tries"
+
+candidate_slot() {
+  "$GRPCURL" -plaintext -d '{}' "$CANDIDATE_GRPC" utxorpc.v1.sync.SyncService/ReadTip 2>/dev/null |
+    jq -r '.tip.slot // 0'
+}
 
 node_slot() {
   docker exec "$NODE" cardano-cli latest query tip | jq -r .slot
@@ -87,35 +74,42 @@ node_slot() {
 
 start=$(date +%s)
 sampled=$start
+io_sampled=0
+io_samples=0
+streak=0
 while :; do
   slot=$(candidate_slot || true)
+  slot=${slot:-0}
   node=$(node_slot)
-  running=$(docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null || echo false)
-  step=$(sync_step "$MODE" "$FROM" "$slot" "$running" $(($(date +%s) - start)) "$node")
-  case $step in
-    synced) break ;;
-    unusable*)
-      echo "LIVE-CANDIDATE SNAPSHOT-UNUSABLE ${step#unusable } node=$node $START"
-      docker logs --tail 5 "$NAME" 2>&1 | cut -c1-300 | sed 's/^/LIVE-CANDIDATE log /'
-      exit 1
-      ;;
-  esac
+  if [ "$slot" -ge $((node - 100)) ]; then
+    break
+  fi
   if [ "$(free_g "$ROOT")" -lt 3 ]; then
-    echo "LIVE-CANDIDATE REFUSED free=$(free_g "$ROOT")G during sync slot=${slot:-0} node=$node store=$(du -sh "$STORE" | cut -f1)"
+    echo "LIVE-CANDIDATE REFUSED free=$(free_g "$ROOT")G during sync slot=$slot node=$node store=$(du -sh "$STORE" | cut -f1)"
     exit 2
   fi
   if [ $(($(date +%s) - sampled)) -ge $((SAMPLE_MINUTES * 60)) ]; then
-    echo "LIVE-CANDIDATE wal slot=${slot:-0} node=$node wal_bytes=$(du -sb "$STORE/data/wal" | cut -f1)"
+    echo "LIVE-CANDIDATE wal slot=$slot node=$node wal_bytes=$(du -sb "$STORE/data/wal" | cut -f1)"
     sampled=$(date +%s)
   fi
+  if [ $(($(date +%s) - io_sampled)) -ge 60 ]; then
+    io_sampled=$(date +%s)
+    line=$(io_line)
+    echo "$line"
+    io_samples=$((io_samples + 1))
+    streak=$(io_streak "$streak" "$line")
+    if io_breached "$streak"; then
+      echo "LIVE-IO breach samples=$streak node_lag_s_limit=$IO_NODE_LAG_S serve_lag_slots_limit=$IO_SERVE_LAG_SLOTS serve_ms_limit=$IO_SERVE_MS candidate_fsync=$FSYNC slot=$slot node=$node"
+      exit 1
+    fi
+  fi
   if [ $(($(date +%s) - start)) -gt $((SYNC_MINUTES * 60)) ]; then
-    echo "LIVE-CANDIDATE sync_timeout slot=${slot:-0} node=$node minutes=$SYNC_MINUTES"
+    echo "LIVE-CANDIDATE sync_timeout slot=$slot node=$node minutes=$SYNC_MINUTES"
     exit 1
   fi
   sleep 30
 done
-slot=${slot:-0}
-echo "LIVE-CANDIDATE synced slot=$slot node=$node seconds=$(($(date +%s) - start)) store=$(du -sh "$STORE" | cut -f1) $START"
+echo "LIVE-CANDIDATE synced slot=$slot node=$node seconds=$(($(date +%s) - start)) store=$(du -sh "$STORE" | cut -f1) io_samples=$io_samples"
 # The bytes of each part of the store and the height of its tip, which divide into bytes per block.
 height=$("$GRPCURL" -plaintext -max-msg-sz 200000000 \
   -d "{\"ref\":[{\"slot\":$slot}],\"fieldMask\":{\"paths\":[\"cardano.header\"]}}" \

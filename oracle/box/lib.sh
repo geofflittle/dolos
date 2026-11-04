@@ -1,4 +1,4 @@
-# Functions the oracle box scripts share, reading ROOT, SCRATCH, REV, MIN_FREE_G, HERE, TARGET and IN_IMAGE.
+# Functions the oracle box scripts share, reading ROOT, SCRATCH, REV, MIN_FREE_G, HERE, TARGET, IN_IMAGE, LOCK_POLL_SECONDS, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_FSYNC, NODE, ENDPOINT, GRPCURL and the IO_ limits.
 
 PALLAS=${PALLAS:-scratch/pallas}
 IN_IMAGE=${IN_IMAGE:-$HERE/in-image.sh}
@@ -87,13 +87,149 @@ same_log() {
   cmp -s "$1.untimed" "$2.untimed"
 }
 
+# The whole gibibytes free on the filesystem holding $1, rounded down.
+free_g() {
+  echo $(($(df -B1 --output=avail "$1" | tail -1 | tr -dc 0-9) / 1073741824))
+}
+
 # Exits when the build root has less than MIN_FREE_G gigabytes free.
 require_free() {
-  free=$(df -BG --output=avail "$ROOT" | tail -1 | tr -dc 0-9)
+  free=$(free_g "$ROOT")
   if [ "$free" -lt "$MIN_FREE_G" ]; then
     echo "REFUSED free=${free}G below ${MIN_FREE_G}G at $ROOT"
     exit 2
   fi
+}
+
+LOCK_POLL_SECONDS=${LOCK_POLL_SECONDS:-30}
+
+# Takes the lock of the tiers on ROOT, a link run.lock naming this process, waiting while a running process holds it and refusing when the process it names has exited.
+take_lock() {
+  lock=$ROOT/run.lock
+  waited=
+  until ln -sn "$$" "$lock" 2>/dev/null; do
+    holder=$(readlink "$lock" 2>/dev/null) || continue
+    if ! kill -0 "$holder" 2>/dev/null; then
+      echo "REFUSED lock=$lock lock_pid=$holder stale"
+      exit 2
+    fi
+    if [ "$holder" != "$waited" ]; then
+      echo "WAITING lock_pid=$holder"
+      waited=$holder
+    fi
+    sleep "$LOCK_POLL_SECONDS"
+  done
+  trap release_lock EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+}
+
+# Removes the lock of the tiers when it names this process.
+release_lock() {
+  if [ "$(readlink "$ROOT/run.lock" 2>/dev/null)" = "$$" ]; then
+    rm -f "$ROOT/run.lock"
+  fi
+}
+
+# The names of a candidate's config files in its store.
+CONFIG_FILES="dolos.toml byron-genesis.json shelley-genesis.json alonzo-genesis.json conway-genesis.json dijkstra-genesis.json"
+
+# Writes the candidate's config into the dir $1: the serving genesis files, and the serving dolos.toml without its serve sections followed by the candidate's grpc listener.
+write_config() {
+  for file in $CONFIG_FILES; do
+    case $file in
+      dolos.toml)
+        awk '/^\[/ { skip = ($0 ~ /^\[serve/) } !skip' "$SERVE_CONFIG/dolos.toml" >"$1/dolos.toml"
+        printf '[serve.grpc]\nlisten_address = "%s"\n' "$CANDIDATE_GRPC" >>"$1/dolos.toml"
+        ;;
+      *) cat "$SERVE_CONFIG/$file" >"$1/$file" ;;
+    esac
+  done
+}
+
+# The candidate's fsync mode from CANDIDATE_FSYNC, off when unset, where off runs it with libeatmydata preloaded so its sync calls return without writing, refusing any value but off or on.
+candidate_fsync() {
+  case ${CANDIDATE_FSYNC:-off} in
+    off | on) echo "${CANDIDATE_FSYNC:-off}" ;;
+    *)
+      echo "LIVE-CANDIDATE REFUSED candidate_fsync=$CANDIDATE_FSYNC want=off,on" >&2
+      return 2
+      ;;
+  esac
+}
+
+# The fsync state of a process from its maps in the file $1, off when they name libeatmydata, on when they name libc but not libeatmydata, which the loader maps before libc, and unknown when they name neither or cannot be read.
+fsync_state() {
+  if grep -q eatmydata "$1" 2>/dev/null; then
+    echo fsync=off
+  elif grep -q '/libc\.so' "$1" 2>/dev/null; then
+    echo fsync=on
+  else
+    echo fsync=unknown
+  fi
+}
+
+# The slot of the wall clock, from the system start and slot length of $SERVE_CONFIG/shelley-genesis.json.
+wall_slot() {
+  genesis=$SERVE_CONFIG/shelley-genesis.json
+  start=$(jq -er .systemStart "$genesis") || return 1
+  start=$(date -u -d "$start" +%s) || return 1
+  length=$(jq -er .slotLength "$genesis") || return 1
+  awk -v now="$(date +%s)" -v start="$start" -v len="$length" 'BEGIN { printf "%d\n", (now - start) / len }'
+}
+
+# The limits of the IO guard on the node's lag behind the wall clock, the serving Dolos's lag behind the node and its ReadTip time, and the run of samples over a limit that breaches it.
+IO_NODE_LAG_S=${IO_NODE_LAG_S:-120}
+IO_SERVE_LAG_SLOTS=${IO_SERVE_LAG_SLOTS:-60}
+IO_SERVE_MS=${IO_SERVE_MS:-2000}
+IO_BREACH_SAMPLES=3
+
+# One LIVE-IO sample of the node tip's lag behind the wall clock in seconds, the serving Dolos tip's lag behind the node tip in slots and the serving Dolos's ReadTip time in milliseconds, each failed read printed as failed.
+io_line() {
+  wall=$(wall_slot) || wall=
+  node=$(docker exec "$NODE" cardano-cli latest query tip 2>/dev/null | jq -r '.slot // empty') || node=
+  before=$(date +%s%N)
+  serve=$("$GRPCURL" -max-time 10 -d '{}' "$ENDPOINT" utxorpc.v1.sync.SyncService/ReadTip 2>/dev/null |
+    jq -r '.tip.slot // empty') || serve=
+  ms=$((($(date +%s%N) - before) / 1000000))
+  node_lag=failed
+  serve_lag=failed
+  if [ -n "$wall" ] && [ -n "$node" ]; then
+    node_lag=$((wall - node))
+  fi
+  if [ -z "$serve" ]; then
+    ms=failed
+  elif [ -n "$node" ]; then
+    serve_lag=$((node - serve))
+  fi
+  echo "LIVE-IO node_lag_s=$node_lag serve_lag_slots=$serve_lag serve_ms=$ms"
+}
+
+# The run of consecutive LIVE-IO samples over a limit, from the run $1 before the sample line $2, a value that is missing or not a whole number counting as over.
+io_streak() {
+  over=0
+  for limit in "node_lag_s $IO_NODE_LAG_S" "serve_lag_slots $IO_SERVE_LAG_SLOTS" "serve_ms $IO_SERVE_MS"; do
+    value=$(echo " $2 " | sed -n "s/.* ${limit% *}=\([^ ]*\) .*/\1/p")
+    case ${value#-} in
+      '' | *[!0-9]*) over=1 ;;
+      *)
+        if [ "$value" -gt "${limit#* }" ]; then
+          over=1
+        fi
+        ;;
+    esac
+  done
+  if [ "$over" -eq 1 ]; then
+    echo $(($1 + 1))
+  else
+    echo 0
+  fi
+}
+
+# Whether a run of $1 samples over a limit breaches the IO guard.
+io_breached() {
+  [ "$1" -ge "$IO_BREACH_SAMPLES" ]
 }
 
 # Puts the scratch tree at REV of the bare repository $ROOT/dolos.git with no planted change.
