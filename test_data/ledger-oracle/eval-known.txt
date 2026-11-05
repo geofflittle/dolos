@@ -1,16 +1,16 @@
-ic#888 top Spend#1 reference script language (requires V3)
-ic#888 top Cert#0 reference script language (requires V3)
+ic#888 top Spend#1 couldn't evaluate phase-2 script: extraneous redeemer
+ic#888 top Cert#0 couldn't evaluate phase-2 script: extraneous redeemer
 ic#890 sub0 Spend#0 subtransaction redeemers
 ic#898 sub0 Spend#0 subtransaction redeemers
 ic#898 sub1 Spend#0 subtransaction redeemers
-ic#900 top Guarding#0 couldn't evaluate phase-2 script: extraneous redeemer
+ic#900 top Guarding#0 redeemer purpose
 ic#1260 top Spend#1 couldn't evaluate phase-2 script: resolved Input not found
 ic#1318 sub0 Spend#0 subtransaction redeemers
 ic#1321 sub0 Spend#99 subtransaction redeemers
-ic#1330 top Guarding#0 couldn't evaluate phase-2 script: extraneous redeemer
+ic#1330 top Guarding#0 redeemer purpose
 ic#1338 sub0 Spend#0 subtransaction redeemers
 ic#1341 sub0 Spend#0 subtransaction redeemers
-ic#1344 top Guarding#0 couldn't evaluate phase-2 script: extraneous redeemer
+ic#1344 top Guarding#0 redeemer purpose
 ic#1347 sub0 Spend#0 subtransaction redeemers
 ic#1350 sub0 Spend#0 subtransaction redeemers
 ic#1356 sub0 Spend#0 subtransaction redeemers
@@ -31,51 +31,10 @@ ic#1395 sub0 Spend#0 subtransaction redeemers
 ic#1401 sub0 Spend#0 subtransaction redeemers
 ic#1401 sub0 Mint#2 subtransaction redeemers
 ic#1404 sub0 Spend#0 subtransaction redeemers
-ic#1896 top Spend#0 reference script language (requires V3)
-ic#1898 top Spend#0 reference script language (requires V3)
-ic#1900 top Spend#0 reference script language (requires V3)
-ic#1902 top Spend#1 reference script language (requires V3)
-ic#1904 top Spend#1 reference script language (requires V3)
-ic#1906 top Spend#0 reference script language (requires V3)
-ic#1908 top Spend#0 reference script language (requires V3)
-ic#1910 top Spend#0 reference script language (requires V3)
-ic#1912 top Spend#0 reference script language (requires V3)
-ic#1914 top Spend#0 reference script language (requires V3)
-ic#1916 top Spend#1 reference script language (requires V3)
-ic#1918 top Spend#1 reference script language (requires V3)
-ic#1920 top Spend#1 reference script language (requires V3)
-ic#1922 top Spend#1 reference script language (requires V3)
-ic#1924 top Spend#1 reference script language (requires V3)
-ic#1926 top Spend#0 reference script language (requires V3)
-ic#1928 top Spend#1 reference script language (requires V3)
-ic#1930 top Spend#0 reference script language (requires V3)
-ic#1932 top Spend#0 reference script language (requires V3)
-ic#1934 top Spend#1 reference script language (requires V3)
-ic#1936 top Spend#0 reference script language (requires V3)
-ic#1953 top Spend#1 reference script language (requires V3)
 ic#1986 top Spend#0 couldn't evaluate phase-2 script: cost model not found for language Language PlutusV1
 ic#2025 top Spend#0 couldn't evaluate phase-2 script: cost model not found for language Language PlutusV2
 ic#2064 top Spend#1 couldn't evaluate phase-2 script: cost model not found for language Language PlutusV3
-ic#2076 top Spend#0 reference script language (requires V3)
-ic#2079 top Spend#0 reference script language (requires V3)
-ic#2082 top Spend#1 reference script language (requires V3)
-ic#2085 top Spend#0 reference script language (requires V3)
-ic#2088 top Spend#0 reference script language (requires V3)
-ic#2092 top Spend#0 reference script language (requires V3)
-ic#2095 top Spend#1 reference script language (requires V3)
-ic#2098 top Spend#0 reference script language (requires V3)
-ic#2101 top Spend#0 reference script language (requires V3)
-ic#2104 top Spend#0 reference script language (requires V3)
-ic#2107 top Spend#1 reference script language (requires V3)
-ic#2109 top Cert#0 reference script language (requires V3)
-ic#2111 top Cert#0 reference script language (requires V3)
-ic#2113 top Reward#0 reference script language (requires V3)
-ic#2160 top Spend#1 reference script language (requires V3)
-ic#2162 top Spend#1 reference script language (requires V3)
-ic#2165 top Spend#0 reference script language (requires V3)
-ic#2165 top Cert#0 reference script language (requires V3)
-ic#2167 top Cert#0 reference script language (requires V3)
-ic#2169 top Reward#0 reference script language (requires V3)
+ic#2104 top Spend#0 couldn't evaluate phase-2 script: cost model not found for language Language PlutusV4
 ic#2179 top Spend#0 couldn't evaluate phase-2 script: missing required datum Datum e88bd757ad5b9bedf372d8d3f0cf6c962a469db61a265f6418e1ffed86da29ec
 ic#2191 top Mint#0 couldn't evaluate phase-2 script: extraneous redeemer
 ic#2197 top Spend#0 couldn't evaluate phase-2 script: extraneous redeemer
@@ -86,14 +45,8 @@ ic#2206 top Spend#0 couldn't evaluate phase-2 script: missing required datum Dat
 ic#2218 top Mint#0 couldn't evaluate phase-2 script: extraneous redeemer
 ic#2227 top Spend#1 couldn't evaluate phase-2 script: missing required datum Datum e88bd757ad5b9bedf372d8d3f0cf6c962a469db61a265f6418e1ffed86da29ec
 ic#2238 top Mint#0 couldn't evaluate phase-2 script: extraneous redeemer
-ic#2247 top Spend#0 reference script language (requires V3)
-ic#2250 top Spend#0 reference script language (requires V3)
-ic#2252 top Spend#1 reference script language (requires V3)
-ic#2258 top Mint#0 reference script language (requires V3)
-ic#2261 top Spend#1 reference script language (requires V3)
-ic#2296 top Spend#1 reference script language (requires V3)
-ic#2299 top Spend#0 reference script language (requires V3)
-ic#2302 top Cert#0 reference script language (requires V3)
+ic#2247 top Spend#0 couldn't evaluate phase-2 script: missing required datum Datum e88bd757ad5b9bedf372d8d3f0cf6c962a469db61a265f6418e1ffed86da29ec
+ic#2258 top Mint#0 couldn't evaluate phase-2 script: extraneous redeemer
 ic#2305 top Spend#1 couldn't evaluate phase-2 script: invalid native Dijkstra evaluation: inline datum
 ic#2308 top Spend#1 couldn't evaluate phase-2 script: extraneous redeemer
 ic#2308 top Mint#2 couldn't evaluate phase-2 script: extraneous redeemer
@@ -101,23 +54,17 @@ ic#2319 top Spend#1 couldn't evaluate phase-2 script: missing required datum Dat
 ic#2322 top Spend#0 couldn't evaluate phase-2 script: extraneous redeemer
 ic#2322 top Mint#2 couldn't evaluate phase-2 script: extraneous redeemer
 ic#2333 top Spend#1 couldn't evaluate phase-2 script: missing required datum Datum 4baa280fae4e875a2d9e8b32cc8958bfb5953b86080b50b024bae00d5ea2d270
-ic#2336 top Spend#0 reference script language (requires V3)
-ic#2336 top Mint#2 reference script language (requires V3)
-ic#2338 top Spend#0 reference script language (requires V3)
-ic#2341 top Spend#0 reference script language (requires V3)
-ic#2344 top Spend#0 reference script language (requires V3)
-ic#2347 top Spend#0 reference script language (requires V3)
+ic#2336 top Spend#0 couldn't evaluate phase-2 script: extraneous redeemer
+ic#2336 top Mint#2 couldn't evaluate phase-2 script: extraneous redeemer
+ic#2347 top Spend#0 couldn't evaluate phase-2 script: missing required datum Datum 4baa280fae4e875a2d9e8b32cc8958bfb5953b86080b50b024bae00d5ea2d270
 ic#2357 top Spend#0 couldn't evaluate phase-2 script: invalid native Dijkstra evaluation: Byron address
 ic#2360 top Spend#1 couldn't evaluate phase-2 script: invalid native Dijkstra evaluation: Byron address
 ic#2363 top Spend#0 couldn't evaluate phase-2 script: invalid native Dijkstra evaluation: Byron address
-ic#2366 top Spend#1 reference script language (requires V3)
+ic#2366 top Spend#1 couldn't evaluate phase-2 script: invalid native Dijkstra evaluation: Byron address
 ic#9642 top Propose#0 couldn't evaluate phase-2 script: cost model not found for language Language PlutusV3
 ic#9652 top Spend#0 couldn't evaluate phase-2 script: invalid native Dijkstra evaluation: inline datum
 ic#9671 top Spend#1 couldn't evaluate phase-2 script: invalid native Dijkstra evaluation: inputs that are also reference inputs
-ic#9677 top Spend#1 reference script language (requires V3)
-ic#9680 top Spend#2 reference script language (requires V3)
-ic#9683 top Spend#2 reference script language (requires V3)
-ic#9686 top Spend#0 reference script language (requires V3)
+ic#9683 top Spend#2 couldn't evaluate phase-2 script: invalid native Dijkstra evaluation: inputs that are also reference inputs
 ic#9690 top Spend#1 couldn't evaluate phase-2 script: invalid native Dijkstra evaluation: treasury value
 ic#9694 top Spend#1 couldn't evaluate phase-2 script: invalid native Dijkstra evaluation: treasury value
 ic#9701 top Spend#1 couldn't evaluate phase-2 script: invalid native Dijkstra evaluation: votes
@@ -141,7 +88,6 @@ ic#9796 top Spend#1 couldn't evaluate phase-2 script: invalid native Dijkstra ev
 ic#9802 top Spend#1 couldn't evaluate phase-2 script: invalid native Dijkstra evaluation: certificate kind
 ic#9808 top Spend#1 couldn't evaluate phase-2 script: invalid native Dijkstra evaluation: certificate kind
 ic#9820 sub0 Spend#0 subtransaction redeemers
-ic#9846 top Propose#0 reference script language (requires V3)
 supp#136 top Spend#0 couldn't evaluate phase-2 script: Dijkstra time translation: slot 5184000 is at or past the forecast horizon 5184000
 supp#179 top Spend#1 couldn't evaluate phase-2 script: invalid native Dijkstra evaluation: script guards
 supp#189 top Spend#1 couldn't evaluate phase-2 script: invalid native Dijkstra evaluation: required top-level guards
