@@ -161,6 +161,7 @@ caught() {
     eval-steps) pattern='^EVAL-DIFF pallas [a-z]+#[0-9]+ top [A-Za-z]+#[0-9]+ ledger=\(ran mem=([0-9]+) steps=[0-9]+\) dolos=\(ran mem=\1 steps=[0-9]+\)$' ;;
     eval-ran) pattern='^EVAL-DIFF pallas [a-z]+#[0-9]+ top [A-Za-z]+#[0-9]+ ledger=\(ran mem=[0-9]+ steps=[0-9]+\) dolos=\(failed\)$' ;;
     v4-v3-context) pattern='^EVAL-DIFF pallas [a-z]+#[0-9]+ top [A-Za-z]+#[0-9]+ ledger=\(ran mem=[0-9]+ steps=[0-9]+\) dolos=\((ran mem=[0-9]+ steps=[0-9]+|failed)\)$' ;;
+    guarding-purpose) pattern='^EVAL-DIFF pallas [a-z]+#[0-9]+ top Guarding#[0-9]+ ledger=\(ran mem=[0-9]+ steps=[0-9]+\) dolos=\((ran mem=[0-9]+ steps=[0-9]+|failed)\)$' ;;
     eval-level) pattern='^EVAL-DIFF pallas [a-z]+#[0-9]+ sub[0-9]+ [A-Za-z]+#[0-9]+ ledger=\((ran|failed)[^)]*\) dolos=\(none\) listed=\(subtransaction redeemers\)$' ;;
     v1-guarding) pattern="^thread 'serve::grpc::v1::submit::mapping_tests::guarding_result_keeps_identity_and_budget' \([0-9]+\) panicked at src/serve/grpc/v1/submit.rs:284:" ;;
     revalidate) pattern='^DIFF revalidate [a-z]+#[0-9]+ kept_after_rollback_to=' ;;

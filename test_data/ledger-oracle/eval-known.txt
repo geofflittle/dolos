@@ -3,14 +3,13 @@ ic#888 top Cert#0 couldn't evaluate phase-2 script: extraneous redeemer
 ic#890 sub0 Spend#0 subtransaction redeemers
 ic#898 sub0 Spend#0 subtransaction redeemers
 ic#898 sub1 Spend#0 subtransaction redeemers
-ic#900 top Guarding#0 redeemer purpose
 ic#1260 top Spend#1 couldn't evaluate phase-2 script: resolved Input not found
 ic#1318 sub0 Spend#0 subtransaction redeemers
 ic#1321 sub0 Spend#99 subtransaction redeemers
-ic#1330 top Guarding#0 redeemer purpose
+ic#1330 top Guarding#0 guarding redeemer with subtransactions
 ic#1338 sub0 Spend#0 subtransaction redeemers
 ic#1341 sub0 Spend#0 subtransaction redeemers
-ic#1344 top Guarding#0 redeemer purpose
+ic#1344 top Guarding#0 guarding redeemer with subtransactions
 ic#1347 sub0 Spend#0 subtransaction redeemers
 ic#1350 sub0 Spend#0 subtransaction redeemers
 ic#1356 sub0 Spend#0 subtransaction redeemers

@@ -114,7 +114,7 @@ index 8825dbf3..7f39d2e2 100644
          .concat(),
      )
 diff --git a/pallas-validate/src/phase1/dijkstra.rs b/pallas-validate/src/phase1/dijkstra.rs
-index fdf7681c..695eea33 100644
+index 38b0d066..1e4984ce 100644
 --- a/pallas-validate/src/phase1/dijkstra.rs
 +++ b/pallas-validate/src/phase1/dijkstra.rs
 @@ -183,6 +183,11 @@ pub(super) fn validate_dijkstra_tx_inner<S: DijkstraLedgerState + ?Sized>(
@@ -212,7 +212,7 @@ index fdf7681c..695eea33 100644
      let raw = encode(b)?;
      let mut allowed = vec![0, 1, 3, 8, 15];
      for (key, present) in [
-@@ -1191,6 +1224,9 @@ fn check_scripts(
+@@ -1186,6 +1219,9 @@ fn check_scripts(
          let output = utxos
              .get(&MultiEraInput::from_alonzo_compatible(input))
              .ok_or(PostAlonzo(CollateralNotInUTxO))?;
@@ -222,7 +222,7 @@ index fdf7681c..695eea33 100644
          let Spender::Key(key) = spender(output)? else {
              return Err(PostAlonzo(CollateralNotVKeyLocked));
          };
-@@ -1303,6 +1339,14 @@ fn reference_fee(mut bytes: u64, p: &DijkstraProtParams) -> Result<u64, Validati
+@@ -1298,6 +1334,14 @@ fn reference_fee(mut bytes: u64, p: &DijkstraProtParams) -> Result<u64, Validati
      u64::try_from(total.0 / total.1).map_err(|_| PostAlonzo(NegativeValue))
  }
  
@@ -237,7 +237,7 @@ index fdf7681c..695eea33 100644
  fn check_auxiliary(
      hash: Option<Hash<32>>,
      auxiliary: &Nullable<KeepRaw<'_, AuxiliaryData>>,
-@@ -1597,6 +1641,11 @@ fn check_new_script(script: &MultiEraScriptRef<'_>) -> ValidationResult {
+@@ -1592,6 +1636,11 @@ fn check_new_script(script: &MultiEraScriptRef<'_>) -> ValidationResult {
      match script {
          MultiEraScriptRef::Dijkstra(s) => match s.as_ref() {
              ScriptRef::NativeScript(_) => Ok(()),
@@ -280,7 +280,7 @@ index b9012a92..00c4bf07 100644
          Certificate::StakeDelegation(c, pool) => {
              registered(state, c)?;
 diff --git a/pallas-validate/src/phase2/dijkstra.rs b/pallas-validate/src/phase2/dijkstra.rs
-index a971d02b..6e3158b2 100644
+index cf9a2555..a4059ab4 100644
 --- a/pallas-validate/src/phase2/dijkstra.rs
 +++ b/pallas-validate/src/phase2/dijkstra.rs
 @@ -60,14 +60,15 @@ impl LegacyContextData for ContextOutput {
@@ -410,7 +410,7 @@ index a971d02b..6e3158b2 100644
                  logs: result.logs,
                  failure_message: result.failure.map(|f| f.message),
              };
-@@ -599,7 +661,9 @@ pub(super) fn runs(
+@@ -626,7 +688,9 @@ pub(super) fn runs(
                  })
                  .collect(),
          };
@@ -421,8 +421,8 @@ index a971d02b..6e3158b2 100644
          keys.dedup();
          keys
      };
-@@ -701,7 +765,10 @@ pub(super) fn runs(
-                     let context = v1v2_script_context_data(info.to_plutus_data(), purpose);
+@@ -726,7 +790,10 @@ pub(super) fn runs(
+                         v1v2_script_context_data(info.to_plutus_data(), purpose.conway()?.1);
                      (legacy(context), costs.plutus_v2.as_ref())
                  }
 -                n::Language::PlutusV3 => {
@@ -433,8 +433,8 @@ index a971d02b..6e3158b2 100644
                      let info = V3TxInfo {
                          inputs: inputs.clone(),
                          reference_inputs: reference_inputs.clone(),
-@@ -726,9 +793,13 @@ pub(super) fn runs(
-                         &purpose.clone().into_script_info(datum.cloned()),
+@@ -751,9 +818,13 @@ pub(super) fn runs(
+                         &purpose.conway()?.1.clone().into_script_info(datum.cloned()),
                          12,
                      );
 -                    (vec![context], costs.plutus_v3.as_ref())
@@ -449,6 +449,22 @@ index a971d02b..6e3158b2 100644
                      let context = top.script_context(key, purpose, &r.data, datum)?;
                      (vec![context], costs.plutus_v4.as_ref())
                  }
+diff --git a/pallas-validate/src/phase2/dijkstra_v4_context.rs b/pallas-validate/src/phase2/dijkstra_v4_context.rs
+index e32e97e1..ccad2242 100644
+--- a/pallas-validate/src/phase2/dijkstra_v4_context.rs
++++ b/pallas-validate/src/phase2/dijkstra_v4_context.rs
+@@ -215,7 +215,10 @@ impl Top<'_, '_> {
+             Purpose::Conway(_, ScriptInfo::Proposing(ix, procedure)) => {
+                 (5, vec![ix.to_plutus_data(), proposal(procedure)?])
+             }
+-            Purpose::Guarding(ix) => (6, vec![u64::from(*ix).to_plutus_data()]),
++            Purpose::Guarding(ix) => (
++                6 - u64::from(pallas_crypto::oracle_plant("guarding-purpose")),
++                vec![u64::from(*ix).to_plutus_data()],
++            ),
+         })
+     }
+ 
 diff --git a/pallas-validate/src/phase2/native_evaluator.rs b/pallas-validate/src/phase2/native_evaluator.rs
 index 42d4b9a2..9bfcef0c 100644
 --- a/pallas-validate/src/phase2/native_evaluator.rs
