@@ -114,7 +114,7 @@ index 8825dbf3..7f39d2e2 100644
          .concat(),
      )
 diff --git a/pallas-validate/src/phase1/dijkstra.rs b/pallas-validate/src/phase1/dijkstra.rs
-index eb9e839a..411f17ca 100644
+index eb9e839a..f1c11e42 100644
 --- a/pallas-validate/src/phase1/dijkstra.rs
 +++ b/pallas-validate/src/phase1/dijkstra.rs
 @@ -136,6 +136,11 @@ pub(super) fn validate_dijkstra_tx_inner<S: DijkstraLedgerState + ?Sized>(
@@ -212,7 +212,20 @@ index eb9e839a..411f17ca 100644
      let raw = encode(b)?;
      let mut allowed = vec![0, 1, 3, 8, 15];
      for (key, present) in [
-@@ -1099,6 +1132,9 @@ fn check_collateral(
+@@ -1066,6 +1099,12 @@ fn check_scripts(
+     let redeemers = levels
+         .into_iter()
+         .any(|w| w.redeemer.as_ref().is_some_and(|x| !x.is_empty()));
++    if pallas_crypto::oracle_plant("collateral-unsupported")
++        && !redeemers
++        && (b.collateral.is_some() || b.collateral_return.is_some() || b.total_collateral.is_some())
++    {
++        return Err(DijkstraUnsupported("collateral without Plutus"));
++    }
+     check_collateral(b, utxos, pp, keys, network, redeemers)?;
+     Ok(Provided {
+         languages,
+@@ -1099,6 +1138,9 @@ fn check_collateral(
          let output = utxos
              .get(&MultiEraInput::from_alonzo_compatible(input))
              .ok_or(PostAlonzo(CollateralNotInUTxO))?;
@@ -222,7 +235,7 @@ index eb9e839a..411f17ca 100644
          match spender(output)? {
              Spender::Key(key) => {
                  keys.insert(key);
-@@ -1316,6 +1352,14 @@ fn reference_fee(mut bytes: u64, p: &DijkstraProtParams) -> Result<u64, Validati
+@@ -1316,6 +1358,14 @@ fn reference_fee(mut bytes: u64, p: &DijkstraProtParams) -> Result<u64, Validati
      u64::try_from(total.0 / total.1).map_err(|_| PostAlonzo(NegativeValue))
  }
  
@@ -237,7 +250,7 @@ index eb9e839a..411f17ca 100644
  fn check_auxiliary(
      hash: Option<Hash<32>>,
      auxiliary: &Nullable<KeepRaw<'_, AuxiliaryData>>,
-@@ -1576,6 +1620,11 @@ fn check_new_script(script: &MultiEraScriptRef<'_>) -> ValidationResult {
+@@ -1576,6 +1626,11 @@ fn check_new_script(script: &MultiEraScriptRef<'_>) -> ValidationResult {
      match script {
          MultiEraScriptRef::Dijkstra(s) => match s.as_ref() {
              ScriptRef::NativeScript(_) => Ok(()),

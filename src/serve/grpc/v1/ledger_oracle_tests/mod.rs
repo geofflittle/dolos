@@ -665,7 +665,7 @@ async fn validate_run<'r>(
             if matches!(dolos, DolosVerdict::Accepted) {
                 dolos_accepted.insert(record.n);
             }
-            if let Some(feature) = declares(record.submitted(), &dolos) {
+            if let Some(feature) = declares(&dolos) {
                 candidates.declared.insert(id, feature);
             }
             let judgement = match one_answer(&dolos, &inflight) {

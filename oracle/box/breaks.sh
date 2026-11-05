@@ -177,6 +177,7 @@ caught() {
     guard-ref-reverted) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=native script guards$' ;;
     v4-ref-refused) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=reference script language ' ;;
     pointer-refused) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=pointer address ' ;;
+    collateral-unsupported) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=collateral without Plutus$' ;;
     *)
       echo "ARM $arm NO_PATTERN"
       return 1

@@ -200,14 +200,13 @@ pub fn outcome(
         (L::Accepted { .. }, D::Unsupported(l), Some(f)) if *l == f.0 => {
             Outcome::Pass(Pass::UnsupportedExpected { label: l.clone() })
         }
-        (L::Accepted { .. }, D::Unsupported(l), _) => {
-            Outcome::Fail(Fail::UnsupportedUnexpected { label: l.clone() })
-        }
-        (L::Refused { .. }, D::Unsupported(l), None) => {
+        (L::Refused { .. }, D::Unsupported(l), Some(f)) if *l == f.0 => {
             Outcome::Pass(Pass::RefuseUnsupported { label: l.clone() })
         }
-        (L::Refused { .. }, D::Unsupported(_), Some(f))
-        | (_, D::Accepted | D::Phase2Rejected | D::Refused { .. }, Some(f)) => {
+        (_, D::Unsupported(l), _) => {
+            Outcome::Fail(Fail::UnsupportedUnexpected { label: l.clone() })
+        }
+        (_, D::Accepted | D::Phase2Rejected | D::Refused { .. }, Some(f)) => {
             Outcome::Fail(Fail::StaleManifest {
                 declared: f.to_string(),
                 dolos: dolos.to_string(),
@@ -244,13 +243,13 @@ pub fn outcome(
     }
 }
 
-/// The feature a record would be declared unsupported for, from a ledger that accepted it and a Dolos that named it unsupported.
-pub fn declares(ledger: &LedgerOutcome, dolos: &DolosVerdict) -> Option<Feature> {
-    match (ledger, dolos) {
-        (LedgerOutcome::Accepted { .. }, DolosVerdict::Unsupported(label)) => {
-            Some(Feature(label.clone()))
+/// The feature a record would be declared unsupported for, from a Dolos that named it unsupported.
+pub fn declares(dolos: &DolosVerdict) -> Option<Feature> {
+    match dolos {
+        DolosVerdict::Unsupported(label) => Some(Feature(label.clone())),
+        DolosVerdict::Accepted | DolosVerdict::Phase2Rejected | DolosVerdict::Refused { .. } => {
+            None
         }
-        _ => None,
     }
 }
 
@@ -845,22 +844,23 @@ mod tests {
     }
 
     #[test]
-    fn a_declared_record_the_ledger_refuses_is_a_stale_manifest() {
+    fn a_record_the_ledger_refuses_passes_unsupported_only_under_its_declared_label() {
         let unsupported = DolosVerdict::Unsupported("witness fields".into());
         let ledger = refused("MissingVKeyWitnessesUTXOW");
         assert_eq!(
-            outcome(&ledger, &unsupported, None),
+            outcome(&ledger, &unsupported, Some(&feature("witness fields"))),
             Outcome::Pass(Pass::RefuseUnsupported {
                 label: "witness fields".into()
             })
         );
-        assert_eq!(
-            outcome(&ledger, &unsupported, Some(&feature("witness fields"))),
-            Outcome::Fail(Fail::StaleManifest {
-                declared: "witness fields".into(),
-                dolos: "unsupported[witness fields]".into()
-            })
-        );
+        for declared in [None, Some(&feature("pointer address"))] {
+            assert_eq!(
+                outcome(&ledger, &unsupported, declared),
+                Outcome::Fail(Fail::UnsupportedUnexpected {
+                    label: "witness fields".into()
+                })
+            );
+        }
     }
 
     #[test]
@@ -1033,15 +1033,12 @@ mod tests {
     }
 
     #[test]
-    fn only_an_accepted_record_dolos_names_unsupported_is_declared() {
+    fn only_a_record_dolos_names_unsupported_is_declared() {
         let unsupported = DolosVerdict::Unsupported("non-vkey witnesses".into());
-        assert_eq!(declares(&refused("BadInputsUTxO"), &unsupported), None);
-        assert_eq!(declares(&accepted(), &DolosVerdict::Accepted), None);
-        assert_eq!(declares(&accepted(), &input_refusal()), None);
-        assert_eq!(
-            declares(&accepted(), &unsupported),
-            Some(feature("non-vkey witnesses"))
-        );
+        assert_eq!(declares(&DolosVerdict::Accepted), None);
+        assert_eq!(declares(&DolosVerdict::Phase2Rejected), None);
+        assert_eq!(declares(&input_refusal()), None);
+        assert_eq!(declares(&unsupported), Some(feature("non-vkey witnesses")));
     }
 
     #[test]

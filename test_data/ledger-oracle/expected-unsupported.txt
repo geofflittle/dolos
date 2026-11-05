@@ -1,0 +1,7 @@
+supp#96 witness fields
+supp#97 witness fields
+supp#100 body fields
+supp#101 body fields
+supp#102 duplicate inputs
+supp#110 output fields
+supp#112 auxiliary fields
