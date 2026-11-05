@@ -114,10 +114,10 @@ index 8825dbf3..7f39d2e2 100644
          .concat(),
      )
 diff --git a/pallas-validate/src/phase1/dijkstra.rs b/pallas-validate/src/phase1/dijkstra.rs
-index 9c28d69f..9343343b 100644
+index eb9e839a..411f17ca 100644
 --- a/pallas-validate/src/phase1/dijkstra.rs
 +++ b/pallas-validate/src/phase1/dijkstra.rs
-@@ -133,6 +133,11 @@ pub(super) fn validate_dijkstra_tx_inner<S: DijkstraLedgerState + ?Sized>(
+@@ -136,6 +136,11 @@ pub(super) fn validate_dijkstra_tx_inner<S: DijkstraLedgerState + ?Sized>(
          check_contexts(&level, &languages, utxos)?;
          output_coin = add(output_coin, check_outputs(&sb.outputs, pp, network_id)?)?;
          check_signatures(w, &encode(&sub.sub_transaction_body)?, sub_keys)?;
@@ -129,7 +129,7 @@ index 9c28d69f..9343343b 100644
      }
      let spending = check_inputs(&b.inputs, utxos, &mut spent, &mut keys)?;
      consumed = add(consumed, spending)?;
-@@ -169,6 +174,11 @@ pub(super) fn validate_dijkstra_tx_inner<S: DijkstraLedgerState + ?Sized>(
+@@ -172,6 +177,11 @@ pub(super) fn validate_dijkstra_tx_inner<S: DijkstraLedgerState + ?Sized>(
          check_assets(b.inputs.iter(), b.outputs.iter(), b.mint.iter(), utxos)?;
      }
      check_signatures(&tx.transaction_witness_set, &encode(b)?, keys)?;
@@ -141,7 +141,7 @@ index 9c28d69f..9343343b 100644
      check_contexts(&level, &provided.languages, utxos)?;
      Ok(delta)
  }
-@@ -308,7 +318,7 @@ fn declared_units(tx: &BlockTransaction<'_>) -> Result<(u64, u64), ValidationErr
+@@ -309,7 +319,7 @@ fn declared_units(tx: &BlockTransaction<'_>) -> Result<(u64, u64), ValidationErr
          .map(|sub| &sub.transaction_witness_set);
      let mut units = (0, 0);
      for (_, value) in std::iter::once(&tx.transaction_witness_set)
@@ -150,7 +150,7 @@ index 9c28d69f..9343343b 100644
          .flat_map(|w| w.redeemer.iter())
          .flat_map(|x| x.iter())
      {
-@@ -462,6 +472,12 @@ fn spender(output: &MultiEraOutput<'_>) -> Result<Spender, ValidationError> {
+@@ -463,6 +473,12 @@ pub(crate) fn spender(output: &MultiEraOutput<'_>) -> Result<Spender, Validation
              ShelleyPaymentPart::Key(key) => Spender::Key(*key),
              ShelleyPaymentPart::Script(hash) => Spender::Script(*hash),
          }),
@@ -163,7 +163,7 @@ index 9c28d69f..9343343b 100644
          Address::Byron(address) => Ok(Spender::Key(
              byron_payload(&address)
                  .map_err(|_| PostAlonzo(InputDecoding))?
-@@ -526,7 +542,9 @@ fn check_signatures(w: &WitnessSet<'_>, body: &[u8], mut required: Keys) -> Vali
+@@ -527,7 +543,9 @@ fn check_signatures(w: &WitnessSet<'_>, body: &[u8], mut required: Keys) -> Vali
          {
              return Err(PostAlonzo(VKWrongSignature));
          }
@@ -174,7 +174,7 @@ index 9c28d69f..9343343b 100644
      }
      if !required.is_empty() {
          return Err(PostAlonzo(VKWitnessMissing));
-@@ -549,6 +567,9 @@ fn check_outputs(
+@@ -550,6 +568,9 @@ fn check_outputs(
      for output in outputs {
          let view = MultiEraOutput::from_dijkstra(output);
          let coin = view.value().coin();
@@ -184,7 +184,7 @@ index 9c28d69f..9343343b 100644
          if let Some(script) = view.multi_era_script_ref() {
              check_new_script(&script)?;
          }
-@@ -676,7 +697,10 @@ fn check_witness_fields(w: &KeepRaw<'_, WitnessSet<'_>>) -> ValidationResult {
+@@ -677,7 +698,10 @@ fn check_witness_fields(w: &KeepRaw<'_, WitnessSet<'_>>) -> ValidationResult {
      }
      let mut roots = HashSet::new();
      for x in w.bootstrap_witness.iter().flat_map(|x| x.iter()) {
@@ -196,7 +196,7 @@ index 9c28d69f..9343343b 100644
              return Err(DijkstraMalformed("bootstrap witness"));
          }
          if !roots.insert(super::conway::bootstrap_wit_root(x)) {
-@@ -707,6 +731,15 @@ fn check_witness_fields(w: &KeepRaw<'_, WitnessSet<'_>>) -> ValidationResult {
+@@ -708,6 +732,15 @@ fn check_witness_fields(w: &KeepRaw<'_, WitnessSet<'_>>) -> ValidationResult {
  }
  fn check_sub_supported(tx: &SubTransaction<'_>) -> ValidationResult {
      let b = &tx.sub_transaction_body;
@@ -212,17 +212,17 @@ index 9c28d69f..9343343b 100644
      let raw = encode(b)?;
      let mut allowed = vec![0, 1, 3, 8, 15];
      for (key, present) in [
-@@ -1104,6 +1137,9 @@ fn check_collateral(
+@@ -1099,6 +1132,9 @@ fn check_collateral(
          let output = utxos
              .get(&MultiEraInput::from_alonzo_compatible(input))
              .ok_or(PostAlonzo(CollateralNotInUTxO))?;
 +        if pallas_crypto::oracle_plant("byron-out") {
 +            payment(output)?;
 +        }
-         let Spender::Key(key) = spender(output)? else {
-             return Err(PostAlonzo(CollateralNotVKeyLocked));
-         };
-@@ -1313,6 +1349,14 @@ fn reference_fee(mut bytes: u64, p: &DijkstraProtParams) -> Result<u64, Validati
+         match spender(output)? {
+             Spender::Key(key) => {
+                 keys.insert(key);
+@@ -1316,6 +1352,14 @@ fn reference_fee(mut bytes: u64, p: &DijkstraProtParams) -> Result<u64, Validati
      u64::try_from(total.0 / total.1).map_err(|_| PostAlonzo(NegativeValue))
  }
  
@@ -237,7 +237,7 @@ index 9c28d69f..9343343b 100644
  fn check_auxiliary(
      hash: Option<Hash<32>>,
      auxiliary: &Nullable<KeepRaw<'_, AuxiliaryData>>,
-@@ -1573,6 +1617,11 @@ fn check_new_script(script: &MultiEraScriptRef<'_>) -> ValidationResult {
+@@ -1576,6 +1620,11 @@ fn check_new_script(script: &MultiEraScriptRef<'_>) -> ValidationResult {
      match script {
          MultiEraScriptRef::Dijkstra(s) => match s.as_ref() {
              ScriptRef::NativeScript(_) => Ok(()),
@@ -250,10 +250,10 @@ index 9c28d69f..9343343b 100644
              ScriptRef::PlutusV2Script(s) => well_formed_plutus(&Language::PlutusV2, s.as_ref()),
              ScriptRef::PlutusV3Script(s) => well_formed_plutus(&Language::PlutusV3, s.as_ref()),
 diff --git a/pallas-validate/src/phase1/dijkstra_ledger.rs b/pallas-validate/src/phase1/dijkstra_ledger.rs
-index bdc943d5..5d07a40c 100644
+index 8773d5b6..63fcdee8 100644
 --- a/pallas-validate/src/phase1/dijkstra_ledger.rs
 +++ b/pallas-validate/src/phase1/dijkstra_ledger.rs
-@@ -97,7 +97,11 @@ impl<'a> Level<'a> {
+@@ -99,7 +99,11 @@ impl<'a> Level<'a> {
              .flat_map(|x| x.iter())
              .map(|(a, c)| (a, *c))
              .collect();
@@ -266,7 +266,7 @@ index bdc943d5..5d07a40c 100644
          ordered
      }
  }
-@@ -582,7 +586,11 @@ fn certificate<S: DijkstraLedgerState + ?Sized>(
+@@ -584,7 +588,11 @@ fn certificate<S: DijkstraLedgerState + ?Sized>(
                  return Err(DijkstraInvalidCertificate("account balance is not zero"));
              }
              state.delta.accounts.insert(c.clone(), None);
@@ -280,23 +280,23 @@ index bdc943d5..5d07a40c 100644
          Certificate::StakeDelegation(c, pool) => {
              registered(state, c)?;
 diff --git a/pallas-validate/src/phase2/dijkstra.rs b/pallas-validate/src/phase2/dijkstra.rs
-index d2f71ab6..ffbaf729 100644
+index 4f1e3ad2..b08b2cfd 100644
 --- a/pallas-validate/src/phase2/dijkstra.rs
 +++ b/pallas-validate/src/phase2/dijkstra.rs
-@@ -60,14 +60,15 @@ impl LegacyContextData for ContextOutput {
+@@ -71,14 +71,15 @@ impl LegacyContextData for ContextOutput {
              Some(c::DatumOption::Hash(hash)) => Some(*hash),
              _ => None,
          };
 -        wrap_multiple_with_constr(
 -            0,
 -            vec![
--                self.address.to_plutus_data(),
+-                self.address_data(),
 -                WithZeroAdaAsset(&self.value).to_plutus_data(),
 -                datum_hash.to_plutus_data(),
 -            ],
 -        )
 +        let mut fields = vec![
-+            self.address.to_plutus_data(),
++            self.address_data(),
 +            WithZeroAdaAsset(&self.value).to_plutus_data(),
 +            datum_hash.to_plutus_data(),
 +        ];
@@ -307,8 +307,8 @@ index d2f71ab6..ffbaf729 100644
      }
  
      fn to_plutus_data_v2(&self) -> c::PlutusData {
-@@ -77,7 +78,11 @@ impl LegacyContextData for ContextOutput {
-                 self.address.to_plutus_data(),
+@@ -88,7 +89,11 @@ impl LegacyContextData for ContextOutput {
+                 self.address_data(),
                  WithZeroAdaAsset(&self.value).to_plutus_data(),
                  self.datum.to_plutus_data(),
 -                self.script.to_plutus_data(),
@@ -320,14 +320,13 @@ index d2f71ab6..ffbaf729 100644
              ],
          )
      }
-@@ -129,7 +134,37 @@ fn context_output(output: &MultiEraOutput<'_>, _reference: bool) -> Result<Conte
-     if !matches!(address, Address::Shelley(_)) {
-         return unsupported("output address (requires Shelley)");
-     }
+@@ -137,7 +142,36 @@ impl LegacyContextData for ContextInput {
+ /// The fields of an output a script context holds, with any reference script reduced to the hash of its original bytes.
+ fn context_output(output: &MultiEraOutput<'_>, _reference: bool) -> Result<ContextOutput, Error> {
+     let address = context_address(output.address()?).map_err(|x| Error::DijkstraInvalid(x.0))?;
 -    let script = output.multi_era_script_ref().map(|s| s.hash());
 +    if pallas_crypto::oracle_plant("pointer-refused")
-+        && let Address::Shelley(a) = &address
-+        && let pallas_addresses::ShelleyDelegationPart::Pointer(_) = a.delegation()
++        && let pallas_addresses::ShelleyDelegationPart::Pointer(_) = address.delegation()
 +    {
 +        return unsupported("pointer address in a V3 script context");
 +    }
@@ -359,14 +358,14 @@ index d2f71ab6..ffbaf729 100644
      Ok(ContextOutput {
          address,
          value: output.value().into_conway(),
-@@ -361,12 +396,23 @@ pub(super) fn eval_tx_with_mode(
+@@ -369,12 +403,23 @@ pub(super) fn eval_tx_with_mode(
              let args: Vec<_> = run.args.iter().collect();
              let (result, calls) =
                  evaluator::eval_native(run.language, &run.script, &args, &run.costs, run.budget)?;
 +            let mut units = result.units;
 +            units.mem += u64::from(pallas_crypto::oracle_plant("eval-mem"));
 +            units.steps += u64::from(pallas_crypto::oracle_plant("eval-steps"));
-             let result = TxEvalResult {
+             let result = MultiEraTxEvalResult {
 -                sub_transaction: run.sub,
 -                tag: run.tag.into(),
 -                index: run.index,
@@ -388,7 +387,7 @@ index d2f71ab6..ffbaf729 100644
                  logs: result.logs,
                  failure_message: result.failure.map(|f| f.message),
              };
-@@ -699,7 +745,9 @@ impl Legacy {
+@@ -705,7 +750,9 @@ impl Legacy {
                  })
                  .collect(),
          };
@@ -399,36 +398,47 @@ index d2f71ab6..ffbaf729 100644
          signatories.dedup();
          Ok(Legacy {
              mint: MintValue {
-@@ -845,7 +893,13 @@ pub(super) fn runs(
+@@ -856,7 +903,18 @@ pub(super) fn runs(
                          purpose.conway()?.1,
                      ))
                  }
 -                (n::Language::PlutusV3, Part::Top(tx)) => {
-+                (n::Language::PlutusV4, _)
-+                    if matches!(part, Part::Sub(..))
-+                        || !pallas_crypto::oracle_plant("v4-v3-context") =>
++                (n::Language::PlutusV4, Part::Top(_))
++                    if !pallas_crypto::oracle_plant("v4-v3-context") =>
 +                {
-+                    vec![context.script_context(key, purpose, &r.data, datum, &batch)?]
++                    vec![context.script_context(
++                        key,
++                        purpose,
++                        &r.data,
++                        datum,
++                        Reach::Top(&batch),
++                    )?]
 +                }
 +                (n::Language::PlutusV3 | n::Language::PlutusV4, Part::Top(tx)) => {
                      let b = &tx.transaction_body;
                      let x = Legacy::new(b, &context)?;
                      let info = V3TxInfo {
-@@ -873,9 +927,6 @@ pub(super) fn runs(
+@@ -884,15 +942,6 @@ pub(super) fn runs(
                          12,
                      )]
                  }
--                (n::Language::PlutusV4, _) => {
--                    vec![context.script_context(key, purpose, &r.data, datum, &batch)?]
+-                (n::Language::PlutusV4, Part::Top(_)) => {
+-                    vec![context.script_context(
+-                        key,
+-                        purpose,
+-                        &r.data,
+-                        datum,
+-                        Reach::Top(&batch),
+-                    )?]
 -                }
-                 (_, Part::Sub(..)) => return Err(Error::DijkstraInvalid(LEGACY_IN_SUB.0)),
              };
              let model = match language {
+                 n::Language::PlutusV1 => costs.plutus_v1.as_ref(),
 diff --git a/pallas-validate/src/phase2/dijkstra_v4_context.rs b/pallas-validate/src/phase2/dijkstra_v4_context.rs
-index b6d62745..e50d6400 100644
+index 899a3bc0..e32b035e 100644
 --- a/pallas-validate/src/phase2/dijkstra_v4_context.rs
 +++ b/pallas-validate/src/phase2/dijkstra_v4_context.rs
-@@ -212,7 +212,10 @@ impl<'a> Context<'a> {
+@@ -221,7 +221,10 @@ impl<'a> Context<'a> {
              Purpose::Conway(_, ScriptInfo::Proposing(ix, procedure)) => {
                  (5, vec![ix.to_plutus_data(), proposal(procedure)?])
              }
@@ -525,10 +535,10 @@ index 055fcb76..ccff26a1 100644
                          wrap_with_constr(0, reward_account.to_plutus_data()),
                          *amount,
 diff --git a/pallas-validate/src/utils/dijkstra_context.rs b/pallas-validate/src/utils/dijkstra_context.rs
-index 865033b5..1e95efa3 100644
+index 77a20bdf..6e9153fd 100644
 --- a/pallas-validate/src/utils/dijkstra_context.rs
 +++ b/pallas-validate/src/utils/dijkstra_context.rs
-@@ -103,13 +103,16 @@ pub(crate) fn check_translatable(
+@@ -123,13 +123,16 @@ pub(crate) fn check_translatable(
          if b.intervals.is_some_and(|x| !x.is_empty()) {
              return refuse("account balance intervals");
          }

@@ -11,7 +11,7 @@ use ledger_oracle_judge::{
     record::{Record, RecordId, Units},
 };
 use pallas::ledger::traverse::MultiEraRedeemerTag as RedeemerTag;
-use pallas::ledger::validate::phase2::{tx::TxEvalResult, Builtin};
+use pallas::ledger::validate::phase2::{tx::MultiEraTxEvalResult, Builtin};
 use tonic::Request;
 
 use super::{purpose, validate::Group};
@@ -27,7 +27,10 @@ struct Evaluator {
 }
 
 /// The message the EvalTx version `layer` gives in place of a report of `results` when it cannot represent one of them, naming the first.
-fn unrepresentable(layer: Layer, results: &[(TxEvalResult, Vec<Builtin>)]) -> Option<String> {
+fn unrepresentable(
+    layer: Layer,
+    results: &[(MultiEraTxEvalResult, Vec<Builtin>)],
+) -> Option<String> {
     results.iter().find_map(|(r, _)| {
         let redeemer = format!("{:?}[{}]", r.tag, r.index);
         let guarding = matches!(r.tag, RedeemerTag::Guarding);
@@ -42,7 +45,7 @@ fn unrepresentable(layer: Layer, results: &[(TxEvalResult, Vec<Builtin>)]) -> Op
 }
 
 /// The evaluator's answer from its estimate of one transaction.
-fn evaluator(estimate: Result<Vec<(TxEvalResult, Vec<Builtin>)>, ChainError>) -> Evaluator {
+fn evaluator(estimate: Result<Vec<(MultiEraTxEvalResult, Vec<Builtin>)>, ChainError>) -> Evaluator {
     let results = match estimate {
         Ok(results) => results,
         Err(e) => {
@@ -59,7 +62,7 @@ fn evaluator(estimate: Result<Vec<(TxEvalResult, Vec<Builtin>)>, ChainError>) ->
             };
         }
     };
-    let key = |r: &TxEvalResult| RowKey {
+    let key = |r: &MultiEraTxEvalResult| RowKey {
         level: r.sub_transaction.map_or(Level::Top, Level::Sub),
         purpose: purpose(r),
     };

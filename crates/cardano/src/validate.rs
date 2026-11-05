@@ -12,7 +12,9 @@ use pallas::ledger::{
 use pallas_validate::phase1::dijkstra::{
     dijkstra_ledger_effects, validate_dijkstra_tx, validate_dijkstra_tx_with_time,
 };
-use pallas_validate::phase2::{script_context::SlotConfig, tx::TxEvalResult, Builtin};
+use pallas_validate::phase2::{
+    script_context::SlotConfig, tx::MultiEraTxEvalResult, Builtin, MultiEraEvalReport,
+};
 use pallas_validate::utils::{
     dijkstra_state::{DijkstraLedgerOverlay, DijkstraLedgerState},
     CertState, DijkstraProtParams, MultiEraProtocolParameters,
@@ -162,7 +164,7 @@ pub fn evaluate_tx<D: Domain>(
     cbor: &[u8],
     utxos: &MempoolAwareUtxoStore<D>,
     genesis: &Genesis,
-) -> Result<pallas_validate::phase2::EvalReport, ChainError> {
+) -> Result<MultiEraEvalReport, ChainError> {
     let active = crate::load_effective_pparams::<D>(utxos.state())?;
     let tx = decode_submission(submission_era(active.ensure_protocol_version()?)?, cbor)?;
     let pparams = validation_parameters(&active)?;
@@ -177,7 +179,7 @@ pub fn estimate_tx<D: Domain>(
     cbor: &[u8],
     utxos: &MempoolAwareUtxoStore<D>,
     genesis: &Genesis,
-) -> Result<pallas_validate::phase2::EvalReport, ChainError> {
+) -> Result<MultiEraEvalReport, ChainError> {
     let active = crate::load_effective_pparams::<D>(utxos.state())?;
     let tx = decode_submission(submission_era(active.ensure_protocol_version()?)?, cbor)?;
     let pparams = validation_parameters(&active)?;
@@ -189,7 +191,7 @@ pub fn estimate_tx_calls<D: Domain>(
     cbor: &[u8],
     utxos: &MempoolAwareUtxoStore<D>,
     genesis: &Genesis,
-) -> Result<Vec<(TxEvalResult, Vec<Builtin>)>, ChainError> {
+) -> Result<Vec<(MultiEraTxEvalResult, Vec<Builtin>)>, ChainError> {
     let active = crate::load_effective_pparams::<D>(utxos.state())?;
     let tx = decode_submission(submission_era(active.ensure_protocol_version()?)?, cbor)?;
     let pparams = validation_parameters(&active)?;
@@ -224,7 +226,7 @@ fn evaluate_decoded<D: Domain>(
     pparams: &MultiEraProtocolParameters,
     estimate: bool,
     admission_time: Option<&pallas_validate::utils::DijkstraTimeContext>,
-) -> Result<pallas_validate::phase2::EvalReport, ChainError> {
+) -> Result<MultiEraEvalReport, ChainError> {
     if estimate && tx.era() == Era::Dijkstra {
         let estimates = estimate_decoded::<D>(tx, utxos, genesis, pparams, admission_time)?;
         return Ok(estimates.into_iter().map(|(result, _)| result).collect());
@@ -236,7 +238,7 @@ fn evaluate_decoded<D: Domain>(
     if let Some(time) = time {
         pallas_validate::phase2::evaluate_tx_with_time(tx, pparams, &utxos, &time)
     } else {
-        pallas_validate::phase2::evaluate_tx(tx, pparams, &utxos, &slot_config)
+        pallas_validate::phase2::evaluate_multi_era_tx(tx, pparams, &utxos, &slot_config)
     }
     .map_err(evaluation_error)
 }
@@ -247,7 +249,7 @@ fn estimate_decoded<D: Domain>(
     genesis: &Genesis,
     pparams: &MultiEraProtocolParameters,
     admission_time: Option<&pallas_validate::utils::DijkstraTimeContext>,
-) -> Result<Vec<(TxEvalResult, Vec<Builtin>)>, ChainError> {
+) -> Result<Vec<(MultiEraTxEvalResult, Vec<Builtin>)>, ChainError> {
     if !requests_scripts(tx) {
         return Ok(vec![]);
     }

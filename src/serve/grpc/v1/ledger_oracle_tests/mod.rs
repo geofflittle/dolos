@@ -57,7 +57,7 @@ use pallas::{
             ComputeHash as _, Era, MultiEraOutput, MultiEraRedeemerTag as RedeemerTag, MultiEraTx,
             OriginalHash as _,
         },
-        validate::phase2::{audited_builtins, tx::TxEvalResult, Builtin},
+        validate::phase2::{audited_builtins, tx::MultiEraTxEvalResult, Builtin},
     },
 };
 use seed::SeedPoint;
@@ -385,7 +385,7 @@ fn tag_number(tag: &RedeemerTag) -> u64 {
 }
 
 /// The purpose of one evaluated redeemer in the ledger's terms.
-fn purpose(r: &TxEvalResult) -> Purpose {
+fn purpose(r: &MultiEraTxEvalResult) -> Purpose {
     Purpose {
         tag: tag_number(&r.tag),
         index: r.index.into(),
@@ -394,7 +394,7 @@ fn purpose(r: &TxEvalResult) -> Purpose {
 
 #[test]
 fn guarding_result_uses_ledger_tag_and_original_index() {
-    let result = TxEvalResult {
+    let result = MultiEraTxEvalResult {
         sub_transaction: None,
         tag: RedeemerTag::Guarding,
         index: 9,
@@ -2594,6 +2594,17 @@ fn a_dolos_refusal_is_named_by_its_kind_and_classed_by_its_variant() {
         (
             C::Phase1ValidationRejected(V::PostAlonzo(P::InputNotInUTxO)),
             expected("InputNotInUTxO", inputs),
+        ),
+        (
+            C::Phase1ValidationRejected(V::PostAlonzo(P::CollateralNotInUTxO)),
+            expected("CollateralNotInUTxO", inputs),
+        ),
+        (
+            C::Phase1ValidationRejected(V::PostAlonzo(P::CollateralMissing)),
+            expected(
+                "CollateralMissing",
+                DolosClass::Rule(RefusalClass::Collateral),
+            ),
         ),
         (
             C::Phase1ValidationRejected(V::PostAlonzo(P::UnsupportedPlutusLanguage)),

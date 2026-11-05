@@ -3,11 +3,11 @@
 use super::*;
 use pallas::ledger::{
     primitives::ExUnits as PallasUnits, traverse::MultiEraRedeemerTag as RedeemerTag,
-    validate::phase2::tx::TxEvalResult,
+    validate::phase2::tx::MultiEraTxEvalResult,
 };
 
-fn entry(tag: RedeemerTag, index: u32, success: bool) -> TxEvalResult {
-    TxEvalResult {
+fn entry(tag: RedeemerTag, index: u32, success: bool) -> MultiEraTxEvalResult {
+    MultiEraTxEvalResult {
         sub_transaction: None,
         tag,
         index,

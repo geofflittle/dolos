@@ -62,7 +62,7 @@ fn set_protocol(domain: &ToyDomain, version: (u64, u64)) {
 fn evaluate(
     domain: &ToyDomain,
     bytes: &[u8],
-) -> Result<pallas::ledger::validate::phase2::EvalReport, ChainError> {
+) -> Result<pallas::ledger::validate::phase2::MultiEraEvalReport, ChainError> {
     dolos_cardano::validate::evaluate_tx(
         bytes,
         &MempoolAwareUtxoStore::<ToyDomain>::new(domain.state(), domain.mempool()),

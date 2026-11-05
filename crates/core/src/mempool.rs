@@ -1,7 +1,7 @@
 use super::*;
 use crate::TagDimension;
 
-pub use pallas::ledger::validate::phase2::EvalReport;
+pub use pallas::ledger::validate::phase2::MultiEraEvalReport as EvalReport;
 
 use futures_core::Stream;
 use std::convert::Infallible;

@@ -28,7 +28,7 @@ use pallas::{
         },
         traverse::MultiEraBlock,
         validate::{
-            phase2::{tx::TxEvalResult, Builtin},
+            phase2::{tx::MultiEraTxEvalResult, Builtin},
             utils::{DijkstraTimeError, PostAlonzoError, ValidationError},
         },
     },
@@ -224,7 +224,7 @@ impl Group {
     pub(super) fn estimate(
         &self,
         tx: &[u8],
-    ) -> Result<Vec<(TxEvalResult, Vec<Builtin>)>, ChainError> {
+    ) -> Result<Vec<(MultiEraTxEvalResult, Vec<Builtin>)>, ChainError> {
         dolos_cardano::validate::estimate_tx_calls(tx, &self.utxos(), &self.domain.genesis)
     }
 
@@ -363,7 +363,10 @@ fn post_alonzo_class(e: &PostAlonzoError) -> DolosClass {
     use PostAlonzoError as P;
     use RefusalClass as C;
     let class = match e {
-        P::InputNotInUTxO | P::ReferenceInputNotInUTxO | P::TxInsEmpty => C::Inputs,
+        P::InputNotInUTxO
+        | P::ReferenceInputNotInUTxO
+        | P::CollateralNotInUTxO
+        | P::TxInsEmpty => C::Inputs,
         P::PreservationOfValue
         | P::NegativeValue
         | P::MinLovelaceUnreached
@@ -384,7 +387,6 @@ fn post_alonzo_class(e: &PostAlonzoError) -> DolosClass {
         P::BlockPrecedesValInt | P::BlockExceedsValInt => C::Interval,
         P::TxWrongNetworkID | P::OutputWrongNetworkID => C::Network,
         P::CollateralMissing
-        | P::CollateralNotInUTxO
         | P::CollateralMinLovelace
         | P::NonLovelaceCollateral
         | P::TooManyCollaterals
