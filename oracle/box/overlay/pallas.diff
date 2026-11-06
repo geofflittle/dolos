@@ -89,10 +89,10 @@ index 245103afd..ebec2f4b5 100644
                      MultiEraNativeScript::from_dijkstra(s).hash()
                  }
 diff --git a/pallas-validate/src/phase1/conway.rs b/pallas-validate/src/phase1/conway.rs
-index 8825dbf32..7f39d2e29 100644
+index 08356a15d..617d8f882 100644
 --- a/pallas-validate/src/phase1/conway.rs
 +++ b/pallas-validate/src/phase1/conway.rs
-@@ -1570,12 +1570,19 @@ pub(crate) const BOOTSTRAP_ROOT_HEADER: [u8; 6] = [0x83, 0x00, 0x82, 0x00, 0x58,
+@@ -1550,12 +1550,19 @@ pub(crate) const BOOTSTRAP_ROOT_HEADER: [u8; 6] = [0x83, 0x00, 0x82, 0x00, 0x58,
  
  /// The key hash a bootstrap witness provides, over its key, chain code and attribute bytes as sent.
  pub(crate) fn bootstrap_wit_root(wit: &BootstrapWitness) -> AddressId {
@@ -310,23 +310,23 @@ index 3e99566b4..baf933ee4 100644
              ScriptRef::PlutusV2Script(s) => well_formed_plutus(&Language::PlutusV2, s.as_ref()),
              ScriptRef::PlutusV3Script(s) => well_formed_plutus(&Language::PlutusV3, s.as_ref()),
 diff --git a/pallas-validate/src/phase1/dijkstra_ledger.rs b/pallas-validate/src/phase1/dijkstra_ledger.rs
-index 282420c78..4ed729c44 100644
+index e185911e4..82160d60e 100644
 --- a/pallas-validate/src/phase1/dijkstra_ledger.rs
 +++ b/pallas-validate/src/phase1/dijkstra_ledger.rs
 @@ -99,7 +99,11 @@ impl<'a> Level<'a> {
              .flat_map(|x| x.iter())
              .map(|(a, c)| (a, *c))
              .collect();
--        ordered.sort_by(|(x, _), (y, _)| account_order(x).cmp(&account_order(y)));
+-        ordered.sort_by(|(x, _), (y, _)| cmp_reward_accounts(x, y));
 +        if pallas_crypto::oracle_plant("withdrawal-order") {
 +            ordered.sort_by_key(|(raw, _)| raw.to_vec());
 +        } else {
-+            ordered.sort_by(|(x, _), (y, _)| account_order(x).cmp(&account_order(y)));
++            ordered.sort_by(|(x, _), (y, _)| cmp_reward_accounts(x, y));
 +        }
          ordered
      }
  }
-@@ -508,7 +512,11 @@ fn register<S: DijkstraLedgerState + ?Sized>(
+@@ -499,7 +503,11 @@ fn register<S: DijkstraLedgerState + ?Sized>(
  ) -> ValidationResult {
      if amount != pp.key_deposit {
          return Err(DijkstraInvalidCertificate(
@@ -339,7 +339,7 @@ index 282420c78..4ed729c44 100644
          ));
      }
      if state.account(credential)?.is_some() {
-@@ -596,7 +604,13 @@ fn certificate<S: DijkstraLedgerState + ?Sized>(
+@@ -587,7 +595,13 @@ fn certificate<S: DijkstraLedgerState + ?Sized>(
                  AccountFailure::StakeCredentialNotRegistered,
              ))?;
              if *refund != account.deposit {
@@ -354,7 +354,7 @@ index 282420c78..4ed729c44 100644
              }
              if account.balance != 0 {
                  return Err(DijkstraInvalidCertificate(
-@@ -604,7 +618,11 @@ fn certificate<S: DijkstraLedgerState + ?Sized>(
+@@ -595,7 +609,11 @@ fn certificate<S: DijkstraLedgerState + ?Sized>(
                  ));
              }
              state.delta.accounts.insert(c.clone(), None);
@@ -368,7 +368,7 @@ index 282420c78..4ed729c44 100644
          Certificate::StakeDelegation(c, pool) => {
              registered(state, c)?;
 diff --git a/pallas-validate/src/phase2/dijkstra.rs b/pallas-validate/src/phase2/dijkstra.rs
-index 965f82598..1dde98c00 100644
+index 965f82598..6dc90e5b2 100644
 --- a/pallas-validate/src/phase2/dijkstra.rs
 +++ b/pallas-validate/src/phase2/dijkstra.rs
 @@ -70,14 +70,15 @@ impl LegacyContextData for ContextOutput {
@@ -486,7 +486,7 @@ index 965f82598..1dde98c00 100644
          signatories.dedup();
          Ok(Legacy {
              mint: MintValue {
-@@ -782,7 +829,29 @@ pub(super) fn runs(
+@@ -784,7 +831,29 @@ pub(super) fn runs(
          if scope.expected.is_empty() && scope.redeemers.is_empty() {
              continue;
          }
@@ -517,7 +517,7 @@ index 965f82598..1dde98c00 100644
          if estimate
              && (execution_limit.mem > i64::MAX as u64 || execution_limit.steps > i64::MAX as u64)
          {
-@@ -807,7 +876,7 @@ pub(super) fn runs(
+@@ -809,7 +878,7 @@ pub(super) fn runs(
                      .collect()
              };
              let args = match (language, part) {
@@ -526,7 +526,7 @@ index 965f82598..1dde98c00 100644
                      vec![context.script_context(key, purpose, &r.data, datum, &batch)?]
                  }
                  (n::Language::PlutusV1, Part::Top(tx)) => {
-@@ -853,14 +922,19 @@ pub(super) fn runs(
+@@ -855,14 +924,19 @@ pub(super) fn runs(
                          purpose.conway()?.1,
                      ))
                  }
@@ -549,10 +549,10 @@ index 965f82598..1dde98c00 100644
                          certificates: context.certificates.clone(),
                          withdrawals: x.withdrawals.into(),
 diff --git a/pallas-validate/src/phase2/dijkstra_v4_context.rs b/pallas-validate/src/phase2/dijkstra_v4_context.rs
-index d711513e9..00a4d1263 100644
+index 327b1a07d..983318a8b 100644
 --- a/pallas-validate/src/phase2/dijkstra_v4_context.rs
 +++ b/pallas-validate/src/phase2/dijkstra_v4_context.rs
-@@ -139,7 +139,10 @@ impl<'a> Context<'a> {
+@@ -140,7 +140,10 @@ impl<'a> Context<'a> {
          required.sort_by_key(|(credential, _)| credential_order(credential));
          Ok(TxInfo {
              id: level.id.to_plutus_data(),
@@ -564,7 +564,7 @@ index d711513e9..00a4d1263 100644
              inputs: self.inputs.iter().map(input).collect(),
              reference_inputs: self.reference_inputs.iter().map(input).collect(),
              outputs: self.outputs.iter().map(output).collect(),
-@@ -209,7 +212,10 @@ impl<'a> Context<'a> {
+@@ -210,7 +213,10 @@ impl<'a> Context<'a> {
              Purpose::Conway(_, ScriptInfo::Proposing(ix, procedure)) => {
                  (5, vec![ix.to_plutus_data(), proposal(procedure)?])
              }
@@ -575,7 +575,7 @@ index d711513e9..00a4d1263 100644
 +            ),
          })
      }
-
+ 
 diff --git a/pallas-validate/src/phase2/error.rs b/pallas-validate/src/phase2/error.rs
 index b080af86f..ad8436d8c 100644
 --- a/pallas-validate/src/phase2/error.rs
@@ -592,7 +592,7 @@ index b080af86f..ad8436d8c 100644
          ReferenceScriptLanguage => "reference script language (requires V3)",
      }
 diff --git a/pallas-validate/src/phase2/mod.rs b/pallas-validate/src/phase2/mod.rs
-index fa882c7a..93f0d52b 100644
+index fa882c7a6..93f0d52b4 100644
 --- a/pallas-validate/src/phase2/mod.rs
 +++ b/pallas-validate/src/phase2/mod.rs
 @@ -88,11 +88,44 @@ pub fn redeemer_arguments(
