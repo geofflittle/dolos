@@ -4,17 +4,24 @@ use std::collections::BTreeMap;
 
 use dolos_core::{ChainError, DomainError};
 use ledger_oracle_judge::{
+    cbor::Purpose,
+    context::{self, ContextTally, Listing, PallasContext, PallasContexts},
     eval::{
         self, named_in_message, wire_purpose, Answer, DolosAnswer, EvalTally, Layer, Level,
         Malformed, Refusal, RowKey, RowVerdict, WireEval, WireFee,
     },
     record::{Record, RecordId, Units},
 };
+use pallas::codec::minicbor;
+use pallas::ledger::primitives::dijkstra::Language;
 use pallas::ledger::traverse::MultiEraRedeemerTag as RedeemerTag;
-use pallas::ledger::validate::phase2::{tx::MultiEraTxEvalResult, Builtin};
+use pallas::ledger::validate::phase2::{
+    tx::{MultiEraTxEvalResult, RedeemerArguments},
+    Builtin,
+};
 use tonic::Request;
 
-use super::{purpose, validate::Group};
+use super::{purpose, tag_number, validate::Group};
 
 /// The evaluator's answer for one transaction, with the builtins each redeemer called and what an EvalTx response says in its place.
 struct Evaluator {
@@ -44,15 +51,20 @@ fn unrepresentable(
     })
 }
 
+/// The refusal the known lists name an evaluation error by.
+fn refusal(e: &ChainError) -> Refusal {
+    Refusal::new(&match e {
+        ChainError::Phase2EvaluationUnsupported(unsupported) => unsupported.0.to_string(),
+        other => other.to_string(),
+    })
+}
+
 /// The evaluator's answer from its estimate of one transaction.
 fn evaluator(estimate: Result<Vec<(MultiEraTxEvalResult, Vec<Builtin>)>, ChainError>) -> Evaluator {
     let results = match estimate {
         Ok(results) => results,
         Err(e) => {
-            let refusal = Refusal::new(&match &e {
-                ChainError::Phase2EvaluationUnsupported(unsupported) => unsupported.0.to_string(),
-                other => other.to_string(),
-            });
+            let refusal = refusal(&e);
             let text = format!("{:#?}", DomainError::from(e));
             return Evaluator {
                 answer: Ok(DolosAnswer::Refused(refusal.clone())),
@@ -191,4 +203,46 @@ pub(super) async fn judge_record(
         _ => None,
     });
     ran.flatten().copied().collect()
+}
+
+/// The contexts the evaluator builds for one transaction, keyed by row.
+fn pallas_contexts(arguments: Result<Vec<RedeemerArguments>, ChainError>) -> PallasContexts {
+    let arguments = match arguments {
+        Ok(arguments) => arguments,
+        Err(e) => return PallasContexts::Refused(refusal(&e)),
+    };
+    let rows = arguments.into_iter().map(|r| {
+        let key = RowKey {
+            level: r.sub_transaction.map_or(Level::Top, Level::Sub),
+            purpose: Purpose {
+                tag: tag_number(&r.tag),
+                index: r.index.into(),
+            },
+        };
+        let language = match r.language {
+            Language::PlutusV1 => context::Language::V1,
+            Language::PlutusV2 => context::Language::V2,
+            Language::PlutusV3 => context::Language::V3,
+            Language::PlutusV4 => context::Language::V4,
+        };
+        let args = r.args.iter().map(|arg| {
+            minicbor::to_vec(arg).unwrap_or_else(|e| panic!("encoding a script argument {e}"))
+        });
+        let args = args.collect();
+        (key, PallasContext { language, args })
+    });
+    PallasContexts::built(rows).unwrap_or_else(|key| panic!("the evaluator built {key} twice"))
+}
+
+/// Judges the arguments the evaluator applies each redeemer's script of one record to against the ledger's and the listing the known list gives each row.
+pub(super) fn judge_context(
+    group: &Group,
+    id: RecordId,
+    record: &Record,
+    listed: &BTreeMap<RowKey, Listing>,
+    tally: &mut ContextTally,
+) {
+    let ledger = context::ledger_contexts(record);
+    let pallas = pallas_contexts(group.arguments(&record.tx.0));
+    tally.add(id, &context::judge_tx(&ledger, &pallas, listed));
 }

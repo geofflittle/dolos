@@ -3,6 +3,7 @@
 pub mod accounts;
 pub mod cbor;
 pub mod compare;
+pub mod context;
 pub mod corpus;
 pub mod cost;
 pub mod eval;
