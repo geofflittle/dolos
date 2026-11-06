@@ -375,6 +375,42 @@ impl fmt::Display for Judged {
     }
 }
 
+/// One agreeing record whose corpus compared each state tally but the ones named in `uncompared`.
+#[cfg(test)]
+fn judged_part(uncompared: &[&str]) -> Judged {
+    let mut judged = Judged::default();
+    judged.validation.agree = 1;
+    let state = &mut judged.state;
+    let tallies = [
+        ("utxo", &mut state.utxo),
+        ("as_output", &mut state.as_output),
+        ("accounts", &mut state.accounts),
+        ("undo", &mut state.undo),
+        ("params", &mut state.params),
+        ("readtx", &mut state.readtx),
+        ("script", &mut state.script),
+        ("datum", &mut state.datum),
+    ];
+    for (name, tally) in tallies {
+        if !uncompared.contains(&name) {
+            tally.add(true, String::new);
+        }
+    }
+    judged
+}
+
+#[test]
+fn a_selection_passes_when_its_corpus_parts_together_compare_each_state_tally() {
+    let mut selection = judged_part(&["accounts", "datum"]);
+    assert!(!selection.pass());
+    selection.merge(judged_part(&["script"]));
+    assert!(selection.pass());
+
+    let mut neither = judged_part(&["accounts"]);
+    neither.merge(judged_part(&["accounts", "datum"]));
+    assert!(!neither.pass());
+}
+
 /// The redeemer tag number the ledger writes in a purpose.
 fn tag_number(tag: &RedeemerTag) -> u64 {
     match tag {
@@ -1864,10 +1900,7 @@ async fn ledger_oracle_records() {
     let list = std::env::var("ORACLE_RECORDS").unwrap_or_else(|e| panic!("ORACLE_RECORDS {e}"));
     let named = named_records(&list);
     let committed = Manifests::committed();
-    let mut pass = true;
-    let mut candidates = Candidates::default();
-    let mut evaluations = EvalTally::default();
-    let mut rule_tally = RuleTally::default();
+    let mut selection = Judged::default();
     for kind in CorpusKind::ALL {
         let corpus = load(kind).select(&named).unwrap_or_else(|e| panic!("{e}"));
         let held = corpus.kept().flat_map(|run| {
@@ -1881,23 +1914,19 @@ async fn ledger_oracle_records() {
         println!("{corpus}");
         let tallies = judge(&corpus, &manifests, &Edits::default()).await;
         println!("{tallies}");
-        pass &= tallies.pass();
-        candidates.declared.extend(tallies.candidates.declared);
-        let known = tallies.candidates.known.records;
-        candidates.known.records.extend(known);
-        evaluations.merge(tallies.eval);
-        rule_tally.merge(tallies.rules);
+        selection.merge(tallies);
     }
-    let (lines, rules_pass) = committed.rules.bar(&rule_tally, false);
+    let (lines, rules_pass) = committed.rules.bar(&selection.rules, false);
     for line in lines {
         println!("{line}");
     }
-    pass &= rules_pass;
-    println!("{evaluations}");
-    for line in candidates
+    let pass = selection.pass() && rules_pass;
+    println!("{}", selection.eval);
+    for line in selection
+        .candidates
         .lines()
         .into_iter()
-        .chain(evaluations.candidates())
+        .chain(selection.eval.candidates())
     {
         println!("{line}");
     }
