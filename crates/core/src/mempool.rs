@@ -1,7 +1,7 @@
 use super::*;
 use crate::TagDimension;
 
-pub use pallas::ledger::validate::phase2::MultiEraEvalReport as EvalReport;
+pub use pallas::ledger::validate::phase2::MultiEraEvalReport;
 
 use futures_core::Stream;
 use std::convert::Infallible;
@@ -19,7 +19,7 @@ pub struct MempoolTx {
     pub confirmed_at: Option<ChainPoint>,
 
     // this might be empty if the tx is cloned
-    pub report: Option<EvalReport>,
+    pub report: Option<MultiEraEvalReport>,
 
     /// The effects of the payload, decoded at the first read and shared by
     /// every clone.
@@ -78,7 +78,7 @@ impl Clone for MempoolTx {
 }
 
 impl MempoolTx {
-    pub fn new(hash: TxHash, payload: EraCbor, report: EvalReport) -> Self {
+    pub fn new(hash: TxHash, payload: EraCbor, report: MultiEraEvalReport) -> Self {
         Self {
             hash,
             payload,

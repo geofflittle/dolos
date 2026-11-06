@@ -24,7 +24,7 @@ pub trait SubmitExt: Domain {
         &self,
         chain: &Self::Chain,
         cbor: &[u8],
-    ) -> Result<crate::mempool::EvalReport, DomainError> {
+    ) -> Result<crate::mempool::MultiEraEvalReport, DomainError> {
         let utxos = MempoolAwareUtxoStore::<'_, Self>::new(self.state(), self.mempool());
         Ok(chain.estimate_tx(cbor, &utxos, &self.genesis())?)
     }

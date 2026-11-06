@@ -691,7 +691,7 @@ pub trait ChainLogic: Sized + Send + Sync {
         cbor: &[u8],
         utxos: &MempoolAwareUtxoStore<D>,
         genesis: &Genesis,
-    ) -> Result<mempool::EvalReport, ChainError>;
+    ) -> Result<mempool::MultiEraEvalReport, ChainError>;
 
     /// Validate a transaction against the current ledger state.
     fn validate_tx<D: Domain>(

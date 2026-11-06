@@ -59,7 +59,7 @@ fn event_to_wait_for_tx_response(event: MempoolEvent) -> WaitForTxResponse {
 }
 
 fn tx_eval_to_u5c(
-    eval: Result<dolos_core::mempool::EvalReport, DomainError>,
+    eval: Result<dolos_core::mempool::MultiEraEvalReport, DomainError>,
 ) -> u5c::cardano::TxEval {
     let report = match eval {
         Ok(report) => report,
