@@ -286,7 +286,7 @@ pallas_pin() {
   sed -n 's/^pallas-validate = { git = "[^"]*", rev = "\([0-9a-f]*\)".*/\1/p' "$ROOT/$SCRATCH/Cargo.toml" | head -1
 }
 
-# Checks pallas out at a commit into the scratch pallas tree and points the scratch tree's pallas crates at it.
+# Checks pallas out at a commit, from the cargo git database or else the repository pallas-validate is pinned to, into the scratch pallas tree and points the scratch tree's pallas crates at it.
 pallas_tree() {
   if [ ! -d "$ROOT/$PALLAS/.git" ]; then
     git init -q "$ROOT/$PALLAS" || return
@@ -297,6 +297,10 @@ pallas_tree() {
       break
     fi
   done
+  if ! git -C "$ROOT/$PALLAS" cat-file -e "$1^{commit}" 2>/dev/null; then
+    url=$(sed -n 's/^pallas-validate = { git = "\([^"]*\)".*/\1/p' "$ROOT/$SCRATCH/Cargo.toml" | head -1)
+    git -C "$ROOT/$PALLAS" fetch -q "$url" "$1" || return
+  fi
   git -C "$ROOT/$PALLAS" checkout -q -f --detach "$1" &&
     git -C "$ROOT/$PALLAS" clean -q -fdx &&
     sed -E -i 's#^(pallas[a-z-]*) = \{ git = "https://github.com/[^/]+/pallas", rev = "[0-9a-f]+"#\1 = { path = "/w/'"$PALLAS"'/\1"#' \

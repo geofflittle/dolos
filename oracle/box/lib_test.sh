@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, which arms an overlay switches, when two test logs differ, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, the pallas pin, when the value leg is due, when a value arm is caught, the amaru pin and the amaru leg's verdicts.
+# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, which arms an overlay switches, when two test logs differ, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, the pallas pin, the scratch pallas checkout, when the value leg is due, when a value arm is caught, the amaru pin and the amaru leg's verdicts.
 # Usage: lib_test.sh <empty work dir>
 set -eu
 W=$(cd "$1" && pwd)
@@ -445,6 +445,27 @@ pin_of() {
 # Must not read another pallas crate's rev or a path entry, and must read the pallas-validate rev.
 expect pin_other "$(pin_of other 'pallas-traverse = { git = "https://github.com/a/pallas", rev = "111" }' 'pallas-validate = { path = "../pallas/pallas-validate" }')" "pin="
 expect pin_validate "$(pin_of validate 'pallas-traverse = { git = "https://github.com/a/pallas", rev = "111" }' 'pallas-validate = { git = "https://github.com/a/pallas", rev = "222", features = ["x"] }')" "pin=222"
+
+# A build root with no cargo git database whose scratch Cargo.toml pins pallas-validate to the commit $2 of the repository $1, and the scratch pallas head after pallas_tree.
+tree_of() {
+  T=$W/tree
+  rm -rf "$T"
+  mkdir -p "$T/scratch/dolos"
+  echo "pallas-validate = { git = \"$1\", rev = \"$2\" }" >"$T/scratch/dolos/Cargo.toml"
+  (
+    ROOT=$T SCRATCH=scratch/dolos PALLAS=scratch/pallas
+    . "$LIB"
+    if pallas_tree "$2" >/dev/null 2>&1; then git -C "$T/scratch/pallas" rev-parse HEAD; else echo refused; fi
+  )
+}
+P=$W/tree-src
+rm -rf "$P"
+git init -q "$P"
+git -C "$P" -c user.name=t -c user.email=t@t commit -q --allow-empty -m t
+src=$(git -C "$P" rev-parse HEAD)
+# Must not check out a commit the pinned repository lacks, and must fetch the pinned commit from that repository.
+expect tree_absent "$(tree_of "$P" 0000000000000000000000000000000000000001)" refused
+expect tree_fetch "$(tree_of "$P" "$src")" "$src"
 
 # A box dir with the value leg's files, and the verdicts of value_due before a pass, after one, after a changed pin and after a changed plant.
 V=$W/value
