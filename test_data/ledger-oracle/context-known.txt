@@ -1,0 +1,1 @@
+supp#92 top Spend#1 V3 arg=0 path=0.11 field=context.scriptContextTxInfo.txInfoId ledger=h'dca7c8658a516b0627191ae82dbca7e646a2931ef67d559e5ba3b37c7156f07e' pallas=h'1b7cf57d7e2e74de5dfa83707fbc6939979c57f5c1e2b5e32eb595645b850aee'
