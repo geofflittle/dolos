@@ -6,13 +6,13 @@ use pallas::interop::utxorpc::v1::spec as rpc;
 use pallas::ledger::primitives::dijkstra as n;
 use rpc::submit::submit_service_server::SubmitService as _;
 
-struct Fixture {
+pub(super) struct Fixture {
     _seed: seed::Seeded,
-    group: validate::Group,
-    tx: Vec<u8>,
+    pub(super) group: validate::Group,
+    pub(super) tx: Vec<u8>,
     expected: Option<ledger_oracle_judge::record::Units>,
 }
-fn fixture(number: u32) -> Fixture {
+pub(super) fn fixture(number: u32) -> Fixture {
     static CORPUS: std::sync::OnceLock<Corpus> = std::sync::OnceLock::new();
     let corpus = CORPUS.get_or_init(|| load(CorpusKind::Ic));
     let run = corpus
@@ -56,7 +56,7 @@ fn fixture(number: u32) -> Fixture {
         expected,
     }
 }
-fn reports(
+pub(super) fn reports(
     f: &Fixture,
     raw: &[u8],
 ) -> (
@@ -70,7 +70,7 @@ fn reports(
         dolos_cardano::validate::estimate_tx(raw, &u, &d.genesis),
     )
 }
-async fn rpc(f: &Fixture, raw: &[u8]) -> rpc::cardano::TxEval {
+pub(super) async fn rpc(f: &Fixture, raw: &[u8]) -> rpc::cardano::TxEval {
     let service = crate::serve::grpc::v1::submit::SubmitServiceImpl::new(f.group.domain().clone());
     let response = service
         .eval_tx(Request::new(rpc::submit::EvalTxRequest {

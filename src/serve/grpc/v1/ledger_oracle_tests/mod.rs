@@ -6,6 +6,7 @@ mod eval;
 mod guarding;
 mod ledger_state;
 mod live;
+mod missing_script_or_redeemer;
 mod output;
 mod params;
 mod seed;
