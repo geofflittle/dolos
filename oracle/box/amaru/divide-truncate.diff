@@ -1,0 +1,14 @@
+# divideInteger rounds toward zero in place of toward negative infinity.
+# test: divideinteger
+diff --git a/crates/amaru-uplc/src/machine/runtime.rs b/crates/amaru-uplc/src/machine/runtime.rs
+--- a/crates/amaru-uplc/src/machine/runtime.rs
++++ b/crates/amaru-uplc/src/machine/runtime.rs
+@@ -385,7 +385,7 @@ where
+                 self.spend_budget(budget)?;
+ 
+                 if !arg2.is_zero() {
+-                    let (result, _) = arg1.floor_div_mod(arg2);
++                    let (result, _) = arg1.div_rem(arg2);
+ 
+                     let new = self.arena.alloc_integer(result);
+ 
