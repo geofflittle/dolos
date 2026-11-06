@@ -14,6 +14,25 @@ index dbabe5f2..2f571fd1 100644
          .with(Val::ProtocolVersion(version.clone().into()))
          .with(Val::EpochLength(epoch_length as u64))
          .with(Val::SlotLength(slot_length as u64))
+diff --git a/crates/cardano/src/pallas_extras.rs b/crates/cardano/src/pallas_extras.rs
+index e416611e..a57fe446 100644
+--- a/crates/cardano/src/pallas_extras.rs
++++ b/crates/cardano/src/pallas_extras.rs
+@@ -571,10 +571,13 @@ pub fn inline_endorser_transactions(
+ ) -> Result<Vec<u8>, minicbor::decode::Error> {
+     let (era, mut block): (u16, dijkstra::Block) = minicbor::decode(block_cbor)?;
+
+-    let replacement = txs
++    let mut replacement: Vec<_> = txs
+         .iter()
+         .map(|tx| minicbor::decode::<dijkstra::BlockTransaction>(tx))
+         .collect::<Result<_, _>>()?;
++    if pallas::crypto::oracle_plant("endorser-tx-dropped") && !replacement.is_empty() {
++        replacement.remove(replacement.len() / 2);
++    }
+
+     block.block_body.transactions = MaybeIndefArray::Def(replacement);
+
 diff --git a/crates/cardano/src/utxoset.rs b/crates/cardano/src/utxoset.rs
 index c91bdb20..d9adb395 100644
 --- a/crates/cardano/src/utxoset.rs

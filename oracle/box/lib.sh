@@ -5,7 +5,7 @@ IN_IMAGE=${IN_IMAGE:-$HERE/in-image.sh}
 # One line for each unit of the target dir, the tree ids of the scratch trees its last build read and its output files.
 BUILT="$ROOT/${TARGET:-target}/built-units"
 # The arms that plant a defect, each judged on the records plants/<arm>.records names.
-PLANTED_ARMS="colret coin inflight rodrigo-reverted rob-reverted cost revalidate revalidate-drops subouts byron-attrs byron-signer byron-guard chaincode minfee-subtx emptyguards tag24 v1v2 byron-out tag24-ref unreg-refund drep-deposit upper-inclusive slot-off-by-one horizon-removed system-start cost-models guard-ref-reverted native-ref-reencoded v2-ref-dropped v4-ref-refused v1-ref-exposed pointer-refused script-payment-swap signatories-unsorted withdrawal-order cert-unwrapped script-guard-admitted v3-cert-wrapped v2-withdrawal-unwrapped top-guards-admitted eval-purpose eval-index eval-mem eval-steps eval-ran eval-level v1-guarding v4-v3-context guarding-purpose collateral-unsupported"
+PLANTED_ARMS="colret coin inflight rodrigo-reverted rob-reverted cost revalidate revalidate-drops subouts byron-attrs byron-signer byron-guard chaincode minfee-subtx emptyguards tag24 v1v2 byron-out tag24-ref unreg-refund drep-deposit upper-inclusive slot-off-by-one horizon-removed system-start cost-models guard-ref-reverted native-ref-reencoded v2-ref-dropped v4-ref-refused v1-ref-exposed pointer-refused script-payment-swap signatories-unsorted withdrawal-order cert-unwrapped script-guard-admitted v3-cert-wrapped v2-withdrawal-unwrapped top-guards-admitted eval-purpose eval-index eval-mem eval-steps eval-ran eval-level v1-guarding v4-v3-context guarding-purpose collateral-unsupported endorser-tx-dropped"
 
 # The arms whose switch an overlay diff adds, one per line.
 switches() {
@@ -30,7 +30,7 @@ pallas_arm() {
 crate_test() {
   case $1 in
     cost-models) echo "-p dolos-cardano --features strict --test musashi_cost_models" ;;
-    v1-guarding) echo "-p dolos --lib" ;;
+    v1-guarding | endorser-tx-dropped) echo "-p dolos --lib" ;;
     *) return 1 ;;
   esac
 }
@@ -39,6 +39,7 @@ crate_test() {
 crate_test_filter() {
   case $1 in
     v1-guarding) echo "serve::grpc::v1::submit::mapping_tests::guarding_result_keeps_identity_and_budget --exact" ;;
+    endorser-tx-dropped) echo "serve::grpc::v1::ledger_oracle_tests::endorser::served_endorser_transactions_are_the_nodes --exact" ;;
   esac
 }
 
