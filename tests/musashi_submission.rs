@@ -353,7 +353,7 @@ fn independent_registrations() -> (
 
 #[test]
 fn pending_registration_reserves_credential_without_changing_ledger_state() {
-    use pallas::ledger::validate::utils::ValidationError;
+    use pallas::ledger::validate::utils::{CertificateFailure, ValidationError};
 
     for inflight in [false, true] {
         let (domain, [first, second], credential) = independent_registrations();
@@ -403,7 +403,9 @@ fn pending_registration_reserves_credential_without_changing_ledger_state() {
             matches!(
                 error,
                 DomainError::ChainError(ChainError::Phase1ValidationRejected(
-                    ValidationError::DijkstraInvalidCertificate("already registered")
+                    ValidationError::DijkstraInvalidCertificate(
+                        CertificateFailure::AlreadyRegistered
+                    )
                 ))
             ),
             "{error:?}"

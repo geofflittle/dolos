@@ -1982,7 +1982,9 @@ async fn the_v2_record_is_known_and_its_maker_agrees() {
     assert!(!text.contains(" supp#1 "), "{text}");
     assert!(!text.contains("\nDISAGREE supp#2 "), "{text}");
     assert!(
-        text.contains("\nKNOWN row=V2 ids=supp#2 ledger=accepted dolos=refused[InputNotInUTxO]"),
+        text.contains(
+            "\nKNOWN row=V2 ids=supp#2 ledger=accepted dolos=refused[PostAlonzo(InputNotInUTxO)]"
+        ),
         "{text}"
     );
 }
@@ -1997,7 +1999,9 @@ async fn deleting_the_v2_known_entry_prints_its_disagreement() {
     .to_string();
     assert!(!text.contains("\nKNOWN row=V2 "), "{text}");
     assert!(
-        text.contains("\nDISAGREE supp#2 ledger=accepted dolos=refused[InputNotInUTxO]"),
+        text.contains(
+            "\nDISAGREE supp#2 ledger=accepted dolos=refused[PostAlonzo(InputNotInUTxO)]"
+        ),
         "{text}"
     );
 }
@@ -2113,7 +2117,7 @@ async fn dropping_the_seeded_input_under_a_metadata_refusal_prints_reason_mismat
     assert!(
         planted.contains(&format!(
             "{line}ledger=refused[SubMissingTxMetadata] ledger_class=metadata \
-             dolos=refused[InputNotInUTxO] dolos_class=inputs"
+             dolos=refused[PostAlonzo(InputNotInUTxO)] dolos_class=inputs"
         )),
         "{planted}"
     );
@@ -2132,7 +2136,7 @@ async fn deleting_the_v1_known_entry_prints_its_reason_mismatch() {
     assert!(
         deleted.contains(
             "\nREASON_MISMATCH supp#5 ledger=refused[BadInputsUTxO,BadInputsUTxO] \
-             ledger_class=inputs dolos=refused[PreservationOfValue] dolos_class=value"
+             ledger_class=inputs dolos=refused[PostAlonzo(PreservationOfValue)] dolos_class=value"
         ),
         "{deleted}"
     );
@@ -2245,7 +2249,7 @@ async fn supp8_written_as_phase2_valid_leaves_the_input_of_supp9_missing() {
     let planted = judge(&corpus, &manifests, &edits).await.to_string();
     assert!(
         planted.contains(&format!(
-            "{line}ledger=accepted dolos=refused[InputNotInUTxO]"
+            "{line}ledger=accepted dolos=refused[PostAlonzo(InputNotInUTxO)]"
         )),
         "{planted}"
     );
@@ -2590,7 +2594,9 @@ async fn a_seeded_reward_changed_by_one_prints_accounts_disagree() {
 fn a_dolos_refusal_is_named_by_its_kind_and_classed_by_its_variant() {
     use dolos_core::{ChainError as C, DomainError};
     use ledger_oracle_judge::refusal::{DolosClass, RefusalClass};
-    use pallas::ledger::validate::utils::{PostAlonzoError as P, ValidationError as V};
+    use pallas::ledger::validate::utils::{
+        ParameterFailure, PostAlonzoError as P, ValidationError as V,
+    };
     let refused = |e: C| validate::verdict(&Err(DomainError::ChainError(e)));
     let expected = |kind: &str, class| DolosVerdict::Refused {
         kind: kind.to_string(),
@@ -2600,30 +2606,35 @@ fn a_dolos_refusal_is_named_by_its_kind_and_classed_by_its_variant() {
     let cases = [
         (
             C::Phase1ValidationRejected(V::PostAlonzo(P::InputNotInUTxO)),
-            expected("InputNotInUTxO", inputs),
+            expected("PostAlonzo(InputNotInUTxO)", inputs),
         ),
         (
             C::Phase1ValidationRejected(V::PostAlonzo(P::CollateralNotInUTxO)),
-            expected("CollateralNotInUTxO", inputs),
+            expected("PostAlonzo(CollateralNotInUTxO)", inputs),
         ),
         (
             C::Phase1ValidationRejected(V::PostAlonzo(P::CollateralMissing)),
             expected(
-                "CollateralMissing",
+                "PostAlonzo(CollateralMissing)",
                 DolosClass::Rule(RefusalClass::Collateral),
             ),
         ),
         (
             C::Phase1ValidationRejected(V::PostAlonzo(P::UnsupportedPlutusLanguage)),
-            expected("UnsupportedPlutusLanguage", DolosClass::NoRule),
+            expected("PostAlonzo(UnsupportedPlutusLanguage)", DolosClass::NoRule),
         ),
         (
             C::Phase1ValidationRejected(V::DijkstraInputAlreadySpent),
             expected("DijkstraInputAlreadySpent", inputs),
         ),
         (
-            C::Phase1ValidationRejected(V::DijkstraMissingParameters("cost models")),
-            expected("DijkstraMissingParameters", DolosClass::NoRule),
+            C::Phase1ValidationRejected(V::DijkstraMissingParameters(
+                ParameterFailure::ReferenceFeeStride,
+            )),
+            expected(
+                "DijkstraMissingParameters(\"reference fee stride\")",
+                DolosClass::NoRule,
+            ),
         ),
         (
             C::NoActiveEpoch,
