@@ -270,11 +270,11 @@ index 8773d5b6..63fcdee8 100644
              .flat_map(|x| x.iter())
              .map(|(a, c)| (a, *c))
              .collect();
--        ordered.sort_by(|(x, _), (y, _)| account_order(x).cmp(&account_order(y)));
+-        ordered.sort_by(|(x, _), (y, _)| cmp_reward_accounts(x, y));
 +        if pallas_crypto::oracle_plant("withdrawal-order") {
 +            ordered.sort_by_key(|(raw, _)| raw.to_vec());
 +        } else {
-+            ordered.sort_by(|(x, _), (y, _)| account_order(x).cmp(&account_order(y)));
++            ordered.sort_by(|(x, _), (y, _)| cmp_reward_accounts(x, y));
 +        }
          ordered
      }
