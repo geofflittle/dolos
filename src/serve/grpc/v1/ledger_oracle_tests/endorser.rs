@@ -246,6 +246,14 @@ fn body_hashes(body: &[u8]) -> Result<Vec<Hash<32>>, String> {
     walk(&mut d).map_err(|e| format!("endorser block body: {e}"))
 }
 
+/// The transactions the node holds for one ranking block, with that block's
+/// hash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct NodeTxs {
+    pub block: Hash<32>,
+    pub txs: Vec<Vec<u8>>,
+}
+
 /// The node's transactions for a ranking block, its endorser block's when its
 /// body holds a certificate and its own otherwise, each checked against the
 /// node's commitments.
@@ -253,7 +261,7 @@ pub(super) fn node_txs(
     parent: &[u8],
     block: &[u8],
     endorser: Option<&NodeEndorser>,
-) -> Result<Vec<Vec<u8>>, String> {
+) -> Result<NodeTxs, String> {
     let decode = |cbor| MultiEraBlock::decode(cbor).map_err(|e| format!("node block: {e}"));
     let (parent, decoded) = (decode(parent)?, decode(block)?);
     if decoded.header().previous_hash() != Some(parent.hash()) {
@@ -267,7 +275,7 @@ pub(super) fn node_txs(
         .ok_or("not a Dijkstra block")?
         .block_body;
     let certifies = matches!(body.leios_certificate, Nullable::Some(_));
-    match (certifies, endorser) {
+    let txs = match (certifies, endorser) {
         (false, None) => block_txs(block),
         (true, Some(endorser)) => {
             let header = parent.header();
@@ -292,14 +300,27 @@ pub(super) fn node_txs(
             "certifies={certifies} stored endorser block={}",
             endorser.is_some()
         )),
-    }
+    }?;
+    Ok(NodeTxs {
+        block: decoded.hash(),
+        txs,
+    })
 }
 
 /// The transactions one served block holds, judged against the node's.
-pub(super) fn judge_served(served: &s::AnyChainBlock, node: &[Vec<u8>]) -> Result<Judged, String> {
+pub(super) fn judge_served(served: &s::AnyChainBlock, node: &NodeTxs) -> Result<Judged, String> {
     let Some(s::any_chain_block::Chain::Cardano(block)) = &served.chain else {
         return Err("serves no Cardano block".into());
     };
+    let hash = block.header.as_ref().map(|h| hex::encode(&h.hash));
+    if hash.as_deref() != Some(node.block.to_string().as_str()) {
+        return Err(format!(
+            "served block {} is not the node's {}",
+            hash.as_deref().unwrap_or("none"),
+            node.block
+        ));
+    }
+    let node = node.txs.as_slice();
     let ids: Vec<Hash<32>> = block
         .body
         .iter()
@@ -636,4 +657,42 @@ fn a_block_agrees_only_when_both_lists_are_the_same() {
     let lines = bytes_differ.lines(Service::FollowTip, 7);
     assert_eq!(lines.len(), 1);
     assert!(lines[0].starts_with("ENDORSER-DIFF service=FollowTip slot=7 list=bytes index=1 "));
+}
+
+/// A served Dijkstra block with no transactions under the header hash.
+fn served_empty(hash: [u8; 32]) -> s::AnyChainBlock {
+    use super::super::spec::cardano;
+    s::AnyChainBlock {
+        native_bytes: vec![0x82, 0x08, 0x82, 0x00, 0x83, 0x80, 0xf6, 0xf6].into(),
+        chain: Some(s::any_chain_block::Chain::Cardano(cardano::Block {
+            header: Some(cardano::BlockHeader {
+                hash: hash.to_vec().into(),
+                ..Default::default()
+            }),
+            body: Some(cardano::BlockBody::default()),
+            ..Default::default()
+        })),
+    }
+}
+
+#[test]
+fn a_served_block_is_judged_only_against_the_node_block_of_its_hash() {
+    let node = NodeTxs {
+        block: Hash::from([1; 32]),
+        txs: Vec::new(),
+    };
+    assert_eq!(
+        judge_served(&served_empty([1; 32]), &node),
+        Ok(Judged {
+            ids: Listed::Same(0),
+            bytes: Listed::Same(0),
+        })
+    );
+    let other = judge_served(&served_empty([2; 32]), &node);
+    assert!(
+        other
+            .as_ref()
+            .is_err_and(|e| e.starts_with(&format!("served block {} ", Hash::<32>::from([2; 32])))),
+        "{other:?}"
+    );
 }
