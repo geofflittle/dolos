@@ -11,9 +11,9 @@ amaru_pin() {
     sed -n 's/^amaru-uplc-native = {.* git = "\([^"]*\)", rev = "\([0-9a-f]*\)".*/\1 \2/p' | head -1
 }
 
-# The number of tests the latest conformance build generated, from the generated source in the target $1.
+# The number of tests the latest conformance build generated, from the generated source in the target $1, in either cargo build directory layout.
 amaru_generated() {
-  source=$(ls -t "$ROOT/$1"/debug/build/amaru-uplc-*/out/generated_tests.rs 2>/dev/null | head -1)
+  source=$(ls -t "$ROOT/$1"/debug/build/amaru-uplc-*/out/generated_tests.rs "$ROOT/$1"/debug/build/amaru-uplc/*/out/generated_tests.rs 2>/dev/null | head -1)
   if [ -z "$source" ]; then
     echo 0
     return
