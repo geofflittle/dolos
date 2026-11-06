@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, the pallas pin, the scratch pallas checkout, when the value leg is due, when a value arm is caught, the amaru pin and the amaru leg's verdicts.
+# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, the pallas pin, the scratch pallas checkout, when the value leg is due, when a value arm is caught, what the value leg hands the harness tier, the amaru pin and the amaru leg's verdicts.
 # Usage: lib_test.sh <empty work dir>
 set -eu
 W=$(cd "$1" && pwd)
@@ -589,6 +589,23 @@ amaru_caught_of() {
 # Must not fire on another failed test or a passing divideInteger test, and must fire on a failed one.
 expect amaru_caught_other "$(amaru_caught_of 'test builtin_semantics_modinteger_01_v3_protocol_version_11 ... FAILED' 'test builtin_semantics_divideinteger_divideinteger_01_v3_protocol_version_11 ... ok')" missed
 expect amaru_caught_divide "$(amaru_caught_of 'test builtin_semantics_divideinteger_divideinteger_neg_pos_v3_protocol_version_11 ... FAILED')" caught
+
+# A build root whose harness tier.sh prints the pairs, probe and given files it was handed, and what value_tier hands it for the pairs $1.
+tier_of() {
+  R=$W/tier
+  rm -rf "$R"
+  mkdir -p "$R/value/gen" "$R/scratch/dolos/test_data/ledger-oracle" "$R/scratch/pallas/test_data" "$R/runs"
+  touch "$R/scratch/pallas/test_data/dijkstra-a.tx" "$R/scratch/pallas/test_data/dijkstra-b.block" "$R/scratch/pallas/test_data/c.ebbody"
+  echo 'echo "pairs=[${PAIRS:-}] probe=$(basename "$PROBE") tx=$(echo $TX_FILES | wc -w) block=$(basename $BLOCK_FILES) eb=$(basename $EB_FILES) n=$2"' >"$R/value/gen/tier.sh"
+  (
+    ROOT=$R OUT=$R/runs SCRATCH=scratch/dolos PALLAS=scratch/pallas HERE=$HERE VALUE_N=7
+    . "$HERE/value.sh"
+    value_tier head "$R/runs/t" "$1"
+  )
+}
+# Must not hand every pair when pairs are named, and must hand the given files and no pairs when none are.
+expect tier_pairs "$(tier_of 'tx:given eb:arb')" "pairs=[tx:given eb:arb] probe=head tx=3 block=dijkstra-b.block eb=c.ebbody n=7"
+expect tier_all "$(tier_of '')" "pairs=[] probe=head tx=3 block=dijkstra-b.block eb=c.ebbody n=7"
 
 # Must keep a value switch's name and prefix an overlay switch's.
 expect value_key "$(
