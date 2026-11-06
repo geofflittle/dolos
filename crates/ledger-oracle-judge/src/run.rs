@@ -308,11 +308,7 @@ mod tests {
 
     /// The records of a committed corpus as the extractor wrote them.
     fn written(kind: CorpusKind) -> Vec<Record> {
-        let bytes = corpus::gunzip(match kind {
-            CorpusKind::Ic => include_bytes!("../../../test_data/ledger-oracle/ic.jsonl.gz"),
-            CorpusKind::Supp => include_bytes!("../../../test_data/ledger-oracle/supp.jsonl.gz"),
-        })
-        .unwrap();
+        let bytes = corpus::gunzip(kind.gz()).unwrap();
         corpus::records(corpus::verify(kind, &bytes, kind.sha256()).unwrap()).unwrap()
     }
 

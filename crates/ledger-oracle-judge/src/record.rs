@@ -14,14 +14,19 @@ use crate::{
 pub enum CorpusKind {
     Ic,
     Supp,
+    P1,
 }
 
 impl CorpusKind {
+    /// Every corpus, in the order a run judges them.
+    pub const ALL: [CorpusKind; 3] = [CorpusKind::Ic, CorpusKind::Supp, CorpusKind::P1];
+
     /// The short name used in record ids and printed lines.
     pub fn name(self) -> &'static str {
         match self {
             CorpusKind::Ic => "ic",
             CorpusKind::Supp => "supp",
+            CorpusKind::P1 => "p1",
         }
     }
 }

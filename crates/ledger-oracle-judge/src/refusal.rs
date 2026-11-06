@@ -25,6 +25,7 @@ impl RefusalClass {
         let class = match leaf {
             "BadInputsUTxO"
             | "SubBadInputsUTxO"
+            | "InputSetEmptyUTxO"
             | "SubInputSetEmptyUTxO"
             | "UnspendableUTxONoDatumHash"
             | "SubUnspendableUTxONoDatumHash" => C::Inputs,
@@ -32,8 +33,14 @@ impl RefusalClass {
             | "ValueNotConservedInLegacyMode"
             | "SubBabbageOutputTooSmallUTxO"
             | "SubOutputTooBigUTxO"
-            | "SubOutputBootAddrAttrsTooBig" => C::Value,
-            "MaxTxSizeUTxO" | "DijkstraTxRefScriptsSizeTooBig" => C::FeeAndSize,
+            | "SubOutputBootAddrAttrsTooBig"
+            | "BabbageOutputTooSmallUTxO"
+            | "OutputTooBigUTxO"
+            | "OutputBootAddrAttrsTooBig" => C::Value,
+            "MaxTxSizeUTxO"
+            | "DijkstraTxRefScriptsSizeTooBig"
+            | "FeeTooSmallUTxO"
+            | "ExUnitsTooBigUTxO" => C::FeeAndSize,
             "MissingVKeyWitnessesUTXOW"
             | "SubMissingVKeyWitnessesUTXOW"
             | "InvalidWitnessesUTXOW"
@@ -45,6 +52,11 @@ impl RefusalClass {
             | "ExtraneousScriptWitnessesUTXOW"
             | "ValidationTagMismatch"
             | "SubScriptIntegrityHashMismatch"
+            | "ScriptIntegrityHashMismatch"
+            | "MalformedScriptWitnesses"
+            | "SubMalformedScriptWitnesses"
+            | "MalformedReferenceScripts"
+            | "SubMalformedReferenceScripts"
             | "MissingRedeemers"
             | "SubMissingRedeemers"
             | "ExtraRedeemers"
@@ -64,6 +76,7 @@ impl RefusalClass {
             | "SubConflictingMetadataHash" => C::Metadata,
             "OutsideValidityIntervalUTxO" | "SubOutsideValidityIntervalUTxO" => C::Interval,
             "SubWrongNetwork"
+            | "WrongNetwork"
             | "WrongNetworkInTxBody"
             | "SubWrongNetworkInTxBody"
             | "WrongNetworkPOOL"
@@ -125,7 +138,13 @@ impl RefusalClass {
             | "VotersDoNotExist"
             | "UnelectedCommitteeVoters"
             | "VotingOnExpiredGovAction" => C::CertificateAndGovernance,
-            "InsufficientCollateral" => C::Collateral,
+            "InsufficientCollateral"
+            | "ScriptsNotPaidUTxO"
+            | "CollateralContainsNonADA"
+            | "TooManyCollateralInputs"
+            | "NoCollateralInputs"
+            | "IncorrectTotalCollateralField"
+            | "PtrPresentInCollateralReturn" => C::Collateral,
             "DecoderErrorDeserialiseFailure" | "DecoderErrorCustom" | "DecoderErrorLeftover" => {
                 C::Decoding
             }
