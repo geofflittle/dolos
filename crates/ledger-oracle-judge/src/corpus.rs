@@ -314,6 +314,38 @@ mod tests {
     }
 
     #[test]
+    fn a_record_the_decoder_refused_listing_redeemers_fails_the_load() {
+        let decoder_refused = |v: &serde_json::Value| {
+            v["outcome"]["refused"]["failure_names"][0][0]
+                .as_str()
+                .is_some_and(|name| name.starts_with("DecoderError"))
+        };
+        let lines: Vec<serde_json::Value> = ic_bytes()
+            .split(|b| *b == b'\n')
+            .filter(|l| !l.is_empty())
+            .map(|l| serde_json::from_slice(l).unwrap())
+            .collect();
+        let refused = lines.iter().position(decoder_refused).unwrap();
+        let redeemer = lines
+            .iter()
+            .find_map(|v| v["ex_units"].as_array()?.first().cloned())
+            .unwrap();
+        let unchanged = edit_line(refused, |_| {});
+        assert_eq!(reload(CorpusKind::Ic, &unchanged).unwrap().len(), 9853);
+        let listed = edit_line(refused, |v| {
+            v["ex_units"] = serde_json::Value::Array(vec![redeemer.clone()]);
+        });
+        let e = reload(CorpusKind::Ic, &listed).unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            format!(
+                "CORPUS ic load error records=1 first_line={} reason=the ledger's decoder refused the bytes and 1 redeemers are listed",
+                refused + 1
+            )
+        );
+    }
+
+    #[test]
     fn a_redeemer_without_its_arguments_fails_the_load() {
         let line = ic_bytes()
             .split(|b| *b == b'\n')
