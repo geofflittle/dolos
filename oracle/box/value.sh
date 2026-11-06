@@ -101,7 +101,7 @@ value_tier() {
   fixtures=$ROOT/$PALLAS/test_data
   (
     cd "$ROOT/value/gen" &&
-      PROBE=$OUT/value/bin/$probe GEN_FROM=$from ${pairs:+PAIRS="$pairs"} \
+      PROBE=$OUT/value/bin/$probe GEN_FROM=$from PAIRS=$pairs \
         TX_FILES="$data/ic.jsonl.gz $data/supp.jsonl.gz $(ls "$fixtures"/dijkstra-*.tx | tr '\n' ' ')" \
         BLOCK_FILES="$(ls "$fixtures"/dijkstra*.block | tr '\n' ' ')" \
         EB_FILES="$(ls "$fixtures"/*.ebbody | tr '\n' ' ')" \
