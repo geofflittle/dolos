@@ -35,31 +35,7 @@ pub(crate) fn sub_transaction_block() -> SubTransactionBlock {
     .unwrap();
     let cbor = hex::decode(text.trim()).unwrap();
 
-    let mut genesis = dolos_cardano::include::preview::load();
-    genesis.dijkstra = Some(
-        dolos_core::dijkstra::from_file(manifest_path(&[
-            "crates",
-            "core",
-            "test_data",
-            "proto-devnet",
-            "dijkstra-genesis.json",
-        ]))
-        .unwrap(),
-    );
-    genesis.force_protocol = Some(11);
-
-    let config = CardanoConfig {
-        magic: 164,
-        is_testnet: true,
-        stop_epoch: None,
-        custom_utxos: vec![],
-    };
-
-    let mut sync = SyncConfig::default();
-    sync.leios_lenient_apply = true;
-
-    let domain = ToyDomain::new_with_genesis_and_config(Arc::new(genesis), config, None, None)
-        .with_sync_config(sync);
+    let domain = musashi_domain();
 
     domain.roll_forward(Arc::new(cbor.clone())).unwrap();
 
@@ -83,6 +59,35 @@ pub(crate) fn sub_transaction_block() -> SubTransactionBlock {
         sub: Hasher::<256>::hash(sub.sub_transaction_body.raw_cbor()),
         sub_bytes: pallas::codec::minicbor::to_vec(sub).unwrap(),
     }
+}
+
+/// An empty store with the Musashi network magic and the Dijkstra genesis, applying endorsed transactions leniently.
+pub(crate) fn musashi_domain() -> ToyDomain {
+    let mut genesis = dolos_cardano::include::preview::load();
+    genesis.dijkstra = Some(
+        dolos_core::dijkstra::from_file(manifest_path(&[
+            "crates",
+            "core",
+            "test_data",
+            "proto-devnet",
+            "dijkstra-genesis.json",
+        ]))
+        .unwrap(),
+    );
+    genesis.force_protocol = Some(11);
+
+    let config = CardanoConfig {
+        magic: 164,
+        is_testnet: true,
+        stop_epoch: None,
+        custom_utxos: vec![],
+    };
+
+    let mut sync = SyncConfig::default();
+    sync.leios_lenient_apply = true;
+
+    ToyDomain::new_with_genesis_and_config(Arc::new(genesis), config, None, None)
+        .with_sync_config(sync)
 }
 
 /// Synthetic serving fixture derived from the captured ranking block. Only its

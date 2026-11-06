@@ -20,7 +20,7 @@ use super::super::{
 use crate::{adapters::DomainAdapter, prelude::CancelTokenImpl};
 
 /// How long a stream read waits for its next response.
-const NEXT: Duration = Duration::from_secs(10);
+pub(super) const NEXT: Duration = Duration::from_secs(10);
 
 /// A service that maps a transaction with its resolved inputs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
