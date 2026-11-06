@@ -9,7 +9,7 @@
 {-# LANGUAGE TypeApplications #-}
 
 -- | One JSON line per LEDGER rule run, written from the Imp post submit hook.
-module Dump (E, decodeTx, dumpTo, editedBytes, failurePath) where
+module Dump (E, counter, decodeTx, dumpTo, editedBytes, evalJson, failurePath, hex) where
 
 import Cardano.Ledger.Alonzo.PParams (ppCostModelsL, ppMaxTxExUnitsL)
 import Cardano.Ledger.Alonzo.Plutus.Context (EraPlutusContext (..), LedgerLevelTxInfo (..), LedgerTxInfo (..), toScriptHashByPurpose)
@@ -109,6 +109,14 @@ argsData args = case (isLanguage :: SLanguage l) of
 -- | The data arguments of a script with its context.
 pwcData :: PlutusWithContext -> [P.Data]
 pwcData PlutusWithContext {pwcArgs} = argsData pwcArgs
+
+-- | The units an evaluation spent, or its failure with its logs.
+evalJson :: ([Text], Either P.EvaluationError P.ExBudget) -> A.Value
+evalJson (logs, result) = case result of
+  Left e -> A.object ["failed" A..= take 300 (show e), "logs" A..= logs]
+  Right b -> case exBudgetToExUnits b of
+    Just (ExUnits m s) -> A.object ["ran" A..= [m, s]]
+    Nothing -> A.object ["incompatible" A..= show b]
 
 pairs :: UTxO E -> [[String]]
 pairs (UTxO m) =

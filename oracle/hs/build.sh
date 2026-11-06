@@ -19,7 +19,7 @@ docker run --rm -v "$STORE":/work:ro -v "$WORK":/probe -w /probe conformance-gen
     -package-id cardano-ledger-core-1.23.0.0-inplace-testlib \
     -package small-steps -package transformers -package bytestring -package base16-bytestring \
     -package hspec -package ImpSpec -package aeson -package cardano-ledger-alonzo \
-    -package plutus-ledger-api -package mtl -package serialise -package text \
+    -package plutus-ledger-api -package plutus-core -package serialise -package mtl -package text \
     -package cardano-ledger-byron -package cardano-crypto-wrapper -package cardano-crypto-class \
     -package primitive -package cborg -package time -package microlens-mtl \
     -package-id cardano-ledger-dijkstra-0.5.0.0-inplace-testlib \
