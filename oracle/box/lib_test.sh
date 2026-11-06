@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes and the box lock.
+# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, the pallas pin, when the value leg is due, when a value arm is caught, the amaru pin and the amaru leg's verdicts.
 # Usage: lib_test.sh <empty work dir>
 set -eu
 W=$(cd "$1" && pwd)
@@ -452,6 +452,129 @@ done
 )
 expect lock_candidate_held "$(sed -n 1p "$K/df.seen")" lock=held
 expect lock_candidate_released "$(record_left "$K")" released
+
+# A build root whose scratch Cargo.toml holds the lines after $1, and the pin pallas_pin reads from it.
+pin_of() {
+  V=$W/pin-$1
+  rm -rf "$V"
+  mkdir -p "$V/scratch/dolos"
+  shift
+  printf '%s\n' "$@" >"$V/scratch/dolos/Cargo.toml"
+  (
+    ROOT=$V SCRATCH=scratch/dolos
+    . "$LIB"
+    echo "pin=$(pallas_pin)"
+  )
+}
+# Must not read another pallas crate's rev or a path entry, and must read the pallas-validate rev.
+expect pin_other "$(pin_of other 'pallas-traverse = { git = "https://github.com/a/pallas", rev = "111" }' 'pallas-validate = { path = "../pallas/pallas-validate" }')" "pin="
+expect pin_validate "$(pin_of validate 'pallas-traverse = { git = "https://github.com/a/pallas", rev = "111" }' 'pallas-validate = { git = "https://github.com/a/pallas", rev = "222", features = ["x"] }')" "pin=222"
+
+# A box dir with the value leg's files, and the verdicts of value_due before a pass, after one, after a changed pin and after a changed plant.
+V=$W/value
+rm -rf "$V"
+mkdir -p "$V/box/value" "$V/box/overlay" "$V/box/amaru" "$V/runs"
+cp "$HERE/value.sh" "$HERE/amaru.sh" "$V/box/"
+echo r1 >"$V/box/value/harness.rev"
+echo p1 >"$V/box/value/pallas.diff"
+echo o1 >"$V/box/overlay/pallas.diff"
+echo a1 >"$V/box/amaru/a.diff"
+due() {
+  (
+    ROOT=$V HERE=$V/box
+    . "$V/box/value.sh"
+    if value_due "$1"; then echo due; else echo passed; fi
+  )
+}
+record_value() {
+  (
+    ROOT=$V HERE=$V/box
+    . "$V/box/value.sh"
+    value_inputs "$1" >"$LAST_VALUE"
+  )
+}
+# Must fire with no passing leg, must not on the inputs that passed, and must fire on another pin, another value plant or another amaru plant.
+expect value_due_none "$(due aaa)" due
+record_value aaa
+expect value_due_same "$(due aaa)" passed
+expect value_due_pin "$(due bbb)" due
+echo p2 >"$V/box/value/pallas.diff"
+expect value_due_plant "$(due aaa)" due
+record_value aaa
+echo a2 >"$V/box/amaru/a.diff"
+expect value_due_amaru_plant "$(due aaa)" due
+
+# An arm's run dir with the reached line $2 and the disagreement class $3, and value_caught's verdict for the arm a with the class c.
+caught_of() {
+  C=$W/caught-$1
+  rm -rf "$C"
+  mkdir -p "$C"
+  echo "$2" >"$C/tx.given.reached"
+  printf '{"cls": "%s", "key": "k"}\n' "$3" >"$C/tx.given.schema.dis.jsonl"
+  (
+    ROOT=$W HERE=$HERE
+    . "$HERE/value.sh"
+    if value_caught "$C" c a; then echo caught; else echo missed; fi
+  )
+}
+# Must not fire with the plant unreached, another plant reached or another class, and must fire with both.
+expect value_caught_unreached "$(caught_of unreached '' c)" missed
+expect value_caught_other_plant "$(caught_of other_plant 'ORACLE_PLANT reached ab' c)" missed
+expect value_caught_other_class "$(caught_of other_class 'ORACLE_PLANT reached a' cc)" missed
+expect value_caught_both "$(caught_of both 'ORACLE_PLANT reached a' c)" caught
+
+# A pallas tree whose pallas-validate Cargo.toml names an amaru-uplc entry, and the url and commit amaru_pin reads at its head.
+A=$W/amaru-pin
+rm -rf "$A"
+mkdir -p "$A/scratch/pallas/pallas-validate"
+git -C "$A/scratch/pallas" init -q
+printf '%s\n' 'amaru-uplc = { version = "=0.1.0", optional = true }' \
+  'amaru-uplc-native = { package = "amaru-uplc", git = "https://example.org/amaru.git", rev = "abc1", optional = true }' \
+  'amaru-kernel = { git = "https://example.org/other.git", rev = "def2", optional = true }' >"$A/scratch/pallas/pallas-validate/Cargo.toml"
+git -C "$A/scratch/pallas" add -A
+git -C "$A/scratch/pallas" -c user.name=t -c user.email=t@t commit -q -m t
+# Must not read the crates.io entry or another crate's commit, and must read the amaru-uplc commit.
+expect amaru_pin "$(
+  ROOT=$A PALLAS=scratch/pallas HERE=$HERE
+  . "$HERE/amaru.sh"
+  amaru_pin HEAD
+)" "https://example.org/amaru.git abc1"
+
+# The verdict of amaru_passed on a test log whose result line is $2, with $1 generated tests.
+amaru_passed_of() {
+  (
+    ROOT=$W HERE=$HERE
+    . "$HERE/amaru.sh"
+    printf '%s\n' "$2" | sed -n 's/^\(test result: .* filtered out; finished in\) [0-9.]*s$/\1/p' >"$W/amaru.log.result"
+    if amaru_passed "$W/amaru.log" "$1"; then echo pass; else echo fail; fi
+  )
+}
+# Must not pass with a test short, a failed test, a filtered test or no generated test, and must pass with every test passed.
+expect amaru_short "$(amaru_passed_of 1065 'test result: ok. 1064 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s')" fail
+expect amaru_failed "$(amaru_passed_of 1065 'test result: FAILED. 1064 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s')" fail
+expect amaru_filtered "$(amaru_passed_of 1065 'test result: ok. 1065 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 1.20s')" fail
+expect amaru_none "$(amaru_passed_of 0 'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s')" fail
+expect amaru_all "$(amaru_passed_of 1065 'test result: ok. 1065 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s')" pass
+
+# The verdict of amaru_caught for the name part divideinteger on a test log of the lines given.
+amaru_caught_of() {
+  (
+    ROOT=$W HERE=$HERE
+    . "$HERE/amaru.sh"
+    printf '%s\n' "$@" >"$W/amaru-arm.log"
+    if amaru_caught "$W/amaru-arm.log" divideinteger; then echo caught; else echo missed; fi
+  )
+}
+# Must not fire on another failed test or a passing divideInteger test, and must fire on a failed one.
+expect amaru_caught_other "$(amaru_caught_of 'test builtin_semantics_modinteger_01_v3_protocol_version_11 ... FAILED' 'test builtin_semantics_divideinteger_divideinteger_01_v3_protocol_version_11 ... ok')" missed
+expect amaru_caught_divide "$(amaru_caught_of 'test builtin_semantics_divideinteger_divideinteger_neg_pos_v3_protocol_version_11 ... FAILED')" caught
+
+# Must keep a value switch's name and prefix an overlay switch's.
+expect value_key "$(
+  ROOT=$W HERE=$HERE
+  . "$HERE/value.sh"
+  echo "$(value_key value-spend-redeemer) $(value_key emptyguards)"
+)" "value-spend-redeemer value-emptyguards"
 
 if [ "$failed" -eq 0 ]; then
   echo "LIB-TEST RESULT PASS"
