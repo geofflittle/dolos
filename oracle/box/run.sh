@@ -272,6 +272,7 @@ ship_run() {
   fi
   cat "$OUT/live-leg.out"
   verdicts=$(sed -n 's/^ARMS \(.*\) logs=.*/\1/p' "$OUT/breaks.out")
+  verdicts="$verdicts $(due_value_verdicts)"
   grep -E '^(LIVE|KNOWN|KNOWN_STALE|LIVE-DIFF|LIVE-GAP) ' "$OUT/live.log" | cut -c1-400 || true
   shift_verdict=$(live_shift | tail -1)
   echo "DONE tier=ship $verdicts $shift_verdict live=$live commit=$commit logs=$OUT"
