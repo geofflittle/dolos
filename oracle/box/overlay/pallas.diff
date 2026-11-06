@@ -293,7 +293,7 @@ index 8773d5b6..63fcdee8 100644
          Certificate::StakeDelegation(c, pool) => {
              registered(state, c)?;
 diff --git a/pallas-validate/src/phase2/dijkstra.rs b/pallas-validate/src/phase2/dijkstra.rs
-index 5c256511..d86a15ee 100644
+index 5c256511..1d771d18 100644
 --- a/pallas-validate/src/phase2/dijkstra.rs
 +++ b/pallas-validate/src/phase2/dijkstra.rs
 @@ -70,14 +70,15 @@ impl LegacyContextData for ContextOutput {
@@ -411,7 +411,38 @@ index 5c256511..d86a15ee 100644
          signatories.dedup();
          Ok(Legacy {
              mint: MintValue {
-@@ -807,7 +854,7 @@ pub(super) fn runs(
+@@ -782,7 +829,29 @@ pub(super) fn runs(
+         if scope.expected.is_empty() && scope.redeemers.is_empty() {
+             continue;
+         }
+-        let context = level_context(part, scope, &scope.languages, utxos, time)?;
++        let mut context = level_context(part, scope, &scope.languages, utxos, time)?;
++        if let Part::Sub(..) = part
++            && pallas_crypto::oracle_plant("ctx-sub-top-info")
++        {
++            let top = level_context(
++                Part::Top(native),
++                &scopes[scopes.len() - 1],
++                &scope.languages,
++                utxos,
++                time,
++            )?;
++            context.level = Level {
++                sub: context.level.sub,
++                ..top.level
++            };
++            context.inputs = top.inputs;
++            context.reference_inputs = top.reference_inputs;
++            context.outputs = top.outputs;
++            context.valid_range = top.valid_range;
++            context.datums = top.datums;
++            context.certificates = top.certificates;
++            context.proposals = top.proposals;
++        }
+         if estimate
+             && (execution_limit.mem > i64::MAX as u64 || execution_limit.steps > i64::MAX as u64)
+         {
+@@ -807,7 +876,7 @@ pub(super) fn runs(
                      .collect()
              };
              let args = match (language, part) {
@@ -420,7 +451,7 @@ index 5c256511..d86a15ee 100644
                      vec![context.script_context(key, purpose, &r.data, datum, &batch)?]
                  }
                  (n::Language::PlutusV1, Part::Top(tx)) => {
-@@ -853,7 +900,12 @@ pub(super) fn runs(
+@@ -853,14 +922,19 @@ pub(super) fn runs(
                          purpose.conway()?.1,
                      ))
                  }
@@ -434,11 +465,31 @@ index 5c256511..d86a15ee 100644
                      let b = &tx.transaction_body;
                      let x = Legacy::new(b, &context)?;
                      let info = V3TxInfo {
+                         inputs: context.inputs.clone(),
+                         reference_inputs: context.reference_inputs.clone(),
+                         outputs: context.outputs.clone(),
+-                        fee: b.fee,
++                        fee: b.fee + u64::from(pallas_crypto::oracle_plant("ctx-v3-fee")),
+                         mint: x.mint,
+                         certificates: context.certificates.clone(),
+                         withdrawals: x.withdrawals.into(),
 diff --git a/pallas-validate/src/phase2/dijkstra_v4_context.rs b/pallas-validate/src/phase2/dijkstra_v4_context.rs
-index d711513e..00a4d126 100644
+index d711513e..a28d256f 100644
 --- a/pallas-validate/src/phase2/dijkstra_v4_context.rs
 +++ b/pallas-validate/src/phase2/dijkstra_v4_context.rs
-@@ -209,7 +209,10 @@ impl<'a> Context<'a> {
+@@ -139,7 +139,10 @@ impl<'a> Context<'a> {
+         required.sort_by_key(|(credential, _)| credential_order(credential));
+         Ok(TxInfo {
+             id: level.id.to_plutus_data(),
+-            sub: level.sub.to_plutus_data(),
++            sub: level
++                .sub
++                .filter(|_| !pallas_crypto::oracle_plant("ctx-v4-subtx-index"))
++                .to_plutus_data(),
+             inputs: self.inputs.iter().map(input).collect(),
+             reference_inputs: self.reference_inputs.iter().map(input).collect(),
+             outputs: self.outputs.iter().map(output).collect(),
+@@ -209,7 +212,10 @@ impl<'a> Context<'a> {
              Purpose::Conway(_, ScriptInfo::Proposing(ix, procedure)) => {
                  (5, vec![ix.to_plutus_data(), proposal(procedure)?])
              }
@@ -450,6 +501,56 @@ index d711513e..00a4d126 100644
          })
      }
  
+diff --git a/pallas-validate/src/phase2/mod.rs b/pallas-validate/src/phase2/mod.rs
+index fa882c7a..93f0d52b 100644
+--- a/pallas-validate/src/phase2/mod.rs
++++ b/pallas-validate/src/phase2/mod.rs
+@@ -88,11 +88,44 @@ pub fn redeemer_arguments(
+         tag: run.tag.into(),
+         index: run.index,
+         language: run.language,
+-        args: run.args,
++        args: if pallas_crypto::oracle_plant("ctx-encoding") {
++            run.args.into_iter().map(serialise_encoding).collect()
++        } else {
++            run.args
++        },
+     });
+     Ok(arguments.collect())
+ }
+ 
++/// The same value with each list and constructor written as Plutus `serialise` writes it.
++#[cfg(feature = "unstable")]
++fn serialise_encoding(data: pallas_primitives::PlutusData) -> pallas_primitives::PlutusData {
++    use pallas_codec::utils::{KeyValuePairs, MaybeIndefArray};
++    use pallas_primitives::PlutusData;
++    fn items(xs: MaybeIndefArray<PlutusData>) -> MaybeIndefArray<PlutusData> {
++        let xs: Vec<PlutusData> = xs.to_vec().into_iter().map(serialise_encoding).collect();
++        if xs.is_empty() {
++            MaybeIndefArray::Def(xs)
++        } else {
++            MaybeIndefArray::Indef(xs)
++        }
++    }
++    match data {
++        PlutusData::Constr(mut x) => {
++            x.fields = items(x.fields);
++            PlutusData::Constr(x)
++        }
++        PlutusData::Array(xs) => PlutusData::Array(items(xs)),
++        PlutusData::Map(kvs) => PlutusData::Map(KeyValuePairs::Def(
++            kvs.to_vec()
++                .into_iter()
++                .map(|(k, v)| (serialise_encoding(k), serialise_encoding(v)))
++                .collect(),
++        )),
++        leaf => leaf,
++    }
++}
++
+ /// Estimate native Dijkstra execution units without checking key witnesses or
+ /// enforcing declared redeemer budgets. Earlier eras return [`Error::WrongEra`].
+ ///
 diff --git a/pallas-validate/src/phase2/native_evaluator.rs b/pallas-validate/src/phase2/native_evaluator.rs
 index 42d4b9a2..9bfcef0c 100644
 --- a/pallas-validate/src/phase2/native_evaluator.rs

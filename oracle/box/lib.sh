@@ -5,7 +5,7 @@ IN_IMAGE=${IN_IMAGE:-$HERE/in-image.sh}
 # One line for each unit of the target dir, the tree ids of the scratch trees its last build read and its output files.
 BUILT="$ROOT/${TARGET:-target}/built-units"
 # The arms that plant a defect, each judged on the records plants/<arm>.records names.
-PLANTED_ARMS="colret coin inflight rodrigo-reverted rob-reverted cost revalidate revalidate-drops subouts byron-attrs byron-signer byron-guard chaincode minfee-subtx emptyguards tag24 v1v2 byron-out tag24-ref unreg-refund drep-deposit upper-inclusive slot-off-by-one horizon-removed system-start cost-models guard-ref-reverted native-ref-reencoded v2-ref-dropped v4-ref-refused v1-ref-exposed pointer-refused script-payment-swap signatories-unsorted withdrawal-order cert-unwrapped script-guard-admitted v3-cert-wrapped v2-withdrawal-unwrapped top-guards-admitted eval-purpose eval-index eval-mem eval-steps eval-ran eval-level v1-guarding v4-v3-context guarding-purpose collateral-unsupported"
+PLANTED_ARMS="colret coin inflight rodrigo-reverted rob-reverted cost revalidate revalidate-drops subouts byron-attrs byron-signer byron-guard chaincode minfee-subtx emptyguards tag24 v1v2 byron-out tag24-ref unreg-refund drep-deposit upper-inclusive slot-off-by-one horizon-removed system-start cost-models guard-ref-reverted native-ref-reencoded v2-ref-dropped v4-ref-refused v1-ref-exposed pointer-refused script-payment-swap signatories-unsorted withdrawal-order cert-unwrapped script-guard-admitted v3-cert-wrapped v2-withdrawal-unwrapped top-guards-admitted eval-purpose eval-index eval-mem eval-steps eval-ran eval-level v1-guarding v4-v3-context guarding-purpose collateral-unsupported ctx-sub-top-info ctx-v3-fee ctx-v4-subtx-index ctx-encoding"
 
 # The arms whose switch an overlay diff adds, one per line.
 switches() {
@@ -93,6 +93,21 @@ same_log() {
   sed 's/; finished in [0-9.]*s$//' "$1" >"$1.untimed"
   sed 's/; finished in [0-9.]*s$//' "$2" >"$2.untimed"
   cmp -s "$1.untimed" "$2.untimed"
+}
+
+# Prints HELD when an encoding arm's log $1 equals the unplanted log $2 but for its ORACLE_PLANT line and a moved bytes_equal count, FIRED when any other line differs, and MISSED when the count did not move.
+encoding_verdict() {
+  grep -v '^ORACLE_PLANT reached ' "$1" | sed 's/ bytes_equal=[0-9]*//' >"$1.blind" || true
+  sed 's/ bytes_equal=[0-9]*//' "$2" >"$2.blind"
+  planted=$(grep -o 'bytes_equal=[0-9]*' "$1" || true)
+  unplanted=$(grep -o 'bytes_equal=[0-9]*' "$2" || true)
+  if ! same_log "$1.blind" "$2.blind"; then
+    echo FIRED
+  elif [ -z "$planted" ] || [ "$planted" = "$unplanted" ]; then
+    echo MISSED
+  else
+    echo HELD
+  fi
 }
 
 # Whether a verdict list holds a passing head and no failed arm or leg.
