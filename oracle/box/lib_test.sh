@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, which arms an overlay switches, when two test logs differ, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes and the box lock.
+# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes and the box lock.
 # Usage: lib_test.sh <empty work dir>
 set -eu
 W=$(cd "$1" && pwd)
@@ -123,6 +123,25 @@ same() {
 # Must not fire on a run time alone, and must fire on one record.
 expect retimed "$(same "$L/head" "$L/retimed")" same
 expect differs "$(same "$L/head" "$L/differs")" differs
+
+# An unplanted log and an encoding arm's logs: one with only bytes_equal moved, one with a context also judged differently, and one with nothing moved.
+context='CONTEXT compared=2 agree=2 differ=0 known=0 unbuilt=0 no_ledger_context=0 pallas_only=0'
+printf '%s\n' "$context bytes_equal=0 by_language=V3=2/0/0 by_level=top=2/0/0" 'RESULT PASS' >"$L/unplanted"
+printf '%s\n' 'ORACLE_PLANT reached e' "$context bytes_equal=2 by_language=V3=2/0/0 by_level=top=2/0/0" 'RESULT PASS' >"$L/rewritten"
+printf '%s\n' 'ORACLE_PLANT reached e' 'CONTEXT compared=2 agree=1 differ=1 known=0 unbuilt=0 no_ledger_context=0 pallas_only=0 bytes_equal=1 by_language=V3=1/0/1 by_level=top=1/0/1' \
+  'CONTEXT-DIFF ic#1 top Spend#0 V3 arg=0 path=0.3 field=context.scriptContextTxInfo.txInfoFee ledger=7 pallas=8' 'RESULT FAIL' >"$L/revalued"
+printf '%s\n' 'ORACLE_PLANT reached e' "$context bytes_equal=0 by_language=V3=2/0/0 by_level=top=2/0/0" 'RESULT PASS' >"$L/unmoved"
+encoding() {
+  (
+    HERE=$H
+    . "$LIB"
+    encoding_verdict "$1" "$L/unplanted"
+  )
+}
+# Must hold when only the bytes count moved, fire on a changed value, and miss when the plant changed no bytes.
+expect encoding_held "$(encoding "$L/rewritten")" HELD
+expect encoding_fired "$(encoding "$L/revalued")" FIRED
+expect encoding_missed "$(encoding "$L/unmoved")" MISSED
 
 # The free gibibytes of a filesystem holding $1 bytes free and require_free's verdict with a floor of $2, with a df that answers -B1 in bytes and -BG in gibibytes rounded up.
 free_of() {

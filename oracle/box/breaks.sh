@@ -178,6 +178,10 @@ caught() {
     v4-ref-refused) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=reference script language ' ;;
     pointer-refused) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=pointer address ' ;;
     collateral-unsupported) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=collateral without Plutus$' ;;
+    ctx-sub-top-info) pattern='^CONTEXT-DIFF [a-z]+#[0-9]+ sub[0-9]+ [A-Za-z]+#[0-9]+ V4 arg=0 path=0\.[0-9.]+ field=context\.scriptContextTxInfo\.txInfo[A-Za-z]+ ' ;;
+    ctx-v3-fee) pattern='^CONTEXT-DIFF [a-z]+#[0-9]+ top [A-Za-z]+#[0-9]+ V3 arg=0 path=0\.3 field=context\.scriptContextTxInfo\.txInfoFee ledger=[0-9]+ pallas=[0-9]+$' ;;
+    ctx-v4-subtx-index) pattern='^CONTEXT-DIFF [a-z]+#[0-9]+ sub[0-9]+ [A-Za-z]+#[0-9]+ V4 arg=0 path=0\.1 field=context\.scriptContextTxInfo\.txInfoSubTxIx ' ;;
+    ctx-encoding) pattern='^CONTEXT-(DIFF|PALLAS-ONLY|STALE) [a-z]+#[0-9]+ ' ;;
     *)
       echo "ARM $arm NO_PATTERN"
       return 1
@@ -253,6 +257,18 @@ overlay_control_clean() {
   return $clean
 }
 
+# Whether an arm's plant changes only how values are written, so it must hold rather than be caught.
+encoding_arm() {
+  [ "$1" = ctx-encoding ]
+}
+
+# Judges an encoding arm's records on the overlay with no switch set and sets held to the arm's verdict against that run.
+held() {
+  run_overlay "$1" "" "$OUT/$1.unplanted.log" "$(paste -sd, "$HERE/plants/$1.records")"
+  grep -h '^CONTEXT ' "$OUT/$1.unplanted.log" "$OUT/$1.log" | sed "s/^/ARM $1 /" || true
+  held=$(encoding_verdict "$OUT/$1.log" "$OUT/$1.unplanted.log")
+}
+
 overlay_arms=
 for arm in $ARMS; do
   if switched "$arm"; then
@@ -281,6 +297,10 @@ for arm in $ARMS; do
       echo "ARM $arm UNREACHED log=$OUT/$arm.log"
       echo "$arm=MISSED"
       verdicts="$verdicts $arm=MISSED"
+    elif encoding_arm "$arm"; then
+      held "$arm"
+      echo "$arm=$held"
+      verdicts="$verdicts $arm=$held"
     elif caught "$arm" "$OUT/$arm.log" "$OUT/$arm"; then
       echo "$arm=CAUGHT"
       verdicts="$verdicts $arm=CAUGHT"
@@ -367,7 +387,7 @@ for arm in $ARMS; do
     echo "control=$control"
     verdicts="$verdicts control=$control"
   elif [ "$arm" = head ]; then
-    grep -E '^(CORPUS|VALIDATION|DEPENDENT|KNOWN|STATE|COST|EVAL-ORACLE|EVAL-DIFF|EVAL-TOTAL|EVAL-UNNAMED|EVAL-FEE|REVALIDATE|BUILTIN|BUILTIN_UNCOVERED|ROLL_FAIL|RESULT|DISAGREE|REASON_MISMATCH|CASCADE|UNSUPPORTED_UNEXPECTED|STALE_MANIFEST|KNOWN_STALE|UNKNOWN_REFUSAL) ' "$OUT/$arm.log" |
+    grep -E '^(CORPUS|VALIDATION|DEPENDENT|KNOWN|STATE|COST|EVAL-ORACLE|EVAL-DIFF|EVAL-TOTAL|EVAL-UNNAMED|EVAL-FEE|CONTEXT|CONTEXT-DIFF|CONTEXT-PALLAS-ONLY|CONTEXT-STALE|REVALIDATE|BUILTIN|BUILTIN_UNCOVERED|ROLL_FAIL|RESULT|DISAGREE|REASON_MISMATCH|CASCADE|UNSUPPORTED_UNEXPECTED|STALE_MANIFEST|KNOWN_STALE|UNKNOWN_REFUSAL) ' "$OUT/$arm.log" |
       cut -c1-400 || true
     if grep -q '^RESULT PASS' "$OUT/$arm.log" && ! grep -q '^RESULT FAIL' "$OUT/$arm.log"; then
       head_result=PASS
