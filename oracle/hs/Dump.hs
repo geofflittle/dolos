@@ -249,18 +249,19 @@ dumpTo out g (TRC (env, st, stAnn)) res = liftIO $ do
           , "gov_pre" A..= govJson st
           , "treasury" A..= unCoin (casTreasury (ledgerAccount env))
           , "outcome" A..= outcome
-          , "ex_units" A..= map evaluationJson (Map.toList topReport)
-          , "sub_ex_units" A..= map (map evaluationJson . Map.toList) subReports
+          , "ex_units" A..= maybe [] (map evaluationJson . Map.toList . fst) reports
+          , "sub_ex_units" A..= maybe [] (map (map evaluationJson . Map.toList) . snd) reports
           , "min_fee" A..= either (const Nothing) (\t -> Just (unCoin (getMinFeeTxUtxo (ledgerPp env) t pre))) decoded
           , "time" A..= timeJson g (ledgerSlotNo env)
           ]
-      (topReport, subReports) = levelReports (ledgerPp env) g pre stAnn
+      -- The redeemer reports of the bytes the ledger decoded, none for bytes its decoder refused.
+      reports = either (const Nothing) (const (Just (levelReports (ledgerPp env) g pre stAnn))) decoded
       -- The ledger's outcome for the same transaction under a true flag, the form a node receives it in.
       submitted =
         let flagged = tx & isPhase2ValidTxL .~ Phase2Valid
             annotated = mkStAnnTx (epochInfo g) (systemStart g) (ledgerPp env) pre mempty flagged
          in fst (outcomeOf (runReader (applySTS @(EraRule "LEDGER" E) (TRC (env, st, annotated))) g))
-  keys <- either (\e -> fail ("record " <> show n <> ", " <> e)) pure (ruleAgrees (ledgerPp env) stAnn topReport subReports)
+  keys <- either (\e -> fail ("record " <> show n <> ", " <> e)) pure (maybe (Right 0) (uncurry (ruleAgrees (ledgerPp env) stAnn)) reports)
   modifyIORef' ruleKeys (+ keys)
   total <- readIORef ruleKeys
   when (keys > 0) $ hPutStrLn stderr ("rule arguments agree on " <> show total <> " redeemers")

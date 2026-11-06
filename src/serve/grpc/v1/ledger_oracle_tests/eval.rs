@@ -10,7 +10,7 @@ use ledger_oracle_judge::{
         self, named_in_message, wire_purpose, Answer, DolosAnswer, EvalTally, Layer, Level,
         Malformed, Refusal, RowKey, RowVerdict, WireEval, WireFee,
     },
-    record::{Record, RecordId, Units},
+    record::{LedgerRedeemers, Record, RecordId, Units},
 };
 use pallas::codec::minicbor;
 use pallas::ledger::primitives::dijkstra::Language;
@@ -182,17 +182,24 @@ pub(super) async fn judge_record(
     listed: &BTreeMap<RowKey, Refusal>,
     tally: &mut EvalTally,
 ) -> Vec<Builtin> {
-    let ledger = eval::ledger_rows(record);
-    tally.collisions += eval::collisions(&ledger);
     let tx = &record.tx.0;
+    let wires = wire_evals(group, tx).await;
+    for (layer, wire) in &wires {
+        tally.add_total(*layer, id, wire);
+        tally.add_fee(*layer, id, record.min_fee, &wire.fee);
+    }
+    let LedgerRedeemers::Read(redeemers) = &record.redeemers else {
+        tally.undecoded += 1;
+        return Vec::new();
+    };
+    let ledger = eval::ledger_rows(redeemers);
+    tally.collisions += eval::collisions(&ledger);
     let evaluator = evaluator(group.estimate(tx));
     let refusal = evaluator
         .refusal
         .as_ref()
         .map(|(text, r)| (text.as_str(), r));
-    for (layer, wire) in wire_evals(group, tx).await {
-        tally.add_total(layer, id, &wire);
-        tally.add_fee(layer, id, record.min_fee, &wire.fee);
+    for (layer, wire) in wires {
         let unrepresentable = evaluator.unrepresentable.get(&layer);
         let answer = wire.answer(refusal, unrepresentable.map(String::as_str));
         tally.add_answer(layer, id, &ledger, listed, answer);

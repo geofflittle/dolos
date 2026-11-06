@@ -13,10 +13,10 @@ use crate::{
 };
 
 /// The sha256 of the decompressed Imp spec corpus.
-pub const IC_SHA256: &str = "4f8dc7425f7bb0c53a19f4e02cf6e8204b8a7aa206aa72dc6d9810c7aba93637";
+pub const IC_SHA256: &str = "38eb868092373a3d10f9f0da913216115b5ce00459993b435768b2e6274575d6";
 
 /// The sha256 of the decompressed supplement corpus.
-pub const SUPP_SHA256: &str = "2093168ef2778a747cda703a32e1a1a53a7995787c148e0711d20daa71a5fb6e";
+pub const SUPP_SHA256: &str = "0b13f2138fb9da18f9d1c8e32166e712c534745e5cee56151a28155d40ae65ba";
 
 /// The sha256 of the decompressed phase one corpus.
 pub const P1_SHA256: &str = "633ab3d7f82825aeca9de26789650e79eeed54832c97e7480836c0cf9c9a2a60";
@@ -235,6 +235,7 @@ pub fn load(kind: CorpusKind) -> Result<Corpus, LoadError> {
 mod tests {
     use super::*;
     use crate::cbor;
+    use crate::record::{LedgerRedeemers, Redeemers};
 
     fn ic_bytes() -> Vec<u8> {
         gunzip(CorpusKind::Ic.gz()).unwrap()
@@ -265,11 +266,11 @@ mod tests {
     fn committed_corpora_load_into_their_runs() {
         assert_eq!(
             load(CorpusKind::Ic).unwrap().to_string(),
-            "CORPUS ic sha=4f8dc7425f7bb0c5 records=9853 runs=892 kept_records=9853"
+            "CORPUS ic sha=38eb868092373a3d records=9853 runs=892 kept_records=9853"
         );
         assert_eq!(
             load(CorpusKind::Supp).unwrap().to_string(),
-            "CORPUS supp sha=2093168ef2778a74 records=190 runs=58 kept_records=190"
+            "CORPUS supp sha=0b13f2138fb9da18 records=190 runs=58 kept_records=190"
         );
         assert_eq!(
             load(CorpusKind::P1).unwrap().to_string(),
@@ -285,7 +286,7 @@ mod tests {
         let e = verify(CorpusKind::Ic, &bytes, IC_SHA256).unwrap_err();
         assert!(e
             .to_string()
-            .starts_with("CORPUS ic sha mismatch expected=4f8dc742"));
+            .starts_with("CORPUS ic sha mismatch expected=38eb8680"));
     }
 
     #[test]
@@ -310,17 +311,64 @@ mod tests {
             let redeemers = records
                 .unwrap()
                 .into_iter()
-                .flat_map(|r| {
-                    r.ex_units
-                        .into_iter()
-                        .chain(r.sub_ex_units.into_iter().flatten())
+                .flat_map(|r| match r.redeemers {
+                    LedgerRedeemers::Read(Redeemers { top, subs }) => {
+                        top.into_iter().chain(subs.into_iter().flatten()).collect()
+                    }
+                    LedgerRedeemers::Undecoded => Vec::new(),
                 })
                 .collect::<Vec<_>>();
             let built = redeemers.iter().filter(|r| r.args.is_some()).count();
             (redeemers.len(), built)
         };
         assert_eq!(built(CorpusKind::Ic), (472, 402));
-        assert_eq!(built(CorpusKind::Supp), (31, 28));
+        assert_eq!(built(CorpusKind::Supp), (30, 27));
+    }
+
+    #[test]
+    fn committed_corpora_list_no_redeemer_for_bytes_the_decoder_refused() {
+        let undecoded = |kind| {
+            let records =
+                records(verify(kind, &gunzip(kind.gz()).unwrap(), kind.sha256()).unwrap());
+            let undecoded = records.unwrap().into_iter();
+            undecoded
+                .filter(|r| r.redeemers == LedgerRedeemers::Undecoded)
+                .count()
+        };
+        assert_eq!(undecoded(CorpusKind::Ic), 1);
+        assert_eq!(undecoded(CorpusKind::Supp), 33);
+    }
+
+    #[test]
+    fn a_record_the_decoder_refused_listing_redeemers_fails_the_load() {
+        let decoder_refused = |v: &serde_json::Value| {
+            v["outcome"]["refused"]["failure_names"][0][0]
+                .as_str()
+                .is_some_and(|name| name.starts_with("DecoderError"))
+        };
+        let lines: Vec<serde_json::Value> = ic_bytes()
+            .split(|b| *b == b'\n')
+            .filter(|l| !l.is_empty())
+            .map(|l| serde_json::from_slice(l).unwrap())
+            .collect();
+        let refused = lines.iter().position(decoder_refused).unwrap();
+        let redeemer = lines
+            .iter()
+            .find_map(|v| v["ex_units"].as_array()?.first().cloned())
+            .unwrap();
+        let unchanged = edit_line(refused, |_| {});
+        assert_eq!(reload(CorpusKind::Ic, &unchanged).unwrap().len(), 9853);
+        let listed = edit_line(refused, |v| {
+            v["ex_units"] = serde_json::Value::Array(vec![redeemer.clone()]);
+        });
+        let e = reload(CorpusKind::Ic, &listed).unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            format!(
+                "CORPUS ic load error records=1 first_line={} reason=the ledger's decoder refused the bytes and 1 redeemers are listed",
+                refused + 1
+            )
+        );
     }
 
     #[test]
