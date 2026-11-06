@@ -338,45 +338,60 @@ pub fn chunk_blocks(secondary: &[u8], chunk: &[u8]) -> Result<Vec<NodeBlock>, St
 pub enum BlockBytes {
     Same,
     /// A block whose body holds a certificate, whose header bytes are the
-    /// node's and whose body carries the endorsed transactions in place of the
-    /// node's certificate body.
-    SameHeader,
+    /// node's and whose body carries this many transactions, the node's
+    /// endorser block's in order.
+    SameHeader(usize),
     NodeAbsent,
     HeaderDiffers,
     BytesDiffer,
+    EndorsedDiffer,
+}
+
+/// How the transactions a certifying block serves compare with its endorser block's on the node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Endorsed {
+    /// Both lists hold this many transactions, equal in id, bytes and order.
+    Agree(usize),
+    Differ,
 }
 
 impl BlockBytes {
     /// Whether the served bytes agree with the node's.
     pub fn agrees(self) -> bool {
-        matches!(self, BlockBytes::Same | BlockBytes::SameHeader)
+        matches!(self, BlockBytes::Same | BlockBytes::SameHeader(_))
     }
 
     /// The name printed in judgement lines.
     pub fn name(self) -> &'static str {
         match self {
             BlockBytes::Same => "same",
-            BlockBytes::SameHeader => "same_header",
+            BlockBytes::SameHeader(_) => "same_header",
             BlockBytes::NodeAbsent => "node_absent",
             BlockBytes::HeaderDiffers => "header_differs",
             BlockBytes::BytesDiffer => "bytes_differ",
+            BlockBytes::EndorsedDiffer => "endorsed_differ",
         }
     }
 }
 
-/// Compares the bytes Dolos serves for a block with the node's, the header
-/// alone for a block whose body holds a certificate.
-pub fn block_bytes(node: Option<&NodeBlock>, served: &[u8], certifying: bool) -> BlockBytes {
+/// Compares the bytes Dolos serves for a block with the node's, the header and
+/// the endorsed transactions for a block whose body holds a certificate.
+pub fn block_bytes(
+    node: Option<&NodeBlock>,
+    served: &[u8],
+    endorsed: Option<Endorsed>,
+) -> BlockBytes {
     let Some(node) = node else {
         return BlockBytes::NodeAbsent;
     };
     if served.get(node.header.clone()) != node.bytes.get(node.header.clone()) {
         return BlockBytes::HeaderDiffers;
     }
-    match (served == node.bytes.as_slice(), certifying) {
+    match (served == node.bytes.as_slice(), endorsed) {
+        (_, Some(Endorsed::Differ)) => BlockBytes::EndorsedDiffer,
         (true, _) => BlockBytes::Same,
-        (false, true) => BlockBytes::SameHeader,
-        (false, false) => BlockBytes::BytesDiffer,
+        (false, Some(Endorsed::Agree(n))) => BlockBytes::SameHeader(n),
+        (false, None) => BlockBytes::BytesDiffer,
     }
 }
 
@@ -546,31 +561,42 @@ mod tests {
     }
 
     #[test]
-    fn served_block_bytes_agree_only_with_the_node_bytes_or_its_header_when_certifying() {
+    fn served_block_bytes_agree_only_with_the_node_bytes_or_its_header_and_endorser_block() {
         let node = NodeBlock {
             slot: 7,
             header: 1..3,
             bytes: b"aHHbb".to_vec(),
         };
-        assert_eq!(block_bytes(Some(&node), b"aHHbb", false), BlockBytes::Same);
-        assert_eq!(block_bytes(Some(&node), b"aHHbb", true), BlockBytes::Same);
+        let agree = Some(Endorsed::Agree(2));
+        assert_eq!(block_bytes(Some(&node), b"aHHbb", None), BlockBytes::Same);
+        assert_eq!(block_bytes(Some(&node), b"aHHbb", agree), BlockBytes::Same);
         assert_eq!(
-            block_bytes(Some(&node), b"aHHxxxx", true),
-            BlockBytes::SameHeader
+            block_bytes(Some(&node), b"aHHxxxx", agree),
+            BlockBytes::SameHeader(2)
+        );
+        assert!(BlockBytes::SameHeader(2).agrees());
+        assert_eq!(
+            block_bytes(Some(&node), b"aHHxxxx", Some(Endorsed::Differ)),
+            BlockBytes::EndorsedDiffer
         );
         assert_eq!(
-            block_bytes(Some(&node), b"aHHxxxx", false),
+            block_bytes(Some(&node), b"aHHbb", Some(Endorsed::Differ)),
+            BlockBytes::EndorsedDiffer
+        );
+        assert!(!BlockBytes::EndorsedDiffer.agrees());
+        assert_eq!(
+            block_bytes(Some(&node), b"aHHxxxx", None),
             BlockBytes::BytesDiffer
         );
         assert_eq!(
-            block_bytes(Some(&node), b"aHXbb", true),
+            block_bytes(Some(&node), b"aHXbb", agree),
             BlockBytes::HeaderDiffers
         );
         assert_eq!(
-            block_bytes(Some(&node), b"aH", true),
+            block_bytes(Some(&node), b"aH", agree),
             BlockBytes::HeaderDiffers
         );
-        assert_eq!(block_bytes(None, b"aHHbb", false), BlockBytes::NodeAbsent);
+        assert_eq!(block_bytes(None, b"aHHbb", None), BlockBytes::NodeAbsent);
         assert!(!BlockBytes::NodeAbsent.agrees());
     }
 

@@ -9,7 +9,8 @@ use ledger_oracle_judge::{
     compare::Tally,
     live::{
         block_bytes, chunk_blocks, compare_era_summary, compare_utxos, settle, Aligned, AtPoint,
-        NodeSlot, NodeTime, NodeTip, Point, ServedEra, ServedTime, UtxoBracket, UtxoReads,
+        Endorsed, NodeBlock, NodeSlot, NodeTime, NodeTip, Point, ServedEra, ServedTime,
+        UtxoBracket, UtxoReads,
     },
     manifest::{self, Candidates, Known, LiveLocus},
     record::PParams,
@@ -26,8 +27,9 @@ use super::super::spec::{
     sync::{self as s, any_chain_block},
 };
 use super::{
+    endorser::{judge_served, node_txs, Judged, NodeEndorser},
     output, params,
-    serve::{add_block, add_tx, Served},
+    serve::{add_block, add_tx, Served, Service},
     show_input,
 };
 
@@ -214,15 +216,62 @@ fn compare_blocks(dir: &Path, tally: &mut Tally) {
             .as_ref()
             .unwrap_or_else(|| panic!("LIVE {name} serves no header"));
         let certifying = header.body_contains_leios_certificate;
-        let verdict = block_bytes(node.get(&header.slot), &block.native_bytes, certifying);
+        let (endorsed, lines) = if certifying {
+            let judged = endorsed(dir, &node, header.slot, &block);
+            let lines = match &judged {
+                Ok(judged) => judged.lines(Service::FetchBlock, header.slot),
+                Err(e) => vec![format!("unjudged={e}")],
+            };
+            let agreed = judged.ok().and_then(|j| j.agreed());
+            (
+                Some(agreed.map_or(Endorsed::Differ, Endorsed::Agree)),
+                lines,
+            )
+        } else {
+            (None, Vec::new())
+        };
+        let verdict = block_bytes(node.get(&header.slot), &block.native_bytes, endorsed);
         tally.add(verdict.agrees(), || {
-            format!(
+            let mut line = format!(
                 "{name} slot={} certifying={certifying} bytes={}",
                 header.slot,
                 verdict.name()
-            )
+            );
+            for l in &lines {
+                line.push(' ');
+                line.push_str(l);
+            }
+            line
         });
     }
+}
+
+/// The served transactions of a certifying block judged against the node's
+/// block, its parent among the node's blocks and the endorser block the node's
+/// leios store holds for it in `node-eb-<slot>.json`.
+fn endorsed(
+    dir: &Path,
+    node: &BTreeMap<u64, NodeBlock>,
+    slot: u64,
+    served: &s::AnyChainBlock,
+) -> Result<Judged, String> {
+    let block = node.get(&slot).ok_or("node block absent")?;
+    let decoded = traverse::MultiEraBlock::decode(&block.bytes).map_err(|e| e.to_string())?;
+    let prev = decoded
+        .header()
+        .previous_hash()
+        .ok_or("the node block names no parent")?;
+    let parent = node
+        .range(..slot)
+        .rev()
+        .find(|(_, b)| traverse::MultiEraBlock::decode(&b.bytes).is_ok_and(|p| p.hash() == prev))
+        .ok_or(format!("node parent {prev} absent"))?
+        .1;
+    let path = dir.join(format!("node-eb-{slot}.json"));
+    let text = fs::read_to_string(&path).map_err(|e| format!("{} {e}", path.display()))?;
+    let stored: NodeEndorser = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let txs = node_txs(&parent.bytes, &block.bytes, Some(&stored))?;
+    judge_served(served, &txs)
 }
 
 /// The fields of a served output that state other values than the output

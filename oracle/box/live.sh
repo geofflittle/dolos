@@ -82,6 +82,18 @@ query_node tip node-tip-after.json
 for slot in $BATCH_SLOTS; do
   read_endpoint sync.SyncService/FetchBlock "{\"ref\":[{\"slot\":$slot}]}" "block-$slot.json"
   node_chunk "$slot"
+  # A certifying block is judged against the endorser block its parent
+  # announced, read from the node's leios store, and against its parent's bytes.
+  if [ "$(jq -r '.block.cardano.header.bodyContainsLeiosCertificate // false' "$DIR/block-$slot.json")" = true ]; then
+    height=$(jq -er .block.cardano.header.height "$DIR/block-$slot.json")
+    read_endpoint sync.SyncService/FetchBlock "{\"ref\":[{\"height\":$((height - 1))}]}" "parent-$slot.json"
+    node_chunk "$(jq -er .block.cardano.header.slot "$DIR/parent-$slot.json")"
+    eb=$(jq -er .block.cardano.header.endorserBlockAnnouncement.referencesHash "$DIR/parent-$slot.json" |
+      base64 -d | od -An -v -tx1 | tr -d ' \n')
+    python3 -I "$(dirname "$0")/endorser_fixture.py" node-eb "$NODE_DB/leios.imm.db" \
+      "$(jq -er .slot "$DIR/node-tip-before.json")" "$slot" "$eb" >"$DIR/node-eb-$slot.json" \
+      2>"$DIR/node-eb-$slot.err" || true
+  fi
   n=0
   for hash in $(jq -r '.block.cardano.body.tx[] | select(.subTransactions) | .common.hash' "$DIR/block-$slot.json"); do
     read_endpoint query.QueryService/ReadTx "{\"hash\":\"$hash\"}" "tx-$slot-$n.json"
