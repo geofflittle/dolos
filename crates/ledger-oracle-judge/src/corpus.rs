@@ -19,7 +19,7 @@ pub const IC_SHA256: &str = "38eb868092373a3d10f9f0da913216115b5ce00459993b43576
 pub const SUPP_SHA256: &str = "0b13f2138fb9da18f9d1c8e32166e712c534745e5cee56151a28155d40ae65ba";
 
 /// The sha256 of the decompressed phase one corpus.
-pub const P1_SHA256: &str = "633ab3d7f82825aeca9de26789650e79eeed54832c97e7480836c0cf9c9a2a60";
+pub const P1_SHA256: &str = "861611cc08a7ff09d45e1bdfda556ab8c8a0bed534df8a16ed228a74481539a2";
 
 const IC_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/ic.jsonl.gz");
 const SUPP_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/supp.jsonl.gz");
@@ -274,7 +274,7 @@ mod tests {
         );
         assert_eq!(
             load(CorpusKind::P1).unwrap().to_string(),
-            "CORPUS p1 sha=633ab3d7f82825ae records=65 runs=22 kept_records=65"
+            "CORPUS p1 sha=861611cc08a7ff09 records=65 runs=22 kept_records=65"
         );
     }
 
