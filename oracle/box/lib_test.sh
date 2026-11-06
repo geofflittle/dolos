@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, which arms an overlay switches, when two test logs differ, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, the pallas pin, the scratch pallas checkout, when the value leg is due, when a value arm is caught, what the value leg hands the harness tier, the amaru pin and the amaru leg's verdicts.
+# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, which arms an overlay switches, when two test logs differ, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, the pallas pin, the scratch pallas checkout, when the value leg is due, when a value arm is caught, what the value leg hands the harness tier, the value control's verdict, the amaru pin and the amaru leg's verdicts.
 # Usage: lib_test.sh <empty work dir>
 set -eu
 W=$(cd "$1" && pwd)
@@ -582,6 +582,29 @@ tier_of() {
 # Must not hand every pair when pairs are named, and must hand the given files and no pairs when none are.
 expect tier_pairs "$(tier_of 'tx:given eb:arb')" "pairs=[tx:given eb:arb] probe=head tx=3 block=dijkstra-b.block eb=c.ebbody n=7"
 expect tier_all "$(tier_of '')" "pairs=[] probe=head tx=3 block=dijkstra-b.block eb=c.ebbody n=7"
+
+# A head dir holding the values $2 and the head probe output $3 for the pair tx.given, and the verdict of value_control with a probe printing $4.
+control_of() {
+  R=$W/control-$1
+  rm -rf "$R"
+  mkdir -p "$R/head"
+  if [ -n "$2" ]; then
+    echo "$2" >"$R/head/tx.given.gen.jsonl"
+    printf '%s\n' "$3" >"$R/head/tx.given.probe.jsonl"
+  fi
+  printf '#!/bin/sh\nprintf "%%s\\n" "%s"\n' "$4" >"$R/probe"
+  chmod +x "$R/probe"
+  (
+    ROOT=$W HERE=$HERE
+    . "$HERE/value.sh"
+    if value_control "$R/head" "$R/control" "$R/probe" >/dev/null 2>&1; then echo clean; else echo fired; fi
+  )
+}
+# Must not fire on equal output, and must fire on no values, other output and a reached plant.
+expect control_same "$(control_of same v 'out' 'out')" clean
+expect control_none "$(control_of none '' '' 'out')" fired
+expect control_differs "$(control_of differs v 'out' 'other')" fired
+expect control_reached "$(control_of reached v 'ORACLE_PLANT reached x' 'ORACLE_PLANT reached x')" fired
 
 # Must keep a value switch's name and prefix an overlay switch's.
 expect value_key "$(
