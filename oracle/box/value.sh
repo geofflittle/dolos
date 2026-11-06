@@ -109,6 +109,31 @@ value_tier() {
   )
 }
 
+# Whether the probe $3 run over each value of the head dir $1 into the dir $2 ran at least one value, reached no plant and printed what the head probe printed.
+value_control() {
+  mkdir -p "$2"
+  clean=yes
+  values=0
+  for gen in "$1"/*.gen.jsonl; do
+    [ -e "$gen" ] || continue
+    base=$(basename "$gen" .gen.jsonl)
+    "$3" "${base%%.*}" <"$gen" >"$2/$base.probe.out" 2>"$2/$base.err"
+    if grep -q '^ORACLE_PLANT reached ' "$2/$base.probe.out"; then
+      echo "VALUE control REACHED $base"
+      clean=no
+    fi
+    if cmp -s "$1/$base.probe.jsonl" "$2/$base.probe.out"; then
+      rm -f "$2/$base.probe.out"
+    else
+      echo "VALUE control DIFFERS $base"
+      clean=no
+    fi
+    values=$((values + $(grep -c . "$gen")))
+  done
+  echo "VALUE control values=$values"
+  [ "$clean" = yes ] && [ "$values" -gt 0 ]
+}
+
 # Judges the pinned pallas with the head probe, the overlay probe with no switch set against the head's output and each arm, printing one VALUE line of verdicts.
 value_leg() {
   started=$(date +%s)
@@ -130,27 +155,9 @@ value_leg() {
   if { git -C "$ROOT/$PALLAS" apply "$HERE/overlay/pallas.diff" &&
     git -C "$ROOT/$PALLAS" apply "$HERE/value/pallas.diff"; } >"$OUT/value/overlay.plant" 2>&1 &&
     value_probe overlay target/value-overlay; then
-    mkdir -p "$OUT/value/control"
-    control=CLEAN
-    values=0
-    for gen in "$OUT"/value/head/*.gen.jsonl; do
-      base=$(basename "$gen" .gen.jsonl)
-      "$OUT/value/bin/overlay" "${base%%.*}" <"$gen" >"$OUT/value/control/$base.probe.out" 2>"$OUT/value/control/$base.err"
-      if grep -q '^ORACLE_PLANT reached ' "$OUT/value/control/$base.probe.out"; then
-        echo "VALUE control REACHED $base"
-        control=FIRED
-      fi
-      if cmp -s "$OUT/value/head/$base.probe.jsonl" "$OUT/value/control/$base.probe.out"; then
-        rm -f "$OUT/value/control/$base.probe.out"
-      else
-        echo "VALUE control DIFFERS $base"
-        control=FIRED
-      fi
-      values=$((values + $(grep -c . "$gen")))
-    done
-    echo "VALUE control values=$values"
-    if [ "$values" -eq 0 ]; then
-      control=FIRED
+    control=FIRED
+    if value_control "$OUT/value/head" "$OUT/value/control" "$OUT/value/bin/overlay"; then
+      control=CLEAN
     fi
     verdicts="$verdicts value-control=$control"
     for arm in $VALUE_ARMS; do
