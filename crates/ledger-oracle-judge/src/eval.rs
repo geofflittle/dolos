@@ -81,7 +81,7 @@ fn tag_number(name: &str) -> Option<u64> {
 }
 
 /// The purpose a message names as `<tag>#<index>`.
-fn parse_purpose(s: &str) -> Result<Purpose, String> {
+pub(crate) fn parse_purpose(s: &str) -> Result<Purpose, String> {
     let (tag, index) = s.split_once('#').ok_or(format!("bad purpose {s}"))?;
     let tag = tag_number(tag).ok_or(format!("bad purpose tag {tag}"))?;
     let index = index

@@ -198,6 +198,26 @@ pub fn estimate_tx_calls<D: Domain>(
     estimate_decoded::<D>(&tx, utxos, genesis, &pparams, None)
 }
 
+/// The arguments each redeemer's script of a Dijkstra transaction is applied to, with the script's language.
+pub fn redeemer_arguments<D: Domain>(
+    cbor: &[u8],
+    utxos: &MempoolAwareUtxoStore<D>,
+    genesis: &Genesis,
+) -> Result<Vec<pallas_validate::phase2::tx::RedeemerArguments>, ChainError> {
+    let active = crate::load_effective_pparams::<D>(utxos.state())?;
+    let tx = decode_submission(submission_era(active.ensure_protocol_version()?)?, cbor)?;
+    let pparams = validation_parameters(&active)?;
+    if !requests_scripts(&tx) {
+        return Ok(vec![]);
+    }
+    let (utxos, _, time) = evaluation_inputs::<D>(&tx, utxos, genesis, None)?;
+    let time = time.ok_or(evaluation_error(
+        pallas_validate::phase2::error::Error::WrongEra(),
+    ))?;
+    pallas_validate::phase2::redeemer_arguments(&tx, &pparams, &utxos, &time)
+        .map_err(evaluation_error)
+}
+
 /// The minimum fee of a Dijkstra transaction under the active parameters,
 /// with the redeemers of its top level and sub transactions priced together,
 /// none outside Dijkstra.

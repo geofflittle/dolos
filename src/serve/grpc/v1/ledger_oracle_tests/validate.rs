@@ -28,7 +28,10 @@ use pallas::{
         },
         traverse::MultiEraBlock,
         validate::{
-            phase2::{tx::MultiEraTxEvalResult, Builtin},
+            phase2::{
+                tx::{MultiEraTxEvalResult, RedeemerArguments},
+                Builtin,
+            },
             utils::{DijkstraTimeError, PostAlonzoError, ValidationError},
         },
     },
@@ -226,6 +229,11 @@ impl Group {
         tx: &[u8],
     ) -> Result<Vec<(MultiEraTxEvalResult, Vec<Builtin>)>, ChainError> {
         dolos_cardano::validate::estimate_tx_calls(tx, &self.utxos(), &self.domain.genesis)
+    }
+
+    /// The arguments the evaluator applies each redeemer's script of one transaction to, against the group's stores and mempool.
+    pub(super) fn arguments(&self, tx: &[u8]) -> Result<Vec<RedeemerArguments>, ChainError> {
+        dolos_cardano::validate::redeemer_arguments(tx, &self.utxos(), &self.domain.genesis)
     }
 
     /// The minimum fee Dolos computes for one transaction against the group's stores and mempool.

@@ -324,8 +324,11 @@ impl Int {
 
 impl std::fmt::Display for Int {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let small = (self.magnitude.len() <= 16)
-            .then(|| self.magnitude.iter().fold(0u128, |acc, b| (acc << 8) | u128::from(*b)));
+        let small = (self.magnitude.len() <= 16).then(|| {
+            self.magnitude
+                .iter()
+                .fold(0u128, |acc, b| (acc << 8) | u128::from(*b))
+        });
         match (self.negative, small) {
             (false, Some(n)) => write!(f, "{n}"),
             (true, Some(n)) if n < u128::MAX => write!(f, "-{}", n + 1),

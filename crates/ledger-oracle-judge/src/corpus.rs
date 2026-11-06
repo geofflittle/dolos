@@ -295,11 +295,16 @@ mod tests {
     #[test]
     fn committed_corpora_carry_the_arguments_of_each_context_the_ledger_built() {
         let built = |kind| {
-            let records = records(verify(kind, &gunzip(kind.gz()).unwrap(), kind.sha256()).unwrap());
+            let records =
+                records(verify(kind, &gunzip(kind.gz()).unwrap(), kind.sha256()).unwrap());
             let redeemers = records
                 .unwrap()
                 .into_iter()
-                .flat_map(|r| r.ex_units.into_iter().chain(r.sub_ex_units.into_iter().flatten()))
+                .flat_map(|r| {
+                    r.ex_units
+                        .into_iter()
+                        .chain(r.sub_ex_units.into_iter().flatten())
+                })
                 .collect::<Vec<_>>();
             let built = redeemers.iter().filter(|r| r.args.is_some()).count();
             (redeemers.len(), built)
