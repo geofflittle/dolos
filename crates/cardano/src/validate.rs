@@ -1168,7 +1168,7 @@ mod parameter_tests {
 #[cfg(test)]
 mod evaluation_tests {
     use super::*;
-    use pallas_validate::phase2::error::{Error, Unsupported};
+    use pallas_validate::phase2::error::{Error, Unsupported, UnsupportedEvaluation};
 
     #[test]
     fn an_evaluation_error_keeps_its_message() {
@@ -1181,7 +1181,7 @@ mod evaluation_tests {
 
     #[test]
     fn an_unsupported_evaluation_keeps_its_label() {
-        let unsupported = Unsupported("V3 builtin outside audited protocol-12 subset");
+        let unsupported = Unsupported(UnsupportedEvaluation::BuiltinOutsideSubset);
         let error = evaluation_error(Error::DijkstraUnsupported(unsupported));
         assert!(
             matches!(&error, ChainError::Phase2EvaluationUnsupported(x) if *x == unsupported),

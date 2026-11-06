@@ -363,10 +363,9 @@ fn post_alonzo_class(e: &PostAlonzoError) -> DolosClass {
     use PostAlonzoError as P;
     use RefusalClass as C;
     let class = match e {
-        P::InputNotInUTxO
-        | P::ReferenceInputNotInUTxO
-        | P::CollateralNotInUTxO
-        | P::TxInsEmpty => C::Inputs,
+        P::InputNotInUTxO | P::ReferenceInputNotInUTxO | P::CollateralNotInUTxO | P::TxInsEmpty => {
+            C::Inputs
+        }
         P::PreservationOfValue
         | P::NegativeValue
         | P::MinLovelaceUnreached
@@ -438,15 +437,28 @@ fn validation_class(v: &ValidationError) -> DolosClass {
     DolosClass::Rule(class)
 }
 
+/// The rule a validation error names, with the label of a labelled variant and without the values of any other.
+fn rule(v: &ValidationError) -> String {
+    use ValidationError as V;
+    match v {
+        V::PostAlonzo(e) => format!("PostAlonzo({})", variant_name(format!("{e:?}"))),
+        V::DijkstraTime(e) => format!("DijkstraTime({})", variant_name(format!("{e:?}"))),
+        V::DijkstraInvalidCertificate(_)
+        | V::DijkstraInvalidAccount(_)
+        | V::DijkstraInvalidGovernance(_)
+        | V::DijkstraMissingParameters(_)
+        | V::DijkstraInvalidWithdrawal(_)
+        | V::DijkstraMalformed(_)
+        | V::DijkstraScriptContext(_) => format!("{v:?}"),
+        other => variant_name(format!("{other:?}")),
+    }
+}
+
 fn validation_verdict(v: &ValidationError) -> DolosVerdict {
     match v {
         ValidationError::DijkstraUnsupported(label) => DolosVerdict::Unsupported(label.to_string()),
-        ValidationError::PostAlonzo(e) => DolosVerdict::Refused {
-            kind: variant_name(format!("{e:?}")),
-            class: validation_class(v),
-        },
         other => DolosVerdict::Refused {
-            kind: variant_name(format!("{other:?}")),
+            kind: rule(other),
             class: validation_class(other),
         },
     }
@@ -472,13 +484,70 @@ mod tests {
 
     #[test]
     fn an_unsupported_phase_two_evaluation_is_unsupported_with_its_label() {
-        let label = "V3 builtin outside audited protocol-12 subset";
-        let error = ChainError::Phase2EvaluationUnsupported(
-            pallas::ledger::validate::phase2::error::Unsupported(label),
-        );
+        use pallas::ledger::validate::phase2::error::{Unsupported, UnsupportedEvaluation};
+        let error = ChainError::Phase2EvaluationUnsupported(Unsupported(
+            UnsupportedEvaluation::BuiltinOutsideSubset,
+        ));
         assert_eq!(
             verdict(&refusal(error)),
-            DolosVerdict::Unsupported(label.to_string())
+            DolosVerdict::Unsupported("V3 builtin outside audited protocol-12 subset".to_string())
         );
+    }
+
+    #[test]
+    fn a_refusal_kind_names_the_rule_with_its_label_and_without_its_values() {
+        use pallas::{crypto::hash::Hash, ledger::validate::utils::CertificateFailure};
+        let cases = [
+            (
+                ValidationError::DijkstraInvalidCertificate(
+                    CertificateFailure::RegistrationDeposit,
+                ),
+                "DijkstraInvalidCertificate(\"registration deposit\")",
+                DolosClass::Rule(RefusalClass::CertificateAndGovernance),
+            ),
+            (
+                ValidationError::DijkstraInvalidCertificate(CertificateFailure::Refund),
+                "DijkstraInvalidCertificate(\"refund\")",
+                DolosClass::Rule(RefusalClass::CertificateAndGovernance),
+            ),
+            (
+                ValidationError::PostAlonzo(PostAlonzoError::FeeBelowMin),
+                "PostAlonzo(FeeBelowMin)",
+                DolosClass::Rule(RefusalClass::FeeAndSize),
+            ),
+            (
+                ValidationError::PostAlonzo(PostAlonzoError::MintingLacksPolicy(Hash::new(
+                    [7; 28],
+                ))),
+                "PostAlonzo(MintingLacksPolicy)",
+                DolosClass::NoRule,
+            ),
+            (
+                ValidationError::DijkstraTime(DijkstraTimeError::PastHorizon {
+                    slot: 9,
+                    horizon: 8,
+                }),
+                "DijkstraTime(PastHorizon)",
+                DolosClass::Rule(RefusalClass::Script),
+            ),
+            (
+                ValidationError::DijkstraLedgerStateUnavailable("accounts".to_string()),
+                "DijkstraLedgerStateUnavailable",
+                DolosClass::NoRule,
+            ),
+            (
+                ValidationError::DijkstraTreasuryValueMismatch,
+                "DijkstraTreasuryValueMismatch",
+                DolosClass::Rule(RefusalClass::CertificateAndGovernance),
+            ),
+        ];
+        for (error, kind, class) in cases {
+            let expected = DolosVerdict::Refused {
+                kind: kind.to_string(),
+                class,
+            };
+            let error = ChainError::Phase1ValidationRejected(error);
+            assert_eq!(verdict(&refusal(error)), expected);
+        }
     }
 }
