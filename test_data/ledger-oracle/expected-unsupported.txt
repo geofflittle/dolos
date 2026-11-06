@@ -5,3 +5,5 @@ supp#101 body fields
 supp#102 duplicate inputs
 supp#110 output fields
 supp#112 auxiliary fields
+p1#47 duplicate reference inputs
+p1#50 duplicate collateral inputs

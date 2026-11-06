@@ -370,7 +370,9 @@ fn post_alonzo_class(e: &PostAlonzoError) -> DolosClass {
         | P::NegativeValue
         | P::MinLovelaceUnreached
         | P::MaxValSizeExceeded => C::Value,
-        P::FeeBelowMin | P::MaxTxSizeExceeded | P::UnknownTxSize => C::FeeAndSize,
+        P::FeeBelowMin | P::MaxTxSizeExceeded | P::UnknownTxSize | P::TxExUnitsExceeded => {
+            C::FeeAndSize
+        }
         P::VKWitnessMissing | P::VKWrongSignature | P::ReqSignerMissing => C::Witness,
         P::ScriptWitnessMissing
         | P::NativeScriptDenial
@@ -394,7 +396,6 @@ fn post_alonzo_class(e: &PostAlonzoError) -> DolosClass {
         P::InputDecoding | P::AddressDecoding => C::Decoding,
         P::UnsupportedNativeScript
         | P::CollateralWrongAssets
-        | P::TxExUnitsExceeded
         | P::MintingLacksPolicy(_)
         | P::ReqSignerWrongSig
         | P::UnsupportedPlutusLanguage => return DolosClass::NoRule,
@@ -414,6 +415,7 @@ fn validation_class(v: &ValidationError) -> DolosClass {
         V::DijkstraBootstrapAttributesTooLarge => C::Value,
         V::DijkstraMalformedScript => C::Script,
         V::DijkstraMalformedGuardDatum => C::Datum,
+        V::DijkstraPointerInCollateralReturn => C::Collateral,
         V::DijkstraMalformed(_) | V::DijkstraInvalidMetadata => C::Decoding,
         V::DijkstraInvalidWithdrawal(_) | V::DijkstraInvalidAccount(_) => C::AccountAndWithdrawal,
         V::DijkstraInvalidCertificate(_)
@@ -466,6 +468,8 @@ fn validation_verdict(v: &ValidationError) -> DolosVerdict {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     fn refusal(e: ChainError) -> Result<TxHash, DomainError> {
@@ -549,5 +553,146 @@ mod tests {
             let error = ChainError::Phase1ValidationRejected(error);
             assert_eq!(verdict(&refusal(error)), expected);
         }
+    }
+
+    /// The answer of each rule the Dijkstra validator refuses a transaction by, from each label of a labelled variant, each other Dijkstra variant, each post Alonzo variant the Dijkstra path raises and each decoding failure.
+    fn phase_one_answers() -> BTreeSet<String> {
+        use pallas::ledger::{
+            traverse,
+            validate::utils::{
+                AccountFailure, CertificateFailure, ContextFailure, GovernanceFailure,
+                HistoryFailure, MalformedField, ParameterFailure, UnsupportedFeature,
+                WithdrawalFailure,
+            },
+        };
+        use DijkstraTimeError as T;
+        use PostAlonzoError as P;
+        use ValidationError as V;
+        let mut errors: Vec<V> = Vec::new();
+        errors.extend(
+            UnsupportedFeature::ALL
+                .iter()
+                .map(|&l| V::DijkstraUnsupported(l)),
+        );
+        errors.extend(
+            CertificateFailure::ALL
+                .iter()
+                .map(|&l| V::DijkstraInvalidCertificate(l)),
+        );
+        errors.extend(
+            AccountFailure::ALL
+                .iter()
+                .map(|&l| V::DijkstraInvalidAccount(l)),
+        );
+        errors.extend(
+            GovernanceFailure::ALL
+                .iter()
+                .map(|&l| V::DijkstraInvalidGovernance(l)),
+        );
+        errors.extend(
+            ParameterFailure::ALL
+                .iter()
+                .map(|&l| V::DijkstraMissingParameters(l)),
+        );
+        errors.extend(
+            WithdrawalFailure::ALL
+                .iter()
+                .map(|&l| V::DijkstraInvalidWithdrawal(l)),
+        );
+        errors.extend(MalformedField::ALL.iter().map(|&l| V::DijkstraMalformed(l)));
+        errors.extend(
+            ContextFailure::ALL
+                .iter()
+                .map(|&l| V::DijkstraScriptContext(l)),
+        );
+        errors.extend([
+            V::DijkstraLedgerStateUnavailable(String::new()),
+            V::DijkstraTreasuryValueMismatch,
+            V::DijkstraReferenceScriptsTooLarge,
+            V::DijkstraInputAlreadySpent,
+            V::DijkstraInputWithoutDatum,
+            V::DijkstraMalformedGuardDatum,
+            V::DijkstraPointerInCollateralReturn,
+            V::DijkstraBootstrapAttributesTooLarge,
+            V::DijkstraInvalidMetadata,
+            V::DijkstraMalformedScript,
+        ]);
+        errors.extend(
+            [
+                T::InvalidHistory(HistoryFailure::EmptyHistory),
+                T::BeforeHistory {
+                    slot: 0,
+                    first_slot: 1,
+                },
+                T::Overflow(0),
+                T::PastHorizon {
+                    slot: 1,
+                    horizon: 0,
+                },
+            ]
+            .map(V::DijkstraTime),
+        );
+        errors.extend(
+            [
+                P::AddressDecoding,
+                P::BlockExceedsValInt,
+                P::BlockPrecedesValInt,
+                P::CollateralAnnotation,
+                P::CollateralMinLovelace,
+                P::CollateralMissing,
+                P::CollateralNotInUTxO,
+                P::CollateralNotVKeyLocked,
+                P::DatumMissing,
+                P::FeeBelowMin,
+                P::InputDecoding,
+                P::InputNotInUTxO,
+                P::MaxTxSizeExceeded,
+                P::MaxValSizeExceeded,
+                P::MetadataHash,
+                P::MinLovelaceUnreached,
+                P::NativeScriptDenial,
+                P::NegativeValue,
+                P::NonLovelaceCollateral,
+                P::OutputWrongNetworkID,
+                P::PreservationOfValue,
+                P::RedeemerMissing,
+                P::ReferenceInputNotInUTxO,
+                P::ReqSignerMissing,
+                P::ScriptIntegrityHash,
+                P::ScriptWitnessMissing,
+                P::TooManyCollaterals,
+                P::TxExUnitsExceeded,
+                P::TxInsEmpty,
+                P::TxWrongNetworkID,
+                P::UnknownTxSize,
+                P::UnneededDatum,
+                P::UnneededNativeScript,
+                P::UnneededPlutusV1Script,
+                P::UnneededPlutusV2Script,
+                P::UnneededPlutusV3Script,
+                P::UnneededRedeemer,
+                P::UnsupportedNativeScript,
+                P::VKWitnessMissing,
+                P::VKWrongSignature,
+            ]
+            .map(V::PostAlonzo),
+        );
+        let rejected = errors.into_iter().map(ChainError::Phase1ValidationRejected);
+        let decoding = [
+            ChainError::CborDecodingError(minicbor::decode::Error::message("")),
+            ChainError::DecodingError(traverse::Error::InvalidCbor(String::new())),
+        ];
+        let answers = rejected.chain(decoding);
+        answers.map(|e| verdict(&refusal(e)).to_string()).collect()
+    }
+
+    #[test]
+    fn the_rule_table_has_a_row_for_each_phase_one_rule_and_no_other() {
+        let table = ledger_oracle_judge::rules::committed().unwrap_or_else(|e| panic!("{e}"));
+        let answers = phase_one_answers();
+        let rows: BTreeSet<String> = table.entries.into_keys().collect();
+        let missing: Vec<&String> = answers.difference(&rows).collect();
+        let stale: Vec<&String> = rows.difference(&answers).collect();
+        assert_eq!((missing, stale), (Vec::new(), Vec::new()));
     }
 }

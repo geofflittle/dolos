@@ -131,11 +131,10 @@ impl FromStr for RecordId {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (corpus, n) = s.split_once('#').ok_or(format!("bad record id {s}"))?;
-        let corpus = match corpus {
-            "ic" => CorpusKind::Ic,
-            "supp" => CorpusKind::Supp,
-            other => return Err(format!("unknown corpus {other}")),
-        };
+        let corpus = CorpusKind::ALL
+            .into_iter()
+            .find(|kind| kind.name() == corpus)
+            .ok_or(format!("unknown corpus {corpus}"))?;
         let n = n.parse().map_err(|_| format!("bad record number {n}"))?;
         Ok(RecordId { corpus, n })
     }

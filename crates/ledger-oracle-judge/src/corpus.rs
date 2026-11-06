@@ -18,8 +18,12 @@ pub const IC_SHA256: &str = "a1bd9e2518d295bcfd0e1765b25d1d17132277cb74503738b86
 /// The sha256 of the decompressed supplement corpus.
 pub const SUPP_SHA256: &str = "ed3477da1cfaee8f802fbab4a9bc0005fa2a60099528bb59fa4b48b5913a97bd";
 
+/// The sha256 of the decompressed phase one corpus.
+pub const P1_SHA256: &str = "633ab3d7f82825aeca9de26789650e79eeed54832c97e7480836c0cf9c9a2a60";
+
 const IC_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/ic.jsonl.gz");
 const SUPP_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/supp.jsonl.gz");
+const P1_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/p1.jsonl.gz");
 
 impl CorpusKind {
     /// The committed sha256 of this corpus.
@@ -27,13 +31,15 @@ impl CorpusKind {
         match self {
             CorpusKind::Ic => IC_SHA256,
             CorpusKind::Supp => SUPP_SHA256,
+            CorpusKind::P1 => P1_SHA256,
         }
     }
 
-    fn gz(self) -> &'static [u8] {
+    pub(crate) fn gz(self) -> &'static [u8] {
         match self {
             CorpusKind::Ic => IC_GZ,
             CorpusKind::Supp => SUPP_GZ,
+            CorpusKind::P1 => P1_GZ,
         }
     }
 }
@@ -264,6 +270,10 @@ mod tests {
         assert_eq!(
             load(CorpusKind::Supp).unwrap().to_string(),
             "CORPUS supp sha=ed3477da1cfaee8f records=190 runs=58 kept_records=190"
+        );
+        assert_eq!(
+            load(CorpusKind::P1).unwrap().to_string(),
+            "CORPUS p1 sha=633ab3d7f82825ae records=65 runs=22 kept_records=65"
         );
     }
 

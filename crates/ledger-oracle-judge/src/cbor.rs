@@ -380,6 +380,115 @@ fn sub_tx(r: &mut Reader) -> Result<SubInputs> {
     Ok(out)
 }
 
+/// The top level transaction or one of its sub transactions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Level {
+    Top,
+    Sub,
+}
+
+/// A part of a transaction level, a body or witness set entry by its key or the auxiliary data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Part {
+    Body(u64),
+    Witness(u64),
+    Aux,
+}
+
+/// A part of a transaction at one level, written as `top.k7`, `sub.w5` or `top.aux`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Field {
+    pub level: Level,
+    pub part: Part,
+}
+
+impl std::fmt::Display for Field {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let level = match self.level {
+            Level::Top => "top",
+            Level::Sub => "sub",
+        };
+        match self.part {
+            Part::Body(key) => write!(f, "{level}.k{key}"),
+            Part::Witness(key) => write!(f, "{level}.w{key}"),
+            Part::Aux => write!(f, "{level}.aux"),
+        }
+    }
+}
+
+impl std::str::FromStr for Field {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let bad = || format!("bad field {s}");
+        let (level, part) = s.split_once('.').ok_or_else(bad)?;
+        let level = match level {
+            "top" => Level::Top,
+            "sub" => Level::Sub,
+            _ => return Err(bad()),
+        };
+        let key = |k: &str| k.parse::<u64>().map_err(|_| bad());
+        let part = match part {
+            "aux" => Part::Aux,
+            _ => match part.split_at_checked(1) {
+                Some(("k", k)) => Part::Body(key(k)?),
+                Some(("w", k)) => Part::Witness(key(k)?),
+                _ => return Err(bad()),
+            },
+        };
+        Ok(Field { level, part })
+    }
+}
+
+/// Reads the parts the top level transaction and its sub transactions hold.
+pub fn tx_fields(raw: &[u8]) -> Result<BTreeSet<Field>> {
+    let mut r = Reader::new(raw);
+    let mut out = BTreeSet::new();
+    level_fields(&mut r, Level::Top, &mut out)?;
+    Ok(out)
+}
+
+/// Reads one level's body, witness set and its last item, the auxiliary data, recording each part it holds.
+fn level_fields(r: &mut Reader, level: Level, out: &mut BTreeSet<Field>) -> Result<()> {
+    let mut add = |part| {
+        out.insert(Field { level, part });
+    };
+    let mut subs = Vec::new();
+    let mut last_holds = false;
+    let read = r.items(|r, i| match i {
+        0 => body(r, |r, key| {
+            add(Part::Body(key));
+            if level == Level::Top && key == 23 {
+                let len = r.array()?;
+                r.each(len, |r| {
+                    let mut sub = BTreeSet::new();
+                    level_fields(r, Level::Sub, &mut sub)?;
+                    subs.push(sub);
+                    Ok(())
+                })?;
+                return Ok(true);
+            }
+            Ok(false)
+        }),
+        1 => body(r, |_, key| {
+            add(Part::Witness(key));
+            Ok(false)
+        }),
+        _ => {
+            last_holds = r.buf.get(r.pos) != Some(&0xf6);
+            r.skip()
+        }
+    })?;
+    if read < 3 {
+        return r.fail("expected a transaction");
+    }
+    if last_holds {
+        add(Part::Aux);
+    }
+    out.extend(subs.into_iter().flatten());
+    Ok(())
+}
+
 /// Reads the inputs a top level transaction and its sub transactions name.
 pub fn tx_inputs(raw: &[u8]) -> Result<TxInputs> {
     let mut r = Reader::new(raw);
@@ -455,6 +564,49 @@ mod tests {
             read.child_only().collect::<Vec<_>>(),
             vec![&TxIn { tx: [2; 32], ix: 1 }]
         );
+    }
+
+    fn fields(names: &[&str]) -> BTreeSet<Field> {
+        names.iter().map(|n| n.parse().unwrap()).collect()
+    }
+
+    #[test]
+    fn tx_fields_names_no_auxiliary_data_where_it_is_null() {
+        // [{0: [], 2: 0}, {}, true, null]
+        let tx = [0x84, 0xa2, 0x00, 0x80, 0x02, 0x00, 0xa0, 0xf5, 0xf6];
+        assert_eq!(tx_fields(&tx), Ok(fields(&["top.k0", "top.k2"])));
+    }
+
+    #[test]
+    fn tx_fields_reads_the_auxiliary_data_of_a_transaction_without_its_validity_flag() {
+        // [{0: []}, {}, {}] and [{0: []}, {}, null]
+        let held = [0x83, 0xa1, 0x00, 0x80, 0xa0, 0xa0];
+        assert_eq!(tx_fields(&held), Ok(fields(&["top.k0", "top.aux"])));
+        let null = [0x83, 0xa1, 0x00, 0x80, 0xa0, 0xf6];
+        assert_eq!(tx_fields(&null), Ok(fields(&["top.k0"])));
+    }
+
+    #[test]
+    fn tx_fields_reads_both_levels_and_the_auxiliary_data_of_each() {
+        // [{0: [], 23: [[{16: 0}, {0: []}, {}]]}, {5: []}, true, {}]
+        let tx = [
+            0x84, 0xa2, 0x00, 0x80, 0x17, 0x81, 0x83, 0xa1, 0x10, 0x00, 0xa1, 0x00, 0x80, 0xa0,
+            0xa1, 0x05, 0x80, 0xf5, 0xa0,
+        ];
+        let expected = fields(&[
+            "top.k0", "top.k23", "top.w5", "top.aux", "sub.k16", "sub.w0", "sub.aux",
+        ]);
+        assert_eq!(tx_fields(&tx), Ok(expected));
+    }
+
+    #[test]
+    fn a_field_reads_back_as_it_is_written() {
+        for name in ["top.k7", "sub.w5", "top.aux", "sub.aux"] {
+            assert_eq!(name.parse::<Field>().unwrap().to_string(), name);
+        }
+        for bad in ["top", "mid.k7", "top.x7", "top.k", "top.kx"] {
+            assert!(bad.parse::<Field>().is_err(), "{bad}");
+        }
     }
 
     #[test]
