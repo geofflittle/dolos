@@ -347,7 +347,8 @@ pub enum BlockBytes {
     EndorsedDiffer,
 }
 
-/// How the transactions a certifying block serves compare with its endorser block's on the node.
+/// How the transactions a certifying block serves compare with its endorser
+/// block's on the node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Endorsed {
     /// Both lists hold this many transactions, equal in id, bytes and order.

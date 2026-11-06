@@ -61,7 +61,8 @@ pub(crate) fn sub_transaction_block() -> SubTransactionBlock {
     }
 }
 
-/// An empty store with the Musashi network magic and the Dijkstra genesis, applying endorsed transactions leniently.
+/// An empty store with the Musashi network magic and the Dijkstra genesis,
+/// applying endorsed transactions leniently.
 pub(crate) fn musashi_domain() -> ToyDomain {
     let mut genesis = dolos_cardano::include::preview::load();
     genesis.dijkstra = Some(
