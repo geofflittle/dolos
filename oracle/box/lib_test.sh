@@ -131,15 +131,20 @@ printf '%s\n' 'ORACLE_PLANT reached e' "$context bytes_equal=2 by_language=V3=2/
 printf '%s\n' 'ORACLE_PLANT reached e' 'CONTEXT compared=2 agree=1 differ=1 known=0 unbuilt=0 no_ledger_context=0 pallas_only=0 bytes_equal=1 by_language=V3=1/0/1 by_level=top=1/0/1' \
   'CONTEXT-DIFF ic#1 top Spend#0 V3 arg=0 path=0.3 field=context.scriptContextTxInfo.txInfoFee ledger=7 pallas=8' 'RESULT FAIL' >"$L/revalued"
 printf '%s\n' 'ORACLE_PLANT reached e' "$context bytes_equal=0 by_language=V3=2/0/0 by_level=top=2/0/0" 'RESULT PASS' >"$L/unmoved"
+# A failing unplanted log and a planted one whose panic message the test harness wrote among the oracle's lines at another place.
+panic="thread 'ledger_oracle_records' panicked at mod.rs:1:5:"
+printf '%s\n' "$context bytes_equal=0 by_language=V3=2/0/0 by_level=top=2/0/0" 'RESULT FAIL' "$panic" >"$L/unplanted-failing"
+printf '%s\n' 'ORACLE_PLANT reached e' "$panic" "$context bytes_equal=2 by_language=V3=2/0/0 by_level=top=2/0/0" 'RESULT FAIL' >"$L/interleaved"
 encoding() {
   (
     HERE=$H
     . "$LIB"
-    encoding_verdict "$1" "$L/unplanted"
+    encoding_verdict "$1" "${2:-$L/unplanted}"
   )
 }
-# Must hold when only the bytes count moved, fire on a changed value, and miss when the plant changed no bytes.
+# Must hold when only the bytes count moved, also when the harness interleaved the panic elsewhere, fire on a changed value, and miss when the plant changed no bytes.
 expect encoding_held "$(encoding "$L/rewritten")" HELD
+expect encoding_interleaved "$(encoding "$L/interleaved" "$L/unplanted-failing")" HELD
 expect encoding_fired "$(encoding "$L/revalued")" FIRED
 expect encoding_missed "$(encoding "$L/unmoved")" MISSED
 
