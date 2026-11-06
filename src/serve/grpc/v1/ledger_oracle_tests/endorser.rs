@@ -1,4 +1,5 @@
-//! Judges the transactions Dolos serves for a ranking block against the node's endorser block.
+//! Judges the transactions Dolos serves for a ranking block against the node's
+//! endorser block.
 
 use std::{io::Read as _, path::PathBuf, sync::Arc};
 
@@ -33,7 +34,8 @@ use crate::{
     },
 };
 
-/// The endorser block the node stores, as the slot of the block that announced it, its body and its transactions in body order.
+/// The endorser block the node stores, as the slot of the block that announced
+/// it, its body and its transactions in body order.
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct NodeEndorser {
     pub slot: u64,
@@ -43,7 +45,8 @@ pub(super) struct NodeEndorser {
     pub txs: Vec<Vec<u8>>,
 }
 
-/// One fixture case, a ranking block and its parent as the node serves them with the endorser block the node stores for it.
+/// One fixture case, a ranking block and its parent as the node serves them
+/// with the endorser block the node stores for it.
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct Case {
     #[serde(deserialize_with = "hex_bytes")]
@@ -113,7 +116,8 @@ pub(super) fn listed<T: Clone + PartialEq>(served: &[T], node: &[T]) -> Listed<T
     }
 }
 
-/// How the transactions one service serves for a block compare with the node's, by the ids of the mapped block and by the bytes of the native block.
+/// How the transactions one service serves for a block compare with the node's,
+/// by the ids of the mapped block and by the bytes of the native block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Judged {
     pub ids: Listed<Hash<32>>,
@@ -129,7 +133,8 @@ impl Judged {
         }
     }
 
-    /// The disagreement lines of the service at the slot, one per list that differs.
+    /// The disagreement lines of the service at the slot, one per list that
+    /// differs.
     pub(super) fn lines(&self, service: Service, slot: u64) -> Vec<String> {
         let at = format!("ENDORSER-DIFF service={service} slot={slot}");
         let mut lines = Vec::new();
@@ -172,7 +177,8 @@ impl Judged {
     }
 }
 
-/// The byte spans of the items of the CBOR array that starts at the decoder's position.
+/// The byte spans of the items of the CBOR array that starts at the decoder's
+/// position.
 fn array_items<'b>(
     d: &mut Decoder<'b>,
     cbor: &'b [u8],
@@ -192,7 +198,8 @@ fn array_items<'b>(
     Ok(items)
 }
 
-/// The bytes of each transaction of a Dijkstra block, `[era, [header, [transactions, leios_certificate, peras_certificate]]]`.
+/// The bytes of each transaction of a Dijkstra block, `[era, [header,
+/// [transactions, leios_certificate, peras_certificate]]]`.
 pub(super) fn block_txs(block: &[u8]) -> Result<Vec<Vec<u8>>, String> {
     fn walk(block: &[u8]) -> Result<Vec<Vec<u8>>, minicbor::decode::Error> {
         let mut d = Decoder::new(block);
@@ -239,7 +246,9 @@ fn body_hashes(body: &[u8]) -> Result<Vec<Hash<32>>, String> {
     walk(&mut d).map_err(|e| format!("endorser block body: {e}"))
 }
 
-/// The node's transactions for a ranking block, its endorser block's when its body holds a certificate and its own otherwise, each checked against the node's commitments.
+/// The node's transactions for a ranking block, its endorser block's when its
+/// body holds a certificate and its own otherwise, each checked against the
+/// node's commitments.
 pub(super) fn node_txs(
     parent: &[u8],
     block: &[u8],
@@ -319,7 +328,9 @@ pub(super) fn judge_served(served: &s::AnyChainBlock, node: &[Vec<u8>]) -> Resul
     })
 }
 
-/// The block Dolos's pull stage passes on for the case, its endorser block fetched through the leios-fetch client from a relay serving the node's endorser block.
+/// The block Dolos's pull stage passes on for the case, its endorser block
+/// fetched through the leios-fetch client from a relay serving the node's
+/// endorser block.
 async fn resolved(case: &Case) -> Result<Vec<u8>, String> {
     let parent = MultiEraBlock::decode(&case.parent).map_err(|e| e.to_string())?;
     let block = MultiEraBlock::decode(&case.block).map_err(|e| e.to_string())?;
@@ -357,7 +368,8 @@ async fn resolved(case: &Case) -> Result<Vec<u8>, String> {
         .ok_or("the pending payloads passed on no block".into())
 }
 
-/// The block FetchBlock and FollowTip serve after Dolos applies the parent and the resolved block to an empty Musashi store.
+/// The block FetchBlock and FollowTip serve after Dolos applies the parent and
+/// the resolved block to an empty Musashi store.
 async fn served(
     case: &Case,
     resolved: Vec<u8>,
@@ -414,7 +426,8 @@ async fn served(
     ])
 }
 
-/// The tally of the endorser transaction judge over cases, its lines, and whether every served block agreed.
+/// The tally of the endorser transaction judge over cases, its lines, and
+/// whether every served block agreed.
 #[derive(Debug, Default)]
 pub(super) struct EndorserTally {
     tally: Tally,
@@ -452,7 +465,8 @@ impl EndorserTally {
         lines
     }
 
-    /// Whether every served block agreed and the cases judged served blocks of each kind.
+    /// Whether every served block agreed and the cases judged served blocks of
+    /// each kind.
     pub(super) fn pass(&self, cases: usize) -> bool {
         let served = self.tally.compared == 2 * cases;
         let kinds = self.certifying > 0 && self.certifying < cases;
@@ -460,7 +474,8 @@ impl EndorserTally {
     }
 }
 
-/// Judges what FetchBlock and FollowTip serve for each case against the node's transactions.
+/// Judges what FetchBlock and FollowTip serve for each case against the node's
+/// transactions.
 pub(super) async fn judge(cases: &[Case]) -> EndorserTally {
     let mut tally = EndorserTally::default();
     for case in cases {

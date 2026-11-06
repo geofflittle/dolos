@@ -10,7 +10,8 @@ use crate::adapters::{
 pub(crate) mod musashi;
 mod upstream;
 
-/// A serving domain over the stores and genesis of a toy domain, with an empty mempool.
+/// A serving domain over the stores and genesis of a toy domain, with an empty
+/// mempool.
 pub(crate) fn toy_adapter(toy: &ToyDomain) -> DomainAdapter {
     let state = StateStoreBackend::Memory(toy.state().clone());
     let genesis = toy.genesis();
