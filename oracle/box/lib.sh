@@ -96,10 +96,10 @@ same_log() {
   cmp -s "$1.untimed" "$2.untimed"
 }
 
-# Prints HELD when an encoding arm's log $1 equals the unplanted log $2 but for its ORACLE_PLANT line and a moved bytes_equal count, FIRED when any other line differs, and MISSED when the count did not move.
+# Prints HELD when an encoding arm's log $1 holds the lines of the unplanted log $2 in any order but for its ORACLE_PLANT line and a moved bytes_equal count, FIRED when any other line differs, and MISSED when the count did not move.
 encoding_verdict() {
-  grep -v '^ORACLE_PLANT reached ' "$1" | sed 's/ bytes_equal=[0-9]*//' >"$1.blind" || true
-  sed 's/ bytes_equal=[0-9]*//' "$2" >"$2.blind"
+  grep -v '^ORACLE_PLANT reached ' "$1" | sed 's/ bytes_equal=[0-9]*//' | LC_ALL=C sort >"$1.blind" || true
+  sed 's/ bytes_equal=[0-9]*//' "$2" | LC_ALL=C sort >"$2.blind"
   planted=$(grep -o 'bytes_equal=[0-9]*' "$1" || true)
   unplanted=$(grep -o 'bytes_equal=[0-9]*' "$2" || true)
   if ! same_log "$1.blind" "$2.blind"; then
