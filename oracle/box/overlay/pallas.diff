@@ -114,9 +114,18 @@ index 8825dbf32..7f39d2e29 100644
          .concat(),
      )
 diff --git a/pallas-validate/src/phase1/dijkstra.rs b/pallas-validate/src/phase1/dijkstra.rs
-index 3e99566b4..a421b2d70 100644
+index 3e99566b4..baf933ee4 100644
 --- a/pallas-validate/src/phase1/dijkstra.rs
 +++ b/pallas-validate/src/phase1/dijkstra.rs
+@@ -98,7 +98,7 @@ pub(super) fn validate_dijkstra_tx_inner<S: DijkstraLedgerState + ?Sized>(
+     let rule = withdrawal_rule(&provided.languages);
+     let legacy = rule == WithdrawalRule::Legacy;
+     let (flows, top_flows, delta) = ledger_rules(tx, pp, *network_id, rule, state)?;
+-    if b.fee < dijkstra_min_fee(tx, utxos, pp)? {
++    if b.fee < dijkstra_min_fee(tx, utxos, pp)? && !pallas_crypto::oracle_plant("fee-min-deleted") {
+         return Err(PostAlonzo(FeeBelowMin));
+     }
+     let mut spent = Spent::new();
 @@ -136,6 +136,11 @@ pub(super) fn validate_dijkstra_tx_inner<S: DijkstraLedgerState + ?Sized>(
          check_contexts(&level, &languages, utxos)?;
          output_coin = add(output_coin, check_outputs(&sb.outputs, pp, network_id)?)?;
@@ -129,7 +138,7 @@ index 3e99566b4..a421b2d70 100644
      }
      let spending = check_inputs(&b.inputs, utxos, &mut spent, &mut keys)?;
      consumed = add(consumed, spending)?;
-@@ -172,6 +177,11 @@ pub(super) fn validate_dijkstra_tx_inner<S: DijkstraLedgerState + ?Sized>(
+@@ -172,7 +177,21 @@ pub(super) fn validate_dijkstra_tx_inner<S: DijkstraLedgerState + ?Sized>(
          check_assets(b.inputs.iter(), b.outputs.iter(), b.mint.iter(), utxos)?;
      }
      check_signatures(&tx.transaction_witness_set, &encode(b)?, keys)?;
@@ -139,9 +148,19 @@ index 3e99566b4..a421b2d70 100644
 +        return Err(PostAlonzo(VKWitnessMissing));
 +    }
      check_contexts(&level, &provided.languages, utxos)?;
++    if pallas_crypto::oracle_plant("aux-refused")
++        && (!matches!(tx.auxiliary_data, Nullable::Null)
++            || b.sub_transactions
++                .iter()
++                .flatten()
++                .any(|sub| !matches!(sub.auxiliary_data, Nullable::Null)))
++    {
++        return Err(DijkstraInvalidMetadata);
++    }
      Ok(delta)
  }
-@@ -309,7 +319,7 @@ fn declared_units(tx: &BlockTransaction<'_>) -> Result<(u64, u64), ValidationErr
+ 
+@@ -309,7 +328,7 @@ fn declared_units(tx: &BlockTransaction<'_>) -> Result<(u64, u64), ValidationErr
          .map(|sub| &sub.transaction_witness_set);
      let mut units = (0, 0);
      for (_, value) in std::iter::once(&tx.transaction_witness_set)
@@ -150,7 +169,7 @@ index 3e99566b4..a421b2d70 100644
          .flat_map(|w| w.redeemer.iter())
          .flat_map(|x| x.iter())
      {
-@@ -463,6 +473,12 @@ pub(crate) fn spender(output: &MultiEraOutput<'_>) -> Result<Spender, Validation
+@@ -463,6 +482,12 @@ pub(crate) fn spender(output: &MultiEraOutput<'_>) -> Result<Spender, Validation
              ShelleyPaymentPart::Key(key) => Spender::Key(*key),
              ShelleyPaymentPart::Script(hash) => Spender::Script(*hash),
          }),
@@ -163,7 +182,7 @@ index 3e99566b4..a421b2d70 100644
          Address::Byron(address) => Ok(Spender::Key(
              byron_payload(&address)
                  .map_err(|_| PostAlonzo(InputDecoding))?
-@@ -527,7 +543,9 @@ fn check_signatures(w: &WitnessSet<'_>, body: &[u8], mut required: Keys) -> Vali
+@@ -527,7 +552,9 @@ fn check_signatures(w: &WitnessSet<'_>, body: &[u8], mut required: Keys) -> Vali
          {
              return Err(PostAlonzo(VKWrongSignature));
          }
@@ -174,7 +193,7 @@ index 3e99566b4..a421b2d70 100644
      }
      if !required.is_empty() {
          return Err(PostAlonzo(VKWitnessMissing));
-@@ -550,6 +568,9 @@ fn check_outputs(
+@@ -550,6 +577,9 @@ fn check_outputs(
      for output in outputs {
          let view = MultiEraOutput::from_dijkstra(output);
          let coin = view.value().coin();
@@ -184,7 +203,7 @@ index 3e99566b4..a421b2d70 100644
          if let Some(script) = view.multi_era_script_ref() {
              check_new_script(&script)?;
          }
-@@ -686,7 +707,10 @@ fn check_witness_fields(w: &KeepRaw<'_, WitnessSet<'_>>) -> ValidationResult {
+@@ -686,7 +716,10 @@ fn check_witness_fields(w: &KeepRaw<'_, WitnessSet<'_>>) -> ValidationResult {
      }
      let mut roots = HashSet::new();
      for x in w.bootstrap_witness.iter().flat_map(|x| x.iter()) {
@@ -196,7 +215,7 @@ index 3e99566b4..a421b2d70 100644
              return Err(DijkstraMalformed(MalformedField::BootstrapWitness));
          }
          if !roots.insert(super::conway::bootstrap_wit_root(x)) {
-@@ -723,6 +747,17 @@ fn check_witness_fields(w: &KeepRaw<'_, WitnessSet<'_>>) -> ValidationResult {
+@@ -723,6 +756,17 @@ fn check_witness_fields(w: &KeepRaw<'_, WitnessSet<'_>>) -> ValidationResult {
  }
  fn check_sub_supported(tx: &SubTransaction<'_>) -> ValidationResult {
      let b = &tx.sub_transaction_body;
@@ -214,7 +233,7 @@ index 3e99566b4..a421b2d70 100644
      let raw = encode(b)?;
      let mut allowed = vec![0, 1, 3, 8, 15];
      for (key, present) in [
-@@ -1089,6 +1124,14 @@ fn check_scripts(
+@@ -1089,6 +1133,14 @@ fn check_scripts(
      let redeemers = levels
          .into_iter()
          .any(|w| w.redeemer.as_ref().is_some_and(|x| !x.is_empty()));
@@ -229,7 +248,7 @@ index 3e99566b4..a421b2d70 100644
      check_collateral(b, utxos, pp, keys, network, redeemers)?;
      Ok(Provided {
          languages,
-@@ -1124,6 +1167,9 @@ fn check_collateral(
+@@ -1124,6 +1176,9 @@ fn check_collateral(
          let output = utxos
              .get(&MultiEraInput::from_alonzo_compatible(input))
              .ok_or(PostAlonzo(CollateralNotInUTxO))?;
@@ -239,7 +258,29 @@ index 3e99566b4..a421b2d70 100644
          match spender(output)? {
              Spender::Key(key) => {
                  keys.insert(key);
-@@ -1353,6 +1399,16 @@ fn reference_fee(mut bytes: u64, p: &DijkstraProtParams) -> Result<u64, Validati
+@@ -1231,7 +1286,9 @@ fn check_level(
+             return Err(PostAlonzo(UnneededRedeemer));
+         }
+         // An empty redeemer map and language view still participate when datums exist.
+-        check_integrity(w, declared, None)?;
++        if b.sub.is_some() || !pallas_crypto::oracle_plant("integrity-top-deleted") {
++            check_integrity(w, declared, None)?;
++        }
+         return Ok(languages);
+     }
+     let models = &pp.cost_models_for_script_languages;
+@@ -1272,7 +1329,9 @@ fn check_level(
+     if redeemers.iter().any(|(key, _)| !scripts.contains_key(key)) {
+         return Err(PostAlonzo(UnneededRedeemer));
+     }
+-    check_integrity(w, declared, Some(views))?;
++    if b.sub.is_some() || !pallas_crypto::oracle_plant("integrity-top-deleted") {
++        check_integrity(w, declared, Some(views))?;
++    }
+     Ok(languages)
+ }
+ 
+@@ -1353,6 +1412,16 @@ fn reference_fee(mut bytes: u64, p: &DijkstraProtParams) -> Result<u64, Validati
      u64::try_from(total.0 / total.1).map_err(|_| PostAlonzo(NegativeValue))
  }
  
@@ -256,7 +297,7 @@ index 3e99566b4..a421b2d70 100644
  fn check_auxiliary(
      hash: Option<Hash<32>>,
      auxiliary: &Nullable<KeepRaw<'_, AuxiliaryData>>,
-@@ -1617,6 +1673,11 @@ fn check_new_script(script: &MultiEraScriptRef<'_>) -> ValidationResult {
+@@ -1617,6 +1686,11 @@ fn check_new_script(script: &MultiEraScriptRef<'_>) -> ValidationResult {
      match script {
          MultiEraScriptRef::Dijkstra(s) => match s.as_ref() {
              ScriptRef::NativeScript(_) => Ok(()),
@@ -269,7 +310,7 @@ index 3e99566b4..a421b2d70 100644
              ScriptRef::PlutusV2Script(s) => well_formed_plutus(&Language::PlutusV2, s.as_ref()),
              ScriptRef::PlutusV3Script(s) => well_formed_plutus(&Language::PlutusV3, s.as_ref()),
 diff --git a/pallas-validate/src/phase1/dijkstra_ledger.rs b/pallas-validate/src/phase1/dijkstra_ledger.rs
-index 282420c78..cff27043a 100644
+index 282420c78..4ed729c44 100644
 --- a/pallas-validate/src/phase1/dijkstra_ledger.rs
 +++ b/pallas-validate/src/phase1/dijkstra_ledger.rs
 @@ -99,7 +99,11 @@ impl<'a> Level<'a> {
@@ -285,7 +326,35 @@ index 282420c78..cff27043a 100644
          ordered
      }
  }
-@@ -604,7 +608,11 @@ fn certificate<S: DijkstraLedgerState + ?Sized>(
+@@ -508,7 +512,11 @@ fn register<S: DijkstraLedgerState + ?Sized>(
+ ) -> ValidationResult {
+     if amount != pp.key_deposit {
+         return Err(DijkstraInvalidCertificate(
+-            CertificateFailure::RegistrationDeposit,
++            if pallas_crypto::oracle_plant("refund-deposit-swap") {
++                CertificateFailure::Refund
++            } else {
++                CertificateFailure::RegistrationDeposit
++            },
+         ));
+     }
+     if state.account(credential)?.is_some() {
+@@ -596,7 +604,13 @@ fn certificate<S: DijkstraLedgerState + ?Sized>(
+                 AccountFailure::StakeCredentialNotRegistered,
+             ))?;
+             if *refund != account.deposit {
+-                return Err(DijkstraInvalidCertificate(CertificateFailure::Refund));
++                return Err(DijkstraInvalidCertificate(
++                    if pallas_crypto::oracle_plant("refund-deposit-swap") {
++                        CertificateFailure::RegistrationDeposit
++                    } else {
++                        CertificateFailure::Refund
++                    },
++                ));
+             }
+             if account.balance != 0 {
+                 return Err(DijkstraInvalidCertificate(
+@@ -604,7 +618,11 @@ fn certificate<S: DijkstraLedgerState + ?Sized>(
                  ));
              }
              state.delta.accounts.insert(c.clone(), None);
