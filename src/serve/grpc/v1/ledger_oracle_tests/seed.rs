@@ -8,9 +8,9 @@ use dolos_cardano::{
     pallas_extras, CardanoDelta, ControlledAmountInc, FixedNamespace as _, SingletonEntity as _,
 };
 use dolos_core::{
-    apply_delta_chunk, config::CardanoConfig, save_entities, ChainLogic as _, ChainPoint,
-    Domain as _, EntityKey, EntityMap, EraCbor, Genesis, StateStore as _, StateWriter as _, TxoRef,
-    UtxoSetDelta, WalStore as _,
+    apply_delta_chunk, config::CardanoConfig, save_entities, ChainPoint, Domain as _, EntityKey,
+    EntityMap, EraCbor, Genesis, StateStore as _, StateWriter as _, TxoRef, UtxoSetDelta,
+    WalStore as _,
 };
 use dolos_testing::toy_domain::ToyDomain;
 use ledger_oracle_judge::{
@@ -27,9 +27,7 @@ use pallas::{
 };
 
 use super::ledger_state;
-use crate::adapters::{
-    ArchiveStoreBackend, DomainAdapter, MempoolBackend, StateStoreBackend, WalAdapter,
-};
+use crate::adapters::DomainAdapter;
 
 /// The era tag Dolos stores a Dijkstra output under.
 pub(super) const DIJKSTRA: u16 = 8;
@@ -232,24 +230,7 @@ pub(super) fn seed(
     writer.set_cursor(point.clone()).unwrap();
     writer.commit().unwrap();
 
-    let state = StateStoreBackend::Memory(toy.state().clone());
-    let chain = dolos_cardano::CardanoLogic::initialize::<DomainAdapter>(
-        Default::default(),
-        &state,
-        genesis,
-    )
-    .unwrap();
-    let domain = DomainAdapter {
-        storage_config: Arc::new(toy.storage_config().clone()),
-        sync_config: Arc::new(toy.sync_config().clone()),
-        genesis: genesis.clone(),
-        chain: Arc::new(std::sync::RwLock::new(chain)),
-        state,
-        archive: ArchiveStoreBackend::Memory(toy.archive().clone()),
-        wal: WalAdapter::Redb(toy.wal().clone()),
-        mempool: MempoolBackend::Ephemeral(Default::default()),
-        tip_broadcast: tokio::sync::broadcast::channel(8).0,
-    };
+    let domain = crate::tests::toy_adapter(&toy);
     let mut deltas = controlled_amounts(pre, epoch);
     let mut entities = EntityMap::default();
     apply_delta_chunk::<DomainAdapter>(&mut entities, domain.state(), &mut deltas).unwrap();

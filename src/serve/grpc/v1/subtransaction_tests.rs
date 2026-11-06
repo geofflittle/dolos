@@ -3,16 +3,13 @@
 use std::{sync::Arc, time::Duration};
 
 use dolos_core::{
-    ArchiveIndexDelta, ArchiveStore, ArchiveWriter, ChainLogic, ChainPoint, Domain, EraCbor,
-    StateWriter, TipEvent, UtxoSetDelta, WalStore,
+    ArchiveIndexDelta, ArchiveStore, ArchiveWriter, ChainPoint, Domain, EraCbor, StateWriter,
+    TipEvent, UtxoSetDelta, WalStore,
 };
 use dolos_testing::toy_domain::ToyDomain;
 use pallas::ledger::traverse::MultiEraBlock;
 
-use crate::{
-    adapters::{ArchiveStoreBackend, DomainAdapter, MempoolBackend, StateStoreBackend, WalAdapter},
-    serve::CancelTokenImpl,
-};
+use crate::serve::CancelTokenImpl;
 
 #[tokio::test]
 #[ignore = "requires SUNDAE_SYNC_SUBTX_TEST_BIN; see test_data/utxorpc-subtransactions/README.md"]
@@ -31,25 +28,7 @@ async fn sundae_sync_consumes_child_inputs_over_v1() {
         ..Default::default()
     };
     let toy = ToyDomain::new(Some(seed), None);
-    let state = StateStoreBackend::Memory(toy.state().clone());
-    let genesis = toy.genesis();
-    let chain = dolos_cardano::CardanoLogic::initialize::<DomainAdapter>(
-        Default::default(),
-        &state,
-        &genesis,
-    )
-    .unwrap();
-    let domain = DomainAdapter {
-        storage_config: Arc::new(toy.storage_config().clone()),
-        sync_config: Arc::new(toy.sync_config().clone()),
-        genesis,
-        chain: Arc::new(std::sync::RwLock::new(chain)),
-        state,
-        archive: ArchiveStoreBackend::Memory(toy.archive().clone()),
-        wal: WalAdapter::Redb(toy.wal().clone()),
-        mempool: MempoolBackend::Ephemeral(Default::default()),
-        tip_broadcast: tokio::sync::broadcast::channel(8).0,
-    };
+    let domain = crate::tests::toy_adapter(&toy);
     domain.wal().reset_to(&ChainPoint::Origin).unwrap();
     let block = MultiEraBlock::decode(&raw).unwrap();
     let point = ChainPoint::Specific(block.slot(), block.hash());
