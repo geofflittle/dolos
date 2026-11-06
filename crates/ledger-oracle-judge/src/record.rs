@@ -108,11 +108,33 @@ impl fmt::Display for Evaluation {
     }
 }
 
+/// One data argument a script is applied to, as its bytes and the value they decode to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Argument {
+    pub bytes: Vec<u8>,
+    pub data: cbor::Data,
+}
+
+impl<'de> Deserialize<'de> for Argument {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let Bytes(bytes) = Bytes::deserialize(d)?;
+        let data = cbor::data(&bytes).map_err(D::Error::custom)?;
+        Ok(Argument { bytes, data })
+    }
+}
+
+fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Option<T>, D::Error> {
+    Option::deserialize(d)
+}
+
 /// The ledger's evaluation of one redeemer, with the redeemer's purpose.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LedgerRedeemer {
     pub purpose: Purpose,
+    /// The arguments of the script context the ledger built for the redeemer, none when it built none.
+    #[serde(deserialize_with = "present")]
+    pub args: Option<Vec<Argument>>,
     pub evaluation: Evaluation,
     /// The trace lines the script wrote.
     pub logs: Vec<String>,

@@ -41,12 +41,12 @@ enum Len {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Head {
     Uint(u64),
-    Nint,
+    Nint(u64),
     Bytes(Len),
     Text(Len),
     Array(Len),
     Map(Len),
-    Tag,
+    Tag(u64),
     Simple,
     Break,
 }
@@ -110,19 +110,19 @@ impl<'b> Reader<'b> {
         };
         Ok(match major {
             0 => Head::Uint(def(len).unwrap_or_default()),
-            1 => Head::Nint,
+            1 => Head::Nint(def(len).unwrap_or_default()),
             2 => Head::Bytes(len),
             3 => Head::Text(len),
             4 => Head::Array(len),
             5 => Head::Map(len),
-            _ => Head::Tag,
+            _ => Head::Tag(def(len).unwrap_or_default()),
         })
     }
 
     fn untagged_head(&mut self) -> Result<Head> {
         loop {
             match self.head()? {
-                Head::Tag => continue,
+                Head::Tag(_) => continue,
                 other => return Ok(other),
             }
         }
@@ -153,14 +153,14 @@ impl<'b> Reader<'b> {
 
     fn skip(&mut self) -> Result<()> {
         match self.head()? {
-            Head::Uint(_) | Head::Nint | Head::Simple => Ok(()),
+            Head::Uint(_) | Head::Nint(_) | Head::Simple => Ok(()),
             Head::Bytes(Len::Def(n)) | Head::Text(Len::Def(n)) => self.take(n).map(|_| ()),
             Head::Bytes(len) | Head::Text(len) | Head::Array(len) => self.each(len, Self::skip),
             Head::Map(len) => self.each(len, |r| {
                 r.skip()?;
                 r.skip()
             }),
-            Head::Tag => self.skip(),
+            Head::Tag(_) => self.skip(),
             Head::Break => self.fail("unexpected break"),
         }
     }
@@ -220,6 +220,162 @@ impl<'b> Reader<'b> {
         self.each(len, |r| r.txin().map(|i| out.push(i)))?;
         Ok(out)
     }
+
+    fn bytes(&mut self, len: Len) -> Result<Vec<u8>> {
+        match len {
+            Len::Def(n) => self.take(n).map(<[u8]>::to_vec),
+            Len::Indef => {
+                let mut out = Vec::new();
+                while !self.at_break()? {
+                    match self.head()? {
+                        Head::Bytes(Len::Def(n)) => out.extend_from_slice(self.take(n)?),
+                        _ => return self.fail("expected a definite byte string chunk"),
+                    }
+                }
+                Ok(out)
+            }
+        }
+    }
+
+    fn data_items(&mut self, len: Len) -> Result<Vec<Data>> {
+        let mut out = Vec::new();
+        self.each(len, |r| r.data().map(|d| out.push(d)))?;
+        Ok(out)
+    }
+
+    fn fields(&mut self) -> Result<Vec<Data>> {
+        match self.head()? {
+            Head::Array(len) => self.data_items(len),
+            _ => self.fail("expected constructor fields"),
+        }
+    }
+
+    fn general_constr(&mut self) -> Result<Data> {
+        let len = match self.head()? {
+            Head::Array(len @ (Len::Def(2) | Len::Indef)) => len,
+            _ => return self.fail("expected a constructor tag and its fields"),
+        };
+        let tag = match self.head()? {
+            Head::Uint(tag) => tag,
+            _ => return self.fail("expected a constructor tag"),
+        };
+        let fields = self.fields()?;
+        if len == Len::Indef && !self.at_break()? {
+            return self.fail("expected a constructor tag and its fields");
+        }
+        Ok(Data::Constr(tag, fields))
+    }
+
+    fn data(&mut self) -> Result<Data> {
+        Ok(match self.head()? {
+            Head::Uint(n) => Data::Int(Int::new(false, &n.to_be_bytes())),
+            Head::Nint(n) => Data::Int(Int::new(true, &n.to_be_bytes())),
+            Head::Bytes(len) => Data::Bytes(self.bytes(len)?),
+            Head::Array(len) => Data::List(self.data_items(len)?),
+            Head::Map(len) => {
+                let mut out = Vec::new();
+                self.each(len, |r| {
+                    let key = r.data()?;
+                    out.push((key, r.data()?));
+                    Ok(())
+                })?;
+                Data::Map(out)
+            }
+            Head::Tag(tag @ 121..=127) => Data::Constr(tag - 121, self.fields()?),
+            Head::Tag(tag @ 1280..=1400) => Data::Constr(tag - 1280 + 7, self.fields()?),
+            Head::Tag(102) => self.general_constr()?,
+            Head::Tag(tag @ (2 | 3)) => match self.head()? {
+                Head::Bytes(len) => Data::Int(Int::new(tag == 3, &self.bytes(len)?)),
+                _ => return self.fail("expected the bytes of a big integer"),
+            },
+            Head::Tag(_) => return self.fail("a tag no data value holds"),
+            Head::Text(_) | Head::Simple => return self.fail("an item no data value holds"),
+            Head::Break => return self.fail("unexpected break"),
+        })
+    }
+}
+
+/// A Plutus data value, without the encoding choices of the bytes it was read from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Data {
+    Constr(u64, Vec<Data>),
+    Map(Vec<(Data, Data)>),
+    List(Vec<Data>),
+    Int(Int),
+    Bytes(Vec<u8>),
+}
+
+/// An integer as a sign and a big endian magnitude with no leading zero byte, a negative one being minus one minus the magnitude.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Int {
+    pub negative: bool,
+    pub magnitude: Vec<u8>,
+}
+
+impl Int {
+    fn new(negative: bool, big_endian: &[u8]) -> Self {
+        let start = big_endian.iter().take_while(|b| **b == 0).count();
+        Int {
+            negative,
+            magnitude: big_endian[start..].to_vec(),
+        }
+    }
+}
+
+impl std::fmt::Display for Int {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let small = (self.magnitude.len() <= 16)
+            .then(|| self.magnitude.iter().fold(0u128, |acc, b| (acc << 8) | u128::from(*b)));
+        match (self.negative, small) {
+            (false, Some(n)) => write!(f, "{n}"),
+            (true, Some(n)) if n < u128::MAX => write!(f, "-{}", n + 1),
+            (false, _) => write!(f, "0x{}", hex::encode(&self.magnitude)),
+            (true, _) => write!(f, "-1-0x{}", hex::encode(&self.magnitude)),
+        }
+    }
+}
+
+impl std::fmt::Display for Data {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn joined(f: &mut std::fmt::Formatter<'_>, items: &[Data]) -> std::fmt::Result {
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    f.write_str(",")?;
+                }
+                write!(f, "{item}")?;
+            }
+            Ok(())
+        }
+        match self {
+            Data::Constr(tag, fields) => {
+                write!(f, "C{tag}[")?;
+                joined(f, fields)?;
+                f.write_str("]")
+            }
+            Data::List(items) => {
+                f.write_str("[")?;
+                joined(f, items)?;
+                f.write_str("]")
+            }
+            Data::Map(entries) => {
+                f.write_str("{")?;
+                for (i, (key, value)) in entries.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(",")?;
+                    }
+                    write!(f, "{key}:{value}")?;
+                }
+                f.write_str("}")
+            }
+            Data::Int(n) => write!(f, "{n}"),
+            Data::Bytes(b) => write!(f, "h'{}'", hex::encode(b)),
+        }
+    }
+}
+
+/// Decodes one Plutus data value from its CBOR bytes.
+pub fn data(raw: &[u8]) -> Result<Data> {
+    Reader::new(raw).data()
 }
 
 /// The slot and epoch at the start or end of an era.
@@ -668,5 +824,53 @@ mod tests {
         );
         let short = &raw[..raw.len() - 2];
         assert!(era_history(short).is_err());
+    }
+
+    fn decoded(text: &str) -> Data {
+        data(&hex::decode(text).unwrap()).unwrap_or_else(|e| panic!("{text}: {e}"))
+    }
+
+    #[test]
+    fn data_reads_each_encoding_of_a_value_alike() {
+        let same = [
+            ("d8799f0102ff", "d87982 0102"),
+            ("d905009f40ff", "d9050081 40"),
+            ("d866820282 0203", "d87b82 0203"),
+            ("c24101", "01"),
+            ("c3420001", "21"),
+            ("1b0000000000000005", "05"),
+            ("5f4201024103ff", "43010203"),
+            ("bf0102ff", "a1 0102"),
+        ];
+        for (one, other) in same {
+            let (one, other) = (one.replace(' ', ""), other.replace(' ', ""));
+            assert_eq!(decoded(&one), decoded(&other), "{one} {other}");
+        }
+    }
+
+    #[test]
+    fn data_tells_different_values_apart() {
+        let differ = [
+            ("d87980", "d87a80"),
+            ("80", "a0"),
+            ("01", "20"),
+            ("4101", "4102"),
+            ("820102", "820201"),
+            ("c249010000000000000000", "c349010000000000000000"),
+        ];
+        for (one, other) in differ {
+            assert_ne!(decoded(one), decoded(other), "{one} {other}");
+        }
+        assert_eq!(
+            decoded("d87c9f2043ab01ffc249010000000000000000ff").to_string(),
+            "C3[-1,h'ab01ff',18446744073709551616]"
+        );
+    }
+
+    #[test]
+    fn data_refuses_an_item_no_data_value_holds() {
+        for raw in ["6161", "f5", "d81801", "d86682014101", "c201"] {
+            assert!(data(&hex::decode(raw).unwrap()).is_err(), "{raw}");
+        }
     }
 }
