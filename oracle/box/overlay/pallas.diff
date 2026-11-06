@@ -114,7 +114,7 @@ index 8825dbf3..7f39d2e2 100644
          .concat(),
      )
 diff --git a/pallas-validate/src/phase1/dijkstra.rs b/pallas-validate/src/phase1/dijkstra.rs
-index eb9e839a..f1c11e42 100644
+index a8455453..bd999f0d 100644
 --- a/pallas-validate/src/phase1/dijkstra.rs
 +++ b/pallas-validate/src/phase1/dijkstra.rs
 @@ -136,6 +136,11 @@ pub(super) fn validate_dijkstra_tx_inner<S: DijkstraLedgerState + ?Sized>(
@@ -235,7 +235,7 @@ index eb9e839a..f1c11e42 100644
          match spender(output)? {
              Spender::Key(key) => {
                  keys.insert(key);
-@@ -1316,6 +1358,14 @@ fn reference_fee(mut bytes: u64, p: &DijkstraProtParams) -> Result<u64, Validati
+@@ -1320,6 +1362,14 @@ fn reference_fee(mut bytes: u64, p: &DijkstraProtParams) -> Result<u64, Validati
      u64::try_from(total.0 / total.1).map_err(|_| PostAlonzo(NegativeValue))
  }
  
@@ -250,7 +250,7 @@ index eb9e839a..f1c11e42 100644
  fn check_auxiliary(
      hash: Option<Hash<32>>,
      auxiliary: &Nullable<KeepRaw<'_, AuxiliaryData>>,
-@@ -1576,6 +1626,11 @@ fn check_new_script(script: &MultiEraScriptRef<'_>) -> ValidationResult {
+@@ -1580,6 +1630,11 @@ fn check_new_script(script: &MultiEraScriptRef<'_>) -> ValidationResult {
      match script {
          MultiEraScriptRef::Dijkstra(s) => match s.as_ref() {
              ScriptRef::NativeScript(_) => Ok(()),
@@ -293,10 +293,10 @@ index 8773d5b6..63fcdee8 100644
          Certificate::StakeDelegation(c, pool) => {
              registered(state, c)?;
 diff --git a/pallas-validate/src/phase2/dijkstra.rs b/pallas-validate/src/phase2/dijkstra.rs
-index 4f1e3ad2..b08b2cfd 100644
+index 5c256511..d86a15ee 100644
 --- a/pallas-validate/src/phase2/dijkstra.rs
 +++ b/pallas-validate/src/phase2/dijkstra.rs
-@@ -71,14 +71,15 @@ impl LegacyContextData for ContextOutput {
+@@ -70,14 +70,15 @@ impl LegacyContextData for ContextOutput {
              Some(c::DatumOption::Hash(hash)) => Some(*hash),
              _ => None,
          };
@@ -320,7 +320,7 @@ index 4f1e3ad2..b08b2cfd 100644
      }
  
      fn to_plutus_data_v2(&self) -> c::PlutusData {
-@@ -88,7 +89,11 @@ impl LegacyContextData for ContextOutput {
+@@ -87,7 +88,11 @@ impl LegacyContextData for ContextOutput {
                  self.address_data(),
                  WithZeroAdaAsset(&self.value).to_plutus_data(),
                  self.datum.to_plutus_data(),
@@ -333,7 +333,7 @@ index 4f1e3ad2..b08b2cfd 100644
              ],
          )
      }
-@@ -137,7 +142,36 @@ impl LegacyContextData for ContextInput {
+@@ -136,7 +141,36 @@ impl LegacyContextData for ContextInput {
  /// The fields of an output a script context holds, with any reference script reduced to the hash of its original bytes.
  fn context_output(output: &MultiEraOutput<'_>, _reference: bool) -> Result<ContextOutput, Error> {
      let address = context_address(output.address()?).map_err(|x| Error::DijkstraInvalid(x.0))?;
@@ -371,7 +371,7 @@ index 4f1e3ad2..b08b2cfd 100644
      Ok(ContextOutput {
          address,
          value: output.value().into_conway(),
-@@ -369,12 +403,23 @@ pub(super) fn eval_tx_with_mode(
+@@ -368,12 +402,23 @@ pub(super) fn eval_tx_with_mode(
              let args: Vec<_> = run.args.iter().collect();
              let (result, calls) =
                  evaluator::eval_native(run.language, &run.script, &args, &run.costs, run.budget)?;
@@ -400,7 +400,7 @@ index 4f1e3ad2..b08b2cfd 100644
                  logs: result.logs,
                  failure_message: result.failure.map(|f| f.message),
              };
-@@ -705,7 +750,9 @@ impl Legacy {
+@@ -704,7 +749,9 @@ impl Legacy {
                  })
                  .collect(),
          };
@@ -411,7 +411,16 @@ index 4f1e3ad2..b08b2cfd 100644
          signatories.dedup();
          Ok(Legacy {
              mint: MintValue {
-@@ -856,7 +903,18 @@ pub(super) fn runs(
+@@ -807,7 +854,7 @@ pub(super) fn runs(
+                     .collect()
+             };
+             let args = match (language, part) {
+-                (_, Part::Sub(..)) | (n::Language::PlutusV4, Part::Top(_)) => {
++                (_, Part::Sub(..)) => {
+                     vec![context.script_context(key, purpose, &r.data, datum, &batch)?]
+                 }
+                 (n::Language::PlutusV1, Part::Top(tx)) => {
+@@ -853,7 +900,12 @@ pub(super) fn runs(
                          purpose.conway()?.1,
                      ))
                  }
@@ -419,39 +428,17 @@ index 4f1e3ad2..b08b2cfd 100644
 +                (n::Language::PlutusV4, Part::Top(_))
 +                    if !pallas_crypto::oracle_plant("v4-v3-context") =>
 +                {
-+                    vec![context.script_context(
-+                        key,
-+                        purpose,
-+                        &r.data,
-+                        datum,
-+                        Reach::Top(&batch),
-+                    )?]
++                    vec![context.script_context(key, purpose, &r.data, datum, &batch)?]
 +                }
 +                (n::Language::PlutusV3 | n::Language::PlutusV4, Part::Top(tx)) => {
                      let b = &tx.transaction_body;
                      let x = Legacy::new(b, &context)?;
                      let info = V3TxInfo {
-@@ -884,15 +942,6 @@ pub(super) fn runs(
-                         12,
-                     )]
-                 }
--                (n::Language::PlutusV4, Part::Top(_)) => {
--                    vec![context.script_context(
--                        key,
--                        purpose,
--                        &r.data,
--                        datum,
--                        Reach::Top(&batch),
--                    )?]
--                }
-             };
-             let model = match language {
-                 n::Language::PlutusV1 => costs.plutus_v1.as_ref(),
 diff --git a/pallas-validate/src/phase2/dijkstra_v4_context.rs b/pallas-validate/src/phase2/dijkstra_v4_context.rs
-index 899a3bc0..e32b035e 100644
+index d711513e..00a4d126 100644
 --- a/pallas-validate/src/phase2/dijkstra_v4_context.rs
 +++ b/pallas-validate/src/phase2/dijkstra_v4_context.rs
-@@ -221,7 +221,10 @@ impl<'a> Context<'a> {
+@@ -209,7 +209,10 @@ impl<'a> Context<'a> {
              Purpose::Conway(_, ScriptInfo::Proposing(ix, procedure)) => {
                  (5, vec![ix.to_plutus_data(), proposal(procedure)?])
              }
@@ -548,10 +535,10 @@ index 055fcb76..ccff26a1 100644
                          wrap_with_constr(0, reward_account.to_plutus_data()),
                          *amount,
 diff --git a/pallas-validate/src/utils/dijkstra_context.rs b/pallas-validate/src/utils/dijkstra_context.rs
-index 77a20bdf..6e9153fd 100644
+index 77a66240..20076aed 100644
 --- a/pallas-validate/src/utils/dijkstra_context.rs
 +++ b/pallas-validate/src/utils/dijkstra_context.rs
-@@ -123,13 +123,16 @@ pub(crate) fn check_translatable(
+@@ -111,13 +111,16 @@ pub(crate) fn check_translatable(
          if b.intervals.is_some_and(|x| !x.is_empty()) {
              return refuse("account balance intervals");
          }
