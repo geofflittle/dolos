@@ -179,6 +179,8 @@ caught() {
     pointer-refused) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=pointer address ' ;;
     collateral-unsupported) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=collateral without Plutus$' ;;
     endorser-tx-dropped) pattern='^ENDORSER-DIFF service=(FetchBlock|FollowTip) slot=[0-9]+ list=(ids|bytes) index=[0-9]+ ' ;;
+    fee-min-deleted | aux-refused | integrity-top-deleted) pattern='^(DISAGREE|REASON_MISMATCH|RULE_MISMATCH) [a-z0-9]+#[0-9]+ ' ;;
+    refund-deposit-swap) pattern='^RULE_MISMATCH [a-z0-9]+#[0-9]+ ' ;;
     *)
       echo "ARM $arm NO_PATTERN"
       return 1
@@ -368,7 +370,7 @@ for arm in $ARMS; do
     echo "control=$control"
     verdicts="$verdicts control=$control"
   elif [ "$arm" = head ]; then
-    grep -E '^(CORPUS|VALIDATION|DEPENDENT|KNOWN|STATE|COST|EVAL-ORACLE|EVAL-DIFF|EVAL-TOTAL|EVAL-UNNAMED|EVAL-FEE|REVALIDATE|BUILTIN|BUILTIN_UNCOVERED|ROLL_FAIL|RESULT|DISAGREE|REASON_MISMATCH|CASCADE|UNSUPPORTED_UNEXPECTED|STALE_MANIFEST|KNOWN_STALE|UNKNOWN_REFUSAL|ENDORSER|ENDORSER-DIFF) ' "$OUT/$arm.log" |
+    grep -E '^(CORPUS|VALIDATION|DEPENDENT|KNOWN|STATE|COST|EVAL-ORACLE|EVAL-DIFF|EVAL-TOTAL|EVAL-UNNAMED|EVAL-FEE|REVALIDATE|BUILTIN|BUILTIN_UNCOVERED|ROLL_FAIL|RESULT|DISAGREE|REASON_MISMATCH|CASCADE|UNSUPPORTED_UNEXPECTED|STALE_MANIFEST|KNOWN_STALE|UNKNOWN_REFUSAL|ENDORSER|ENDORSER-DIFF|PHASE1-RULES|RULE_SIDE|RULE_MISMATCH|RULE_UNMAPPED|RULE_KNOWN_STALE|RULE_KNOWN_UNJUDGED) ' "$OUT/$arm.log" |
       cut -c1-400 || true
     if grep -q '^RESULT PASS' "$OUT/$arm.log" && ! grep -q '^RESULT FAIL' "$OUT/$arm.log"; then
       head_result=PASS
