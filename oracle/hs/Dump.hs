@@ -7,7 +7,7 @@
 {-# LANGUAGE TypeApplications #-}
 
 -- | One JSON line per LEDGER rule run, written from the Imp post submit hook.
-module Dump (E, decodeTx, dumpTo, editedBytes, failurePath) where
+module Dump (E, counter, decodeTx, dumpTo, editedBytes, evalJson, failurePath, hex) where
 
 import Cardano.Ledger.Alonzo.PParams (ppCostModelsL, ppMaxTxExUnitsL)
 import Cardano.Ledger.Alonzo.Plutus.Context (EraPlutusContext (..), LedgerLevelTxInfo (..), LedgerTxInfo (..), toScriptHashByPurpose)
@@ -53,6 +53,7 @@ import Data.List (dropWhileEnd, isSuffixOf)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
+import Data.Text (Text)
 import Cardano.Ledger.Shelley.API.Mempool (ApplyTx (mkStAnnTx))
 import Control.Monad.Reader (runReader)
 import Control.State.Transition.Extended (applySTS)
@@ -78,6 +79,14 @@ counter = unsafePerformIO (newIORef 0)
 
 hex :: BS8.ByteString -> String
 hex = BS8.unpack . B16.encode
+
+-- | The units an evaluation spent, or its failure with its logs.
+evalJson :: ([Text], Either P.EvaluationError P.ExBudget) -> A.Value
+evalJson (logs, result) = case result of
+  Left e -> A.object ["failed" A..= take 300 (show e), "logs" A..= logs]
+  Right b -> case exBudgetToExUnits b of
+    Just (ExUnits m s) -> A.object ["ran" A..= [m, s]]
+    Nothing -> A.object ["incompatible" A..= show b]
 
 pairs :: UTxO E -> [[String]]
 pairs (UTxO m) =
