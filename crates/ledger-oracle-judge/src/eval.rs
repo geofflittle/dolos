@@ -10,7 +10,7 @@ use crate::{
     cbor::Purpose,
     compare::Tally,
     manifest::ManifestError,
-    record::{Evaluation, Record, RecordId, Units},
+    record::{Evaluation, RecordId, Redeemers, Units},
 };
 
 const EVAL_KNOWN: &str = include_str!("../../../test_data/ledger-oracle/eval-known.txt");
@@ -285,11 +285,11 @@ pub fn judge_tx(
         .collect()
 }
 
-/// The ledger's answer for each redeemer of a record, at its top level and in each sub transaction.
-pub fn ledger_rows(record: &Record) -> BTreeMap<RowKey, Answer> {
-    let top = record.ex_units.iter().map(|r| (Level::Top, r));
-    let subs = record
-        .sub_ex_units
+/// The ledger's answer for each redeemer, at its top level and in each sub transaction.
+pub fn ledger_rows(redeemers: &Redeemers) -> BTreeMap<RowKey, Answer> {
+    let top = redeemers.top.iter().map(|r| (Level::Top, r));
+    let subs = redeemers
+        .subs
         .iter()
         .enumerate()
         .flat_map(|(k, sub)| sub.iter().map(move |r| (Level::Sub(k as u32), r)));
@@ -547,6 +547,8 @@ pub struct EvalTally {
     pub fee_differ: Vec<String>,
     pub collisions: usize,
     pub skipped_cascade: usize,
+    /// The records whose bytes the ledger's decoder refused, for which the ledger evaluated no redeemer.
+    pub undecoded: usize,
     /// The rows the evaluator refused, with its refusal, the candidates for the known list.
     pub refused: EvalKnown,
     pub judged: BTreeSet<RecordId>,
@@ -667,6 +669,7 @@ impl EvalTally {
             fee_differ,
             collisions,
             skipped_cascade,
+            undecoded,
             refused,
             judged,
         } = other;
@@ -688,6 +691,7 @@ impl EvalTally {
         self.fee_differ.extend(fee_differ);
         self.collisions += collisions;
         self.skipped_cascade += skipped_cascade;
+        self.undecoded += undecoded;
         for (id, rows) in refused {
             self.refused.entry(id).or_default().extend(rows);
         }
@@ -745,7 +749,7 @@ impl fmt::Display for EvalTally {
         );
         write!(
             f,
-            "EVAL-ORACLE compared={} agree={} known={} unrepresentable={} disagree={} by_layer={layers} by_purpose={purposes} by_level={levels} totals={} totals_disagree={} unnamed={} fee_unset={} fee_equal={} fee_differ={} fee_undecoded={} collisions={} skipped_cascade={} every_layer_agrees={}",
+            "EVAL-ORACLE compared={} agree={} known={} unrepresentable={} disagree={} by_layer={layers} by_purpose={purposes} by_level={levels} totals={} totals_disagree={} unnamed={} fee_unset={} fee_equal={} fee_differ={} fee_undecoded={} collisions={} skipped_cascade={} undecoded={} every_layer_agrees={}",
             all.compared(),
             all.agree,
             all.known,
@@ -760,6 +764,7 @@ impl fmt::Display for EvalTally {
             self.fee_undecoded,
             self.collisions,
             self.skipped_cascade,
+            self.undecoded,
             self.every_layer_agrees()
         )?;
         let kinds = [
@@ -1170,6 +1175,7 @@ mod tests {
         ];
         t.add_rows(Layer::Pallas, ic(1), &rows);
         t.add_rows(Layer::V1, ic(1), &rows);
+        t.undecoded = 1;
         let mut merged = EvalTally::default();
         merged.merge(t.clone());
         assert_eq!(merged, t);
@@ -1178,5 +1184,6 @@ mod tests {
             line.starts_with("EVAL-ORACLE compared=4 agree=2 known=2 unrepresentable=0 disagree=0 by_layer=pallas:1/1/0/0,v1:1/1/0/0 by_purpose=Spend:2/2/0/0 by_level=sub:0/2/0/0,top:2/0/0/0 "),
             "{line}"
         );
+        assert!(line.contains(" undecoded=1 every_layer_agrees="), "{line}");
     }
 }

@@ -9,7 +9,7 @@ use crate::{
     cbor::{self, Data},
     eval::{parse_purpose, Level, Refusal, RowKey},
     manifest::ManifestError,
-    record::{Argument, CorpusKind, Evaluation, Record, RecordId},
+    record::{Argument, CorpusKind, Evaluation, LedgerRedeemers, Record, RecordId, Redeemers},
 };
 
 const CONTEXT_KNOWN: &str = include_str!("../../../test_data/ledger-oracle/context-known.txt");
@@ -151,11 +151,26 @@ pub enum LedgerContext {
     NotBuilt(Refusal),
 }
 
-/// The context the ledger built or refused for each redeemer of a record, at its top level and in each sub transaction.
-pub fn ledger_contexts(record: &Record) -> BTreeMap<RowKey, LedgerContext> {
-    let top = record.ex_units.iter().map(|r| (Level::Top, r));
-    let subs = record
-        .sub_ex_units
+/// The context the ledger built or refused for each redeemer of a record, or that its decoder refused the record's bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LedgerContexts {
+    Read(BTreeMap<RowKey, LedgerContext>),
+    Undecoded,
+}
+
+/// The contexts the ledger built or refused for a record's redeemers.
+pub fn ledger_contexts(record: &Record) -> LedgerContexts {
+    match &record.redeemers {
+        LedgerRedeemers::Read(redeemers) => LedgerContexts::Read(redeemer_contexts(redeemers)),
+        LedgerRedeemers::Undecoded => LedgerContexts::Undecoded,
+    }
+}
+
+/// The context the ledger built or refused for each redeemer, at its top level and in each sub transaction.
+fn redeemer_contexts(redeemers: &Redeemers) -> BTreeMap<RowKey, LedgerContext> {
+    let top = redeemers.top.iter().map(|r| (Level::Top, r));
+    let subs = redeemers
+        .subs
         .iter()
         .enumerate()
         .flat_map(|(k, sub)| sub.iter().map(move |r| (Level::Sub(k as u32), r)));
@@ -228,7 +243,7 @@ pub enum ContextVerdict {
     Known,
     /// The ledger built a context and the evaluator refused the transaction for this reason.
     Unbuilt(Refusal),
-    /// Neither side built a context.
+    /// The ledger built no context, and the evaluator built none or the ledger's decoder refused the transaction's bytes.
     NoLedgerContext,
     /// The arguments differ at each of these places, and from the listing when there is one.
     Differ {
@@ -254,7 +269,7 @@ enum PallasRow<'a> {
 
 /// Each row's verdict for one transaction, with the language of the evaluator's context, for every row the ledger, the evaluator or the known list names.
 pub fn judge_tx(
-    ledger: &BTreeMap<RowKey, LedgerContext>,
+    ledger: &LedgerContexts,
     pallas: &PallasContexts,
     listed: &BTreeMap<RowKey, Listing>,
 ) -> Vec<(RowKey, Option<Language>, ContextVerdict)> {
@@ -262,10 +277,13 @@ pub fn judge_tx(
         PallasContexts::Built(rows) => rows.keys().copied().collect(),
         PallasContexts::Refused(_) => Vec::new(),
     };
-    let keys: BTreeSet<RowKey> = ledger
-        .keys()
-        .chain(listed.keys())
-        .copied()
+    let read = match ledger {
+        LedgerContexts::Read(rows) => rows.keys().copied().collect(),
+        LedgerContexts::Undecoded => Vec::new(),
+    };
+    let keys: BTreeSet<RowKey> = read
+        .into_iter()
+        .chain(listed.keys().copied())
         .chain(built)
         .collect();
     let row = |key: &RowKey| match pallas {
@@ -279,13 +297,21 @@ pub fn judge_tx(
                 PallasRow::Built(context) => Some(context.language),
                 PallasRow::Missing | PallasRow::Refused(_) => None,
             };
-            (
-                key,
-                language,
-                row_verdict(ledger.get(&key), row, listed.get(&key)),
-            )
+            let verdict = match ledger {
+                LedgerContexts::Read(rows) => row_verdict(rows.get(&key), row, listed.get(&key)),
+                LedgerContexts::Undecoded => undecoded_verdict(listed.get(&key)),
+            };
+            (key, language, verdict)
         })
         .collect()
+}
+
+/// The verdict of one row of a transaction whose bytes the ledger's decoder refused, for which the ledger built no context.
+fn undecoded_verdict(listed: Option<&Listing>) -> ContextVerdict {
+    match listed {
+        None => ContextVerdict::NoLedgerContext,
+        Some(listing) => ContextVerdict::Stale(listing.clone()),
+    }
 }
 
 /// The verdict of one row from the ledger's context, what the evaluator built and the row's listing.
@@ -740,7 +766,7 @@ mod tests {
         listed: Option<Listing>,
     ) -> ContextVerdict {
         let row = key(Level::Top, 0, 0);
-        let ledger = ledger.into_iter().map(|l| (row, l)).collect();
+        let ledger = LedgerContexts::Read(ledger.into_iter().map(|l| (row, l)).collect());
         let listed = listed.into_iter().map(|l| (row, l)).collect();
         let verdicts = judge_tx(&ledger, &pallas, &listed);
         assert_eq!(verdicts.len(), 1);
@@ -944,6 +970,29 @@ mod tests {
         assert_eq!(
             one(Some(ledger_refused), none, None),
             ContextVerdict::NoLedgerContext
+        );
+    }
+
+    #[test]
+    fn a_context_pallas_builds_for_bytes_the_ledger_could_not_decode_has_no_ledger_context() {
+        let row = key(Level::Top, 0, 1);
+        let built =
+            || PallasContexts::Built(BTreeMap::from([(row, pallas(Language::V3, &["00"]))]));
+        let verdicts = judge_tx(&LedgerContexts::Undecoded, &built(), &BTreeMap::new());
+        assert_eq!(
+            verdicts,
+            vec![(row, Some(Language::V3), ContextVerdict::NoLedgerContext)]
+        );
+        let refused = PallasContexts::Refused(Refusal::new("no script"));
+        assert_eq!(
+            judge_tx(&LedgerContexts::Undecoded, &refused, &BTreeMap::new()),
+            vec![]
+        );
+        let listing = Listing::Refused(Refusal::new("none"));
+        let listed = BTreeMap::from([(row, listing.clone())]);
+        assert_eq!(
+            judge_tx(&LedgerContexts::Undecoded, &built(), &listed),
+            vec![(row, Some(Language::V3), ContextVerdict::Stale(listing))]
         );
     }
 

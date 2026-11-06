@@ -254,6 +254,18 @@ pub enum LedgerOutcome {
     },
 }
 
+impl LedgerOutcome {
+    /// Whether the ledger's decoder refused the transaction's bytes.
+    pub fn undecoded(&self) -> bool {
+        match self {
+            LedgerOutcome::Accepted { .. } => false,
+            LedgerOutcome::Refused { failure_names, .. } => failure_names
+                .iter()
+                .any(|path| path.class == RefusalClass::Decoding),
+        }
+    }
+}
+
 /// The slot to time map of the era the ledger ran a record in.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -273,9 +285,23 @@ pub struct Time {
     pub horizon_slot: Option<u64>,
 }
 
+/// The redeemers the ledger evaluated at a transaction's top level and in each of its sub transactions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Redeemers {
+    pub top: Vec<LedgerRedeemer>,
+    pub subs: Vec<Vec<LedgerRedeemer>>,
+}
+
+/// The redeemers the ledger evaluated for a record, or that its decoder refused the record's bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LedgerRedeemers {
+    Read(Redeemers),
+    Undecoded,
+}
+
 /// One LEDGER rule run as the extractor wrote it.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "RecordLine")]
 pub struct Record {
     pub n: u32,
     pub slot: u64,
@@ -289,10 +315,86 @@ pub struct Record {
     pub gov_pre: Gov,
     pub treasury: u64,
     pub outcome: LedgerOutcome,
-    pub ex_units: Vec<LedgerRedeemer>,
-    pub sub_ex_units: Vec<Vec<LedgerRedeemer>>,
+    pub redeemers: LedgerRedeemers,
     pub min_fee: Option<u64>,
     pub time: Time,
+}
+
+/// One corpus line, the record with its redeemers as the extractor lists them.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordLine {
+    n: u32,
+    slot: u64,
+    epoch: Option<u64>,
+    phase2: Declared,
+    tx: Bytes,
+    pparams: PParams,
+    pre: Pre,
+    accounts_pre: LedgerAccounts,
+    certs_pre: Certs,
+    gov_pre: Gov,
+    treasury: u64,
+    outcome: LedgerOutcome,
+    ex_units: Vec<LedgerRedeemer>,
+    sub_ex_units: Vec<Vec<LedgerRedeemer>>,
+    min_fee: Option<u64>,
+    time: Time,
+}
+
+impl TryFrom<RecordLine> for Record {
+    type Error = String;
+
+    fn try_from(line: RecordLine) -> Result<Self, String> {
+        let RecordLine {
+            n,
+            slot,
+            epoch,
+            phase2,
+            tx,
+            pparams,
+            pre,
+            accounts_pre,
+            certs_pre,
+            gov_pre,
+            treasury,
+            outcome,
+            ex_units,
+            sub_ex_units,
+            min_fee,
+            time,
+        } = line;
+        let listed = ex_units.len() + sub_ex_units.iter().map(Vec::len).sum::<usize>();
+        let redeemers = match (outcome.undecoded(), listed) {
+            (false, _) => LedgerRedeemers::Read(Redeemers {
+                top: ex_units,
+                subs: sub_ex_units,
+            }),
+            (true, 0) => LedgerRedeemers::Undecoded,
+            (true, _) => {
+                return Err(format!(
+                    "the ledger's decoder refused the bytes and {listed} redeemers are listed"
+                ))
+            }
+        };
+        Ok(Record {
+            n,
+            slot,
+            epoch,
+            phase2,
+            tx,
+            pparams,
+            pre,
+            accounts_pre,
+            certs_pre,
+            gov_pre,
+            treasury,
+            outcome,
+            redeemers,
+            min_fee,
+            time,
+        })
+    }
 }
 
 impl Record {
