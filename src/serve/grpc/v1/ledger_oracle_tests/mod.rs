@@ -1814,6 +1814,12 @@ async fn ledger_oracle() {
     {
         println!("{line}");
     }
+    let cases = endorser::load(&endorser::fixture_path());
+    let endorsed = endorser::judge(&cases).await;
+    for line in endorsed.lines() {
+        println!("{line}");
+    }
+    pass &= endorsed.pass(cases.len());
     let result = if pass { "PASS" } else { "FAIL" };
     println!("RESULT {result}");
     assert!(pass);

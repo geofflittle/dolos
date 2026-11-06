@@ -59,11 +59,11 @@ use crate::sync::endorser::{self, EndorserBlockBody};
 /// A short reply is asked for again rather than taken as the end of the
 /// endorser block, and the transactions it did deliver are checked against the
 /// entries they are filed under before any of them is kept.
-const TXS_PER_REQUEST: usize = 8192;
+pub(crate) const TXS_PER_REQUEST: usize = 8192;
 
 /// How long to wait for one endorser block before giving up and letting the
 /// stage retry, which also reconnects.
-const FETCH_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const FETCH_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// How often the real transport runs housekeeping, which sends the peer a
 /// keepalive message.
@@ -654,7 +654,7 @@ fn finish(wire: Vec<leiosfetch::TxCbor>) -> Result<Vec<Vec<u8>>, Error> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use dolos_cardano::owned::OwnedMultiEraOutput;
     use dolos_cardano::utxoset::compute_apply_delta;
@@ -675,7 +675,7 @@ mod tests {
     /// and it refuses to have two requests outstanding, because the behavior
     /// under the real transport serves one per peer and a second would wait
     /// behind the first with nothing saying so.
-    struct FakeRelay {
+    pub(crate) struct FakeRelay {
         point: EbId,
         body: Vec<u8>,
         eb_txs: Vec<Vec<u8>>,
@@ -707,7 +707,7 @@ mod tests {
     }
 
     impl FakeRelay {
-        fn new(point: EbId, body: Vec<u8>, eb_txs: Vec<Vec<u8>>, cap: usize) -> Self {
+        pub(crate) fn new(point: EbId, body: Vec<u8>, eb_txs: Vec<Vec<u8>>, cap: usize) -> Self {
             Self {
                 point,
                 body,

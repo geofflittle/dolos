@@ -61,7 +61,7 @@ async fn peer_block(peer: &mut PeerClient, point: Point) -> Result<BlockBody, Wo
 }
 
 /// The announcement of `parent` that `header` certifies, with the parent's slot.
-fn announced_by(
+pub(crate) fn announced_by(
     parent: Option<&MultiEraHeader<'_>>,
     header: &MultiEraHeader<'_>,
 ) -> Result<Option<AnnouncedEndorserBlock>, endorser::Error> {
