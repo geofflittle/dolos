@@ -13,10 +13,10 @@ use crate::{
 };
 
 /// The sha256 of the decompressed Imp spec corpus.
-pub const IC_SHA256: &str = "a1bd9e2518d295bcfd0e1765b25d1d17132277cb74503738b863ba02112380de";
+pub const IC_SHA256: &str = "4f8dc7425f7bb0c53a19f4e02cf6e8204b8a7aa206aa72dc6d9810c7aba93637";
 
 /// The sha256 of the decompressed supplement corpus.
-pub const SUPP_SHA256: &str = "ed3477da1cfaee8f802fbab4a9bc0005fa2a60099528bb59fa4b48b5913a97bd";
+pub const SUPP_SHA256: &str = "2093168ef2778a747cda703a32e1a1a53a7995787c148e0711d20daa71a5fb6e";
 
 const IC_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/ic.jsonl.gz");
 const SUPP_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/supp.jsonl.gz");
@@ -259,11 +259,11 @@ mod tests {
     fn committed_corpora_load_into_their_runs() {
         assert_eq!(
             load(CorpusKind::Ic).unwrap().to_string(),
-            "CORPUS ic sha=a1bd9e2518d295bc records=9853 runs=892 kept_records=9853"
+            "CORPUS ic sha=4f8dc7425f7bb0c5 records=9853 runs=892 kept_records=9853"
         );
         assert_eq!(
             load(CorpusKind::Supp).unwrap().to_string(),
-            "CORPUS supp sha=ed3477da1cfaee8f records=190 runs=58 kept_records=190"
+            "CORPUS supp sha=2093168ef2778a74 records=190 runs=58 kept_records=190"
         );
     }
 
@@ -275,7 +275,7 @@ mod tests {
         let e = verify(CorpusKind::Ic, &bytes, IC_SHA256).unwrap_err();
         assert!(e
             .to_string()
-            .starts_with("CORPUS ic sha mismatch expected=a1bd9e25"));
+            .starts_with("CORPUS ic sha mismatch expected=4f8dc742"));
     }
 
     #[test]
@@ -289,6 +289,45 @@ mod tests {
         assert_eq!(
             e.to_string(),
             "CORPUS ic load error records=1 first_line=4 reason=missing field `pparams`"
+        );
+    }
+
+    #[test]
+    fn committed_corpora_carry_the_arguments_of_each_context_the_ledger_built() {
+        let built = |kind| {
+            let records = records(verify(kind, &gunzip(kind.gz()).unwrap(), kind.sha256()).unwrap());
+            let redeemers = records
+                .unwrap()
+                .into_iter()
+                .flat_map(|r| r.ex_units.into_iter().chain(r.sub_ex_units.into_iter().flatten()))
+                .collect::<Vec<_>>();
+            let built = redeemers.iter().filter(|r| r.args.is_some()).count();
+            (redeemers.len(), built)
+        };
+        assert_eq!(built(CorpusKind::Ic), (472, 402));
+        assert_eq!(built(CorpusKind::Supp), (31, 28));
+    }
+
+    #[test]
+    fn a_redeemer_without_its_arguments_fails_the_load() {
+        let line = ic_bytes()
+            .split(|b| *b == b'\n')
+            .position(|l| {
+                let v: serde_json::Value = serde_json::from_slice(l).unwrap_or_default();
+                v["ex_units"].as_array().is_some_and(|r| !r.is_empty())
+            })
+            .unwrap();
+        let missing = edit_line(line, |v| {
+            let redeemers = v["ex_units"].as_array_mut().unwrap();
+            redeemers[0].as_object_mut().unwrap().remove("args");
+        });
+        let e = reload(CorpusKind::Ic, &missing).unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            format!(
+                "CORPUS ic load error records=1 first_line={} reason=missing field `args`",
+                line + 1
+            )
         );
     }
 

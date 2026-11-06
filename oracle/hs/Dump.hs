@@ -1,5 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
@@ -24,8 +26,9 @@ import Cardano.Ledger.Core
 import Cardano.Ledger.Dijkstra (DijkstraEra)
 import Cardano.Ledger.Dijkstra.Tx (DijkstraStAnnTx (..))
 import Cardano.Ledger.Plutus.CostModels (costModelsValid)
-import Cardano.Ledger.Plutus.Evaluate (evaluatePlutusWithContext)
+import Cardano.Ledger.Plutus.Evaluate (PlutusWithContext (..), evaluatePlutusWithContext)
 import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
+import Cardano.Ledger.Plutus.Language (LegacyPlutusArgs (..), PlutusArgs (..), PlutusLanguage (..), PlutusScriptContext, SLanguage (..))
 import Cardano.Ledger.Plutus.TxInfo (exBudgetToExUnits)
 import Cardano.Ledger.Conway.Governance (GovRelation (..), PRoot (..), cgsCommitteeL, cgsConstitutionL, cgsProposalsL, pRootsL)
 import Cardano.Ledger.Shelley.LedgerState (lsCertStateL, lsUTxOStateL, utxosGovStateL)
@@ -35,31 +38,37 @@ import Cardano.Ledger.State (ChainAccountState (..), EraUTxO (..), ScriptsProvid
 import Cardano.Slotting.EpochInfo (epochInfoEpoch, epochInfoSize, epochInfoSlotLength, epochInfoSlotToRelativeTime)
 import Cardano.Slotting.Slot (EpochNo (..), EpochSize (..), SlotNo (..))
 import Cardano.Slotting.Time (SystemStart (..), slotLengthToMillisec)
+import Codec.Serialise (serialise)
 import Data.Bifunctor (first)
 import Data.Either (isRight)
 import Data.MapExtras (fromElems)
 import Data.Ratio (denominator, numerator)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
+import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
 import Control.State.Transition.Extended (STS (..), TRC (..))
 import qualified Data.Aeson as A
 import qualified Data.ByteString.Base16 as B16
 import qualified Data.ByteString.Char8 as BS8
+import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BL8
 import Data.Char (isAlphaNum, isSpace, isUpper)
 import Data.Functor.Identity (runIdentity)
-import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (dropWhileEnd, isSuffixOf)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
+import Data.Text (Text)
 import Cardano.Ledger.Shelley.API.Mempool (ApplyTx (mkStAnnTx))
 import Control.Monad.Reader (runReader)
 import Control.State.Transition.Extended (applySTS)
 import Lens.Micro ((&), (.~), (^.))
 import qualified PlutusLedgerApi.Common as P
+import qualified PlutusLedgerApi.V3 as PV3
+import System.IO (hPutStrLn, stderr)
 import System.IO.Unsafe (unsafePerformIO)
-import Test.Cardano.Ledger.Dijkstra.ImpTest
+import Test.Cardano.Ledger.Dijkstra.ImpTest hiding (PlutusArgs)
 
 type E = DijkstraEra
 
@@ -76,8 +85,30 @@ editedBytes = unsafePerformIO (newIORef Nothing)
 counter :: IORef Int
 counter = unsafePerformIO (newIORef 0)
 
+{-# NOINLINE ruleKeys #-}
+-- | The number of redeemers so far whose dumped arguments were compared with the arguments the rule built.
+ruleKeys :: IORef Int
+ruleKeys = unsafePerformIO (newIORef 0)
+
 hex :: BS8.ByteString -> String
 hex = BS8.unpack . B16.encode
+
+-- | The data arguments a script is applied to, in order.
+argsData :: forall l. PlutusLanguage l => PlutusArgs l -> [P.Data]
+argsData args = case (isLanguage :: SLanguage l) of
+  SPlutusV1 -> legacy (unPlutusV1Args args)
+  SPlutusV2 -> legacy (unPlutusV2Args args)
+  SPlutusV3 -> [PV3.toData (unPlutusV3Args args)]
+  SPlutusV4 -> [PV3.toData (unPlutusV4Args args)]
+  where
+    legacy :: PV3.ToData (PlutusScriptContext k) => LegacyPlutusArgs k -> [P.Data]
+    legacy = \case
+      LegacyPlutusArgs2 r c -> [r, PV3.toData c]
+      LegacyPlutusArgs3 d r c -> [d, r, PV3.toData c]
+
+-- | The data arguments of a script with its context.
+pwcData :: PlutusWithContext -> [P.Data]
+pwcData PlutusWithContext {pwcArgs} = argsData pwcArgs
 
 pairs :: UTxO E -> [[String]]
 pairs (UTxO m) =
@@ -229,6 +260,10 @@ dumpTo out g (TRC (env, st, stAnn)) res = liftIO $ do
         let flagged = tx & isPhase2ValidTxL .~ Phase2Valid
             annotated = mkStAnnTx (epochInfo g) (systemStart g) (ledgerPp env) pre mempty flagged
          in fst (outcomeOf (runReader (applySTS @(EraRule "LEDGER" E) (TRC (env, st, annotated))) g))
+  keys <- either (\e -> fail ("record " <> show n <> ", " <> e)) pure (ruleAgrees (ledgerPp env) stAnn topReport subReports)
+  modifyIORef' ruleKeys (+ keys)
+  total <- readIORef ruleKeys
+  when (keys > 0) $ hPutStrLn stderr ("rule arguments agree on " <> show total <> " redeemers")
   writeIORef lastPost (Just (continuity (fromMaybe st post)))
   BL8.appendFile out (A.encode line <> "\n")
   where
@@ -251,9 +286,10 @@ dumpTo out g (TRC (env, st, stAnn)) res = liftIO $ do
             , "committee" A..= (gov ^. cgsCommitteeL)
             , "constitution" A..= (gov ^. cgsConstitutionL)
             ]
-    evaluationJson (purpose, result) =
+    evaluationJson (purpose, (result, args)) =
       A.object
         [ "purpose" A..= hex (serialize' (eraProtVerHigh @E) purpose)
+        , "args" A..= fmap (map (hex . BL.toStrict . serialise)) args
         , "evaluation" A..= case result of
             Right (_, ExUnits mem steps) -> A.object ["ran" A..= [mem, steps]]
             Left failure -> A.object ["failed" A..= take 300 (show failure)]
@@ -263,18 +299,43 @@ dumpTo out g (TRC (env, st, stAnn)) res = liftIO $ do
             Left _ -> []
         ]
 
--- | The redeemer reports of a transaction at the maximum budget, its top level given the results of its sub transactions, then each sub transaction in order.
-levelReports :: PParams E -> Globals -> UTxO E -> DijkstraStAnnTx TopTx E -> (RedeemerReportWithLogs E, [RedeemerReportWithLogs E])
+-- | Each redeemer's evaluation at the maximum budget with the data arguments of the context built for it, none when none was built.
+type Report = Map.Map (PlutusPurpose AsIx E) (Either (TransactionScriptFailure E) ([Text], ExUnits), Maybe [P.Data])
+
+-- | The redeemer reports of a transaction, its top level given the results of its sub transactions, then each sub transaction in order.
+levelReports :: PParams E -> Globals -> UTxO E -> DijkstraStAnnTx TopTx E -> (Report, [Report])
 levelReports pp g utxo DijkstraStAnnTopTx {dsattTx, dsattSubTransactions} =
   (levelReport pp g utxo provided (LedgerTopTxInfo subResults) dsattTx, zipWith sub [0 ..] dsattSubTransactions)
   where
     provided = getScriptsProvided utxo dsattTx
     subResults = Map.fromList [(txIdTx dsastTx, dsastTxInfoResult) | DijkstraStAnnSubTx {dsastTx, dsastTxInfoResult} <- dsattSubTransactions]
-    sub :: Int -> DijkstraStAnnTx SubTx E -> RedeemerReportWithLogs E
+    sub :: Int -> DijkstraStAnnTx SubTx E -> Report
     sub ix DijkstraStAnnSubTx {dsastTx} = levelReport pp g utxo provided (LedgerSubTxInfo (TxIx (fromIntegral ix))) dsastTx
 
--- | The redeemer report of one level of a transaction at the maximum budget, in the context its level information gives.
-levelReport :: PParams E -> Globals -> UTxO E -> ScriptsProvided E -> LedgerLevelTxInfo l E -> Tx l E -> RedeemerReportWithLogs E
+-- | The number of redeemers whose context the rule built, or the first level where the rule's redeemers or their data arguments differ from the reports'.
+ruleAgrees :: PParams E -> DijkstraStAnnTx TopTx E -> Report -> [Report] -> Either String Int
+ruleAgrees pp DijkstraStAnnTopTx {dsattScriptsNeeded, dsattScriptsProvided, dsattPlutusScriptsWithContext, dsattSubTransactions} top subs = do
+  topKeys <- level "top" dsattScriptsProvided dsattScriptsNeeded dsattPlutusScriptsWithContext top
+  subKeys <- sequence (zipWith3 sub [0 ..] dsattSubTransactions subs)
+  pure (topKeys + sum subKeys)
+  where
+    sub :: Int -> DijkstraStAnnTx SubTx E -> Report -> Either String Int
+    sub ix DijkstraStAnnSubTx {dsastScriptsNeeded, dsastScriptsProvided, dsastPlutusScriptsWithContext} =
+      level ("sub " <> show ix) dsastScriptsProvided dsastScriptsNeeded dsastPlutusScriptsWithContext
+    level name provided needed collected report = case collected of
+      Left _ -> Right 0
+      Right pwcs
+        | length used /= length pwcs -> Left (name <> ": " <> show (length used) <> " scripts used, " <> show (length pwcs) <> " contexts")
+        | ruled /= dumped -> Left (name <> ": the arguments differ at " <> show differing)
+        | otherwise -> Right (Map.size ruled)
+        where
+          (_, used) = resolveNeededPlutusScriptsWithPurpose (pp ^. ppProtocolVersionL) provided needed mempty
+          ruled = Map.fromList (zip (map (hoistPlutusPurpose toAsIx . fst) (reverse used)) (map pwcData pwcs))
+          dumped = Map.mapMaybe snd report
+          differing = [k | k <- Map.keys (Map.union ruled dumped), Map.lookup k ruled /= Map.lookup k dumped]
+
+-- | The redeemer report of one level of a transaction, in the context its level information gives.
+levelReport :: PParams E -> Globals -> UTxO E -> ScriptsProvided E -> LedgerLevelTxInfo l E -> Tx l E -> Report
 levelReport pp g utxo provided@(ScriptsProvided scripts) level tx = Map.mapWithKey run (tx ^. witsTxL . rdmrsTxWitsL . unRedeemersL)
   where
     protVer = pp ^. ppProtocolVersionL
@@ -295,14 +356,17 @@ levelReport pp g utxo provided@(ScriptsProvided scripts) level tx = Map.mapWithK
         }
     infoResult = mkTxInfoResult lti
     unresolved = Map.map (\(purpose, hash) -> (hoistPlutusPurpose toAsItem purpose, lookupPlutusScript hash scripts, hash)) byPointer
-    run pointer (redeemerData, exUnits) = do
-      (purpose, hash) <- maybe (Left (RedeemerPointsToUnknownScriptHash pointer)) Right (Map.lookup pointer byPointer)
-      script <- maybe (Left (MissingScript pointer unresolved)) Right (lookupPlutusScript hash scripts)
-      let lang = plutusScriptLanguage script
-      costModel <- maybe (Left (NoCostModelInLedgerState lang)) Right (Map.lookup lang costModels)
-      pwc <-
-        first ContextError $
-          mkPlutusWithContext (mkSupportedPlutusRunnable (pvMajor protVer) script) purpose lti infoResult redeemerData (pp ^. ppMaxTxExUnitsL) costModel
-      case evaluatePlutusWithContext P.Verbose pwc of
-        (logs, Left err) -> Left (ValidationFailure exUnits err logs pwc)
-        (logs, Right budget) -> maybe (Left (IncompatibleBudget budget)) (Right . (,) logs) (exBudgetToExUnits budget)
+    run pointer (redeemerData, exUnits) = case built of
+      Left failure -> (Left failure, Nothing)
+      Right pwc -> (evaluated pwc, Just (pwcData pwc))
+      where
+        built = do
+          (purpose, hash) <- maybe (Left (RedeemerPointsToUnknownScriptHash pointer)) Right (Map.lookup pointer byPointer)
+          script <- maybe (Left (MissingScript pointer unresolved)) Right (lookupPlutusScript hash scripts)
+          let lang = plutusScriptLanguage script
+          costModel <- maybe (Left (NoCostModelInLedgerState lang)) Right (Map.lookup lang costModels)
+          first ContextError $
+            mkPlutusWithContext (mkSupportedPlutusRunnable (pvMajor protVer) script) purpose lti infoResult redeemerData (pp ^. ppMaxTxExUnitsL) costModel
+        evaluated pwc = case evaluatePlutusWithContext P.Verbose pwc of
+          (logs, Left err) -> Left (ValidationFailure exUnits err logs pwc)
+          (logs, Right budget) -> maybe (Left (IncompatibleBudget budget)) (Right . (,) logs) (exBudgetToExUnits budget)
