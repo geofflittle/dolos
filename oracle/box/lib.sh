@@ -281,6 +281,28 @@ io_breached() {
   [ "$1" -ge "$IO_BREACH_SAMPLES" ]
 }
 
+# The pallas commit the scratch tree's Cargo.toml pins pallas-validate to.
+pallas_pin() {
+  sed -n 's/^pallas-validate = { git = "[^"]*", rev = "\([0-9a-f]*\)".*/\1/p' "$ROOT/$SCRATCH/Cargo.toml" | head -1
+}
+
+# Checks pallas out at a commit into the scratch pallas tree and points the scratch tree's pallas crates at it.
+pallas_tree() {
+  if [ ! -d "$ROOT/$PALLAS/.git" ]; then
+    git init -q "$ROOT/$PALLAS" || return
+  fi
+  for db in "$ROOT"/cargo-home/git/db/pallas-*; do
+    if git -C "$db" cat-file -e "$1^{commit}" 2>/dev/null; then
+      git -C "$ROOT/$PALLAS" fetch -q "$db" '+refs/*:refs/db/*' || return
+      break
+    fi
+  done
+  git -C "$ROOT/$PALLAS" checkout -q -f --detach "$1" &&
+    git -C "$ROOT/$PALLAS" clean -q -fdx &&
+    sed -E -i 's#^(pallas[a-z-]*) = \{ git = "https://github.com/[^/]+/pallas", rev = "[0-9a-f]+"#\1 = { path = "/w/'"$PALLAS"'/\1"#' \
+      "$ROOT/$SCRATCH/Cargo.toml"
+}
+
 # Puts the scratch tree at REV of the bare repository $ROOT/dolos.git with no planted change.
 reset_scratch() {
   if [ ! -d "$ROOT/$SCRATCH/.git" ]; then

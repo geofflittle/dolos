@@ -1,0 +1,86 @@
+diff --git a/pallas-primitives/src/dijkstra/model.rs b/pallas-primitives/src/dijkstra/model.rs
+index ad9f6a63..3b833ed7 100644
+--- a/pallas-primitives/src/dijkstra/model.rs
++++ b/pallas-primitives/src/dijkstra/model.rs
+@@ -1052,6 +1052,29 @@ pub(crate) mod guards_field {
+         d.decode_with(ctx).map(Some)
+     }
+ 
++    pub fn decode_top<Ctx>(
++        d: &mut minicbor::Decoder<'_>,
++        ctx: &mut Ctx,
++    ) -> Result<Option<Guards>, Error> {
++        refuse_keyhashes(decode_option(d, ctx)?, "value-guards-top")
++    }
++
++    pub fn decode_sub<Ctx>(
++        d: &mut minicbor::Decoder<'_>,
++        ctx: &mut Ctx,
++    ) -> Result<Option<Guards>, Error> {
++        refuse_keyhashes(decode_option(d, ctx)?, "value-guards-sub")
++    }
++
++    fn refuse_keyhashes(x: Option<Guards>, plant: &str) -> Result<Option<Guards>, Error> {
++        match x {
++            Some(Guards::AddrKeyhashes(_)) if pallas_crypto::oracle_plant(plant) => {
++                Err(Error::message("planted keyhash guards refusal"))
++            }
++            x => Ok(x),
++        }
++    }
++
+     /// The value of a body's guards field that is absent.
+     pub fn none() -> Option<Option<Guards>> {
+         Some(None)
+@@ -1198,7 +1221,7 @@ pub struct SubTransactionBody<'a> {
+ 
+     #[n(14)]
+     #[cbor(
+-        decode_with = "guards_field::decode_option",
++        decode_with = "guards_field::decode_sub",
+         nil = "guards_field::none"
+     )]
+     pub guards: Option<Guards>,
+@@ -1286,7 +1309,7 @@ pub struct TransactionBody<'a> {
+ 
+     #[n(14)]
+     #[cbor(
+-        decode_with = "guards_field::decode_option",
++        decode_with = "guards_field::decode_top",
+         nil = "guards_field::none"
+     )]
+     pub guards: Option<Guards>,
+diff --git a/pallas-traverse/src/tx.rs b/pallas-traverse/src/tx.rs
+index 0b4c7f22..34100d5d 100644
+--- a/pallas-traverse/src/tx.rs
++++ b/pallas-traverse/src/tx.rs
+@@ -321,6 +321,14 @@ impl<'b> MultiEraTx<'b> {
+     }
+ 
+     pub fn withdrawals_sorted_set(&self) -> Vec<(&[u8], u64)> {
++        let raw = pallas_crypto::oracle_plant("value-withdrawal-order");
++        let cmp_reward_accounts = |a: &&[u8], b: &&[u8]| {
++            if raw {
++                a.cmp(b)
++            } else {
++                cmp_reward_accounts(a, b)
++            }
++        };
+         match self.withdrawals() {
+             MultiEraWithdrawals::NotApplicable | MultiEraWithdrawals::Empty => {
+                 std::iter::empty().collect()
+diff --git a/pallas-utxorpc/src/shared.rs b/pallas-utxorpc/src/shared.rs
+index fd504aac..c332177e 100644
+--- a/pallas-utxorpc/src/shared.rs
++++ b/pallas-utxorpc/src/shared.rs
+@@ -243,7 +243,9 @@ macro_rules! impl_cardano_mapper_shared {
+                     tx_hash: input.hash().to_vec().into(),
+                     output_index: input.index() as u32,
+                     as_output: self.decode_resolved_utxo(resolved, input, tx),
+-                    redeemer: tx.find_spend_redeemer(order).map(|x| self.map_redeemer(&x)),
++                    redeemer: tx
++                        .find_spend_redeemer(order + pallas_crypto::oracle_plant("value-spend-redeemer") as u32)
++                        .map(|x| self.map_redeemer(&x)),
+                 }
+             }
+ 
