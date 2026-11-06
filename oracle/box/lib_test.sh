@@ -577,6 +577,30 @@ expect amaru_filtered "$(amaru_passed_of 1065 'test result: ok. 1065 passed; 0 f
 expect amaru_none "$(amaru_passed_of 0 'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s')" fail
 expect amaru_all "$(amaru_passed_of 1065 'test result: ok. 1065 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s')" pass
 
+# The count amaru_generated gives for a target holding a generated source of $2 tests at the build path $1 under debug/build, or none when $1 is empty.
+amaru_generated_of() {
+  (
+    ROOT=$W/gen-count HERE=$HERE
+    rm -rf "$ROOT"
+    mkdir -p "$ROOT/t/debug/build/amaru-kernel-1/out"
+    printf '#[test]\nfn k() {}\n' >"$ROOT/t/debug/build/amaru-kernel-1/out/generated_tests.rs"
+    if [ -n "$1" ]; then
+      mkdir -p "$ROOT/t/debug/build/$1/out"
+      i=0
+      while [ "$i" -lt "$2" ]; do
+        printf '#[test]\nfn t%s() {}\n' "$i"
+        i=$((i + 1))
+      done >"$ROOT/t/debug/build/$1/out/generated_tests.rs"
+    fi
+    . "$HERE/amaru.sh"
+    amaru_generated t
+  )
+}
+# Must not count another crate's generated tests, and must count amaru-uplc's in the hashed directory or under the crate directory.
+expect amaru_generated_none "$(amaru_generated_of '' 0)" 0
+expect amaru_generated_flat "$(amaru_generated_of amaru-uplc-1a2b 3)" 3
+expect amaru_generated_nested "$(amaru_generated_of amaru-uplc/1a2b 3)" 3
+
 # The verdict of amaru_caught for the name part divideinteger on a test log of the lines given.
 amaru_caught_of() {
   (
