@@ -220,8 +220,8 @@ readme = "README.md"
 authors = ["TxPipe <hello@txpipe.io>"]
 
 [workspace.dependencies]
-pallas-validate = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "73cef926ffaa4fb2df7f8ab4f5616b41eba4bf27", features = ["phase2", "unstable"] }
-pallas = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "73cef926ffaa4fb2df7f8ab4f5616b41eba4bf27", features = ["hardano", "phase2", "unstable", "network2"] }
+pallas-validate = { git = "https://github.com/geofflittle/pallas", rev = "056bb021f137165f107f3f5491dd4e699b623829", features = ["phase2", "unstable"] }
+pallas = { git = "https://github.com/geofflittle/pallas", rev = "056bb021f137165f107f3f5491dd4e699b623829", features = ["hardano", "phase2", "unstable", "network2"] }
 # pallas = { version = "1.3.0", features = ["hardano", "phase2", "unstable"] }
 # pallas = { git = "https://github.com/txpipe/pallas.git", rev = "a7b5a86", features = ["hardano", "phase2", "unstable"] }
 # pallas = { path = "../pallas/pallas", features = ["hardano", "phase2", "unstable"] }
@@ -272,17 +272,17 @@ tracing-opentelemetry = "0.33"
 minicbor = { version = "0.26", features = ["std"] }
 
 [patch.crates-io]
-pallas = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "73cef926ffaa4fb2df7f8ab4f5616b41eba4bf27" }
-pallas-addresses = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "73cef926ffaa4fb2df7f8ab4f5616b41eba4bf27" }
-pallas-codec = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "73cef926ffaa4fb2df7f8ab4f5616b41eba4bf27" }
-pallas-configs = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "73cef926ffaa4fb2df7f8ab4f5616b41eba4bf27" }
-pallas-crypto = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "73cef926ffaa4fb2df7f8ab4f5616b41eba4bf27" }
-pallas-network = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "73cef926ffaa4fb2df7f8ab4f5616b41eba4bf27" }
-pallas-primitives = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "73cef926ffaa4fb2df7f8ab4f5616b41eba4bf27" }
-pallas-traverse = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "73cef926ffaa4fb2df7f8ab4f5616b41eba4bf27" }
-pallas-txbuilder = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "73cef926ffaa4fb2df7f8ab4f5616b41eba4bf27" }
-pallas-utxorpc = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "73cef926ffaa4fb2df7f8ab4f5616b41eba4bf27" }
-pallas-validate = { git = "https://github.com/SundaeSwap-finance/pallas", rev = "73cef926ffaa4fb2df7f8ab4f5616b41eba4bf27" }
+pallas = { git = "https://github.com/geofflittle/pallas", rev = "056bb021f137165f107f3f5491dd4e699b623829" }
+pallas-addresses = { git = "https://github.com/geofflittle/pallas", rev = "056bb021f137165f107f3f5491dd4e699b623829" }
+pallas-codec = { git = "https://github.com/geofflittle/pallas", rev = "056bb021f137165f107f3f5491dd4e699b623829" }
+pallas-configs = { git = "https://github.com/geofflittle/pallas", rev = "056bb021f137165f107f3f5491dd4e699b623829" }
+pallas-crypto = { git = "https://github.com/geofflittle/pallas", rev = "056bb021f137165f107f3f5491dd4e699b623829" }
+pallas-network = { git = "https://github.com/geofflittle/pallas", rev = "056bb021f137165f107f3f5491dd4e699b623829" }
+pallas-primitives = { git = "https://github.com/geofflittle/pallas", rev = "056bb021f137165f107f3f5491dd4e699b623829" }
+pallas-traverse = { git = "https://github.com/geofflittle/pallas", rev = "056bb021f137165f107f3f5491dd4e699b623829" }
+pallas-txbuilder = { git = "https://github.com/geofflittle/pallas", rev = "056bb021f137165f107f3f5491dd4e699b623829" }
+pallas-utxorpc = { git = "https://github.com/geofflittle/pallas", rev = "056bb021f137165f107f3f5491dd4e699b623829" }
+pallas-validate = { git = "https://github.com/geofflittle/pallas", rev = "056bb021f137165f107f3f5491dd4e699b623829" }
 utxorpc-spec = { git = "https://github.com/SundaeSwap-finance/utxorpc-spec", rev = "4bef71401bae7e9fc80b9d24379be0f9078b0ff5" }
 
 [workspace.metadata.release]

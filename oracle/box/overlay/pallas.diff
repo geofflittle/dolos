@@ -867,12 +867,14 @@ index cdc70b06a..1a9b4acbd 100644
      }
  
 diff --git a/pallas-validate/src/phase2/error.rs b/pallas-validate/src/phase2/error.rs
-index 3ca2ba2af..39f1c1d66 100644
+index 3aff93985..39f1c1d66 100644
 --- a/pallas-validate/src/phase2/error.rs
 +++ b/pallas-validate/src/phase2/error.rs
-@@ -16,7 +16,10 @@ labels! {
+@@ -14,8 +14,12 @@ pub struct Unsupported(pub UnsupportedEvaluation);
+ labels! {
+     /// A construct the native Dijkstra evaluation does not implement.
      pub enum UnsupportedEvaluation {
-         BuiltinOutsideSubset => "V3 builtin outside audited protocol-12 subset",
++        BuiltinOutsideSubset => "V3 builtin outside audited protocol-12 subset",
          IntegerOutsideRegistrationRange => "integer operand outside audited registration range",
 +        NativeScriptGuards => "native script guards",
 +        OutputAddress => "output address (requires Shelley)",
@@ -882,7 +884,7 @@ index 3ca2ba2af..39f1c1d66 100644
          ReferenceScriptLanguage => "reference script language (requires V3)",
      }
 diff --git a/pallas-validate/src/phase2/mod.rs b/pallas-validate/src/phase2/mod.rs
-index fa882c7a6..93f0d52b4 100644
+index 198f4462e..5c5003b62 100644
 --- a/pallas-validate/src/phase2/mod.rs
 +++ b/pallas-validate/src/phase2/mod.rs
 @@ -88,11 +88,44 @@ pub fn redeemer_arguments(
@@ -932,10 +934,18 @@ index fa882c7a6..93f0d52b4 100644
  /// enforcing declared redeemer budgets. Earlier eras return [`Error::WrongEra`].
  ///
 diff --git a/pallas-validate/src/phase2/native_evaluator.rs b/pallas-validate/src/phase2/native_evaluator.rs
-index e7fb39da0..ec1b63fe2 100644
+index 97f9659c4..a8fd37273 100644
 --- a/pallas-validate/src/phase2/native_evaluator.rs
 +++ b/pallas-validate/src/phase2/native_evaluator.rs
-@@ -48,6 +48,11 @@ pub(crate) fn eval_native(
+@@ -7,6 +7,7 @@ use amaru_kernel::{PlutusVersion, ProtocolVersion};
+ use amaru_uplc_native::{
+     arena::Arena,
+     binder::DeBruijn,
++    builtin::DefaultFunction,
+     bumpalo::Bump,
+     constant::Constant,
+     data::PlutusData as PragmaPlutusData,
+@@ -39,6 +40,11 @@ pub(crate) fn eval_native(
      let flat_bytes: minicbor::bytes::ByteVec = minicbor::decode(script_bytes)?;
      let version = plutus_version(&language);
      let protocol = ProtocolVersion::new(12, 0);
@@ -947,7 +957,7 @@ index e7fb39da0..ec1b63fe2 100644
      let cost_model = match language {
          Language::PlutusV1 | Language::PlutusV2 | Language::PlutusV3 => {
              CostModel::new(version, protocol, costs)
-@@ -59,6 +64,72 @@ pub(crate) fn eval_native(
+@@ -50,6 +56,72 @@ pub(crate) fn eval_native(
      if remainder > 0 {
          return Err(amaru_uplc_native::flat::FlatDecodeError::TrailingBytes(remainder).into());
      }
@@ -1020,6 +1030,79 @@ index e7fb39da0..ec1b63fe2 100644
      let initial = ExBudget {
          mem: i64::try_from(budget.mem)
              .map_err(|_| Error::DijkstraInvalid(EvaluationFailure::MemoryBudgetOverflow))?,
+@@ -61,6 +133,12 @@ pub(crate) fn eval_native(
+     });
+     let mut calls = Vec::new();
+     let (value, info) = run(&arena, program, cost_model, initial, &mut calls);
++    if pallas_crypto::oracle_plant("builtin-call-unaudited") && !calls.iter().all(|f| audited(*f))
++    {
++        return Err(Error::DijkstraUnsupported(Unsupported(
++            UnsupportedEvaluation::BuiltinOutsideSubset,
++        )));
++    }
+     if matches!(
+         value,
+         Err(MachineError::Runtime(RuntimeError::IntegerOutOfBounds(_)))
+@@ -155,6 +233,59 @@ fn steps<'a>(
+     }
+ }
+ 
++/// Whether a builtin is in the audited set the evaluation once restricted calls to.
++fn audited(fun: DefaultFunction) -> bool {
++    use DefaultFunction as F;
++    matches!(
++        fun,
++        F::AddInteger
++            | F::SubtractInteger
++            | F::MultiplyInteger
++            | F::DivideInteger
++            | F::QuotientInteger
++            | F::ModInteger
++            | F::EqualsInteger
++            | F::LessThanInteger
++            | F::LessThanEqualsInteger
++            | F::AppendByteString
++            | F::ConsByteString
++            | F::SliceByteString
++            | F::LengthOfByteString
++            | F::IndexByteString
++            | F::EqualsByteString
++            | F::LessThanByteString
++            | F::LessThanEqualsByteString
++            | F::Blake2b_256
++            | F::Blake2b_224
++            | F::VerifyEd25519Signature
++            | F::IfThenElse
++            | F::ChooseUnit
++            | F::Trace
++            | F::FstPair
++            | F::SndPair
++            | F::ChooseList
++            | F::MkCons
++            | F::HeadList
++            | F::TailList
++            | F::NullList
++            | F::DropList
++            | F::ChooseData
++            | F::ConstrData
++            | F::MapData
++            | F::ListData
++            | F::IData
++            | F::BData
++            | F::UnConstrData
++            | F::UnMapData
++            | F::UnListData
++            | F::UnIData
++            | F::UnBData
++            | F::EqualsData
++            | F::SerialiseData
++            | F::MkPairData
++    )
++}
++
+ fn plutus_data_to_term<'a>(arena: &'a Arena, data: &PlutusData) -> &'a Term<'a, DeBruijn> {
+     // Bridge pallas PlutusData -> amaru-uplc PlutusData through CBOR. Both
+     // sides implement the same Plutus data encoding; the upstream amaru node
 diff --git a/pallas-validate/src/phase2/to_plutus_data.rs b/pallas-validate/src/phase2/to_plutus_data.rs
 index be4fafed3..9e9fd939b 100644
 --- a/pallas-validate/src/phase2/to_plutus_data.rs
