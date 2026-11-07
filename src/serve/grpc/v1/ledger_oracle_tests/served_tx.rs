@@ -156,7 +156,6 @@ macro_rules! dijkstra_keys {
             max_ref_script_size_per_endorser_block,
             peras_min_candidate_block_age,
             peras_healing_factor,
-            peras_cert_boost,
             peras_target_committee_size,
             peras_bootstrap_round,
             peras_quorum_threshold_safety_margin,
