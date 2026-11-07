@@ -340,7 +340,7 @@ pub(super) fn verdict(result: &Result<TxHash, DomainError>) -> DolosVerdict {
         ChainError::Phase2ValidationRejected(_) => DolosVerdict::Phase2Rejected,
         ChainError::Phase2EvaluationError(_) => refused("Phase2EvaluationError"),
         ChainError::Phase2EvaluationUnsupported(unsupported) => {
-            DolosVerdict::Unsupported(unsupported.0.to_string())
+            DolosVerdict::Phase2Unsupported(unsupported.0.to_string())
         }
         ChainError::CantReceiveBlock(_) => refused("CantReceiveBlock"),
         ChainError::BrokenInvariant(_) => refused("BrokenInvariant"),
@@ -501,14 +501,16 @@ mod tests {
     }
 
     #[test]
-    fn an_unsupported_phase_two_evaluation_is_unsupported_with_its_label() {
+    fn an_unsupported_phase_two_evaluation_is_phase_two_unsupported_with_its_label() {
         use pallas::ledger::validate::phase2::error::{Unsupported, UnsupportedEvaluation};
         let error = ChainError::Phase2EvaluationUnsupported(Unsupported(
             UnsupportedEvaluation::BuiltinOutsideSubset,
         ));
         assert_eq!(
             verdict(&refusal(error)),
-            DolosVerdict::Unsupported("V3 builtin outside audited protocol-12 subset".to_string())
+            DolosVerdict::Phase2Unsupported(
+                "V3 builtin outside audited protocol-12 subset".to_string()
+            )
         );
     }
 

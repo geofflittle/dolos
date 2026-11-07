@@ -336,7 +336,12 @@ impl Rules {
                     },
                 }
             }
-            (_, DolosVerdict::Accepted | DolosVerdict::Phase2Rejected) => Shown::Unjudged,
+            (
+                _,
+                DolosVerdict::Accepted
+                | DolosVerdict::Phase2Rejected
+                | DolosVerdict::Phase2Unsupported(_),
+            ) => Shown::Unjudged,
         };
         let ledger = ledger_answer(ledger);
         let both = format!("dolos={answer} ledger={ledger}");
@@ -578,6 +583,32 @@ unsupported[witness fields] | unrepresentable because the native validator does 
                 .to_string()
         ));
         assert!(lines.last().unwrap().contains(" mismatch=0 unmapped=1 "));
+    }
+
+    const BUILTIN: &str = "V3 builtin outside audited protocol-12 subset";
+
+    #[test]
+    fn an_unsupported_phase_two_evaluation_is_no_phase_one_answer() {
+        let rules = rules(TABLE);
+        let mut tally = every_side(&rules);
+        let evaluation = DolosVerdict::Phase2Unsupported(BUILTIN.to_string());
+        judge(&rules, 8, &accepted(), &evaluation, &mut tally);
+        let (lines, pass) = rules.bar(&tally, false);
+        assert!(pass, "{lines:?}");
+        assert!(lines.last().unwrap().contains(" mismatch=0 unmapped=0 "));
+    }
+
+    #[test]
+    fn an_unsupported_phase_one_answer_the_table_lacks_is_unmapped() {
+        let rules = rules(TABLE);
+        let mut tally = every_side(&rules);
+        let feature = DolosVerdict::Unsupported(BUILTIN.to_string());
+        judge(&rules, 8, &accepted(), &feature, &mut tally);
+        let (lines, pass) = rules.bar(&tally, false);
+        assert!(!pass);
+        assert!(lines.contains(&format!(
+            "RULE_UNMAPPED supp#8 dolos=unsupported[{BUILTIN}] ledger=accepted"
+        )));
     }
 
     #[test]

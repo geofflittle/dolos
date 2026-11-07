@@ -16,6 +16,7 @@ use crate::{
 pub enum DolosVerdict {
     Accepted,
     Phase2Rejected,
+    Phase2Unsupported(String),
     Unsupported(String),
     Refused { kind: String, class: DolosClass },
 }
@@ -25,7 +26,9 @@ impl fmt::Display for DolosVerdict {
         match self {
             DolosVerdict::Accepted => write!(f, "accepted"),
             DolosVerdict::Phase2Rejected => write!(f, "phase2_rejected"),
-            DolosVerdict::Unsupported(label) => write!(f, "unsupported[{label}]"),
+            DolosVerdict::Phase2Unsupported(label) | DolosVerdict::Unsupported(label) => {
+                write!(f, "unsupported[{label}]")
+            }
             DolosVerdict::Refused { kind, .. } => write!(f, "refused[{kind}]"),
         }
     }
@@ -198,13 +201,13 @@ pub fn outcome(
         ) => Outcome::Fail(Fail::UnknownRefusal {
             dolos: dolos.to_string(),
         }),
-        (L::Accepted { .. }, D::Unsupported(l), Some(f)) if *l == f.0 => {
+        (L::Accepted { .. }, D::Phase2Unsupported(l) | D::Unsupported(l), Some(f)) if *l == f.0 => {
             Outcome::Pass(Pass::UnsupportedExpected { label: l.clone() })
         }
-        (L::Refused { .. }, D::Unsupported(l), Some(f)) if *l == f.0 => {
+        (L::Refused { .. }, D::Phase2Unsupported(l) | D::Unsupported(l), Some(f)) if *l == f.0 => {
             Outcome::Pass(Pass::RefuseUnsupported { label: l.clone() })
         }
-        (_, D::Unsupported(l), _) => {
+        (_, D::Phase2Unsupported(l) | D::Unsupported(l), _) => {
             Outcome::Fail(Fail::UnsupportedUnexpected { label: l.clone() })
         }
         (_, D::Accepted | D::Phase2Rejected | D::Refused { .. }, Some(f)) => {
@@ -247,7 +250,9 @@ pub fn outcome(
 /// The feature a record would be declared unsupported for, from a Dolos that named it unsupported.
 pub fn declares(dolos: &DolosVerdict) -> Option<Feature> {
     match dolos {
-        DolosVerdict::Unsupported(label) => Some(Feature(label.clone())),
+        DolosVerdict::Phase2Unsupported(label) | DolosVerdict::Unsupported(label) => {
+            Some(Feature(label.clone()))
+        }
         DolosVerdict::Accepted | DolosVerdict::Phase2Rejected | DolosVerdict::Refused { .. } => {
             None
         }
@@ -307,12 +312,16 @@ pub fn maker(id: RecordId, dolos: &DolosVerdict, outcome: &Outcome) -> Maker {
         (D::Accepted, Outcome::Pass(_) | Outcome::Fail(_) | Outcome::Cascade(_)) => Maker::Taken,
         // An unsupported answer says nothing of the outputs, so later records
         // spend the ledger's outputs.
-        (D::Phase2Rejected | D::Unsupported(_) | D::Refused { .. }, Outcome::Pass(_))
-        | (D::Unsupported(_), Outcome::Fail(Fail::UnsupportedUnexpected { .. })) => {
-            Maker::Seeds(SeedingMaker(id))
-        }
         (
-            D::Phase2Rejected | D::Unsupported(_) | D::Refused { .. },
+            D::Phase2Rejected | D::Phase2Unsupported(_) | D::Unsupported(_) | D::Refused { .. },
+            Outcome::Pass(_),
+        )
+        | (
+            D::Phase2Unsupported(_) | D::Unsupported(_),
+            Outcome::Fail(Fail::UnsupportedUnexpected { .. }),
+        ) => Maker::Seeds(SeedingMaker(id)),
+        (
+            D::Phase2Rejected | D::Phase2Unsupported(_) | D::Unsupported(_) | D::Refused { .. },
             Outcome::Fail(_) | Outcome::Cascade(_),
         ) => Maker::Fails(FailingMaker(id)),
     }
@@ -330,7 +339,11 @@ pub fn with_failing_makers(
             class: DolosClass::Rule(RefusalClass::Inputs),
             ..
         } => true,
-        D::Refused { .. } | D::Accepted | D::Phase2Rejected | D::Unsupported(_) => false,
+        D::Refused { .. }
+        | D::Accepted
+        | D::Phase2Rejected
+        | D::Phase2Unsupported(_)
+        | D::Unsupported(_) => false,
     };
     let Some(makers) = NonEmpty::of(makers) else {
         return outcome;
