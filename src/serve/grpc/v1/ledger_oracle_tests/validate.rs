@@ -504,12 +504,12 @@ mod tests {
     fn an_unsupported_phase_two_evaluation_is_phase_two_unsupported_with_its_label() {
         use pallas::ledger::validate::phase2::error::{Unsupported, UnsupportedEvaluation};
         let error = ChainError::Phase2EvaluationUnsupported(Unsupported(
-            UnsupportedEvaluation::BuiltinOutsideSubset,
+            UnsupportedEvaluation::IntegerOutsideRegistrationRange,
         ));
         assert_eq!(
             verdict(&refusal(error)),
             DolosVerdict::Phase2Unsupported(
-                "V3 builtin outside audited protocol-12 subset".to_string()
+                "integer operand outside audited registration range".to_string()
             )
         );
     }

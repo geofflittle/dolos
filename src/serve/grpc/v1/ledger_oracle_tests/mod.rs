@@ -38,7 +38,7 @@ use ledger_oracle_judge::{
     context::{ContextKnown, ContextTally},
     corpus::{self, Corpus},
     cost::CostTallies,
-    eval::{EvalKnown, EvalTally, TxKnown},
+    eval::{ledger_rows, Answer, EvalKnown, EvalTally, Layer, TxKnown},
     manifest::{self, Candidates, Declared, Feature, Known, KnownList, Locus},
     parallel::in_parallel,
     record::{CorpusKind, LedgerOutcome, PParams, Phase2, Record, RecordId, UtxoEntry},
@@ -63,7 +63,7 @@ use pallas::{
             ComputeHash as _, Era, MultiEraOutput, MultiEraRedeemerTag as RedeemerTag, MultiEraTx,
             OriginalHash as _,
         },
-        validate::phase2::{audited_builtins, tx::MultiEraTxEvalResult as TxEvalResult, Builtin},
+        validate::phase2::{tx::MultiEraTxEvalResult as TxEvalResult, Builtin},
     },
 };
 use seed::SeedPoint;
@@ -305,41 +305,22 @@ impl Coverage {
     }
 }
 
-/// The audited builtins whose coverage decides the run, the rest of the
-/// audited set being reported only.
-const ADDED_BUILTINS: [Builtin; 7] = [
-    Builtin::QuotientInteger,
-    Builtin::SliceByteString,
-    Builtin::IndexByteString,
-    Builtin::ChooseUnit,
-    Builtin::Trace,
-    Builtin::NullList,
-    Builtin::DropList,
-];
-
-/// The coverage line of each audited builtin, a count line, and whether every
-/// added builtin has a covering record.
-fn builtin_bar(audited: &[Builtin], added: &[Builtin], coverage: &Coverage) -> (Vec<String>, bool) {
+/// The coverage line of each builtin in tag order and a count line.
+fn builtin_bar(coverage: &Coverage) -> Vec<String> {
+    let builtins = (0..=u8::MAX).filter_map(|tag| Builtin::try_from(tag).ok());
     let mut lines = Vec::new();
-    let mut counts = [[0usize; 2]; 2];
-    for builtin in audited {
-        let in_base = !added.contains(builtin);
-        let record = coverage.record(*builtin);
-        lines.push(match (record, in_base) {
-            (Some(id), _) => format!("BUILTIN {builtin:?} record={id}"),
-            (None, true) => format!("BUILTIN {builtin:?} uncovered base"),
-            (None, false) => format!("BUILTIN_UNCOVERED {builtin:?}"),
+    let mut covered = 0;
+    for builtin in builtins {
+        lines.push(match coverage.record(builtin) {
+            Some(id) => {
+                covered += 1;
+                format!("BUILTIN {builtin:?} record={id}")
+            }
+            None => format!("BUILTIN {builtin:?} uncovered"),
         });
-        let tally = &mut counts[usize::from(in_base)];
-        tally[0] += 1;
-        tally[1] += usize::from(record.is_some());
     }
-    let [[added, added_covered], [base, base_covered]] = counts;
-    let pass = added_covered == added;
-    lines.push(format!(
-        "BUILTIN added covered={added_covered}/{added} base covered={base_covered}/{base} pass={pass}"
-    ));
-    (lines, pass)
+    lines.push(format!("BUILTIN covered={covered}/{}", lines.len()));
+    lines
 }
 
 impl Judged {
@@ -387,7 +368,7 @@ impl fmt::Display for Judged {
 #[cfg(test)]
 fn judged_part(uncompared: &[&str]) -> Judged {
     let mut judged = Judged::default();
-    judged.validation.agree = 1;
+    judged.validation.agree.insert(supp(1));
     let state = &mut judged.state;
     let tallies = [
         ("utxo", &mut state.utxo),
@@ -1894,49 +1875,35 @@ fn supp(n: u32) -> RecordId {
 }
 
 #[test]
-fn an_uncovered_base_builtin_passes_the_bar_and_names_no_record() {
+fn the_builtin_bar_names_the_record_of_each_covered_builtin_of_the_whole_type() {
     let mut coverage = Coverage::default();
-    coverage.add(supp(41), &[Builtin::ChooseUnit, Builtin::IfThenElse]);
-    let audited = [
-        Builtin::ChooseUnit,
-        Builtin::IfThenElse,
-        Builtin::AddInteger,
-    ];
-    let (lines, pass) = builtin_bar(&audited, &[Builtin::ChooseUnit], &coverage);
-    assert!(pass, "{lines:?}");
+    coverage.add(supp(211), &[Builtin::Sha2_256]);
+    coverage.add(supp(214), &[Builtin::MkNilData, Builtin::Sha2_256]);
+    let lines = builtin_bar(&coverage);
+    let line = |builtin: Builtin| {
+        let prefix = format!("BUILTIN {builtin:?} ");
+        lines.iter().find(|l| l.starts_with(&prefix)).cloned()
+    };
     assert_eq!(
-        lines,
-        [
-            "BUILTIN ChooseUnit record=supp#41",
-            "BUILTIN IfThenElse record=supp#41",
-            "BUILTIN AddInteger uncovered base",
-            "BUILTIN added covered=1/1 base covered=1/2 pass=true",
-        ]
+        line(Builtin::AddInteger).as_deref(),
+        Some("BUILTIN AddInteger uncovered")
     );
-}
-
-#[test]
-fn an_uncovered_builtin_outside_the_base_fails_the_bar() {
-    let mut coverage = Coverage::default();
-    coverage.add(supp(41), &[Builtin::ChooseUnit]);
-    let audited = [Builtin::ChooseUnit, Builtin::NullList];
-    let (lines, pass) = builtin_bar(&audited, &audited, &coverage);
-    assert!(!pass);
-    assert_eq!(lines[1], "BUILTIN_UNCOVERED NullList");
     assert_eq!(
-        lines[2],
-        "BUILTIN added covered=1/2 base covered=0/0 pass=false"
+        line(Builtin::Bls12_381_G1_Add).as_deref(),
+        Some("BUILTIN Bls12_381_G1_Add uncovered")
     );
-}
-
-#[test]
-fn every_added_builtin_is_audited() {
-    let audited = audited_builtins();
-    let outside: Vec<_> = ADDED_BUILTINS
-        .iter()
-        .filter(|b| !audited.contains(b))
-        .collect();
-    assert_eq!(outside, Vec::<&Builtin>::new());
+    assert_eq!(
+        line(Builtin::Sha2_256).as_deref(),
+        Some("BUILTIN Sha2_256 record=supp#211")
+    );
+    assert_eq!(
+        line(Builtin::MkNilData).as_deref(),
+        Some("BUILTIN MkNilData record=supp#214")
+    );
+    assert_eq!(
+        lines.last().map(String::as_str),
+        Some("BUILTIN covered=2/101")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1989,11 +1956,9 @@ async fn ledger_oracle() {
         revalidated > 0
     );
     pass &= revalidated > 0;
-    let (lines, bar_pass) = builtin_bar(&audited_builtins(), &ADDED_BUILTINS, &coverage);
-    for line in lines {
+    for line in builtin_bar(&coverage) {
         println!("{line}");
     }
-    pass &= bar_pass;
     let (lines, construct_pass) = constructs.bar();
     for line in lines.into_iter().chain(inventory.lines()) {
         println!("{line}");
@@ -2180,6 +2145,40 @@ async fn the_v2_record_is_known_and_its_maker_agrees() {
         ),
         "{text}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
+async fn every_layer_accepts_the_sha2_256_and_mk_nil_data_records_in_the_ledger_units() {
+    let corpus = load(CorpusKind::Supp);
+    let records: BTreeMap<u32, &Record> = corpus
+        .kept()
+        .flat_map(|run| run.records())
+        .map(|r| (r.n, r))
+        .collect();
+    let judged = judge_supp(|_| ()).await;
+    for (n, units) in [(211, (1004, 437_340)), (214, (1965, 445_825))] {
+        let record = records[&n];
+        let ledger: Vec<_> = ledger_rows(record).into_iter().collect();
+        let [(key, Answer::Ran(ran))] = &ledger[..] else {
+            panic!("supp#{n} ledger rows {ledger:?}");
+        };
+        assert_eq!((ran.mem, ran.steps), units, "supp#{n}");
+        assert!(matches!(record.outcome, LedgerOutcome::Accepted { .. }));
+        assert!(
+            judged.validation.agree.contains(&supp(n)),
+            "supp#{n} {}",
+            judged.validation
+        );
+        let every_layer = Layer::ALL.map(|layer| ((layer, *key), *ran));
+        assert_eq!(
+            judged.eval.ran.get(&supp(n)),
+            Some(&BTreeMap::from(every_layer)),
+            "supp#{n}"
+        );
+    }
+    assert!(!judged.validation.agree.contains(&supp(217)));
+    assert_eq!(judged.eval.ran.get(&supp(217)), None);
 }
 
 #[tokio::test(flavor = "multi_thread")]

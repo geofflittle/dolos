@@ -953,6 +953,8 @@ pub struct EvalTally {
     pub purposes: BTreeMap<u64, Counts>,
     pub levels: BTreeMap<&'static str, Counts>,
     pub disagree: Vec<String>,
+    /// The units each layer ran each agreeing row of a record in.
+    pub ran: BTreeMap<RecordId, BTreeMap<(Layer, RowKey), Units>>,
     pub totals: Tally,
     pub unnamed: Vec<String>,
     pub fee_unset: usize,
@@ -1023,8 +1025,13 @@ impl EvalTally {
                     .or_default()
                     .insert(*key, refusal.clone());
             }
-            if let RowVerdict::Disagree(d) = verdict {
-                self.disagree.push(format!("{layer} {id} {key} {d}"));
+            match verdict {
+                RowVerdict::Agree(Answer::Ran(units)) => {
+                    let rows = self.ran.entry(id).or_default();
+                    rows.insert((layer, *key), *units);
+                }
+                RowVerdict::Disagree(d) => self.disagree.push(format!("{layer} {id} {key} {d}")),
+                _ => {}
             }
         }
     }
@@ -1078,6 +1085,7 @@ impl EvalTally {
             purposes,
             levels,
             disagree,
+            ran,
             totals,
             unnamed,
             fee_unset,
@@ -1103,6 +1111,9 @@ impl EvalTally {
             self.levels.entry(level).or_default().merge(counts);
         }
         self.disagree.extend(disagree);
+        for (id, rows) in ran {
+            self.ran.entry(id).or_default().extend(rows);
+        }
         self.totals.merge(totals);
         self.unnamed.extend(unnamed);
         self.fee_unset += fee_unset;
@@ -1592,6 +1603,30 @@ mod tests {
         assert!(!listed.pass());
         listed.unjudged(&known, CorpusKind::Supp);
         assert_eq!(listed.disagree.len(), 1);
+    }
+
+    #[test]
+    fn the_tally_keeps_the_units_of_each_row_a_layer_ran_and_agreed_on() {
+        let mut t = EvalTally::default();
+        let rows = [
+            (key(Level::Top, 0, 1), RowVerdict::Agree(Answer::Failed)),
+            (key(Level::Top, 0, 2), RowVerdict::Known(refusal("r"))),
+            (
+                key(Level::Top, 0, 3),
+                row_verdict(Some(ran(1, 2)), DolosRow::Answered(ran(1, 3)), None),
+            ),
+            (key(Level::Top, 0, 0), RowVerdict::Agree(ran(1, 2))),
+        ];
+        t.add_rows(Layer::V1, ic(1), &rows);
+        let mut other = EvalTally::default();
+        other.add_rows(Layer::Pallas, ic(1), &rows[3..]);
+        t.merge(other);
+        let units = Units { mem: 1, steps: 2 };
+        let ran = BTreeMap::from([
+            ((Layer::Pallas, key(Level::Top, 0, 0)), units),
+            ((Layer::V1, key(Level::Top, 0, 0)), units),
+        ]);
+        assert_eq!(t.ran, BTreeMap::from([(ic(1), ran)]));
     }
 
     #[test]

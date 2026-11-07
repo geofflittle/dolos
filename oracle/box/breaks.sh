@@ -173,7 +173,7 @@ caught() {
     native-guard-datum-required) pattern='^DISAGREE [a-z]+#[0-9]+ ledger=accepted dolos=refused\[DijkstraMalformedGuardDatum\]$' ;;
     plutus-guard-datum-optional) pattern='^DISAGREE [a-z]+#[0-9]+ ledger=refused\[SubMalformedGuardDatums\] dolos=accepted$' ;;
     horizon-unbounded) pattern='^DISAGREE [a-z]+#[0-9]+ ledger=refused\[CollectErrors\] dolos=accepted$' ;;
-    builtin-term-walk) pattern='^EVAL-DIFF pallas [a-z]+#[0-9]+ top [A-Za-z]+#[0-9]+ ledger=\(ran mem=[0-9]+ steps=[0-9]+\) dolos=\(refused V3 builtin outside audited protocol-12 subset\)$' ;;
+    builtin-term-walk | builtin-call-unaudited) pattern='^EVAL-DIFF pallas [a-z]+#[0-9]+ top [A-Za-z]+#[0-9]+ ledger=\(ran mem=[0-9]+ steps=[0-9]+\) dolos=\(refused V3 builtin outside audited protocol-12 subset\)$' ;;
     block-made-unserved) pattern='^DIFF undo [a-z]+#[0-9]+ ' ;;
     scripts-sub-unsearched) pattern='^DIFF script [a-z]+#[0-9]+ ' ;;
     gov-proposal-panics | dijkstra-scripts-panic) pattern='^DIFF served_tx [a-z]+#[0-9]+ v1 tx=[0-9a-f]+ panicked=' ;;
@@ -195,7 +195,7 @@ caught() {
     ctx-v4-subtx-index) pattern='^CONTEXT-DIFF [a-z]+#[0-9]+ sub[0-9]+ [A-Za-z]+#[0-9]+ V4 arg=0 path=0\.1 field=context\.scriptContextTxInfo\.txInfoSubTxIx ' ;;
     ctx-encoding) pattern='^CONTEXT-(DIFF|PALLAS-ONLY|STALE) [a-z]+#[0-9]+ ' ;;
     reward-output-unsupported) pattern='^EVAL-REWARD-OUTPUT-DIFF [a-z0-9]+ [a-z]+#[0-9]+ expected=\(couldn.t evaluate phase-2 script: invalid native Dijkstra evaluation: reward account address\) dolos=refused\[output address \(requires Shelley\)\]$' ;;
-    unsupported-untyped) pattern='^STALE_MANIFEST [a-z]+#[0-9]+ declared=V3 builtin outside audited protocol-12 subset dolos=refused\[Phase2EvaluationError\]$' ;;
+    unsupported-untyped) pattern='^STALE_MANIFEST [a-z]+#[0-9]+ declared=integer operand outside audited registration range dolos=refused\[Phase2EvaluationError\]$' ;;
     *)
       echo "ARM $arm NO_PATTERN"
       return 1

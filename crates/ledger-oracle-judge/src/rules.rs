@@ -585,13 +585,13 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         assert!(lines.last().unwrap().contains(" mismatch=0 unmapped=1 "));
     }
 
-    const BUILTIN: &str = "V3 builtin outside audited protocol-12 subset";
+    const INTEGER: &str = "integer operand outside audited registration range";
 
     #[test]
     fn an_unsupported_phase_two_evaluation_is_no_phase_one_answer() {
         let rules = rules(TABLE);
         let mut tally = every_side(&rules);
-        let evaluation = DolosVerdict::Phase2Unsupported(BUILTIN.to_string());
+        let evaluation = DolosVerdict::Phase2Unsupported(INTEGER.to_string());
         judge(&rules, 8, &accepted(), &evaluation, &mut tally);
         let (lines, pass) = rules.bar(&tally, false);
         assert!(pass, "{lines:?}");
@@ -602,12 +602,12 @@ unsupported[witness fields] | unrepresentable because the native validator does 
     fn an_unsupported_phase_one_answer_the_table_lacks_is_unmapped() {
         let rules = rules(TABLE);
         let mut tally = every_side(&rules);
-        let feature = DolosVerdict::Unsupported(BUILTIN.to_string());
+        let feature = DolosVerdict::Unsupported(INTEGER.to_string());
         judge(&rules, 8, &accepted(), &feature, &mut tally);
         let (lines, pass) = rules.bar(&tally, false);
         assert!(!pass);
         assert!(lines.contains(&format!(
-            "RULE_UNMAPPED supp#8 dolos=unsupported[{BUILTIN}] ledger=accepted"
+            "RULE_UNMAPPED supp#8 dolos=unsupported[{INTEGER}] ledger=accepted"
         )));
     }
 

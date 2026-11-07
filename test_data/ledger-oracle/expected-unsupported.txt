@@ -6,6 +6,6 @@ supp#102 duplicate inputs
 supp#110 output fields
 supp#112 auxiliary fields
 supp#191 auxiliary scripts
-supp#211 V3 builtin outside audited protocol-12 subset
+supp#217 integer operand outside audited registration range
 p1#47 duplicate reference inputs
 p1#50 duplicate collateral inputs

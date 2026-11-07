@@ -360,7 +360,7 @@ pub fn with_failing_makers(
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ValidationTally {
     pub dependent: Vec<(RecordId, BTreeSet<RecordId>)>,
-    pub agree: usize,
+    pub agree: BTreeSet<RecordId>,
     pub unsupported_expected: BTreeMap<String, usize>,
     pub refuse_unsupported: Vec<(RecordId, String)>,
     pub known: Vec<(RecordId, Row, String)>,
@@ -377,7 +377,9 @@ impl ValidationTally {
     /// Counts the outcome of one record.
     pub fn add(&mut self, id: RecordId, outcome: Outcome) {
         match outcome {
-            Outcome::Pass(Pass::Agree) => self.agree += 1,
+            Outcome::Pass(Pass::Agree) => {
+                self.agree.insert(id);
+            }
             Outcome::Pass(Pass::UnsupportedExpected { label }) => {
                 *self.unsupported_expected.entry(label).or_default() += 1
             }
@@ -421,7 +423,7 @@ impl ValidationTally {
             unknown_refusal,
         } = other;
         self.dependent.extend(dependent);
-        self.agree += agree;
+        self.agree.extend(agree);
         for (label, n) in unsupported_expected {
             *self.unsupported_expected.entry(label).or_default() += n;
         }
@@ -452,7 +454,7 @@ impl ValidationTally {
             known_stale,
             unknown_refusal,
         } = self;
-        let passing = agree
+        let passing = agree.len()
             + unsupported_expected.values().sum::<usize>()
             + refuse_unsupported.len()
             + known.len();
@@ -484,9 +486,10 @@ impl fmt::Display for ValidationTally {
         } = self;
         write!(
             f,
-            "VALIDATION agree={agree} disagree={} reason_mismatch={} cascade={} \
+            "VALIDATION agree={} disagree={} reason_mismatch={} cascade={} \
              unsupported_expected={} unsupported_unexpected={} refuse_unsupported={} \
              stale_manifest={} dependent={} known={} known_stale={} unknown_refusal={}",
+            agree.len(),
             disagree.len(),
             reason_mismatch.len(),
             cascade.len(),
@@ -540,7 +543,7 @@ mod tests {
         let line = || vec![(supp(n), format!("line{n}"))];
         ValidationTally {
             dependent: vec![(supp(n), BTreeSet::from([supp(n + 10)]))],
-            agree: 1,
+            agree: BTreeSet::from([supp(n + 20)]),
             unsupported_expected: BTreeMap::from([(label.to_string(), 1), ("both".to_string(), 2)]),
             refuse_unsupported: line(),
             known: vec![(supp(n), Row::S1, format!("line{n}"))],
@@ -552,6 +555,21 @@ mod tests {
             known_stale: line(),
             unknown_refusal: line(),
         }
+    }
+
+    #[test]
+    fn an_agreeing_outcome_names_its_record_and_a_known_one_does_not() {
+        let mut t = ValidationTally::default();
+        let shown = String::new();
+        t.add(
+            supp(2),
+            Outcome::Pass(Pass::Known {
+                row: Row::S1,
+                shown,
+            }),
+        );
+        t.add(supp(1), Outcome::Pass(Pass::Agree));
+        assert_eq!(t.agree, BTreeSet::from([supp(1)]));
     }
 
     #[test]
@@ -569,7 +587,7 @@ mod tests {
                 (supp(0), BTreeSet::from([supp(10)])),
                 (supp(1), BTreeSet::from([supp(11)])),
             ],
-            agree: 2,
+            agree: BTreeSet::from([supp(20), supp(21)]),
             unsupported_expected: BTreeMap::from([
                 ("both".to_string(), 4),
                 ("first".to_string(), 1),

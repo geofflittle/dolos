@@ -81,6 +81,7 @@ fixes = [
   { commit = "1f302a33", arm = "upper-inclusive" },
   { commit = "69754a91", arm = "pointer-refused" },
   { commit = "2aaa99af", arm = "builtin-term-walk" },
+  { commit = "056bb021", arm = "builtin-call-unaudited" },
   { commit = "703f4b9e", arm = "pointer-output-refused" },
   { commit = "ea8c3a65", arm = "v1v2" },
   { commit = "14521063", arm = "top-guards-admitted" },
