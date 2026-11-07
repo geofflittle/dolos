@@ -245,6 +245,11 @@ pub(super) async fn judge_record(
     let tx = &record.tx.0;
     let wires = wire_evals(group, tx).await;
     for (layer, wire) in &wires {
+        if wire.total_agrees().is_none() {
+            let msg: Vec<&str> = wire.errors.iter().map(|(_, m)| m.as_str()).collect();
+            let msg: String = msg.join(" | ").chars().take(200).collect();
+            eprintln!("WIRE-REFUSES {layer} {id} {msg}");
+        }
         tally.add_total(*layer, id, wire);
         tally.add_fee(*layer, id, record.min_fee, &wire.fee);
     }
