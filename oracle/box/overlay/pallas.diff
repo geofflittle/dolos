@@ -1,3 +1,48 @@
+diff --git a/pallas-codec/src/lib.rs b/pallas-codec/src/lib.rs
+index 1ea0fbcf8..a8b69abc7 100644
+--- a/pallas-codec/src/lib.rs
++++ b/pallas-codec/src/lib.rs
+@@ -62,6 +62,18 @@ pub mod tree;
+ /// Round-trip friendly common helper structs (`Bytes`, `Nullable`, `Set`, …).
+ pub mod utils;
+ 
++/// Whether the ORACLE_PLANT environment variable names this planted defect, printing the name the first time it does.
++pub fn oracle_plant(name: &str) -> bool {
++    static PLANT: std::sync::LazyLock<Option<String>> =
++        std::sync::LazyLock::new(|| std::env::var("ORACLE_PLANT").ok());
++    static REACHED: std::sync::Once = std::sync::Once::new();
++    let planted = PLANT.as_deref() == Some(name);
++    if planted {
++        REACHED.call_once(|| println!("ORACLE_PLANT reached {name}"));
++    }
++    planted
++}
++
+ /// Blanket trait for any type that can be CBOR-encoded and decoded with
+ /// [`minicbor`]. Implemented automatically for every such type.
+ pub trait Fragment: Sized + for<'b> minicbor::Decode<'b, ()> + minicbor::Encode<()> {}
+diff --git a/pallas-codec/src/utils.rs b/pallas-codec/src/utils.rs
+index 14fd263ea..2d1679329 100644
+--- a/pallas-codec/src/utils.rs
++++ b/pallas-codec/src/utils.rs
+@@ -1420,7 +1420,7 @@ pub fn decode_bytes_def_or_indef<'b, C>(
+     d: &mut minicbor::Decoder<'b>,
+     _ctx: &mut C,
+ ) -> Result<Cow<'b, [u8]>, Error> {
+-    if d.datatype()? == Type::BytesIndef {
++    if d.datatype()? == Type::BytesIndef && !crate::oracle_plant("indef-strings-refused") {
+         let mut joined = Vec::new();
+         for chunk in d.bytes_iter()? {
+             joined.extend_from_slice(chunk?);
+@@ -1436,7 +1436,7 @@ pub fn decode_text_def_or_indef<'b, C>(
+     d: &mut minicbor::Decoder<'b>,
+     _ctx: &mut C,
+ ) -> Result<String, Error> {
+-    if d.datatype()? == Type::StringIndef {
++    if d.datatype()? == Type::StringIndef && !crate::oracle_plant("indef-strings-refused") {
+         let mut joined = String::new();
+         for chunk in d.str_iter()? {
+             joined.push_str(chunk?);
 diff --git a/pallas-configs/src/alonzo.rs b/pallas-configs/src/alonzo.rs
 index c933fa0b5..313a39fb7 100644
 --- a/pallas-configs/src/alonzo.rs
@@ -15,25 +60,15 @@ index c933fa0b5..313a39fb7 100644
          Value::Object(map) => initial_names(language_number)
              .iter()
 diff --git a/pallas-crypto/src/lib.rs b/pallas-crypto/src/lib.rs
-index 977279afc..946c2a228 100644
+index 977279afc..621ce4899 100644
 --- a/pallas-crypto/src/lib.rs
 +++ b/pallas-crypto/src/lib.rs
-@@ -67,3 +67,15 @@ pub mod key;
+@@ -67,3 +67,5 @@ pub mod key;
  pub mod memsec;
  /// Nonce derivation utilities used by the Ouroboros leader-selection schedule.
  pub mod nonce;
 +
-+/// Whether the ORACLE_PLANT environment variable names this planted defect, printing the name the first time it does.
-+pub fn oracle_plant(name: &str) -> bool {
-+    static PLANT: std::sync::LazyLock<Option<String>> =
-+        std::sync::LazyLock::new(|| std::env::var("ORACLE_PLANT").ok());
-+    static REACHED: std::sync::Once = std::sync::Once::new();
-+    let planted = PLANT.as_deref() == Some(name);
-+    if planted {
-+        REACHED.call_once(|| println!("ORACLE_PLANT reached {name}"));
-+    }
-+    planted
-+}
++pub use pallas_codec::oracle_plant;
 diff --git a/pallas-primitives/src/babbage/model.rs b/pallas-primitives/src/babbage/model.rs
 index 752fbf2be..8ce729461 100644
 --- a/pallas-primitives/src/babbage/model.rs
@@ -88,6 +123,21 @@ index 245103afd..ebec2f4b5 100644
                  dijkstra::ScriptRef::NativeScript(s) => {
                      MultiEraNativeScript::from_dijkstra(s).hash()
                  }
+diff --git a/pallas-traverse/src/tx.rs b/pallas-traverse/src/tx.rs
+index 0b4c7f227..08b27e058 100644
+--- a/pallas-traverse/src/tx.rs
++++ b/pallas-traverse/src/tx.rs
+@@ -1026,7 +1026,9 @@ impl<'b> MultiEraTx<'b> {
+             #[cfg(feature = "unstable")]
+             MultiEraTx::Dijkstra(x) => x.success,
+             #[cfg(feature = "unstable")]
+-            MultiEraTx::DijkstraSub(_, success) => *success,
++            MultiEraTx::DijkstraSub(_, success) => {
++                *success || pallas_codec::oracle_plant("sub-valid-always")
++            }
+         }
+     }
+ 
 diff --git a/pallas-validate/src/phase1/conway.rs b/pallas-validate/src/phase1/conway.rs
 index 08356a15d..617d8f882 100644
 --- a/pallas-validate/src/phase1/conway.rs
@@ -114,7 +164,7 @@ index 08356a15d..617d8f882 100644
          .concat(),
      )
 diff --git a/pallas-validate/src/phase1/dijkstra.rs b/pallas-validate/src/phase1/dijkstra.rs
-index 3e99566b4..baf933ee4 100644
+index 3e99566b4..c8b8b98bd 100644
 --- a/pallas-validate/src/phase1/dijkstra.rs
 +++ b/pallas-validate/src/phase1/dijkstra.rs
 @@ -98,7 +98,7 @@ pub(super) fn validate_dijkstra_tx_inner<S: DijkstraLedgerState + ?Sized>(
@@ -169,7 +219,29 @@ index 3e99566b4..baf933ee4 100644
          .flat_map(|w| w.redeemer.iter())
          .flat_map(|x| x.iter())
      {
-@@ -463,6 +482,12 @@ pub(crate) fn spender(output: &MultiEraOutput<'_>) -> Result<Spender, Validation
+@@ -412,9 +431,21 @@ fn check_guard_datums(
+     for (credential, datum) in required.into_iter().flatten() {
+         let takes = match credential {
+             StakeCredential::AddrKeyhash(_) => Some(false),
++            StakeCredential::ScriptHash(_)
++                if matches!(datum, Nullable::Null)
++                    && pallas_crypto::oracle_plant("native-guard-datum-required") =>
++            {
++                Some(true)
++            }
+             StakeCredential::ScriptHash(x) if provided.natives.contains_key(x) => Some(false),
+             StakeCredential::ScriptHash(x) => provided.plutus.get(x).map(|_| true),
+         };
++        if matches!(datum, Nullable::Null)
++            && takes == Some(true)
++            && pallas_crypto::oracle_plant("plutus-guard-datum-optional")
++        {
++            continue;
++        }
+         if takes.is_some_and(|x| x == matches!(datum, Nullable::Null)) {
+             return Err(DijkstraMalformedGuardDatum);
+         }
+@@ -463,6 +494,12 @@ pub(crate) fn spender(output: &MultiEraOutput<'_>) -> Result<Spender, Validation
              ShelleyPaymentPart::Key(key) => Spender::Key(*key),
              ShelleyPaymentPart::Script(hash) => Spender::Script(*hash),
          }),
@@ -182,7 +254,7 @@ index 3e99566b4..baf933ee4 100644
          Address::Byron(address) => Ok(Spender::Key(
              byron_payload(&address)
                  .map_err(|_| PostAlonzo(InputDecoding))?
-@@ -527,7 +552,9 @@ fn check_signatures(w: &WitnessSet<'_>, body: &[u8], mut required: Keys) -> Vali
+@@ -527,7 +564,9 @@ fn check_signatures(w: &WitnessSet<'_>, body: &[u8], mut required: Keys) -> Vali
          {
              return Err(PostAlonzo(VKWrongSignature));
          }
@@ -193,7 +265,7 @@ index 3e99566b4..baf933ee4 100644
      }
      if !required.is_empty() {
          return Err(PostAlonzo(VKWitnessMissing));
-@@ -550,6 +577,9 @@ fn check_outputs(
+@@ -550,6 +589,9 @@ fn check_outputs(
      for output in outputs {
          let view = MultiEraOutput::from_dijkstra(output);
          let coin = view.value().coin();
@@ -203,7 +275,7 @@ index 3e99566b4..baf933ee4 100644
          if let Some(script) = view.multi_era_script_ref() {
              check_new_script(&script)?;
          }
-@@ -686,7 +716,10 @@ fn check_witness_fields(w: &KeepRaw<'_, WitnessSet<'_>>) -> ValidationResult {
+@@ -686,7 +728,10 @@ fn check_witness_fields(w: &KeepRaw<'_, WitnessSet<'_>>) -> ValidationResult {
      }
      let mut roots = HashSet::new();
      for x in w.bootstrap_witness.iter().flat_map(|x| x.iter()) {
@@ -215,7 +287,7 @@ index 3e99566b4..baf933ee4 100644
              return Err(DijkstraMalformed(MalformedField::BootstrapWitness));
          }
          if !roots.insert(super::conway::bootstrap_wit_root(x)) {
-@@ -723,6 +756,17 @@ fn check_witness_fields(w: &KeepRaw<'_, WitnessSet<'_>>) -> ValidationResult {
+@@ -723,6 +768,17 @@ fn check_witness_fields(w: &KeepRaw<'_, WitnessSet<'_>>) -> ValidationResult {
  }
  fn check_sub_supported(tx: &SubTransaction<'_>) -> ValidationResult {
      let b = &tx.sub_transaction_body;
@@ -233,7 +305,7 @@ index 3e99566b4..baf933ee4 100644
      let raw = encode(b)?;
      let mut allowed = vec![0, 1, 3, 8, 15];
      for (key, present) in [
-@@ -1089,6 +1133,14 @@ fn check_scripts(
+@@ -1089,6 +1145,14 @@ fn check_scripts(
      let redeemers = levels
          .into_iter()
          .any(|w| w.redeemer.as_ref().is_some_and(|x| !x.is_empty()));
@@ -248,7 +320,7 @@ index 3e99566b4..baf933ee4 100644
      check_collateral(b, utxos, pp, keys, network, redeemers)?;
      Ok(Provided {
          languages,
-@@ -1124,6 +1176,9 @@ fn check_collateral(
+@@ -1124,6 +1188,9 @@ fn check_collateral(
          let output = utxos
              .get(&MultiEraInput::from_alonzo_compatible(input))
              .ok_or(PostAlonzo(CollateralNotInUTxO))?;
@@ -258,7 +330,15 @@ index 3e99566b4..baf933ee4 100644
          match spender(output)? {
              Spender::Key(key) => {
                  keys.insert(key);
-@@ -1231,7 +1286,9 @@ fn check_level(
+@@ -1143,6 +1210,7 @@ fn check_collateral(
+     if let Some(output) = &b.collateral_return
+         && let Ok(Address::Shelley(address)) = MultiEraOutput::from_dijkstra(output).address()
+         && matches!(address.delegation(), ShelleyDelegationPart::Pointer(_))
++        && !pallas_crypto::oracle_plant("pointer-output-refused")
+     {
+         return Err(DijkstraPointerInCollateralReturn);
+     }
+@@ -1231,7 +1299,9 @@ fn check_level(
              return Err(PostAlonzo(UnneededRedeemer));
          }
          // An empty redeemer map and language view still participate when datums exist.
@@ -269,7 +349,7 @@ index 3e99566b4..baf933ee4 100644
          return Ok(languages);
      }
      let models = &pp.cost_models_for_script_languages;
-@@ -1272,7 +1329,9 @@ fn check_level(
+@@ -1272,7 +1342,9 @@ fn check_level(
      if redeemers.iter().any(|(key, _)| !scripts.contains_key(key)) {
          return Err(PostAlonzo(UnneededRedeemer));
      }
@@ -280,7 +360,7 @@ index 3e99566b4..baf933ee4 100644
      Ok(languages)
  }
  
-@@ -1353,6 +1412,16 @@ fn reference_fee(mut bytes: u64, p: &DijkstraProtParams) -> Result<u64, Validati
+@@ -1353,6 +1425,21 @@ fn reference_fee(mut bytes: u64, p: &DijkstraProtParams) -> Result<u64, Validati
      u64::try_from(total.0 / total.1).map_err(|_| PostAlonzo(NegativeValue))
  }
  
@@ -291,13 +371,18 @@ index 3e99566b4..baf933ee4 100644
 +            UnsupportedFeature::BootstrapOrRewardAddress,
 +        ));
 +    };
++    if matches!(address.delegation(), ShelleyDelegationPart::Pointer(_))
++        && pallas_crypto::oracle_plant("pointer-output-refused")
++    {
++        return Err(DijkstraUnsupported(UnsupportedFeature::PointerAddress));
++    }
 +    Ok(address.payment().clone())
 +}
 +
  fn check_auxiliary(
      hash: Option<Hash<32>>,
      auxiliary: &Nullable<KeepRaw<'_, AuxiliaryData>>,
-@@ -1617,6 +1686,11 @@ fn check_new_script(script: &MultiEraScriptRef<'_>) -> ValidationResult {
+@@ -1617,6 +1704,11 @@ fn check_new_script(script: &MultiEraScriptRef<'_>) -> ValidationResult {
      match script {
          MultiEraScriptRef::Dijkstra(s) => match s.as_ref() {
              ScriptRef::NativeScript(_) => Ok(()),
@@ -642,7 +727,7 @@ index fa882c7a6..93f0d52b4 100644
  /// enforcing declared redeemer budgets. Earlier eras return [`Error::WrongEra`].
  ///
 diff --git a/pallas-validate/src/phase2/native_evaluator.rs b/pallas-validate/src/phase2/native_evaluator.rs
-index e7fb39da0..74e21fdab 100644
+index e7fb39da0..ec1b63fe2 100644
 --- a/pallas-validate/src/phase2/native_evaluator.rs
 +++ b/pallas-validate/src/phase2/native_evaluator.rs
 @@ -48,6 +48,11 @@ pub(crate) fn eval_native(
@@ -657,6 +742,79 @@ index e7fb39da0..74e21fdab 100644
      let cost_model = match language {
          Language::PlutusV1 | Language::PlutusV2 | Language::PlutusV3 => {
              CostModel::new(version, protocol, costs)
+@@ -59,6 +64,72 @@ pub(crate) fn eval_native(
+     if remainder > 0 {
+         return Err(amaru_uplc_native::flat::FlatDecodeError::TrailingBytes(remainder).into());
+     }
++    if language == Language::PlutusV3 && pallas_crypto::oracle_plant("builtin-term-walk") {
++        use DefaultFunction as F;
++        let mut pending = vec![program.term];
++        while let Some(term) = pending.pop() {
++            match term {
++                Term::Builtin(f) => match f {
++                    F::AddInteger
++                    | F::SubtractInteger
++                    | F::MultiplyInteger
++                    | F::LessThanByteString
++                    | F::AppendByteString
++                    | F::BData
++                    | F::Blake2b_224
++                    | F::Blake2b_256
++                    | F::ChooseData
++                    | F::ChooseList
++                    | F::ConsByteString
++                    | F::ConstrData
++                    | F::DivideInteger
++                    | F::EqualsByteString
++                    | F::EqualsData
++                    | F::EqualsInteger
++                    | F::FstPair
++                    | F::HeadList
++                    | F::IData
++                    | F::IfThenElse
++                    | F::LengthOfByteString
++                    | F::LessThanEqualsByteString
++                    | F::LessThanEqualsInteger
++                    | F::LessThanInteger
++                    | F::ListData
++                    | F::MapData
++                    | F::MkCons
++                    | F::MkPairData
++                    | F::ModInteger
++                    | F::SerialiseData
++                    | F::SndPair
++                    | F::TailList
++                    | F::UnBData
++                    | F::UnConstrData
++                    | F::UnIData
++                    | F::UnListData
++                    | F::UnMapData
++                    | F::VerifyEd25519Signature => (),
++                    _ => {
++                        return Err(Error::DijkstraUnsupported(Unsupported(
++                            UnsupportedEvaluation::BuiltinOutsideSubset,
++                        )));
++                    }
++                },
++                Term::Lambda { body, .. } | Term::Delay(body) | Term::Force(body) => {
++                    pending.push(body)
++                }
++                Term::Apply { function, argument } => {
++                    pending.push(function);
++                    pending.push(argument);
++                }
++                Term::Constr { fields, .. } => pending.extend(fields.iter().copied()),
++                Term::Case { constr, branches } => {
++                    pending.push(constr);
++                    pending.extend(branches.iter().copied());
++                }
++                Term::Var(_) | Term::Constant(_) | Term::Error => (),
++            }
++        }
++    }
+     let initial = ExBudget {
+         mem: i64::try_from(budget.mem)
+             .map_err(|_| Error::DijkstraInvalid(EvaluationFailure::MemoryBudgetOverflow))?,
 diff --git a/pallas-validate/src/phase2/to_plutus_data.rs b/pallas-validate/src/phase2/to_plutus_data.rs
 index 055fcb76a..59d886477 100644
 --- a/pallas-validate/src/phase2/to_plutus_data.rs
@@ -774,10 +932,10 @@ index 0507ea76c..607fcc5e4 100644
      }
  
 diff --git a/pallas-validate/src/utils/validation.rs b/pallas-validate/src/utils/validation.rs
-index c649d5b5d..0e16dab87 100644
+index c649d5b5d..59b045eb2 100644
 --- a/pallas-validate/src/utils/validation.rs
 +++ b/pallas-validate/src/utils/validation.rs
-@@ -113,17 +113,21 @@ labels! {
+@@ -113,17 +113,22 @@ labels! {
          AuxiliaryFields => "auxiliary fields",
          AuxiliaryScripts => "auxiliary scripts",
          BodyFields => "body fields",
@@ -792,6 +950,7 @@ index c649d5b5d..0e16dab87 100644
          OutputFields => "output fields",
          PlutusUpperBoundWithoutForecast => "Plutus validity upper bound requires forecast state",
          PlutusWithoutPhase2 => "new Plutus script validation requires phase2 feature",
++        PointerAddress => "pointer address",
          ProtocolVersion => "protocol version (requires 12.0)",
          ReferenceScriptLanguage => "reference script language (requires V3)",
          RequiredTopLevelGuards => "required top-level guards",

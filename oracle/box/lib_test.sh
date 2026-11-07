@@ -684,10 +684,14 @@ fixes_of() {
     echo "exit=$code $(echo "$out" | sed 's/commit=[0-9a-f]* //' | paste -sd '|' -)"
   )
 }
-# Must not fire on a feature commit with no row, an armed fix and an excluded one, and must fire on a fix with no row, an arm outside PLANTED_ARMS, an unknown reason and a base the repository lacks.
+# Must not fire on a feature commit with no row, an armed fix and an excluded one, and must fire on a fix with no row, an arm outside PLANTED_ARMS, an unknown reason, the retired reason unarmed, a gap or unrevertable row with no why and a base the repository lacks.
 expect fixes_none "$(fixes_of '')" "exit=0 FIX-ARMS repo=dolos fixes=0 armed=0 excluded=0 unarmed=0 failing=0"
-expect fixes_rowed "$(fixes_of 'a b c' 'a arm = "colret"' 'b exclude = "conway"' 'c exclude = "unarmed"')" \
-  "exit=0 FIX-ARMS repo=dolos fixes=3 armed=1 excluded=2 unarmed=1 failing=0"
+expect fixes_rowed "$(fixes_of 'a b c d' 'a arm = "colret"' 'b exclude = "conway"' 'c exclude = "gap", why = "no record"' 'd exclude = "unrevertable", why = "a conflict"')" \
+  "exit=0 FIX-ARMS repo=dolos fixes=4 armed=1 excluded=3 unarmed=0 failing=0"
+expect fixes_gap_unexplained "$(fixes_of 'a b c' 'a exclude = "gap"' 'b exclude = "unrevertable"' 'c exclude = "gap", why = ""')" \
+  'exit=1 FIX-ARM repo=dolos row=exclude=gap subject="fix: c"|FIX-ARM repo=dolos row=exclude=unrevertable subject="fix: b"|FIX-ARM repo=dolos row=exclude=gap subject="fix: a"|FIX-ARMS repo=dolos fixes=3 armed=0 excluded=0 unarmed=0 failing=3'
+expect fixes_unarmed "$(fixes_of 'a' 'a exclude = "unarmed"')" \
+  'exit=1 FIX-ARM repo=dolos row=exclude=unarmed subject="fix: a"|FIX-ARMS repo=dolos fixes=1 armed=0 excluded=0 unarmed=1 failing=1'
 expect fixes_missing "$(fixes_of 'a b' 'a arm = "colret"')" \
   'exit=1 FIX-ARM repo=dolos row=none subject="fix: b"|FIX-ARMS repo=dolos fixes=2 armed=1 excluded=0 unarmed=0 failing=1'
 expect fixes_unknown_arm "$(fixes_of 'a' 'a arm = "nothing"')" \

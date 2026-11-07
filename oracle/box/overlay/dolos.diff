@@ -1,5 +1,23 @@
+diff --git a/crates/cardano/src/eras.rs b/crates/cardano/src/eras.rs
+index 5ddc91bb2..47b494c99 100644
+--- a/crates/cardano/src/eras.rs
++++ b/crates/cardano/src/eras.rs
+@@ -140,7 +140,12 @@ impl ChainSummary {
+             .div_ceil(era.epoch_length)
+             .saturating_mul(era.epoch_length)
+             .saturating_add(era.start.slot);
+-        DijkstraTimeContext::new(eras, ForecastHorizon::Slot(horizon)).map_err(|error| {
++        let horizon = if pallas::crypto::oracle_plant("horizon-unbounded") {
++            ForecastHorizon::Unbounded
++        } else {
++            ForecastHorizon::Slot(horizon)
++        };
++        DijkstraTimeContext::new(eras, horizon).map_err(|error| {
+             ChainError::InvalidConfig(format!("invalid chain time history: {error}"))
+         })
+     }
 diff --git a/crates/cardano/src/forks.rs b/crates/cardano/src/forks.rs
-index dbabe5f2..2f571fd1 100644
+index dbabe5f20..2f571fd1f 100644
 --- a/crates/cardano/src/forks.rs
 +++ b/crates/cardano/src/forks.rs
 @@ -106,7 +106,10 @@ pub fn from_shelley_genesis(shelley: &shelley::GenesisFile) -> PParamsSet {
@@ -14,8 +32,24 @@ index dbabe5f2..2f571fd1 100644
          .with(Val::ProtocolVersion(version.clone().into()))
          .with(Val::EpochLength(epoch_length as u64))
          .with(Val::SlotLength(slot_length as u64))
+diff --git a/crates/cardano/src/indexes/query.rs b/crates/cardano/src/indexes/query.rs
+index a15a1ddff..da0700175 100644
+--- a/crates/cardano/src/indexes/query.rs
++++ b/crates/cardano/src/indexes/query.rs
+@@ -562,6 +562,11 @@ fn datum_in_block(block: &MultiEraBlock, datum_hash: Hash<32>) -> Option<PlutusD
+ fn script_in_block(block: &MultiEraBlock, script_hash: Hash<28>) -> Option<ScriptData> {
+     for tx in block.txs() {
+         let searched = crate::pallas_extras::for_each_applied_tx(&tx, |tx| {
++            if tx.as_dijkstra_sub().is_some()
++                && pallas::crypto::oracle_plant("scripts-sub-unsearched")
++            {
++                return Ok(());
++            }
+             match crate::pallas_extras::tx_scripts(tx)
+                 .into_iter()
+                 .find(|parts| parts.hash == script_hash)
 diff --git a/crates/cardano/src/pallas_extras.rs b/crates/cardano/src/pallas_extras.rs
-index e416611e..a57fe446 100644
+index e416611e1..a57fe446f 100644
 --- a/crates/cardano/src/pallas_extras.rs
 +++ b/crates/cardano/src/pallas_extras.rs
 @@ -571,10 +571,13 @@ pub fn inline_endorser_transactions(
@@ -34,7 +68,7 @@ index e416611e..a57fe446 100644
      block.block_body.transactions = MaybeIndefArray::Def(replacement);
  
 diff --git a/crates/cardano/src/utxoset.rs b/crates/cardano/src/utxoset.rs
-index c91bdb20..d9adb395 100644
+index c91bdb20f..d9adb3956 100644
 --- a/crates/cardano/src/utxoset.rs
 +++ b/crates/cardano/src/utxoset.rs
 @@ -165,7 +165,12 @@ fn apply_txs_lenient(
@@ -66,10 +100,22 @@ index c91bdb20..d9adb395 100644
                  delta
                      .produced_utxo
 diff --git a/crates/cardano/src/validate.rs b/crates/cardano/src/validate.rs
-index 211146c9..9ac3b77a 100644
+index 211146c93..701cbb3ef 100644
 --- a/crates/cardano/src/validate.rs
 +++ b/crates/cardano/src/validate.rs
-@@ -135,6 +135,10 @@ pub fn required_utxos<D: Domain>(
+@@ -79,6 +79,11 @@ pub fn validate_tx<D: Domain>(
+                 .iter()
+                 .map(|entry| MultiEraTx::try_from(entry.payload()))
+                 .collect::<Result<Vec<_>, _>>()?;
++            let unconfirmed = if pallas::crypto::oracle_plant("pending-registrations-ignored") {
++                vec![]
++            } else {
++                unconfirmed
++            };
+             let state = with_unconfirmed(&stored, &unconfirmed, pp, env.network_id);
+             match &time {
+                 Some(time) => validate_dijkstra_tx_with_time(
+@@ -135,6 +140,10 @@ pub fn required_utxos<D: Domain>(
      tx: &MultiEraTx<'_>,
      utxos: &MempoolAwareUtxoStore<D>,
  ) -> Result<UtxoMap, ChainError> {
@@ -80,7 +126,7 @@ index 211146c9..9ac3b77a 100644
      Ok(utxos.get_utxos(tx.requires().iter().map(From::from).collect())?)
  }
  
-@@ -270,6 +274,15 @@ fn estimate_decoded<D: Domain>(
+@@ -270,6 +279,15 @@ fn estimate_decoded<D: Domain>(
      pparams: &MultiEraProtocolParameters,
      admission_time: Option<&pallas_validate::utils::DijkstraTimeContext>,
  ) -> Result<Vec<(MultiEraTxEvalResult, Vec<Builtin>)>, ChainError> {
@@ -96,7 +142,7 @@ index 211146c9..9ac3b77a 100644
      if !requests_scripts(tx) {
          return Ok(vec![]);
      }
-@@ -354,6 +367,16 @@ fn requests_scripts(tx: &MultiEraTx<'_>) -> bool {
+@@ -354,6 +372,16 @@ fn requests_scripts(tx: &MultiEraTx<'_>) -> bool {
              .iter()
              .any(|credential| matches!(credential, StakeCredential::ScriptHash(_))))
      };
@@ -113,7 +159,7 @@ index 211146c9..9ac3b77a 100644
      !tx.redeemers().is_empty()
          || tx.as_dijkstra().is_some_and(|tx| {
              script_guard(tx.transaction_body.guards.as_ref())
-@@ -612,7 +635,11 @@ fn with_unconfirmed<'a, S: DijkstraLedgerState + ?Sized>(
+@@ -612,7 +640,11 @@ fn with_unconfirmed<'a, S: DijkstraLedgerState + ?Sized>(
  /// The mempool transactions, inflight before pending, each once.
  fn unconfirmed_txs<D: Domain>(utxos: &MempoolAwareUtxoStore<D>) -> Vec<MempoolTx> {
      let pending = utxos.pending();
@@ -126,7 +172,7 @@ index 211146c9..9ac3b77a 100644
      // Relay can move a transaction between these two reads. Count it once.
      let mut seen = std::collections::HashSet::new();
      inflight
-@@ -631,6 +658,9 @@ fn unconfirmed_txs<D: Domain>(utxos: &MempoolAwareUtxoStore<D>) -> Vec<MempoolTx
+@@ -631,6 +663,9 @@ fn unconfirmed_txs<D: Domain>(utxos: &MempoolAwareUtxoStore<D>) -> Vec<MempoolTx
  }
  
  fn decode_submission(era: Era, cbor: &[u8]) -> Result<MultiEraTx<'_>, ChainError> {
@@ -137,7 +183,7 @@ index 211146c9..9ac3b77a 100644
      decoder.skip()?;
      if decoder.position() != cbor.len() {
 diff --git a/crates/cardano/src/validate/ledger.rs b/crates/cardano/src/validate/ledger.rs
-index 42a31b71..467085df 100644
+index 42a31b717..467085df3 100644
 --- a/crates/cardano/src/validate/ledger.rs
 +++ b/crates/cardano/src/validate/ledger.rs
 @@ -157,6 +157,9 @@ impl<D: Domain> DijkstraLedgerState for StoredLedger<'_, D> {
@@ -166,7 +212,7 @@ index 42a31b71..467085df 100644
  
      fn committee(&self) -> Result<Option<BTreeMap<StakeCredential, Epoch>>, ValidationError> {
 diff --git a/crates/core/src/submit.rs b/crates/core/src/submit.rs
-index 0ebbab30..2f4c00cd 100644
+index 0ebbab309..2f4c00cdc 100644
 --- a/crates/core/src/submit.rs
 +++ b/crates/core/src/submit.rs
 @@ -113,6 +113,9 @@ pub trait SubmitExt: Domain {
@@ -180,7 +226,7 @@ index 0ebbab30..2f4c00cd 100644
                  Err(error) => {
                      debug!(tx.hash = %tx.hash(), %error, "pending tx refused on revalidation");
 diff --git a/crates/core/src/sync.rs b/crates/core/src/sync.rs
-index 4f6ccb08..4960e805 100644
+index 4f6ccb080..4960e8058 100644
 --- a/crates/core/src/sync.rs
 +++ b/crates/core/src/sync.rs
 @@ -201,6 +201,9 @@ impl<D: Domain> SyncExt for D {
@@ -193,21 +239,40 @@ index 4f6ccb08..4960e805 100644
      if let Err(e) = domain.revalidate_pending(chain) {
          warn!(?e, "mempool revalidation failed");
      }
+diff --git a/src/adapters/mod.rs b/src/adapters/mod.rs
+index 38d80babe..f867d2096 100644
+--- a/src/adapters/mod.rs
++++ b/src/adapters/mod.rs
+@@ -203,7 +203,12 @@ fn resolve_archive_inputs<A: dolos_core::ArchiveStore>(
+             let Some(refs) = wanted.remove(&tx.hash()) else {
+                 continue;
+             };
+-            let outputs: HashMap<usize, _> = tx.produces().into_iter().collect();
++            let outputs: HashMap<usize, _> =
++                if pallas::crypto::oracle_plant("archive-outputs-only") {
++                    tx.outputs().into_iter().enumerate().collect()
++                } else {
++                    tx.produces().into_iter().collect()
++                };
+             for r in refs {
+                 if let Some(output) = outputs.get(&(r.1 as usize)) {
+                     result.insert(r, (block.era(), output.encode()));
 diff --git a/src/serve/grpc/block_context.rs b/src/serve/grpc/block_context.rs
-index 87249add..29d2a093 100644
+index 87249adda..91e3cb04f 100644
 --- a/src/serve/grpc/block_context.rs
 +++ b/src/serve/grpc/block_context.rs
-@@ -32,6 +32,9 @@ pub(super) struct BlockContext<C: ChainReads> {
+@@ -32,6 +32,10 @@ pub(super) struct BlockContext<C: ChainReads> {
  fn made_outputs(block: &MultiEraBlock<'_>) -> UtxoMap {
      dolos_core::applied_txs(block)
          .into_iter()
++        .filter(|_| !pallas::crypto::oracle_plant("block-made-unserved"))
 +        .filter(|(_, tx)| {
 +            !pallas::crypto::oracle_plant("subouts") || tx.as_dijkstra_sub().is_none()
 +        })
          .flat_map(|(_, tx)| {
              let hash = tx.hash();
              tx.produces()
-@@ -70,8 +73,10 @@ impl<C: ChainReads> BlockContext<C> {
+@@ -70,8 +74,10 @@ impl<C: ChainReads> BlockContext<C> {
                  // The v1 mapper resolves every child separately. Its inputs
                  // need not also occur in the parent's reference inputs.
                  let mut refs = named_inputs(tx);
@@ -221,7 +286,7 @@ index 87249add..29d2a093 100644
                  refs
              })
 diff --git a/src/serve/grpc/v1/query.rs b/src/serve/grpc/v1/query.rs
-index 3db11ef0..034d25e5 100644
+index 3db11ef01..034d25e53 100644
 --- a/src/serve/grpc/v1/query.rs
 +++ b/src/serve/grpc/v1/query.rs
 @@ -801,6 +801,9 @@ async fn into_u5c_utxo<S: Domain>(
@@ -235,7 +300,7 @@ index 3db11ef0..034d25e5 100644
      // If the output has a datum hash, try to fetch the datum value from storage
      if let Some(DatumOption::Hash(datum_hash)) = parsed_output.datum() {
 diff --git a/src/serve/grpc/v1/submit.rs b/src/serve/grpc/v1/submit.rs
-index 8f5c4338..4192983b 100644
+index 8f5c4338f..4192983b0 100644
 --- a/src/serve/grpc/v1/submit.rs
 +++ b/src/serve/grpc/v1/submit.rs
 @@ -111,6 +111,9 @@ fn tx_eval_to_u5c(
@@ -249,7 +314,7 @@ index 8f5c4338..4192983b 100644
              other => return unrepresentable(format!("{other:?}[{}]", entry.index)),
          };
 diff --git a/src/serve/grpc/v1alpha/submit.rs b/src/serve/grpc/v1alpha/submit.rs
-index 3b7094a4..bef35ded 100644
+index 3b7094a49..bef35ded0 100644
 --- a/src/serve/grpc/v1alpha/submit.rs
 +++ b/src/serve/grpc/v1alpha/submit.rs
 @@ -132,9 +132,16 @@ fn tx_eval_to_u5c(
@@ -273,7 +338,7 @@ index 3b7094a4..bef35ded 100644
              ..Default::default()
          });
 diff --git a/src/serve/grpc/v1beta/submit.rs b/src/serve/grpc/v1beta/submit.rs
-index c45b80f9..da307577 100644
+index c45b80f9c..da3075776 100644
 --- a/src/serve/grpc/v1beta/submit.rs
 +++ b/src/serve/grpc/v1beta/submit.rs
 @@ -133,9 +133,16 @@ fn tx_eval_to_u5c(

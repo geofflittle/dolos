@@ -135,7 +135,7 @@ caught() {
     colret) pattern='^(DIFF utxo .* ledger=none dolos=|DISAGREE [a-z]+#[0-9]+ |KNOWN_STALE [a-z]+#[0-9]+ row=)' ;;
     coin) pattern='^DIFF utxo .* fields=([a-z_]+,)*coin(,|$)' ;;
     inflight) pattern='^DISAGREE [a-z]+#[0-9]+ held=' ;;
-    rodrigo-reverted) pattern='^DIFF as_output [a-z]+#[0-9]+ ' ;;
+    rodrigo-reverted | archive-outputs-only) pattern='^DIFF as_output [a-z]+#[0-9]+ ' ;;
     rob-reverted) pattern='^(UNSUPPORTED_UNEXPECTED|DISAGREE|REASON_MISMATCH|STALE_MANIFEST) [a-z]+#[0-9]+ ' ;;
     cost) pattern='^EVAL-DIFF pallas supp#[0-9]+ top [A-Za-z]+#[0-9]+ ledger=\(ran ' ;;
     eval-purpose) pattern='^EVAL-DIFF pallas [a-z]+#[0-9]+ top Vote#[0-9]+ ledger=\(none\) dolos=\((ran|failed)' ;;
@@ -167,6 +167,16 @@ caught() {
     v4-ref-refused) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=reference script language ' ;;
     pointer-refused) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=pointer address ' ;;
     collateral-unsupported) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=collateral without Plutus$' ;;
+    indef-strings-refused) pattern='^DISAGREE [a-z]+#[0-9]+ ledger=accepted dolos=refused\[CborDecodingError\]$' ;;
+    sub-valid-always) pattern='^DIFF (utxo|accounts) [a-z]+#[0-9]+ ' ;;
+    pointer-output-refused) pattern='^DISAGREE [a-z0-9]+#[0-9]+ ledger=refused\[PtrPresentInCollateralReturn\] dolos=accepted$' ;;
+    native-guard-datum-required) pattern='^DISAGREE [a-z]+#[0-9]+ ledger=accepted dolos=refused\[DijkstraMalformedGuardDatum\]$' ;;
+    plutus-guard-datum-optional) pattern='^DISAGREE [a-z]+#[0-9]+ ledger=refused\[SubMalformedGuardDatums\] dolos=accepted$' ;;
+    horizon-unbounded) pattern='^DISAGREE [a-z]+#[0-9]+ ledger=refused\[CollectErrors\] dolos=accepted$' ;;
+    builtin-term-walk) pattern='^EVAL-DIFF pallas [a-z]+#[0-9]+ top [A-Za-z]+#[0-9]+ ledger=\(ran mem=[0-9]+ steps=[0-9]+\) dolos=\(refused V3 builtin outside audited protocol-12 subset\)$' ;;
+    block-made-unserved) pattern='^DIFF undo [a-z]+#[0-9]+ ' ;;
+    scripts-sub-unsearched) pattern='^DIFF script [a-z]+#[0-9]+ ' ;;
+    pending-registrations-ignored) pattern='^DISAGREE [a-z]+#[0-9]+ ledger=accepted dolos=refused\[DijkstraInvalidAccount\(' ;;
     endorser-tx-dropped) pattern='^ENDORSER-DIFF service=(FetchBlock|FollowTip) slot=[0-9]+ list=(ids|bytes) index=[0-9]+ ' ;;
     fee-min-deleted | aux-refused | integrity-top-deleted) pattern='^(DISAGREE|REASON_MISMATCH|RULE_MISMATCH) [a-z0-9]+#[0-9]+ ' ;;
     refund-deposit-swap) pattern='^RULE_MISMATCH [a-z0-9]+#[0-9]+ ' ;;
