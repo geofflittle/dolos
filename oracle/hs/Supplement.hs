@@ -207,6 +207,8 @@ supplement = describe "SUPPLEMENT" $ do
   validityBounds
   contextValues
   readBackShapes
+  it "a V3 script calls sha2_256" $
+    spendWithV3 "4b010100232498dc92450001"
 
 -- | Transactions whose integers, scripts, arrays and proposals have shapes the read back and evaluation paths decode or map, each case with the verdict the ledger gives.
 readBackShapes :: SpecWith (ImpInit (LedgerSpec E))

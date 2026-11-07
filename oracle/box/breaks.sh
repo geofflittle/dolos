@@ -194,6 +194,7 @@ caught() {
     ctx-v3-fee) pattern='^CONTEXT-DIFF [a-z]+#[0-9]+ top [A-Za-z]+#[0-9]+ V3 arg=0 path=0\.3 field=context\.scriptContextTxInfo\.txInfoFee ledger=[0-9]+ pallas=[0-9]+$' ;;
     ctx-v4-subtx-index) pattern='^CONTEXT-DIFF [a-z]+#[0-9]+ sub[0-9]+ [A-Za-z]+#[0-9]+ V4 arg=0 path=0\.1 field=context\.scriptContextTxInfo\.txInfoSubTxIx ' ;;
     ctx-encoding) pattern='^CONTEXT-(DIFF|PALLAS-ONLY|STALE) [a-z]+#[0-9]+ ' ;;
+    unsupported-untyped) pattern='^STALE_MANIFEST [a-z]+#[0-9]+ declared=V3 builtin outside audited protocol-12 subset dolos=refused\[Phase2EvaluationError\]$' ;;
     *)
       echo "ARM $arm NO_PATTERN"
       return 1

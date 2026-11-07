@@ -23,7 +23,7 @@ fixes = [
   { commit = "76da90cd0", arm = "subouts" },
   { commit = "b72b240b3", exclude = "pin" },
   { commit = "7258706ef", arm = "inflight" },
-  { commit = "44e8bb770", exclude = "gap", why = "no record reaches a pallas unsupported evaluation, the ledger writes Dijkstra records at protocol 12 only and a Conway read of a Dijkstra update skips its new keys" },
+  { commit = "44e8bb770", arm = "unsupported-untyped" },
   { commit = "9f5584bcd", exclude = "follower" },
   { commit = "9cc8fc393", arm = "block-made-unserved" },
   { commit = "9ddbbd32f", arm = "pending-registrations-ignored" },

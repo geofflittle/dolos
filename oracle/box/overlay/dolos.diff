@@ -111,7 +111,7 @@ index c91bdb20..d9adb395 100644
                  delta
                      .produced_utxo
 diff --git a/crates/cardano/src/validate.rs b/crates/cardano/src/validate.rs
-index e50cf9b8..c984c5d6 100644
+index e50cf9b8..652cb0ff 100644
 --- a/crates/cardano/src/validate.rs
 +++ b/crates/cardano/src/validate.rs
 @@ -71,6 +71,11 @@ pub fn validate_tx<D: Domain>(
@@ -176,7 +176,17 @@ index e50cf9b8..c984c5d6 100644
      let (utxos, slot_config, time) = evaluation_inputs::<D>(tx, utxos, genesis, admission_time)?;
      if let Some(time) = time {
          pallas_validate::phase2::estimate_tx_calls_with_time(tx, pparams, &utxos, &time)
-@@ -319,6 +346,36 @@ fn evaluation_error(error: pallas_validate::phase2::error::Error) -> ChainError
+@@ -312,13 +339,45 @@ fn evaluation_inputs<D: Domain>(
+ /// The chain error for a phase two evaluation pallas could not complete.
+ fn evaluation_error(error: pallas_validate::phase2::error::Error) -> ChainError {
+     match error {
+-        pallas_validate::phase2::error::Error::DijkstraUnsupported(unsupported) => {
++        pallas_validate::phase2::error::Error::DijkstraUnsupported(unsupported)
++            if !pallas::crypto::oracle_plant("unsupported-untyped") =>
++        {
+             ChainError::Phase2EvaluationUnsupported(unsupported)
+         }
+         error => ChainError::Phase2EvaluationError(error.to_string()),
      }
  }
  
@@ -213,7 +223,7 @@ index e50cf9b8..c984c5d6 100644
  /// Submission has no era tag in its signed envelope. Only known protocol
  /// versions select an era; unknown future versions must not inherit this
  /// subset.
-@@ -562,7 +619,11 @@ fn with_unconfirmed<'a, S: DijkstraLedgerState + ?Sized>(
+@@ -562,7 +621,11 @@ fn with_unconfirmed<'a, S: DijkstraLedgerState + ?Sized>(
  /// The mempool transactions, inflight before pending, each once.
  fn unconfirmed_txs<D: Domain>(utxos: &MempoolAwareUtxoStore<D>) -> Vec<MempoolTx> {
      let pending = utxos.pending();
@@ -226,7 +236,7 @@ index e50cf9b8..c984c5d6 100644
      // Relay can move a transaction between these two reads. Count it once.
      let mut seen = std::collections::HashSet::new();
      inflight
-@@ -581,6 +642,9 @@ fn unconfirmed_txs<D: Domain>(utxos: &MempoolAwareUtxoStore<D>) -> Vec<MempoolTx
+@@ -581,6 +644,9 @@ fn unconfirmed_txs<D: Domain>(utxos: &MempoolAwareUtxoStore<D>) -> Vec<MempoolTx
  }
  
  fn decode_submission(era: Era, cbor: &[u8]) -> Result<MultiEraTx<'_>, ChainError> {
