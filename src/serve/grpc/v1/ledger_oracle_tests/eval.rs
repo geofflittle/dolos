@@ -13,13 +13,19 @@ use ledger_oracle_judge::{
     record::{LedgerOutcome, LedgerRedeemers, Phase2, Record, RecordId, Units},
 };
 use pallas::codec::minicbor;
-use pallas::ledger::primitives::dijkstra::{Language, MempoolTransaction};
+use pallas::crypto::hash::Hash;
+use pallas::ledger::addresses::{Network, StakeAddress, StakePayload};
+use pallas::ledger::primitives::dijkstra::{
+    Language, MempoolTransaction, PostAlonzoTransactionOutput, Value,
+};
 use pallas::ledger::primitives::ExUnits;
 use pallas::ledger::traverse::MultiEraRedeemerTag as RedeemerTag;
 use pallas::ledger::validate::phase2::{
+    error::{Error as Phase2Error, EvaluationFailure},
     tx::{MultiEraTxEvalResult, RedeemerArguments},
     Builtin,
 };
+use pallas::ledger::validate::utils::ContextFailure;
 use tonic::Request;
 
 use super::{purpose, tag_number, validate::Group};
@@ -213,6 +219,83 @@ impl Draft {
         let bytes = minicbor::to_vec(&draft).map_err(|e| e.to_string())?;
         Ok(Draft { signed, bytes })
     }
+
+    /// This draft with one more top level output, to a reward account.
+    fn with_reward_output(&self) -> Result<Self, String> {
+        let account = StakeAddress::new(Network::Testnet, StakePayload::Stake(Hash::new([7; 28])));
+        let output = PostAlonzoTransactionOutput {
+            address: account.to_vec().into(),
+            value: Value::Coin(2_000_000),
+            datum_option: None,
+            script_ref: None,
+        };
+        let output = minicbor::to_vec(&output).map_err(|e| e.to_string())?;
+        let bytes = with_output(&self.bytes, &output).map_err(|e| e.to_string())?;
+        Ok(Draft {
+            signed: self.signed,
+            bytes,
+        })
+    }
+}
+
+/// The transaction `tx` with `output` after its last top level output.
+fn with_output(tx: &[u8], output: &[u8]) -> Result<Vec<u8>, minicbor::decode::Error> {
+    use minicbor::{data::Type, decode::Error};
+
+    let mut d = minicbor::Decoder::new(tx);
+    d.array()?;
+    let entries = d
+        .map()?
+        .ok_or_else(|| Error::message("an indefinite length body"))?;
+    for _ in 0..entries {
+        if d.u64()? != 1 {
+            d.skip()?;
+            continue;
+        }
+        let header = d.position();
+        let mut paid = tx[..header].to_vec();
+        match d.array()? {
+            Some(n) => {
+                let first = d.position();
+                for _ in 0..n {
+                    d.skip()?;
+                }
+                minicbor::Encoder::new(&mut paid)
+                    .array(n + 1)
+                    .unwrap_or_else(|e| panic!("writing an array header {e}"));
+                paid.extend_from_slice(&tx[first..d.position()]);
+            }
+            None => {
+                while d.datatype()? != Type::Break {
+                    d.skip()?;
+                }
+                paid.extend_from_slice(&tx[header..d.position()]);
+            }
+        }
+        paid.extend_from_slice(output);
+        paid.extend_from_slice(&tx[d.position()..]);
+        return Ok(paid);
+    }
+    Err(Error::message("a body with no outputs"))
+}
+
+/// The refusal for a transaction whose script context pays a reward account.
+fn reward_output_refusal() -> Refusal {
+    let context = EvaluationFailure::Context(ContextFailure::RewardAccountAddress);
+    let invalid = Phase2Error::DijkstraInvalid(context).to_string();
+    refusal(&ChainError::Phase2EvaluationError(invalid))
+}
+
+/// Judges the evaluator's and each EvalTx version's reward output answer.
+async fn judge_reward_output(group: &Group, draft: &Draft, tally: &mut EvalTally) {
+    let expected = reward_output_refusal();
+    let wires = wire_evals(group, &draft.bytes).await;
+    let evaluator = evaluator(group.estimate(&draft.bytes));
+    let tally = &mut tally.reward_output;
+    for (layer, answer) in wire_answers(&wires, &evaluator) {
+        tally.add(layer, draft.signed, &expected, &answer);
+    }
+    tally.add(Layer::Pallas, draft.signed, &expected, &evaluator.answer);
 }
 
 /// Judges the evaluator's and each EvalTx version's answer for a draft against the signed record's ledger rows.
@@ -256,6 +339,8 @@ pub(super) async fn judge_record(
     let ledger = eval::ledger_rows(record);
     tally.collisions += eval::collisions(&ledger);
     let evaluator = evaluator(group.estimate(tx));
+    let runs_top = ledger.keys().any(|key| key.level == Level::Top)
+        && matches!(evaluator.answer, Ok(DolosAnswer::Evaluated(_)));
     let demand = ledger.is_empty().then(|| TxDemand::of(&record.outcome));
     let mut judge_tx = |layer: Layer, answer: &Result<DolosAnswer, Malformed>| {
         if let Some(demand) = demand {
@@ -275,7 +360,15 @@ pub(super) async fn judge_record(
         (&record.outcome, record.flag(), ledger.is_empty())
     {
         match Draft::of(id, tx) {
-            Ok(draft) => judge_draft(group, &draft, &ledger, listed, tally).await,
+            Ok(draft) => {
+                judge_draft(group, &draft, &ledger, listed, tally).await;
+                if runs_top {
+                    match draft.with_reward_output() {
+                        Ok(paid) => judge_reward_output(group, &paid, tally).await,
+                        Err(why) => tally.draft.underived.push(format!("{id} {why}")),
+                    }
+                }
+            }
             Err(why) => tally.draft.underived.push(format!("{id} {why}")),
         }
     }
@@ -369,4 +462,49 @@ fn a_draft_keeps_the_signed_body_and_drops_its_key_witnesses_and_budgets() {
     assert!(budgets(&draft).iter().all(|b| *b == (0, 0)));
     assert_eq!(budgets(&signed).len(), budgets(&draft).len());
     assert!(Draft::of(id, &[0x80]).is_err());
+}
+
+#[test]
+fn a_reward_output_draft_pays_a_reward_account_after_the_draft_outputs() {
+    use ledger_oracle_judge::record::CorpusKind;
+    use pallas::ledger::addresses::Address;
+    use pallas::ledger::traverse::MultiEraOutput;
+
+    let corpus = super::load(CorpusKind::Supp);
+    let records = corpus.kept().flat_map(|run| run.records());
+    let signed = records
+        .filter(|r| matches!(r.outcome, LedgerOutcome::Accepted { .. }))
+        .find(|r| r.flag() == Phase2::Valid && !eval::ledger_rows(r).is_empty())
+        .expect("an accepted record runs a script");
+    let id = RecordId {
+        corpus: CorpusKind::Supp,
+        n: signed.n,
+    };
+    let draft = Draft::of(id, &signed.tx.0).unwrap();
+    let paid = draft.with_reward_output().unwrap();
+    assert_eq!(paid.signed, id);
+    let decode = |bytes| -> MempoolTransaction<'_> { minicbor::decode(bytes).unwrap() };
+    let (draft, paid) = (decode(&draft.bytes), decode(&paid.bytes));
+    let (before, after) = (
+        &draft.transaction_body.outputs,
+        &paid.transaction_body.outputs,
+    );
+    assert_eq!(after.len(), before.len() + 1);
+    assert_eq!(after[..before.len()], before[..]);
+    let address = MultiEraOutput::from_dijkstra(&after[before.len()]).address();
+    assert!(matches!(address, Ok(Address::Stake(_))));
+    assert_eq!(
+        draft.transaction_witness_set.raw_cbor(),
+        paid.transaction_witness_set.raw_cbor()
+    );
+
+    let definite = [0x84, 0xa2, 0x00, 0x80, 0x01, 0x81, 0x01, 0xa0, 0xf5, 0xf6];
+    let definite_paid = [
+        0x84, 0xa2, 0x00, 0x80, 0x01, 0x82, 0x01, 0x02, 0xa0, 0xf5, 0xf6,
+    ];
+    assert_eq!(with_output(&definite, &[0x02]).unwrap(), definite_paid);
+    let indefinite = [0x84, 0xa1, 0x01, 0x9f, 0x01, 0xff, 0xa0, 0xf5, 0xf6];
+    let indefinite_paid = [0x84, 0xa1, 0x01, 0x9f, 0x01, 0x02, 0xff, 0xa0, 0xf5, 0xf6];
+    assert_eq!(with_output(&indefinite, &[0x02]).unwrap(), indefinite_paid);
+    assert!(with_output(&[0x84, 0xa0, 0xa0, 0xf5, 0xf6], &[0x02]).is_err());
 }

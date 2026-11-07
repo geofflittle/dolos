@@ -194,6 +194,7 @@ caught() {
     ctx-v3-fee) pattern='^CONTEXT-DIFF [a-z]+#[0-9]+ top [A-Za-z]+#[0-9]+ V3 arg=0 path=0\.3 field=context\.scriptContextTxInfo\.txInfoFee ledger=[0-9]+ pallas=[0-9]+$' ;;
     ctx-v4-subtx-index) pattern='^CONTEXT-DIFF [a-z]+#[0-9]+ sub[0-9]+ [A-Za-z]+#[0-9]+ V4 arg=0 path=0\.1 field=context\.scriptContextTxInfo\.txInfoSubTxIx ' ;;
     ctx-encoding) pattern='^CONTEXT-(DIFF|PALLAS-ONLY|STALE) [a-z]+#[0-9]+ ' ;;
+    reward-output-unsupported) pattern='^EVAL-REWARD-OUTPUT-DIFF [a-z0-9]+ [a-z]+#[0-9]+ expected=\(couldn.t evaluate phase-2 script: invalid native Dijkstra evaluation: reward account address\) dolos=refused\[output address \(requires Shelley\)\]$' ;;
     unsupported-untyped) pattern='^STALE_MANIFEST [a-z]+#[0-9]+ declared=V3 builtin outside audited protocol-12 subset dolos=refused\[Phase2EvaluationError\]$' ;;
     *)
       echo "ARM $arm NO_PATTERN"
@@ -400,7 +401,7 @@ for arm in $ARMS; do
     echo "control=$control"
     verdicts="$verdicts control=$control"
   elif [ "$arm" = head ]; then
-    grep -E '^(CORPUS|VALIDATION|DEPENDENT|KNOWN|STATE|COST|EVAL-ORACLE|EVAL-DIFF|EVAL-TOTAL|EVAL-UNNAMED|EVAL-FEE|EVAL-TX|EVAL-TX-DIFF|EVAL-DRAFT|EVAL-DRAFT-DIFF|EVAL-DRAFT-UNDERIVED|CONTEXT|CONTEXT-DIFF|CONTEXT-PALLAS-ONLY|CONTEXT-STALE|REVALIDATE|BUILTIN|BUILTIN_UNCOVERED|ROLL_FAIL|RESULT|DISAGREE|REASON_MISMATCH|CASCADE|UNSUPPORTED_UNEXPECTED|STALE_MANIFEST|KNOWN_STALE|UNKNOWN_REFUSAL|ENDORSER|ENDORSER-DIFF|PHASE1-RULES|RULE_SIDE|RULE_MISMATCH|RULE_UNMAPPED|RULE_KNOWN_STALE|RULE_KNOWN_UNJUDGED) ' "$OUT/$arm.log" |
+    grep -E '^(CORPUS|VALIDATION|DEPENDENT|KNOWN|STATE|COST|EVAL-ORACLE|EVAL-DIFF|EVAL-TOTAL|EVAL-UNNAMED|EVAL-FEE|EVAL-TX|EVAL-TX-DIFF|EVAL-DRAFT|EVAL-DRAFT-DIFF|EVAL-DRAFT-UNDERIVED|EVAL-REWARD-OUTPUT|EVAL-REWARD-OUTPUT-DIFF|CONTEXT|CONTEXT-DIFF|CONTEXT-PALLAS-ONLY|CONTEXT-STALE|REVALIDATE|BUILTIN|BUILTIN_UNCOVERED|ROLL_FAIL|RESULT|DISAGREE|REASON_MISMATCH|CASCADE|UNSUPPORTED_UNEXPECTED|STALE_MANIFEST|KNOWN_STALE|UNKNOWN_REFUSAL|ENDORSER|ENDORSER-DIFF|PHASE1-RULES|RULE_SIDE|RULE_MISMATCH|RULE_UNMAPPED|RULE_KNOWN_STALE|RULE_KNOWN_UNJUDGED) ' "$OUT/$arm.log" |
       cut -c1-400 || true
     if grep -q '^RESULT PASS' "$OUT/$arm.log" && ! grep -q '^RESULT FAIL' "$OUT/$arm.log"; then
       head_result=PASS

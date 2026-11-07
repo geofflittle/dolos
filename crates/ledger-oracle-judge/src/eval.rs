@@ -361,18 +361,23 @@ fn names_script_or_redeemer(refusal: &Refusal) -> bool {
     words.contains("script") || words.contains("redeemer")
 }
 
+/// One layer's answer for a whole transaction, on one line.
+fn answer_text(answer: &Result<DolosAnswer, Malformed>) -> String {
+    match answer {
+        Ok(DolosAnswer::Evaluated(rows)) => format!("evaluated[{} rows]", rows.len()),
+        Ok(DolosAnswer::Refused(refusal)) => format!("refused[{refusal}]"),
+        Ok(DolosAnswer::Unrepresentable(why)) => format!("unrepresentable[{why}]"),
+        Err(malformed) => format!("malformed[{malformed}]"),
+    }
+}
+
 /// The verdict of one layer's answer against the demand of a transaction whose redeemers the ledger evaluated none of and the answer the known list gives it.
 pub fn tx_verdict(
     demand: TxDemand,
     answer: &Result<DolosAnswer, Malformed>,
     listed: Option<&str>,
 ) -> TxVerdict {
-    let dolos = match answer {
-        Ok(DolosAnswer::Evaluated(rows)) => format!("evaluated[{} rows]", rows.len()),
-        Ok(DolosAnswer::Refused(refusal)) => format!("refused[{refusal}]"),
-        Ok(DolosAnswer::Unrepresentable(why)) => format!("unrepresentable[{why}]"),
-        Err(malformed) => format!("malformed[{malformed}]"),
-    };
+    let dolos = answer_text(answer);
     match (demand, answer, listed) {
         (TxDemand::Undecided, _, None) => TxVerdict::Undecided,
         (TxDemand::Refuse(leaf), Ok(DolosAnswer::Refused(refusal)), None)
@@ -878,6 +883,69 @@ impl fmt::Display for DraftTally {
     }
 }
 
+/// The answers each layer gives drafts that pay a reward account.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct RewardOutputTally {
+    /// The drafts each layer refused with the reward account refusal.
+    pub agree: BTreeMap<Layer, usize>,
+    /// One line for each answer that is not that refusal.
+    pub disagree: Vec<String>,
+}
+
+impl RewardOutputTally {
+    /// Judges one layer's answer for a reward output draft.
+    pub fn add(
+        &mut self,
+        layer: Layer,
+        signed: RecordId,
+        expected: &Refusal,
+        answer: &Result<DolosAnswer, Malformed>,
+    ) {
+        match answer {
+            Ok(DolosAnswer::Refused(refusal)) if refusal == expected => {
+                *self.agree.entry(layer).or_default() += 1;
+            }
+            other => self.disagree.push(format!(
+                "{layer} {signed} expected=({expected}) dolos={}",
+                answer_text(other)
+            )),
+        }
+    }
+
+    /// Adds the counts and lines of another part after this one's.
+    pub fn merge(&mut self, other: RewardOutputTally) {
+        for (layer, agree) in other.agree {
+            *self.agree.entry(layer).or_default() += agree;
+        }
+        self.disagree.extend(other.disagree);
+    }
+
+    /// Whether every layer gave some reward output draft its refusal.
+    pub fn every_layer_agrees(&self) -> bool {
+        let agreed = |layer: &Layer| self.agree.get(layer).is_some_and(|n| *n > 0);
+        Layer::ALL.iter().all(agreed)
+    }
+}
+
+impl fmt::Display for RewardOutputTally {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let agree: usize = self.agree.values().sum();
+        let layers: Vec<String> = self.agree.iter().map(|(l, n)| format!("{l}:{n}")).collect();
+        write!(
+            f,
+            "EVAL-REWARD-OUTPUT compared={} agree={agree} disagree={} by_layer={} every_layer_agrees={}",
+            agree + self.disagree.len(),
+            self.disagree.len(),
+            layers.join(","),
+            self.every_layer_agrees()
+        )?;
+        for line in &self.disagree {
+            write!(f, "\nEVAL-REWARD-OUTPUT-DIFF {line}")?;
+        }
+        Ok(())
+    }
+}
+
 /// The row verdicts, response totals and fees of the evaluation judgement of one or more corpora.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct EvalTally {
@@ -900,6 +968,7 @@ pub struct EvalTally {
     pub judged: BTreeSet<RecordId>,
     pub tx: TxTally,
     pub draft: DraftTally,
+    pub reward_output: RewardOutputTally,
 }
 
 impl EvalTally {
@@ -1022,6 +1091,7 @@ impl EvalTally {
             judged,
             tx,
             draft,
+            reward_output,
         } = other;
         for (layer, counts) in layers {
             self.layers.entry(layer).or_default().merge(counts);
@@ -1048,14 +1118,17 @@ impl EvalTally {
         self.judged.extend(judged);
         self.tx.merge(tx);
         self.draft.merge(draft);
+        self.reward_output.merge(reward_output);
     }
 
-    /// Whether no row, transaction, draft, total, error or set fee disagrees and every draft derives.
+    /// Whether no row, transaction, draft, reward output draft, total, error
+    /// or set fee disagrees and every draft derives.
     pub fn pass(&self) -> bool {
         self.disagree.is_empty()
             && self.tx.disagree.is_empty()
             && self.draft.disagree.is_empty()
             && self.draft.underived.is_empty()
+            && self.reward_output.disagree.is_empty()
             && self.totals.disagree.is_empty()
             && self.unnamed.is_empty()
             && self.fee_differ.is_empty()
@@ -1133,7 +1206,7 @@ impl fmt::Display for EvalTally {
                 write!(f, "\n{prefix} {line}")?;
             }
         }
-        write!(f, "\n{}\n{}", self.tx, self.draft)
+        write!(f, "\n{}\n{}\n{}", self.tx, self.draft, self.reward_output)
     }
 }
 
@@ -1775,6 +1848,40 @@ mod tests {
             .underived
             .push("ic#3 unexpected type".to_string());
         assert!(!underived.pass());
+    }
+
+    #[test]
+    fn a_reward_output_draft_agrees_only_where_the_layer_gives_its_refusal() {
+        let expected = refusal("reward account address");
+        let mut t = EvalTally::default();
+        for layer in Layer::ALL {
+            let same = refused_for("reward account address");
+            t.reward_output.add(layer, ic(1), &expected, &same);
+        }
+        assert!(t.pass());
+        assert!(t.reward_output.every_layer_agrees());
+        let unsupported = refused_for("output address (requires Shelley)");
+        t.reward_output
+            .add(Layer::Pallas, ic(2), &expected, &unsupported);
+        t.reward_output
+            .add(Layer::V1, ic(2), &expected, &none_evaluated());
+        assert!(!t.pass());
+        let mut merged = EvalTally::default();
+        merged.merge(t.clone());
+        assert_eq!(merged, t);
+        assert_eq!(
+            t.reward_output.to_string(),
+            "EVAL-REWARD-OUTPUT compared=6 agree=4 disagree=2 by_layer=pallas:1,v1:1,v1beta:1,v1alpha:1 every_layer_agrees=true\nEVAL-REWARD-OUTPUT-DIFF pallas ic#2 expected=(reward account address) dolos=refused[output address (requires Shelley)]\nEVAL-REWARD-OUTPUT-DIFF v1 ic#2 expected=(reward account address) dolos=evaluated[0 rows]"
+        );
+        let mut one = RewardOutputTally::default();
+        one.add(
+            Layer::Pallas,
+            ic(1),
+            &expected,
+            &refused_for("reward account address"),
+        );
+        assert!(one.disagree.is_empty());
+        assert!(!one.every_layer_agrees());
     }
 
     #[test]

@@ -1981,7 +1981,8 @@ async fn ledger_oracle() {
     println!("{evaluations}");
     pass &= evaluations.every_layer_agrees()
         && evaluations.tx.every_layer_judged()
-        && evaluations.draft.every_layer_agrees();
+        && evaluations.draft.every_layer_agrees()
+        && evaluations.reward_output.every_layer_agrees();
     println!("{contexts}");
     println!(
         "REVALIDATE all compared={revalidated} pass={}",

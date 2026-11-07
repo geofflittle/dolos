@@ -623,7 +623,7 @@ index e185911e4..82160d60e 100644
          Certificate::StakeDelegation(c, pool) => {
              registered(state, c)?;
 diff --git a/pallas-validate/src/phase2/dijkstra.rs b/pallas-validate/src/phase2/dijkstra.rs
-index 71f121e29..a8362deae 100644
+index 71f121e29..4c26b4058 100644
 --- a/pallas-validate/src/phase2/dijkstra.rs
 +++ b/pallas-validate/src/phase2/dijkstra.rs
 @@ -70,14 +70,15 @@ impl LegacyContextData for ContextOutput {
@@ -663,9 +663,18 @@ index 71f121e29..a8362deae 100644
              ],
          )
      }
-@@ -137,7 +142,36 @@ impl LegacyContextData for ContextInput {
+@@ -135,9 +140,44 @@ impl LegacyContextData for ContextInput {
+ 
+ /// The fields of an output a script context holds, with any reference script reduced to the hash of its original bytes.
  fn context_output(output: &MultiEraOutput<'_>, _reference: bool) -> Result<ContextOutput, Error> {
-     let address = context_address(output.address()?)
+-    let address = context_address(output.address()?)
++    let address = output.address()?;
++    if matches!(address, Address::Stake(_))
++        && pallas_crypto::oracle_plant("reward-output-unsupported")
++    {
++        return unsupported(UnsupportedEvaluation::OutputAddress);
++    }
++    let address = context_address(address)
          .map_err(|x| Error::DijkstraInvalid(EvaluationFailure::Context(x.0)))?;
 -    let script = output.multi_era_script_ref().map(|s| s.hash());
 +    if pallas_crypto::oracle_plant("pointer-refused")
@@ -701,7 +710,7 @@ index 71f121e29..a8362deae 100644
      Ok(ContextOutput {
          address,
          value: output.value().into_conway(),
-@@ -362,12 +396,23 @@ pub(super) fn eval_tx_with_mode(
+@@ -362,12 +402,23 @@ pub(super) fn eval_tx_with_mode(
              let args: Vec<_> = run.args.iter().collect();
              let (result, calls) =
                  evaluator::eval_native(run.language, &run.script, &args, &run.costs, run.budget)?;
@@ -730,7 +739,7 @@ index 71f121e29..a8362deae 100644
                  logs: result.logs,
                  failure_message: result.failure.map(|f| f.message),
              };
-@@ -562,7 +607,24 @@ fn level_context<'a>(
+@@ -562,7 +613,24 @@ fn level_context<'a>(
          .flatten()
          .map(conway_certificate)
          .collect();
@@ -756,7 +765,7 @@ index 71f121e29..a8362deae 100644
      let policies: Vec<_> = level.mint.into_iter().flat_map(|x| x.keys()).collect();
      let voters: Vec<_> = level.votes.into_iter().flat_map(|x| x.keys()).collect();
      let mut purposes = Vec::new();
-@@ -693,7 +755,9 @@ impl Legacy {
+@@ -693,7 +761,9 @@ impl Legacy {
                  })
                  .collect(),
          };
@@ -767,7 +776,7 @@ index 71f121e29..a8362deae 100644
          signatories.dedup();
          Ok(Legacy {
              mint: MintValue {
-@@ -771,7 +835,29 @@ pub(super) fn runs(
+@@ -771,7 +841,29 @@ pub(super) fn runs(
          if scope.expected.is_empty() && scope.redeemers.is_empty() {
              continue;
          }
@@ -798,7 +807,7 @@ index 71f121e29..a8362deae 100644
          if estimate
              && (execution_limit.mem > i64::MAX as u64 || execution_limit.steps > i64::MAX as u64)
          {
-@@ -796,7 +882,7 @@ pub(super) fn runs(
+@@ -796,7 +888,7 @@ pub(super) fn runs(
                      .collect()
              };
              let args = match (language, part) {
@@ -807,7 +816,7 @@ index 71f121e29..a8362deae 100644
                      vec![context.script_context(key, purpose, &r.data, datum, &batch)?]
                  }
                  (n::Language::PlutusV1, Part::Top(tx)) => {
-@@ -842,14 +928,19 @@ pub(super) fn runs(
+@@ -842,14 +934,19 @@ pub(super) fn runs(
                          purpose.conway()?.1,
                      ))
                  }
@@ -858,14 +867,15 @@ index cdc70b06a..1a9b4acbd 100644
      }
  
 diff --git a/pallas-validate/src/phase2/error.rs b/pallas-validate/src/phase2/error.rs
-index 3ca2ba2af..0d99adb3b 100644
+index 3ca2ba2af..39f1c1d66 100644
 --- a/pallas-validate/src/phase2/error.rs
 +++ b/pallas-validate/src/phase2/error.rs
-@@ -16,7 +16,9 @@ labels! {
+@@ -16,7 +16,10 @@ labels! {
      pub enum UnsupportedEvaluation {
          BuiltinOutsideSubset => "V3 builtin outside audited protocol-12 subset",
          IntegerOutsideRegistrationRange => "integer operand outside audited registration range",
 +        NativeScriptGuards => "native script guards",
++        OutputAddress => "output address (requires Shelley)",
          ParametersRequireDijkstra => "protocol parameters require Dijkstra",
 +        PointerAddress => "pointer address in a V3 script context",
          ProtocolVersion => "protocol version (requires 12.0)",
@@ -1083,7 +1093,7 @@ index be4fafed3..9e9fd939b 100644
                          wrap_with_constr(0, reward_account.to_plutus_data()),
                          *amount,
 diff --git a/pallas-validate/src/utils/dijkstra_context.rs b/pallas-validate/src/utils/dijkstra_context.rs
-index 279d4a9f8..f4bb0f39e 100644
+index 279d4a9f8..85c565316 100644
 --- a/pallas-validate/src/utils/dijkstra_context.rs
 +++ b/pallas-validate/src/utils/dijkstra_context.rs
 @@ -111,13 +111,16 @@ pub(crate) fn check_translatable(
@@ -1104,6 +1114,17 @@ index 279d4a9f8..f4bb0f39e 100644
          {
              return refuse(ContextFailure::ScriptGuards);
          }
+@@ -136,6 +139,10 @@ pub(crate) fn check_translatable(
+         .chain(references.iter().map(|x| x.address()))
+         .chain(outputs.iter().map(MultiEraOutput::address))
+         .filter_map(Result::ok)
++        .filter(|x| {
++            !(matches!(x, Address::Stake(_))
++                && pallas_crypto::oracle_plant("reward-output-unsupported"))
++        })
+         .map(context_address)
+         .collect::<Result<Vec<_>, _>>()?;
+     if *language == Language::PlutusV4 {
 diff --git a/pallas-validate/src/utils/dijkstra_time.rs b/pallas-validate/src/utils/dijkstra_time.rs
 index 0507ea76c..607fcc5e4 100644
 --- a/pallas-validate/src/utils/dijkstra_time.rs
