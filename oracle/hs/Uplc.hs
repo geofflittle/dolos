@@ -9,24 +9,19 @@ import Cardano.Ledger.Plutus.Language (Language (..))
 import Cardano.Ledger.Plutus.TxInfo (transExUnits)
 import Codec.Serialise (serialise)
 import qualified Data.Aeson as A
-import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BL8
 import qualified Data.ByteString.Short as SBS
 import Dump (evalJson, hex)
-import PlutusCore (DefaultFun (..), DefaultUni)
-import qualified PlutusCore as PLC
-import PlutusCore.DeBruijn (DeBruijn (..))
+import PlutusCore (DefaultFun (..))
 import PlutusCore.Version (plcVersion100, plcVersion110)
 import qualified PlutusLedgerApi.Common as P
 import qualified PlutusLedgerApi.V1 as PV1
 import qualified PlutusLedgerApi.V2 as PV2
 import qualified PlutusLedgerApi.V3 as PV3
 import Test.Cardano.Ledger.Plutus (testingCostModel)
+import UplcTerm (T, builtin, bytes, check, equal, int, lam, var)
 import qualified UntypedPlutusCore as UPLC
-
--- | A term of a program.
-type T = UPLC.Term DeBruijn DefaultUni DefaultFun ()
 
 -- | The units every program may spend, the transaction maximum.
 budget :: ExUnits
@@ -35,40 +30,6 @@ budget = ExUnits 14000000 10000000000
 -- | The smallest positive integer that does not fit in 262144 signed bits.
 aboveBound :: Integer
 aboveBound = 2 ^ (262143 :: Int)
-
--- | An integer constant.
-int :: Integer -> T
-int = UPLC.Constant () . PLC.someValue
-
--- | A bytestring constant.
-bytes :: BS.ByteString -> T
-bytes = UPLC.Constant () . PLC.someValue
-
--- | The unit constant.
-unit :: T
-unit = UPLC.Constant () (PLC.someValue ())
-
--- | A builtin applied to its arguments.
-builtin :: DefaultFun -> [T] -> T
-builtin f = foldl (UPLC.Apply ()) (UPLC.Builtin () f)
-
--- | A function of one argument.
-lam :: T -> T
-lam = UPLC.LamAbs () (DeBruijn 0)
-
--- | The innermost bound variable.
-var :: T
-var = UPLC.Var () (DeBruijn 1)
-
--- | Unit when the boolean term is true, otherwise an error.
-check :: T -> T
-check b =
-  UPLC.Force () $
-    foldl (UPLC.Apply ()) (UPLC.Force () (UPLC.Builtin () IfThenElse)) [b, UPLC.Delay () unit, UPLC.Delay () (UPLC.Error ())]
-
--- | Whether two integer terms are equal.
-equal :: T -> T -> T
-equal a b = builtin EqualsInteger [a, b]
 
 -- | The programs of the slice, each named, with its language, its body and the data it is applied to.
 programs :: [(String, Language, T, [P.Data])]

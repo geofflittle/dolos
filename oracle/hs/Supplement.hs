@@ -63,12 +63,14 @@ import Dump (E, dumpTo)
 import Edit
 import Lens.Micro ((%~), (&), (.~), (^.))
 import Lens.Micro.Mtl (use, (%=))
+import qualified PlutusCore as PLC
 import qualified PlutusLedgerApi.V1 as PV1
 import qualified PlutusLedgerApi.V3 as PV3
 import Test.Cardano.Ledger.Core.KeyPair (ByronKeyPair (..))
 import Test.Cardano.Ledger.Core.Utils (txInAt)
 import Test.Cardano.Ledger.Dijkstra.ImpTest
 import Test.Cardano.Ledger.Imp.Common
+import qualified UplcTerm as U
 
 supplement :: SpecWith (ImpInit (LedgerSpec E))
 supplement = describe "SUPPLEMENT" $ do
@@ -209,6 +211,15 @@ supplement = describe "SUPPLEMENT" $ do
   readBackShapes
   it "a V3 script calls sha2_256" $
     spendWithV3 "4b010100232498dc92450001"
+  it "a V3 script calls mkNilData" $
+    spendWithV3 (U.v3ScriptHex (U.lam (U.check (U.forced PLC.NullList [U.builtin PLC.MkNilData [U.unit]]))))
+  it "a V3 script compares an integer above the 262144 bit bound" $
+    spendWithV3In (void . trySubmitTx) (ValidityInterval SNothing SNothing) (Data (PV1.I 0)) (ExUnits 30_000 3_000_000_000) $
+      U.v3ScriptHex (U.lam (U.check (U.builtin PLC.LessThanInteger [U.int 1, squared 18 (U.int 2)])))
+
+-- | An integer term squared the given number of times.
+squared :: Int -> U.T -> U.T
+squared n x = iterate (U.apply (U.lam (U.builtin PLC.MultiplyInteger [U.var, U.var]))) x !! n
 
 -- | Transactions whose integers, scripts, arrays and proposals have shapes the read back and evaluation paths decode or map, each case with the verdict the ledger gives.
 readBackShapes :: SpecWith (ImpInit (LedgerSpec E))
@@ -319,7 +330,7 @@ posixAt g s = PV1.POSIXTime (floor (utcTimeToPOSIXSeconds start * 1000) + toInte
 
 -- | Locks coin at the range checking validator, then submits a spend of it with the validity interval and the range as its redeemer.
 spendInRange :: (Tx TopTx E -> ImpTestM E ()) -> ValidityInterval -> PV1.POSIXTimeRange -> ImpTestM E ()
-spendInRange submit interval range = spendWithV3In submit interval (Data (PV1.toData range)) rangeIsRedeemer
+spendInRange submit interval range = spendWithV3In submit interval (Data (PV1.toData range)) v3Units rangeIsRedeemer
 
 -- | Spends whose script context holds a hash, credential or reference the ledger builds from the transaction, each case with the value the ledger is expected to build or the refusal it is expected to give.
 contextValues :: SpecWith (ImpInit (LedgerSpec E))
@@ -613,11 +624,15 @@ spendWithV3 = spendWithV3Using submitTx_
 
 -- | Locks coin at a V3 script given as its CBOR hex, then submits a spend of it with that script and no datum.
 spendWithV3Using :: (Tx TopTx E -> ImpTestM E ()) -> ByteString -> ImpTestM E ()
-spendWithV3Using submit = spendWithV3In submit (ValidityInterval SNothing SNothing) (Data (PV1.I 0))
+spendWithV3Using submit = spendWithV3In submit (ValidityInterval SNothing SNothing) (Data (PV1.I 0)) v3Units
 
--- | Locks coin at a V3 script given as its CBOR hex, then submits a spend of it with that script, the validity interval, the redeemer and no datum.
-spendWithV3In :: (Tx TopTx E -> ImpTestM E ()) -> ValidityInterval -> Data E -> ByteString -> ImpTestM E ()
-spendWithV3In submit interval redeemer hex = do
+-- | The units the redeemer of a V3 spend declares.
+v3Units :: ExUnits
+v3Units = ExUnits 1_000_000 1_000_000_000
+
+-- | Locks coin at a V3 script given as its CBOR hex, then submits a spend of it with that script, the validity interval, the redeemer and its units, and no datum.
+spendWithV3In :: (Tx TopTx E -> ImpTestM E ()) -> ValidityInterval -> Data E -> ExUnits -> ByteString -> ImpTestM E ()
+spendWithV3In submit interval redeemer units hex = do
   plutus :: PlutusScript E <- expectJust $ mkBinaryPlutusScript PlutusV3 . PlutusBinary . toShort =<< either (const Nothing) Just (B16.decode hex)
   let script = fromPlutusScript plutus
       hash = hashScript script
@@ -627,7 +642,7 @@ spendWithV3In submit interval redeemer hex = do
       tx =
         mkBasicTx (mkBasicTxBody & inputsTxBodyL .~ [locked] & collateralInputsTxBodyL .~ [collateral] & feeTxBodyL .~ Coin 400_000 & vldtTxBodyL .~ interval)
           & witsTxL . scriptTxWitsL .~ [(hash, script)]
-          & witsTxL . rdmrsTxWitsL .~ Redeemers [(SpendingPurpose (AsIx 0), (redeemer, ExUnits 1_000_000 1_000_000_000))]
+          & witsTxL . rdmrsTxWitsL .~ Redeemers [(SpendingPurpose (AsIx 0), (redeemer, units))]
   submit tx
 
 main :: IO ()
