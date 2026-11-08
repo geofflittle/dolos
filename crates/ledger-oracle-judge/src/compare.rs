@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, fmt};
 
 use crate::{
     eval::Layer,
-    judgement::{self, CellKey, EntryPoint, Finding, Judge, Verdict},
+    judgement::{self, Axis, CellKey, EntryPoint, Finding, Judge, Verdict},
     manifest::{KnownList, Locus},
     record::{CorpusKind, RecordId},
     row::Row,
@@ -52,7 +52,7 @@ impl ByteVerdict {
             ByteVerdict::LedgerOnly(_) => "ledger_only",
             ByteVerdict::NodeOnly(_) => "dolos_only",
         };
-        CellKey::new("bytes", member)
+        CellKey::new(Axis::Bytes, member)
     }
 }
 
@@ -229,7 +229,7 @@ impl StateTallies {
                 judge,
                 entry,
                 subject: judgement::Subject::Record(*id),
-                cells: vec![CellKey::new("row", row)],
+                cells: vec![CellKey::new(Axis::Row, row)],
                 outcome: judgement::Outcome::Known(format!("row={row}")),
             });
         }
@@ -238,7 +238,7 @@ impl StateTallies {
                 Judge::ApplyBlock,
                 EntryPoint::ApplyBlock,
                 fail.first,
-                vec![CellKey::new("answer", "refused")],
+                vec![CellKey::new(Axis::Answer, "refused")],
                 fail.to_string(),
             ));
         }
@@ -327,8 +327,8 @@ impl StateTallies {
         let (judge, entry) = locus.judge();
         let stale = |id: RecordId, row: &Row, detail: String| {
             let cells = vec![
-                CellKey::new("failure", "known_stale"),
-                CellKey::new("row", row),
+                CellKey::new(Axis::Failure, "known_stale"),
+                CellKey::new(Axis::Row, row),
             ];
             Verdict::disagree(judge, entry, id, cells, detail)
         };
@@ -604,7 +604,7 @@ mod tests {
         assert!(passes(&state), "{state}");
         state.revalidate.agree();
         assert!(passes(&state), "{state}");
-        let cells = vec![CellKey::new("rollback", "kept")];
+        let cells = vec![CellKey::new(Axis::Rollback, "kept")];
         let line = "kept_after_rollback_to=Slot(40)";
         state
             .revalidate

@@ -3,13 +3,14 @@ use std::{collections::BTreeMap, fmt, str::FromStr};
 use thiserror::Error;
 
 use crate::{
-    judgement::{EntryPoint, Judge},
+    judgement::{Axis, EntryPoint, Judge, UnknownName},
     record::{CorpusKind, RecordId},
     row::{coverage, Check, Row},
 };
 
 const EXPECTED: &str = include_str!("../../../test_data/ledger-oracle/expected-unsupported.txt");
 const KNOWN: &str = include_str!("../../../test_data/ledger-oracle/known.txt");
+const ARMS: &str = include_str!("../../../oracle/box/arms.toml");
 
 /// An unsupported feature label as Dolos's validator names it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -292,6 +293,91 @@ pub fn known() -> Result<Known, ManifestError> {
     parse_known("known.txt", KNOWN)
 }
 
+/// A cell a catch names, a member of an axis or, ending in `*`, a prefix of its members.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CellPattern {
+    pub axis: Axis,
+    pub member: String,
+}
+
+/// One term of a catch, which every verdict line the catch selects meets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CatchTerm {
+    /// A panic of the named crate test, in place of a verdict line.
+    Test(String),
+    Judge(Vec<Judge>),
+    Entry(Vec<String>),
+    /// No cell of the line matches the pattern.
+    Without(CellPattern),
+    /// A cell of the line matches one of the patterns.
+    Cell(Vec<CellPattern>),
+}
+
+/// The catches of each planted arm, each a list of terms one line meets all of.
+pub type Catches = BTreeMap<String, Vec<Vec<CatchTerm>>>;
+
+fn cell_pattern(text: &str) -> Result<CellPattern, String> {
+    let (axis, member) = text.split_once(':').ok_or(format!("no axis in {text}"))?;
+    let axis = axis.parse().map_err(|e: UnknownName| e.to_string())?;
+    let member = member.to_string();
+    Ok(CellPattern { axis, member })
+}
+
+fn catch_term(text: &str) -> Result<CatchTerm, String> {
+    if let Some(test) = text.strip_prefix("test=") {
+        return Ok(CatchTerm::Test(test.to_string()));
+    }
+    if let Some(judges) = text.strip_prefix("judge=") {
+        let judges = judges.split('|').map(str::parse);
+        let judges = judges.collect::<Result<_, UnknownName>>();
+        return judges.map(CatchTerm::Judge).map_err(|e| e.to_string());
+    }
+    if let Some(entries) = text.strip_prefix("entry=") {
+        let entries = entries.split('|').map(str::to_string).collect();
+        return Ok(CatchTerm::Entry(entries));
+    }
+    if let Some(cell) = text.strip_prefix('!') {
+        return cell_pattern(cell).map(CatchTerm::Without);
+    }
+    let cells = text.split('|').map(cell_pattern).collect::<Result<_, _>>();
+    cells.map(CatchTerm::Cell)
+}
+
+/// Reads the `[catches]` table of the arms manifest, one `arm = ["term term", ...]` per line.
+pub fn parse_catches(file: &'static str, text: &str) -> Result<Catches, ManifestError> {
+    let mut catches = Catches::new();
+    let mut inside = false;
+    for (line, l) in lines(text) {
+        let error = |reason: String| ManifestError { file, line, reason };
+        if l.starts_with('[') {
+            inside = l == "[catches]";
+            continue;
+        }
+        if !inside || l.starts_with('#') {
+            continue;
+        }
+        let (arm, value) = l.split_once(" = ").ok_or(error("no catch list".into()))?;
+        let value = value.strip_prefix('[').and_then(|v| v.strip_suffix(']'));
+        let value = value.ok_or(error(format!("{arm} catch is not a list")))?;
+        let mut specs = Vec::new();
+        for spec in value.split(',') {
+            let spec = spec.trim().strip_prefix('"').and_then(|s| s.strip_suffix('"'));
+            let spec = spec.ok_or(error(format!("{arm} catch is not a string")))?;
+            let terms = spec.split(' ').map(catch_term).collect::<Result<_, _>>();
+            specs.push(terms.map_err(error)?);
+        }
+        if catches.insert(arm.to_string(), specs).is_some() {
+            return Err(error(format!("{arm} caught twice")));
+        }
+    }
+    Ok(catches)
+}
+
+/// The committed catches of the arms manifest.
+pub fn catches() -> Result<Catches, ManifestError> {
+    parse_catches("arms.toml", ARMS)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,6 +386,42 @@ mod tests {
     fn the_committed_manifests_parse() {
         declared().unwrap_or_else(|e| panic!("{e}"));
         assert!(!known().unwrap().records.is_empty());
+        let catches = catches().unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            catches["fee-min-deleted"][1],
+            vec![
+                CatchTerm::Judge(vec![Judge::Rules]),
+                CatchTerm::Cell(vec![CellPattern {
+                    axis: Axis::Failure,
+                    member: "mismatch".into(),
+                }]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_catch_naming_no_judge_or_axis_fails_the_load() {
+        let text = |catch: &str| format!("[dolos]\na = 1\n\n[catches]\nb = [\"{catch}\"]\n");
+        let parsed = |catch| parse_catches("arms", &text(catch));
+        let caught = parsed("judge=eval-tx|utxo !units:mem field:coin|field:datum* test=t").unwrap();
+        assert_eq!(caught["b"][0].len(), 4);
+        let reason = |catch| parsed(catch).unwrap_err().to_string();
+        assert_eq!(
+            reason("judge=utxo|nothing"),
+            "MANIFEST arms line=5 no judge is named nothing"
+        );
+        assert_eq!(
+            reason("judge=utxo nothing:coin"),
+            "MANIFEST arms line=5 no axis is named nothing"
+        );
+        assert_eq!(
+            reason("judge=utxo !nothing:coin"),
+            "MANIFEST arms line=5 no axis is named nothing"
+        );
+        assert_eq!(
+            reason("judge=utxo coin"),
+            "MANIFEST arms line=5 no axis in coin"
+        );
     }
 
     #[test]

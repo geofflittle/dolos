@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
     cbor::{tx_fields, CborError, Field},
-    judgement::{self, CellKey, EntryPoint, Judge, Verdict},
+    judgement::{self, Axis, CellKey, EntryPoint, Judge, Verdict},
     manifest::ManifestError,
     record::{LedgerOutcome, RecordId},
     refusal::LedgerLeaf,
@@ -370,7 +370,7 @@ impl Rules {
             (Shown::Unmapped, None) => (RuleFail::Unmapped, both),
             (Shown::Agrees | Shown::Unrepresentable | Shown::Unjudged, None) => return Ok(()),
         };
-        let cells = vec![CellKey::new("failure", kind.name())];
+        let cells = vec![CellKey::new(Axis::Failure, kind.name())];
         let verdict = Verdict::disagree(Judge::Rules, EntryPoint::SubmitTx, id, cells, detail);
         tally.failures.push((kind, verdict));
         Ok(())
@@ -429,7 +429,7 @@ impl Rules {
         out.count(Judge::Rules, passing);
         tally.failures.iter().for_each(|(_, v)| out.add(v.clone()));
         for id in unjudged {
-            let cells = vec![CellKey::new("answer", "unjudged")];
+            let cells = vec![CellKey::new(Axis::Answer, "unjudged")];
             let entry = EntryPoint::SubmitTx;
             out.add(Verdict::disagree(
                 Judge::Rules,

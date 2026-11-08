@@ -2,118 +2,118 @@
 //! record, the cells it touched and its outcome, and the tally every run passes
 //! or fails by.
 
-use std::{collections::BTreeMap, fmt, str::FromStr};
+use std::{collections::BTreeMap, fmt};
 
 use crate::{eval::Layer, record::RecordId};
 
-/// A judge of the oracle, by the name its verdict lines print.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Judge {
-    Validation,
-    Rules,
-    EvalOracle,
-    EvalTx,
-    EvalDraft,
-    EvalRewardOutput,
-    Context,
-    Utxo,
-    AsOutput,
-    Accounts,
-    Undo,
-    Revalidate,
-    Params,
-    ReadTx,
-    Script,
-    Datum,
-    PlutusData,
-    ServedTx,
-    ApplyBlock,
-    Cost,
-    Construct,
-    Builtin,
-    Inventory,
-    Endorser,
-}
-
-impl Judge {
-    /// Every judge, in the order a run prints them.
-    pub const ALL: [Judge; 24] = [
-        Judge::Validation,
-        Judge::Rules,
-        Judge::EvalOracle,
-        Judge::EvalTx,
-        Judge::EvalDraft,
-        Judge::EvalRewardOutput,
-        Judge::Context,
-        Judge::Utxo,
-        Judge::AsOutput,
-        Judge::Accounts,
-        Judge::Undo,
-        Judge::Revalidate,
-        Judge::Params,
-        Judge::ReadTx,
-        Judge::Script,
-        Judge::Datum,
-        Judge::PlutusData,
-        Judge::ServedTx,
-        Judge::ApplyBlock,
-        Judge::Cost,
-        Judge::Construct,
-        Judge::Builtin,
-        Judge::Inventory,
-        Judge::Endorser,
-    ];
-
-    /// The name verdict lines and the arms manifest give the judge.
-    pub fn name(self) -> &'static str {
-        match self {
-            Judge::Validation => "validation",
-            Judge::Rules => "rules",
-            Judge::EvalOracle => "eval-oracle",
-            Judge::EvalTx => "eval-tx",
-            Judge::EvalDraft => "eval-draft",
-            Judge::EvalRewardOutput => "eval-reward-output",
-            Judge::Context => "context",
-            Judge::Utxo => "utxo",
-            Judge::AsOutput => "as-output",
-            Judge::Accounts => "accounts",
-            Judge::Undo => "undo",
-            Judge::Revalidate => "revalidate",
-            Judge::Params => "params",
-            Judge::ReadTx => "read-tx",
-            Judge::Script => "script",
-            Judge::Datum => "datum",
-            Judge::PlutusData => "plutus-data",
-            Judge::ServedTx => "served-tx",
-            Judge::ApplyBlock => "apply-block",
-            Judge::Cost => "cost",
-            Judge::Construct => "construct",
-            Judge::Builtin => "builtin",
-            Judge::Inventory => "inventory",
-            Judge::Endorser => "endorser",
-        }
-    }
-}
-
-impl fmt::Display for Judge {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
-    }
-}
-
-/// A name that no judge prints.
+/// A name that no member of the named kind prints.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("no judge is named {0}")]
-pub struct UnknownJudge(pub String);
+#[error("no {kind} is named {name}")]
+pub struct UnknownName {
+    pub kind: &'static str,
+    pub name: String,
+}
 
-impl FromStr for Judge {
-    type Err = UnknownJudge;
+macro_rules! named {
+    ($(#[$doc:meta])* $kind:literal $enum:ident { $($member:ident = $name:literal),* $(,)? }) => {
+        $(#[$doc])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub enum $enum {
+            $($member),*
+        }
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Judge::ALL
-            .into_iter()
-            .find(|judge| judge.name() == s)
-            .ok_or_else(|| UnknownJudge(s.to_string()))
+        impl $enum {
+            /// Every member, in the order a run prints them.
+            pub const ALL: [$enum; [$(stringify!($member)),*].len()] = [$($enum::$member),*];
+
+            /// The name verdict lines and the arms manifest give the member.
+            pub fn name(self) -> &'static str {
+                match self {
+                    $($enum::$member => $name),*
+                }
+            }
+        }
+
+        impl ::std::fmt::Display for $enum {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                f.write_str(self.name())
+            }
+        }
+
+        impl ::std::str::FromStr for $enum {
+            type Err = $crate::judgement::UnknownName;
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                $enum::ALL
+                    .into_iter()
+                    .find(|member| member.name() == s)
+                    .ok_or_else(|| $crate::judgement::UnknownName {
+                        kind: $kind,
+                        name: s.to_string(),
+                    })
+            }
+        }
+    };
+}
+
+pub(crate) use named;
+
+named! {
+    /// A judge of the oracle, by the name its verdict lines print.
+    "judge" Judge {
+        Validation = "validation",
+        Rules = "rules",
+        EvalOracle = "eval-oracle",
+        EvalTx = "eval-tx",
+        EvalDraft = "eval-draft",
+        EvalRewardOutput = "eval-reward-output",
+        Context = "context",
+        Utxo = "utxo",
+        AsOutput = "as-output",
+        Accounts = "accounts",
+        Undo = "undo",
+        Revalidate = "revalidate",
+        Params = "params",
+        ReadTx = "read-tx",
+        Script = "script",
+        Datum = "datum",
+        PlutusData = "plutus-data",
+        ServedTx = "served-tx",
+        ApplyBlock = "apply-block",
+        Cost = "cost",
+        Construct = "construct",
+        Builtin = "builtin",
+        Inventory = "inventory",
+        Endorser = "endorser",
+    }
+}
+
+named! {
+    /// An axis of the cells a judgement touches, by the name its cells print.
+    "axis" Axis {
+        Answer = "answer",
+        Bytes = "bytes",
+        Construct = "construct",
+        Datum = "datum",
+        Demand = "demand",
+        Dolos = "dolos",
+        Draft = "draft",
+        Failure = "failure",
+        Field = "field",
+        Input = "input",
+        Label = "label",
+        Language = "language",
+        Layer = "layer",
+        Ledger = "ledger",
+        Level = "level",
+        Param = "param",
+        Purpose = "purpose",
+        Rollback = "rollback",
+        Row = "row",
+        Service = "service",
+        Tx = "tx",
+        Units = "units",
+        Unsupported = "unsupported",
     }
 }
 
@@ -174,13 +174,13 @@ impl fmt::Display for Subject {
 /// A member of one axis a judgement touched, printed as `axis:member`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CellKey {
-    pub axis: &'static str,
+    pub axis: Axis,
     pub member: String,
 }
 
 impl CellKey {
     /// The cell of `member` on `axis`.
-    pub fn new(axis: &'static str, member: impl fmt::Display) -> Self {
+    pub fn new(axis: Axis, member: impl fmt::Display) -> Self {
         CellKey {
             axis,
             member: member.to_string(),
@@ -473,7 +473,7 @@ mod tests {
                 judge,
                 EntryPoint::MinFee,
                 id(2),
-                vec![CellKey::new("units", "mem")],
+                vec![CellKey::new(Axis::Units, "mem")],
                 "ledger=1 dolos=2",
             ));
             assert_eq!(tally.verdict(), RunVerdict::Fail { failing: 1 }, "{judge}");
@@ -522,8 +522,8 @@ mod tests {
             EntryPoint::EstimateTx(Layer::V1beta),
             id(4),
             vec![
-                CellKey::new("purpose", "Spend"),
-                CellKey::new("label", "new script language"),
+                CellKey::new(Axis::Purpose, "Spend"),
+                CellKey::new(Axis::Label, "new script language"),
             ],
             "ledger=(none)",
         )
@@ -536,13 +536,18 @@ mod tests {
     }
 
     #[test]
-    fn every_judge_reads_back_from_its_name() {
+    fn every_judge_and_axis_reads_back_from_its_name() {
         for judge in Judge::ALL {
             assert_eq!(judge.name().parse(), Ok(judge));
         }
-        assert_eq!(
-            "nothing".parse::<Judge>(),
-            Err(UnknownJudge("nothing".into()))
-        );
+        for axis in Axis::ALL {
+            assert_eq!(axis.name().parse(), Ok(axis));
+        }
+        let unknown = |kind| UnknownName {
+            kind,
+            name: "nothing".into(),
+        };
+        assert_eq!("nothing".parse::<Judge>(), Err(unknown("judge")));
+        assert_eq!("nothing".parse::<Axis>(), Err(unknown("axis")));
     }
 }

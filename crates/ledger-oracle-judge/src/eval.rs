@@ -9,7 +9,7 @@ use std::{
 use crate::{
     cbor::Purpose,
     compare::Tally,
-    judgement::{self, CellKey, EntryPoint, Judge, Verdict},
+    judgement::{self, Axis, CellKey, EntryPoint, Judge, Verdict},
     manifest::ManifestError,
     record::{Evaluation, LedgerOutcome, LedgerRedeemers, Record, RecordId, Units},
     refusal::LedgerLeaf,
@@ -101,8 +101,8 @@ impl RowKey {
     /// The purpose and level cells of the row.
     pub fn cells(&self) -> Vec<CellKey> {
         vec![
-            CellKey::new("purpose", tag_name(self.purpose.tag)),
-            CellKey::new("level", self.level.kind()),
+            CellKey::new(Axis::Purpose, tag_name(self.purpose.tag)),
+            CellKey::new(Axis::Level, self.level.kind()),
         ]
     }
 }
@@ -185,28 +185,13 @@ impl fmt::Display for DolosRow {
     }
 }
 
-/// A layer of Dolos that answers for the evaluation of a transaction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Layer {
-    Pallas,
-    V1,
-    V1beta,
-    V1alpha,
-}
-
-impl Layer {
-    /// Every layer, the evaluator first.
-    pub const ALL: [Layer; 4] = [Layer::Pallas, Layer::V1, Layer::V1beta, Layer::V1alpha];
-}
-
-impl fmt::Display for Layer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Layer::Pallas => "pallas",
-            Layer::V1 => "v1",
-            Layer::V1beta => "v1beta",
-            Layer::V1alpha => "v1alpha",
-        })
+judgement::named! {
+    /// A layer of Dolos that answers for the evaluation of a transaction, the evaluator first.
+    "layer" Layer {
+        Pallas = "pallas",
+        V1 = "v1",
+        V1beta = "v1beta",
+        V1alpha = "v1alpha",
     }
 }
 
@@ -232,17 +217,17 @@ impl Disagreement {
             DolosRow::Unrepresentable(_) => "unrepresentable",
         };
         let mut cells = vec![
-            CellKey::new("ledger", self.ledger.as_ref().map_or("none", ran)),
-            CellKey::new("dolos", dolos),
+            CellKey::new(Axis::Ledger, self.ledger.as_ref().map_or("none", ran)),
+            CellKey::new(Axis::Dolos, dolos),
         ];
         if let (Some(Answer::Ran(l)), DolosRow::Answered(Answer::Ran(d))) =
             (&self.ledger, &self.dolos)
         {
             if l.mem != d.mem {
-                cells.push(CellKey::new("units", "mem"));
+                cells.push(CellKey::new(Axis::Units, "mem"));
             }
             if l.steps != d.steps {
-                cells.push(CellKey::new("units", "steps"));
+                cells.push(CellKey::new(Axis::Units, "steps"));
             }
         }
         cells
@@ -549,7 +534,7 @@ impl Malformed {
             Malformed::NoUnits(key) => (key, "no_units"),
         };
         let mut cells = key.cells();
-        cells.push(CellKey::new("dolos", kind));
+        cells.push(CellKey::new(Axis::Dolos, kind));
         cells
     }
 }
@@ -799,7 +784,7 @@ impl TxTally {
                     Judge::EvalTx,
                     EntryPoint::EstimateTx(layer),
                     id,
-                    vec![CellKey::new("demand", demand.kind())],
+                    vec![CellKey::new(Axis::Demand, demand.kind())],
                     format!("demand={demand} dolos={dolos}{listed}"),
                 ));
             }
@@ -816,7 +801,7 @@ impl TxTally {
                 Judge::EvalTx,
                 EntryPoint::EstimateTx(Layer::Pallas),
                 *id,
-                vec![CellKey::new("answer", "unjudged")],
+                vec![CellKey::new(Axis::Answer, "unjudged")],
                 format!("not judged listed=({answer})"),
             ));
         }
@@ -944,7 +929,7 @@ impl DraftTally {
             Judge::EvalDraft,
             EntryPoint::EstimateTx(Layer::Pallas),
             signed,
-            vec![CellKey::new("draft", "underived")],
+            vec![CellKey::new(Axis::Draft, "underived")],
             format!("underived {why}"),
         ));
     }
@@ -1032,7 +1017,7 @@ impl RewardOutputTally {
                 Judge::EvalRewardOutput,
                 EntryPoint::EstimateTx(layer),
                 signed,
-                vec![CellKey::new("answer", answer_kind(other))],
+                vec![CellKey::new(Axis::Answer, answer_kind(other))],
                 format!("expected=({expected}) dolos={}", answer_text(other)),
             )),
         }
@@ -1187,7 +1172,7 @@ impl EvalTally {
             self.totals.add(agrees, || {
                 let total = wire.total.map_or("none".to_string(), |t| t.to_string());
                 let detail = format!("total=({total}) redeemers={}", wire.redeemers.len());
-                let cells = vec![CellKey::new("answer", "total")];
+                let cells = vec![CellKey::new(Axis::Answer, "total")];
                 Verdict::disagree(
                     Judge::EvalOracle,
                     EntryPoint::EstimateTx(layer),
@@ -1200,7 +1185,7 @@ impl EvalTally {
         for msg in wire.unnamed() {
             let msg: String = msg.chars().take(160).collect();
             self.unnamed += 1;
-            let cells = vec![CellKey::new("answer", "unnamed_error")];
+            let cells = vec![CellKey::new(Axis::Answer, "unnamed_error")];
             self.fail(layer, id, cells, msg);
         }
     }
@@ -1213,7 +1198,7 @@ impl EvalTally {
             (Some(l), WireFee::Int(n)) if i64::try_from(l) == Ok(*n) => self.fee_equal += 1,
             (Some(l), other) => {
                 self.fee_differ += 1;
-                let cells = vec![CellKey::new("answer", "fee")];
+                let cells = vec![CellKey::new(Axis::Answer, "fee")];
                 self.fail(layer, id, cells, format!("fee ledger={l} dolos={other:?}"));
             }
         }
@@ -1228,7 +1213,7 @@ impl EvalTally {
         for (id, rows) in missed {
             for (key, refusal) in rows {
                 let mut cells = key.cells();
-                cells.push(CellKey::new("answer", "unjudged"));
+                cells.push(CellKey::new(Axis::Answer, "unjudged"));
                 let detail = format!("{key} not judged listed=({refusal})");
                 self.fail(Layer::Pallas, *id, cells, detail);
             }

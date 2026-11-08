@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    judgement::{self, CellKey, EntryPoint, Judge, Verdict},
+    judgement::{self, Axis, CellKey, EntryPoint, Judge, Verdict},
     manifest::Feature,
     record::{FailurePath, LedgerOutcome, NonEmpty, RecordId},
     refusal::{DolosClass, LedgerLeaf, RefusalClass},
@@ -145,19 +145,19 @@ impl Fail {
     /// The cells the failure touches: its kind, and the answers or label it
     /// names.
     pub fn cells(&self) -> Vec<CellKey> {
-        let mut cells = vec![CellKey::new("failure", self.kind())];
+        let mut cells = vec![CellKey::new(Axis::Failure, self.kind())];
         match self {
             Fail::Disagree { ledger, dolos } | Fail::ReasonMismatch { ledger, dolos, .. } => {
-                cells.push(CellKey::new("ledger", answer_member(ledger)));
-                cells.push(CellKey::new("dolos", answer_member(dolos)));
+                cells.push(CellKey::new(Axis::Ledger, answer_member(ledger)));
+                cells.push(CellKey::new(Axis::Dolos, answer_member(dolos)));
             }
             Fail::UnsupportedUnexpected { label } => {
-                cells.push(CellKey::new("unsupported", label));
+                cells.push(CellKey::new(Axis::Unsupported, label));
             }
             Fail::StaleManifest { dolos, .. } | Fail::UnknownRefusal { dolos } => {
-                cells.push(CellKey::new("dolos", answer_member(dolos)));
+                cells.push(CellKey::new(Axis::Dolos, answer_member(dolos)));
             }
-            Fail::KnownStale { row } => cells.push(CellKey::new("row", row)),
+            Fail::KnownStale { row } => cells.push(CellKey::new(Axis::Row, row)),
             Fail::RelayDependent { .. } => {}
         }
         cells
@@ -417,7 +417,7 @@ pub struct ValidationTally {
 impl ValidationTally {
     /// The number of failing records of the failure kind `kind`.
     fn failed(&self, kind: &str) -> usize {
-        let cell = CellKey::new("failure", kind);
+        let cell = CellKey::new(Axis::Failure, kind);
         self.failing
             .iter()
             .filter(|v| v.cells.contains(&cell))

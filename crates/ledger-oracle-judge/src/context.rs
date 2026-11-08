@@ -8,7 +8,7 @@ use std::{
 use crate::{
     cbor::{self, Data},
     eval::{parse_purpose, Level, Refusal, RowKey},
-    judgement::{self, CellKey, EntryPoint, Judge, Verdict},
+    judgement::{self, Axis, CellKey, EntryPoint, Judge, Verdict},
     manifest::ManifestError,
     record::{Argument, CorpusKind, Evaluation, LedgerRedeemers, Record, RecordId, Redeemers},
 };
@@ -580,7 +580,7 @@ pub struct ContextTally {
 /// The cell of the field a difference line names, its path's last component.
 fn field_cell(line: &str) -> Option<CellKey> {
     let field = line.split(' ').find_map(|w| w.strip_prefix("field="))?;
-    Some(CellKey::new("field", field.rsplit('.').next()?))
+    Some(CellKey::new(Axis::Field, field.rsplit('.').next()?))
 }
 
 impl ContextTally {
@@ -599,8 +599,8 @@ impl ContextTally {
         let row = lines.peek().is_none().then_some(None);
         for line in lines.chain(row) {
             let mut cells = key.cells();
-            cells.extend(language.map(|l| CellKey::new("language", l)));
-            cells.push(CellKey::new("answer", answer));
+            cells.extend(language.map(|l| CellKey::new(Axis::Language, l)));
+            cells.push(CellKey::new(Axis::Answer, answer));
             cells.extend(line.as_deref().and_then(field_cell));
             let detail = match line {
                 Some(line) => format!("{key} {line}"),

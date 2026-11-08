@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ledger_oracle_judge::{
-    judgement::{self, CellKey, EntryPoint, Judge, Outcome, Subject, Verdict},
+    judgement::{self, Axis, CellKey, EntryPoint, Judge, Outcome, Subject, Verdict},
     record::RecordId,
 };
 use pallas::{
@@ -278,7 +278,7 @@ impl Coverage {
                     judge: Judge::Construct,
                     entry: EntryPoint::SubmitTx,
                     subject: Subject::Selection,
-                    cells: vec![CellKey::new("construct", &name)],
+                    cells: vec![CellKey::new(Axis::Construct, &name)],
                     outcome: Outcome::Disagree("uncovered".to_string()),
                 }),
             }

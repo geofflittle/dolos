@@ -39,7 +39,7 @@ use ledger_oracle_judge::{
     corpus::{self, Corpus},
     cost::CostTallies,
     eval::{ledger_rows, Answer, EvalKnown, EvalTally, Layer, TxKnown},
-    judgement::{self, CellKey, EntryPoint, Finding, Judge, RunVerdict},
+    judgement::{self, Axis, CellKey, EntryPoint, Finding, Judge, RunVerdict},
     manifest::{self, Candidates, Declared, Feature, Known, KnownList, Locus},
     parallel::in_parallel,
     record::{CorpusKind, LedgerOutcome, PParams, Phase2, Record, RecordId, UtxoEntry},
@@ -196,7 +196,7 @@ async fn compare_utxos<'a>(
         tally.add(verdict.agrees() && fields.is_empty(), || {
             let shown = show_input(input);
             let mut cells = vec![verdict.cell()];
-            cells.extend(fields.iter().map(|f| CellKey::new("field", f)));
+            cells.extend(fields.iter().map(|f| CellKey::new(Axis::Field, f)));
             let detail = match fields.is_empty() {
                 true => format!("input={shown} {verdict}"),
                 false => format!("input={shown} {verdict} fields={}", fields.iter().join(",")),
@@ -448,7 +448,7 @@ fn a_selection_fails_on_a_fee_disagreement_alone() {
     assert!(passes(&selection));
     let finding = Finding::new(
         supp(1),
-        vec![CellKey::new("answer", "differ")],
+        vec![CellKey::new(Axis::Answer, "differ")],
         "ledger=7 dolos=8",
     );
     selection.cost.fee.add(false, || finding);
@@ -535,6 +535,8 @@ struct Manifests {
 
 impl Manifests {
     fn committed() -> Self {
+        // An arm catch naming no judge or axis fails every run here.
+        manifest::catches().unwrap_or_else(|e| panic!("{e}"));
         Manifests {
             declared: manifest::declared().unwrap_or_else(|e| panic!("{e}")),
             known: manifest::known().unwrap_or_else(|e| panic!("{e}")).records,
@@ -963,7 +965,7 @@ async fn compare_datums(
                 (verdict.agrees(), verdict.to_string(), verdict.cell())
             }
             ExpectedDatum::Unwitnessed => {
-                let cell = CellKey::new("datum", "unwitnessed");
+                let cell = CellKey::new(Axis::Datum, "unwitnessed");
                 match served {
                     None => (true, "unwitnessed dolos=none".to_string(), cell),
                     Some(bytes) => {
@@ -1261,7 +1263,7 @@ async fn compare_read_tx(
             }
         };
         tally.add(agrees, || {
-            let cells = vec![CellKey::new("tx", name.kind())];
+            let cells = vec![CellKey::new(Axis::Tx, name.kind())];
             Finding::new(id, cells, format!("{name} ledger={shown} dolos={dolos}"))
         });
     }
@@ -1382,7 +1384,7 @@ async fn compare_scripts(
         };
         tally.add(agrees, || {
             let detail = format!("script={} ledger={shown} dolos={dolos}", hex::encode(hash));
-            Finding::new(id, vec![CellKey::new("ledger", held(&ledger))], detail)
+            Finding::new(id, vec![CellKey::new(Axis::Ledger, held(&ledger))], detail)
         });
     }
 }
@@ -1472,7 +1474,7 @@ async fn compare_plutus_data(
         };
         tally.add(agrees, || {
             let detail = format!("datum={} ledger={shown} dolos={dolos}", hex::encode(hash));
-            Finding::new(id, vec![CellKey::new("ledger", held(&ledger))], detail)
+            Finding::new(id, vec![CellKey::new(Axis::Ledger, held(&ledger))], detail)
         });
     }
 }
@@ -1598,7 +1600,7 @@ fn compare_served(
                 }
                 InputOrigin::AbsentFromPre => {
                     tally.add(false, || {
-                        let cells = vec![CellKey::new("input", "absent_from_pre")];
+                        let cells = vec![CellKey::new(Axis::Input, "absent_from_pre")];
                         Finding::new(id, cells, format!("absent_from_pre input={shown}"))
                     });
                     continue;
@@ -1616,7 +1618,7 @@ fn compare_served(
             let failures = served_verdicts(id, &hash, &input, &ledger.0, services);
             tally.add(failures.is_empty(), || {
                 let services = failures.values().flatten();
-                let cells = services.map(|s| CellKey::new("service", s));
+                let cells = services.map(|s| CellKey::new(Axis::Service, s));
                 let lines = failures.iter().map(|(verdict, services)| {
                     let mut names = services.iter().map(Service::to_string);
                     let names = names.join(",");
@@ -1753,13 +1755,13 @@ async fn sweep(
             .unwrap_or_else(|e| panic!("RUN {id} drop pending {e}"));
         if let Err(e) = rolled_back {
             state.undo.add(false, || {
-                let cells = vec![CellKey::new("rollback", "refused")];
+                let cells = vec![CellKey::new(Axis::Rollback, "refused")];
                 Finding::new(id, cells, format!("rollback to={to} {e}"))
             });
             return;
         }
         let rollback = |rid: RecordId, member: &'static str| {
-            let cells = vec![CellKey::new("rollback", member)];
+            let cells = vec![CellKey::new(Axis::Rollback, member)];
             Finding::new(rid, cells, format!("{member}_after_rollback_to={to}"))
         };
         for (rid, hash) in &held {
@@ -1880,7 +1882,7 @@ async fn judge_run(
     let served = read_params(&seeded.domain).await;
     let expected = (edits.expected_params)(run.pparams());
     params::compare(&expected, &served, &mut judged.state.params, |key, d| {
-        Finding::new(id, vec![CellKey::new("param", key)], d)
+        Finding::new(id, vec![CellKey::new(Axis::Param, key)], d)
     });
     let (blocks, run_accounts) =
         validate_run(&seeded.domain, kind, run, manifests, edits, ids, judged).await;

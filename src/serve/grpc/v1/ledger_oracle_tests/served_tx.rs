@@ -10,7 +10,7 @@ use itertools::Itertools as _;
 use ledger_oracle_judge::{
     compare::Tally,
     eval::{Layer, WireFee},
-    judgement::{CellKey, Finding},
+    judgement::{Axis, CellKey, Finding},
     record::{CorpusKind, LedgerOutcome, RecordId},
 };
 use pallas::{
@@ -439,7 +439,7 @@ fn add(
     ledger: &LedgerTx,
     answer: Answer<MappedTx>,
 ) {
-    let answer_cell = |member: &str| CellKey::new("answer", member);
+    let answer_cell = |member: &str| CellKey::new(Axis::Answer, member);
     let (agrees, dolos, mut cells) = match answer {
         Answer::Mapped(mapped) => {
             let differing = differing(ledger, &mapped);
@@ -450,7 +450,7 @@ fn add(
             let dolos = dolos.join(" ");
             let shown = format!("differing={fields} ledger=[{ledger}] dolos=[{dolos}]");
             let mut cells = vec![answer_cell("differ")];
-            cells.extend(differing.iter().map(|(f, _, _)| CellKey::new("field", f)));
+            cells.extend(differing.iter().map(|(f, _, _)| CellKey::new(Axis::Field, f)));
             (differing.is_empty(), shown, cells)
         }
         Answer::Absent => (false, "dolos=none".to_string(), vec![answer_cell("none")]),
@@ -465,8 +465,8 @@ fn add(
             vec![answer_cell("panicked")],
         ),
     };
-    cells.insert(0, CellKey::new("layer", layer));
-    cells.insert(1, CellKey::new("tx", name.kind()));
+    cells.insert(0, CellKey::new(Axis::Layer, layer));
+    cells.insert(1, CellKey::new(Axis::Tx, name.kind()));
     tally.add(agrees, || {
         Finding::new(id, cells, format!("{layer} {name} {dolos}"))
     });

@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::{
     compare::Tally,
-    judgement::{self, CellKey, EntryPoint, Finding, Judge},
+    judgement::{self, Axis, CellKey, EntryPoint, Finding, Judge},
     record::{LedgerOutcome, RecordId},
 };
 
@@ -36,11 +36,11 @@ impl CostTallies {
         let agrees = node.as_ref() == Ok(&ledger);
         self.fee.add(agrees, || match &node {
             Ok(n) => {
-                let cells = vec![CellKey::new("answer", "differ")];
+                let cells = vec![CellKey::new(Axis::Answer, "differ")];
                 Finding::new(id, cells, format!("ledger={ledger} dolos={n}"))
             }
             Err(e) => {
-                let cells = vec![CellKey::new("answer", "none")];
+                let cells = vec![CellKey::new(Axis::Answer, "none")];
                 Finding::new(id, cells, format!("ledger={ledger} dolos=none {e}"))
             }
         });
