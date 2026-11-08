@@ -35,21 +35,6 @@ impl Side {
     }
 }
 
-/// A side a rule lacks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Gap {
-    RefusedOnly,
-    AcceptedOnly,
-    Neither,
-}
-
-/// The sides a table row declares its rule has, with the reason for a side it lacks.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Declared {
-    Both,
-    Lacks { gap: Gap, why: String },
-}
-
 /// The ledger accepted transactions whose acceptance a rule's check passes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reads {
@@ -63,7 +48,6 @@ pub enum Entry {
     Ruled {
         leaves: BTreeSet<String>,
         reads: Reads,
-        declared: Declared,
     },
     Unrepresentable {
         why: String,
@@ -98,7 +82,7 @@ pub fn ledger_answer(outcome: &LedgerOutcome) -> String {
     }
 }
 
-/// Reads the reason after `because` that a row lacking a side or a ledger counterpart gives.
+/// Reads the reason after `because` that a row lacking a ledger counterpart gives.
 fn reason(words: &str) -> Result<(&str, String), String> {
     let (before, why) = words
         .split_once(" because ")
@@ -109,21 +93,6 @@ fn reason(words: &str) -> Result<(&str, String), String> {
     }
 }
 
-/// Reads the sides a row declares.
-fn declared(words: &str) -> Result<Declared, String> {
-    if words == "both" {
-        return Ok(Declared::Both);
-    }
-    let (side, why) = reason(words)?;
-    let gap = match side {
-        "refused_only" => Gap::RefusedOnly,
-        "accepted_only" => Gap::AcceptedOnly,
-        "neither" => Gap::Neither,
-        other => return Err(format!("unknown side {other}")),
-    };
-    Ok(Declared::Lacks { gap, why })
-}
-
 /// Reads one rule row after its answer.
 fn entry(cells: &[&str]) -> Result<Entry, String> {
     match cells {
@@ -131,7 +100,7 @@ fn entry(cells: &[&str]) -> Result<Entry, String> {
             ("unrepresentable", why) => Ok(Entry::Unrepresentable { why }),
             (other, _) => Err(format!("expected unrepresentable, found {other}")),
         },
-        [leaves, reads, side] => {
+        [leaves, reads] => {
             let leaves = leaves
                 .strip_prefix("leaves ")
                 .ok_or(format!("expected leaves, found {leaves}"))?;
@@ -149,17 +118,13 @@ fn entry(cells: &[&str]) -> Result<Entry, String> {
                 ),
                 None => return Err(format!("expected reads, found {reads}")),
             };
-            Ok(Entry::Ruled {
-                leaves,
-                reads,
-                declared: declared(side)?,
-            })
+            Ok(Entry::Ruled { leaves, reads })
         }
-        _ => Err("expected leaves, reads and a side, or unrepresentable".to_string()),
+        _ => Err("expected leaves and reads, or unrepresentable".to_string()),
     }
 }
 
-/// Reads the rule table, one `<answer> | leaves <L,...> | reads <every or fields> | <side>` row, `<answer> | unrepresentable because <why>` row or `known <record> | <answer> | <ledger answer>` row per line.
+/// Reads the rule table, one `<answer> | leaves <L,...> | reads <every or fields>` row, `<answer> | unrepresentable because <why>` row or `known <record> | <answer> | <ledger answer>` row per line.
 pub fn parse(file: &'static str, text: &str) -> Result<Rules, ManifestError> {
     let mut rules = Rules::default();
     let lines = text.lines().enumerate().map(|(i, l)| (i + 1, l.trim()));
@@ -338,36 +303,19 @@ impl Rules {
         Ok(())
     }
 
-    /// The coverage members of the table, each side of each rule, a side its row lacks excluded for the row's reason.
+    /// The coverage members of the table, each side of each rule.
     pub fn members(&self) -> Vec<Member> {
         let mut members = Vec::new();
         for (answer, entry) in &self.entries {
-            let member = |side: Side, lacks: Option<&String>| Member {
-                cell: side.cell(answer),
-                reach: match lacks {
-                    None => Reach::Counted,
-                    Some(why) => Reach::Excluded {
-                        reason: why.clone(),
-                        command: format!("grep -nF '{answer} |' test_data/ledger-oracle/{FILE}"),
-                    },
-                },
+            let sides: &[Side] = match entry {
+                Entry::Unrepresentable { .. } => &[Side::Unrepresentable],
+                Entry::Ruled { .. } => &[Side::Refused, Side::Accepted],
             };
-            let (refused, accepted) = match entry {
-                Entry::Unrepresentable { .. } => {
-                    members.push(member(Side::Unrepresentable, None));
-                    continue;
-                }
-                Entry::Ruled { declared, .. } => match declared {
-                    Declared::Both => (None, None),
-                    Declared::Lacks { gap, why } => match gap {
-                        Gap::RefusedOnly => (None, Some(why)),
-                        Gap::AcceptedOnly => (Some(why), None),
-                        Gap::Neither => (Some(why), Some(why)),
-                    },
-                },
-            };
-            members.push(member(Side::Refused, refused));
-            members.push(member(Side::Accepted, accepted));
+            let cells = sides.iter().map(|side| side.cell(answer));
+            members.extend(cells.map(|cell| Member {
+                cell,
+                reach: Reach::Counted,
+            }));
         }
         members
     }
@@ -430,10 +378,10 @@ mod tests {
     };
 
     const TABLE: &str = "\
-refused[PostAlonzo(FeeBelowMin)] | leaves FeeTooSmallUTxO | reads every | both
-refused[DijkstraInvalidCertificate(\"refund\")] | leaves RefundIncorrectDELEG | reads sub.k4 | refused_only because no accepted record deregisters
-refused[DijkstraInvalidCertificate(\"registration deposit\")] | leaves DepositIncorrectDELEG | reads top.k4 | both
-refused[DijkstraInvalidMetadata] | leaves DecoderErrorDeserialiseFailure | reads top.aux,sub.aux | neither because no record holds metadata
+refused[PostAlonzo(FeeBelowMin)] | leaves FeeTooSmallUTxO | reads every
+refused[DijkstraInvalidCertificate(\"refund\")] | leaves RefundIncorrectDELEG | reads sub.k4
+refused[DijkstraInvalidCertificate(\"registration deposit\")] | leaves DepositIncorrectDELEG | reads top.k4
+refused[DijkstraInvalidMetadata] | leaves DecoderErrorDeserialiseFailure | reads top.aux,sub.aux
 unsupported[witness fields] | unrepresentable because the native validator does not decode them
 ";
 
@@ -522,16 +470,14 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         (lines, out.failing.iter().map(Verdict::to_string).collect())
     }
 
-    /// The coverage lines of the table's members over `tally`, each counted side committed at one.
-    fn covered(rules: &Rules, tally: &RuleTally) -> Vec<String> {
+    /// The coverage lines of the table's members over `tally`, each counted side committed at `count`.
+    fn covered(rules: &Rules, tally: &RuleTally, count: usize) -> Vec<String> {
         let mut out = judgement::Tally::default();
         rules.report(tally, true, &mut out);
-        let counted = rules
-            .members()
-            .into_iter()
-            .filter(|m| m.reach == Reach::Counted);
-        let committed = counted.map(|m| (m.cell.to_string(), 1)).collect();
-        coverage::table(&rules.members(), &committed, &mut out)
+        let members = rules.members();
+        let counted = members.iter().filter(|m| m.reach == Reach::Counted);
+        let committed = counted.map(|m| (m.cell.to_string(), count));
+        coverage::table(&members, &committed.collect(), &mut out)
     }
 
     #[test]
@@ -561,29 +507,17 @@ unsupported[witness fields] | unrepresentable because the native validator does 
     }
 
     #[test]
-    fn rules_on_their_declared_sides_cover_the_table_and_a_side_a_row_lacks_is_excluded() {
+    fn a_side_no_record_holds_is_a_gap_and_passes_at_a_committed_zero() {
         let rules = rules(TABLE);
-        let lines = covered(&rules, &every_side(&rules));
+        let lines = covered(&rules, &every_side(&rules), 0);
         assert_eq!(lines.last().unwrap(), "coverage=PASS", "{lines:#?}");
         assert!(lines.contains(&format!(
-            "COVERAGE rule:refused[{}].accepted records=0 committed=none excluded \
-             no accepted record deregisters command: grep -nF 'refused[{REFUND}] |' \
-             test_data/ledger-oracle/phase1-rules.txt",
+            "COVERAGE rule:refused[{}].accepted records=0 committed=0 gap",
             REFUND.replace(' ', "_")
         )));
-    }
-
-    #[test]
-    fn a_record_on_a_side_its_row_lacks_fails_the_coverage_table() {
-        let rules = rules(TABLE);
-        let mut tally = every_side(&rules);
-        let metadata = dolos("DijkstraInvalidMetadata");
-        let ledger = refused(&["DecoderErrorDeserialiseFailure"]);
-        judge(&rules, 6, &ledger, &metadata, &mut tally);
-        let lines = covered(&rules, &tally);
-        assert_eq!(
-            lines.last().unwrap(),
-            "coverage=FAIL rule:refused[DijkstraInvalidMetadata].refused"
+        assert!(
+            !lines.iter().any(|l| l.contains(" excluded ")),
+            "{lines:#?}"
         );
     }
 
@@ -651,12 +585,12 @@ unsupported[witness fields] | unrepresentable because the native validator does 
     }
 
     #[test]
-    fn a_declared_side_no_record_holds_fails_the_coverage_table_below_its_committed_count() {
+    fn a_side_below_its_committed_count_fails_the_coverage_table() {
         let rules = rules(TABLE);
         let mut tally = RuleTally::default();
         let fee = dolos("PostAlonzo(FeeBelowMin)");
         judge(&rules, 1, &refused(&["FeeTooSmallUTxO"]), &fee, &mut tally);
-        let lines = covered(&rules, &tally);
+        let lines = covered(&rules, &tally, 1);
         let last = lines.last().unwrap();
         let failed: Vec<&str> = last
             .trim_start_matches("coverage=FAIL ")
@@ -713,22 +647,21 @@ unsupported[witness fields] | unrepresentable because the native validator does 
     }
 
     #[test]
-    fn a_row_lacking_a_side_without_a_reason_does_not_parse() {
-        let row =
-            "refused[PostAlonzo(FeeBelowMin)] | leaves FeeTooSmallUTxO | reads every | neither";
+    fn a_row_with_a_side_cell_listed_twice_or_without_leaves_does_not_parse() {
+        let row = "refused[PostAlonzo(FeeBelowMin)] | leaves FeeTooSmallUTxO | reads every | both";
         let error = parse("phase1-rules.txt", row).unwrap_err();
         assert_eq!(error.line, 1);
-        let twice =
-            format!("{TABLE}refused[PostAlonzo(FeeBelowMin)] | leaves A | reads every | both");
+        let twice = format!("{TABLE}refused[PostAlonzo(FeeBelowMin)] | leaves A | reads every");
         let error = parse("phase1-rules.txt", &twice).unwrap_err();
         assert_eq!(error.line, 6);
-        let empty = "refused[PostAlonzo(FeeBelowMin)] | leaves | reads every | both";
+        let empty = "refused[PostAlonzo(FeeBelowMin)] | leaves | reads every";
         assert!(parse("phase1-rules.txt", empty).is_err());
     }
 
     #[test]
     fn a_row_naming_a_leaf_without_a_refusal_class_does_not_parse() {
-        let row = "refused[PostAlonzo(FeeBelowMin)] | leaves FeeTooSmallUTxO,FeeTooSmall | reads every | both";
+        let row =
+            "refused[PostAlonzo(FeeBelowMin)] | leaves FeeTooSmallUTxO,FeeTooSmall | reads every";
         let error = parse("phase1-rules.txt", row).unwrap_err();
         assert!(error.reason.contains("FeeTooSmall "), "{error}");
         assert!(parse("phase1-rules.txt", TABLE).is_ok());

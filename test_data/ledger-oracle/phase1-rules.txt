@@ -1,158 +1,158 @@
-refused[CborDecodingError] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom,DecoderErrorLeftover | reads every | both
-refused[DecodingError] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom,DecoderErrorLeftover | reads every | accepted_only because no record decodes as CBOR but not as a Dijkstra transaction
-refused[PostAlonzo(AddressDecoding)] | leaves DecoderErrorDeserialiseFailure | reads top.k1,sub.k1 | both
-refused[PostAlonzo(BlockExceedsValInt)] | leaves OutsideValidityIntervalUTxO,SubOutsideValidityIntervalUTxO | reads top.k3,sub.k3 | both
-refused[PostAlonzo(BlockPrecedesValInt)] | leaves OutsideValidityIntervalUTxO,SubOutsideValidityIntervalUTxO | reads top.k8,sub.k8 | both
-refused[PostAlonzo(CollateralAnnotation)] | leaves IncorrectTotalCollateralField | reads top.k17 | both
-refused[PostAlonzo(CollateralMinLovelace)] | leaves InsufficientCollateral | reads top.k13 | both
-refused[PostAlonzo(CollateralMissing)] | leaves NoCollateralInputs | reads top.w5 | both
-refused[PostAlonzo(CollateralNotInUTxO)] | leaves BadInputsUTxO | reads top.k13 | both
-refused[PostAlonzo(CollateralNotVKeyLocked)] | leaves ScriptsNotPaidUTxO | reads top.k13 | both
-refused[PostAlonzo(DatumMissing)] | leaves MissingRequiredDatums,SubMissingRequiredDatums | reads top.w5,sub.w5 | both
-refused[PostAlonzo(FeeBelowMin)] | leaves FeeTooSmallUTxO | reads every | both
+refused[CborDecodingError] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom,DecoderErrorLeftover | reads every
+refused[DecodingError] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom,DecoderErrorLeftover | reads every
+refused[PostAlonzo(AddressDecoding)] | leaves DecoderErrorDeserialiseFailure | reads top.k1,sub.k1
+refused[PostAlonzo(BlockExceedsValInt)] | leaves OutsideValidityIntervalUTxO,SubOutsideValidityIntervalUTxO | reads top.k3,sub.k3
+refused[PostAlonzo(BlockPrecedesValInt)] | leaves OutsideValidityIntervalUTxO,SubOutsideValidityIntervalUTxO | reads top.k8,sub.k8
+refused[PostAlonzo(CollateralAnnotation)] | leaves IncorrectTotalCollateralField | reads top.k17
+refused[PostAlonzo(CollateralMinLovelace)] | leaves InsufficientCollateral | reads top.k13
+refused[PostAlonzo(CollateralMissing)] | leaves NoCollateralInputs | reads top.w5
+refused[PostAlonzo(CollateralNotInUTxO)] | leaves BadInputsUTxO | reads top.k13
+refused[PostAlonzo(CollateralNotVKeyLocked)] | leaves ScriptsNotPaidUTxO | reads top.k13
+refused[PostAlonzo(DatumMissing)] | leaves MissingRequiredDatums,SubMissingRequiredDatums | reads top.w5,sub.w5
+refused[PostAlonzo(FeeBelowMin)] | leaves FeeTooSmallUTxO | reads every
 refused[PostAlonzo(InputDecoding)] | unrepresentable because a resolved input is an output the ledger decoded, which holds no stake address and no Byron payload that fails to decode
-refused[PostAlonzo(InputNotInUTxO)] | leaves BadInputsUTxO,SubBadInputsUTxO | reads every | both
-refused[PostAlonzo(MaxTxSizeExceeded)] | leaves MaxTxSizeUTxO | reads every | both
-refused[PostAlonzo(MaxValSizeExceeded)] | leaves OutputTooBigUTxO,SubOutputTooBigUTxO | reads top.k1,sub.k1 | both
-refused[PostAlonzo(MetadataHash)] | leaves ConflictingMetadataHash,MissingTxBodyMetadataHash,MissingTxMetadata,SubConflictingMetadataHash,SubMissingTxBodyMetadataHash,SubMissingTxMetadata | reads top.aux,sub.aux,top.k7,sub.k7 | both
-refused[PostAlonzo(MinLovelaceUnreached)] | leaves BabbageOutputTooSmallUTxO,SubBabbageOutputTooSmallUTxO | reads top.k1,sub.k1 | both
-refused[PostAlonzo(NativeScriptDenial)] | leaves ScriptWitnessNotValidatingUTXOW,SubScriptWitnessNotValidatingUTXOW | reads top.w1,sub.w1 | both
-refused[PostAlonzo(NegativeValue)] | leaves ValueNotConservedUTxO,InsufficientCollateral,FeeTooSmallUTxO | reads every | accepted_only because no record holds amounts whose sum passes 2^64 or whose difference falls below zero
-refused[PostAlonzo(NonLovelaceCollateral)] | leaves CollateralContainsNonADA | reads top.k13 | both
-refused[PostAlonzo(OutputWrongNetworkID)] | leaves WrongNetwork,SubWrongNetwork | reads top.k1,sub.k1 | both
-refused[PostAlonzo(PreservationOfValue)] | leaves ValueNotConservedUTxO,ValueNotConservedInLegacyMode | reads every | both
-refused[PostAlonzo(RedeemerMissing)] | leaves MissingRedeemers,SubMissingRedeemers | reads top.w5,sub.w5 | both
-refused[PostAlonzo(ReferenceInputNotInUTxO)] | leaves BadInputsUTxO,SubBadInputsUTxO | reads top.k18,sub.k18 | both
-refused[PostAlonzo(ReqSignerMissing)] | leaves MissingRequiredGuards | reads top.k14,sub.k14 | both
-refused[PostAlonzo(ScriptIntegrityHash)] | leaves ScriptIntegrityHashMismatch,SubScriptIntegrityHashMismatch | reads top.k11,sub.k11 | both
-refused[PostAlonzo(ScriptWitnessMissing)] | leaves MissingScriptWitnessesUTXOW | reads every | both
-refused[PostAlonzo(TooManyCollaterals)] | leaves TooManyCollateralInputs | reads top.k13 | both
-refused[PostAlonzo(TxExUnitsExceeded)] | leaves ExUnitsTooBigUTxO | reads top.w5,sub.w5 | both
-refused[PostAlonzo(TxInsEmpty)] | leaves InputSetEmptyUTxO,SubInputSetEmptyUTxO | reads every | both
-refused[PostAlonzo(TxWrongNetworkID)] | leaves WrongNetworkInTxBody,SubWrongNetworkInTxBody,WithdrawalAddressesWithWrongNetwork,SubWithdrawalAddressesWithWrongNetwork,DirectDepositAddressesWithWrongNetwork,SubDirectDepositAddressesWithWrongNetwork,WrongNetworkInAccountBalanceIntervals,SubWrongNetworkInAccountBalanceIntervals,WrongNetworkInStartingAccountBalanceIntervals,ProposalProcedureNetworkIdMismatch,TreasuryWithdrawalsNetworkIdMismatch,WrongNetworkPOOL | reads top.k4,sub.k4,top.k5,sub.k5,top.k15,sub.k15,top.k20,sub.k20,top.k25,sub.k25,top.k26,sub.k26,top.k27 | both
+refused[PostAlonzo(InputNotInUTxO)] | leaves BadInputsUTxO,SubBadInputsUTxO | reads every
+refused[PostAlonzo(MaxTxSizeExceeded)] | leaves MaxTxSizeUTxO | reads every
+refused[PostAlonzo(MaxValSizeExceeded)] | leaves OutputTooBigUTxO,SubOutputTooBigUTxO | reads top.k1,sub.k1
+refused[PostAlonzo(MetadataHash)] | leaves ConflictingMetadataHash,MissingTxBodyMetadataHash,MissingTxMetadata,SubConflictingMetadataHash,SubMissingTxBodyMetadataHash,SubMissingTxMetadata | reads top.aux,sub.aux,top.k7,sub.k7
+refused[PostAlonzo(MinLovelaceUnreached)] | leaves BabbageOutputTooSmallUTxO,SubBabbageOutputTooSmallUTxO | reads top.k1,sub.k1
+refused[PostAlonzo(NativeScriptDenial)] | leaves ScriptWitnessNotValidatingUTXOW,SubScriptWitnessNotValidatingUTXOW | reads top.w1,sub.w1
+refused[PostAlonzo(NegativeValue)] | leaves ValueNotConservedUTxO,InsufficientCollateral,FeeTooSmallUTxO | reads every
+refused[PostAlonzo(NonLovelaceCollateral)] | leaves CollateralContainsNonADA | reads top.k13
+refused[PostAlonzo(OutputWrongNetworkID)] | leaves WrongNetwork,SubWrongNetwork | reads top.k1,sub.k1
+refused[PostAlonzo(PreservationOfValue)] | leaves ValueNotConservedUTxO,ValueNotConservedInLegacyMode | reads every
+refused[PostAlonzo(RedeemerMissing)] | leaves MissingRedeemers,SubMissingRedeemers | reads top.w5,sub.w5
+refused[PostAlonzo(ReferenceInputNotInUTxO)] | leaves BadInputsUTxO,SubBadInputsUTxO | reads top.k18,sub.k18
+refused[PostAlonzo(ReqSignerMissing)] | leaves MissingRequiredGuards | reads top.k14,sub.k14
+refused[PostAlonzo(ScriptIntegrityHash)] | leaves ScriptIntegrityHashMismatch,SubScriptIntegrityHashMismatch | reads top.k11,sub.k11
+refused[PostAlonzo(ScriptWitnessMissing)] | leaves MissingScriptWitnessesUTXOW | reads every
+refused[PostAlonzo(TooManyCollaterals)] | leaves TooManyCollateralInputs | reads top.k13
+refused[PostAlonzo(TxExUnitsExceeded)] | leaves ExUnitsTooBigUTxO | reads top.w5,sub.w5
+refused[PostAlonzo(TxInsEmpty)] | leaves InputSetEmptyUTxO,SubInputSetEmptyUTxO | reads every
+refused[PostAlonzo(TxWrongNetworkID)] | leaves WrongNetworkInTxBody,SubWrongNetworkInTxBody,WithdrawalAddressesWithWrongNetwork,SubWithdrawalAddressesWithWrongNetwork,DirectDepositAddressesWithWrongNetwork,SubDirectDepositAddressesWithWrongNetwork,WrongNetworkInAccountBalanceIntervals,SubWrongNetworkInAccountBalanceIntervals,WrongNetworkInStartingAccountBalanceIntervals,ProposalProcedureNetworkIdMismatch,TreasuryWithdrawalsNetworkIdMismatch,WrongNetworkPOOL | reads top.k4,sub.k4,top.k5,sub.k5,top.k15,sub.k15,top.k20,sub.k20,top.k25,sub.k25,top.k26,sub.k26,top.k27
 refused[PostAlonzo(UnknownTxSize)] | unrepresentable because it is a failure to encode a value the validator decoded
-refused[PostAlonzo(UnneededDatum)] | leaves NotAllowedSupplementalDatums,SubNotAllowedSupplementalDatums | reads top.w4,sub.w4 | both
-refused[PostAlonzo(UnneededNativeScript)] | leaves ExtraneousScriptWitnessesUTXOW | reads top.w1,sub.w1 | both
-refused[PostAlonzo(UnneededPlutusV1Script)] | leaves ExtraneousScriptWitnessesUTXOW | reads top.w3,sub.w3 | accepted_only because no record carries a Plutus V1 script it does not run
-refused[PostAlonzo(UnneededPlutusV2Script)] | leaves ExtraneousScriptWitnessesUTXOW | reads top.w6,sub.w6 | both
-refused[PostAlonzo(UnneededPlutusV3Script)] | leaves ExtraneousScriptWitnessesUTXOW | reads top.w7,sub.w7 | both
-refused[PostAlonzo(UnneededRedeemer)] | leaves ExtraRedeemers,SubExtraRedeemers | reads top.w5,sub.w5 | both
+refused[PostAlonzo(UnneededDatum)] | leaves NotAllowedSupplementalDatums,SubNotAllowedSupplementalDatums | reads top.w4,sub.w4
+refused[PostAlonzo(UnneededNativeScript)] | leaves ExtraneousScriptWitnessesUTXOW | reads top.w1,sub.w1
+refused[PostAlonzo(UnneededPlutusV1Script)] | leaves ExtraneousScriptWitnessesUTXOW | reads top.w3,sub.w3
+refused[PostAlonzo(UnneededPlutusV2Script)] | leaves ExtraneousScriptWitnessesUTXOW | reads top.w6,sub.w6
+refused[PostAlonzo(UnneededPlutusV3Script)] | leaves ExtraneousScriptWitnessesUTXOW | reads top.w7,sub.w7
+refused[PostAlonzo(UnneededRedeemer)] | leaves ExtraRedeemers,SubExtraRedeemers | reads top.w5,sub.w5
 refused[PostAlonzo(UnsupportedNativeScript)] | unrepresentable because it is a failure to decode a native script the validator encoded from its decoded form
-refused[PostAlonzo(VKWitnessMissing)] | leaves MissingVKeyWitnessesUTXOW,SubMissingVKeyWitnessesUTXOW | reads every | both
-refused[PostAlonzo(VKWrongSignature)] | leaves InvalidWitnessesUTXOW,SubInvalidWitnessesUTXOW | reads top.w0,sub.w0 | both
+refused[PostAlonzo(VKWitnessMissing)] | leaves MissingVKeyWitnessesUTXOW,SubMissingVKeyWitnessesUTXOW | reads every
+refused[PostAlonzo(VKWrongSignature)] | leaves InvalidWitnessesUTXOW,SubInvalidWitnessesUTXOW | reads top.w0,sub.w0
 refused[DijkstraTime(InvalidHistory)] | unrepresentable because the era time history is node state that no transaction sets
 refused[DijkstraTime(BeforeHistory)] | unrepresentable because the era time history is node state that no transaction sets
 refused[DijkstraTime(Overflow)] | unrepresentable because the era time history is node state that no transaction sets
-refused[DijkstraTime(PastHorizon)] | leaves CollectErrors | reads top.w5,sub.w5 | both
+refused[DijkstraTime(PastHorizon)] | leaves CollectErrors | reads top.w5,sub.w5
 refused[DijkstraLedgerStateUnavailable] | unrepresentable because it reports ledger state the node lacks, which no transaction sets
-refused[DijkstraTreasuryValueMismatch] | leaves DijkstraTreasuryValueMismatch,SubTreasuryValueMismatch | reads top.k21,sub.k21 | both
-refused[DijkstraReferenceScriptsTooLarge] | leaves DijkstraTxRefScriptsSizeTooBig | reads every | both
-refused[DijkstraInputAlreadySpent] | leaves BadInputsUTxO,SubBadInputsUTxO | reads top.k23 | both
-refused[DijkstraInputWithoutDatum] | leaves UnspendableUTxONoDatumHash,SubUnspendableUTxONoDatumHash | reads top.w5,sub.w5 | both
-refused[DijkstraMalformedGuardDatum] | leaves MalformedGuardDatums,SubMalformedGuardDatums | reads top.k24,sub.k24 | both
-refused[DijkstraPointerInCollateralReturn] | leaves PtrPresentInCollateralReturn | reads top.k16 | both
-refused[DijkstraBootstrapAttributesTooLarge] | leaves OutputBootAddrAttrsTooBig,SubOutputBootAddrAttrsTooBig | reads top.k1,sub.k1 | both
-refused[DijkstraInvalidMetadata] | leaves DecoderErrorDeserialiseFailure | reads top.aux,sub.aux | both
-refused[DijkstraMalformedScript] | leaves MalformedScriptWitnesses,SubMalformedScriptWitnesses,MalformedReferenceScripts,SubMalformedReferenceScripts | reads top.w3,sub.w3,top.w6,sub.w6,top.w7,sub.w7,top.w8,sub.w8 | both
-refused[DijkstraInvalidCertificate("account balance is not zero")] | leaves StakeKeyHasNonZeroAccountBalanceDELEG | reads top.k4,sub.k4 | both
-refused[DijkstraInvalidCertificate("already registered")] | leaves DelegAccountAlreadyRegistered | reads top.k4,sub.k4 | both
-refused[DijkstraInvalidCertificate("BLS proof of possession")] | leaves BlsKeyInvalidProofOfPossession | reads top.k4,sub.k4 | both
-refused[DijkstraInvalidCertificate("committee member has resigned")] | leaves DijkstraCommitteeHasPreviouslyResigned | reads top.k4,sub.k4 | both
-refused[DijkstraInvalidCertificate("committee member is unknown")] | leaves DijkstraCommitteeIsUnknown | reads top.k4,sub.k4 | both
-refused[DijkstraInvalidCertificate("delegatee DRep not registered")] | leaves DelegateeDRepNotRegisteredDELEG | reads top.k4,sub.k4 | both
-refused[DijkstraInvalidCertificate("delegatee pool not registered")] | leaves DelegateeStakePoolNotRegisteredDELEG | reads top.k4,sub.k4 | both
-refused[DijkstraInvalidCertificate("DRep already registered")] | leaves DijkstraDRepAlreadyRegistered | reads top.k4,sub.k4 | both
-refused[DijkstraInvalidCertificate("DRep deposit")] | leaves DijkstraDRepIncorrectDeposit | reads top.k4,sub.k4 | both
-refused[DijkstraInvalidCertificate("DRep not registered")] | leaves DijkstraDRepNotRegistered | reads top.k4,sub.k4 | both
-refused[DijkstraInvalidCertificate("DRep refund")] | leaves DijkstraDRepIncorrectRefund | reads top.k4,sub.k4 | both
-refused[DijkstraInvalidCertificate("pool cost below the minimum")] | leaves StakePoolCostTooLowPOOL | reads top.k4,sub.k4 | both
-refused[DijkstraInvalidCertificate("pool not registered")] | leaves StakePoolNotRegisteredOnKeyPOOL | reads top.k4,sub.k4 | both
-refused[DijkstraInvalidCertificate("pool retirement epoch")] | leaves StakePoolRetirementWrongEpochPOOL | reads top.k4,sub.k4 | both
-refused[DijkstraInvalidCertificate("refund")] | leaves RefundIncorrectDELEG | reads top.k4,sub.k4 | both
-refused[DijkstraInvalidCertificate("registration deposit")] | leaves DepositIncorrectDELEG | reads top.k4,sub.k4 | both
-refused[DijkstraInvalidCertificate("VRF key hash already registered")] | leaves VRFKeyHashAlreadyRegistered | reads top.k4,sub.k4 | both
-refused[DijkstraInvalidAccount("balance interval names an unregistered account")] | leaves MissingAccountsInAccountBalanceIntervals,MissingAccountsInStartingAccountBalanceIntervals,SubMissingAccountsInAccountBalanceIntervals | reads top.k26,sub.k26,top.k27 | both
-refused[DijkstraInvalidAccount("balance outside its interval")] | leaves BalancesOutsideAccountBalanceIntervals,BalancesOutsideStartingAccountBalanceIntervals,SubBalancesOutsideAccountBalanceIntervals | reads top.k26,sub.k26,top.k27 | both
-refused[DijkstraInvalidAccount("direct deposit names an unregistered account")] | leaves DirectDepositAccountsMissing,SubDirectDepositAccountsMissing | reads top.k25,sub.k25 | both
-refused[DijkstraInvalidAccount("stake credential not registered")] | leaves StakeKeyNotRegisteredDELEG | reads top.k4,sub.k4 | both
-refused[DijkstraInvalidGovernance("governance action does not exist")] | leaves GovActionsDoNotExist | reads top.k19,sub.k19 | both
-refused[DijkstraInvalidGovernance("committee term too small")] | leaves ExpirationEpochTooSmall | reads top.k20,sub.k20 | both
-refused[DijkstraInvalidGovernance("conflicting committee update")] | leaves ConflictingCommitteeUpdate | reads top.k20,sub.k20 | both
-refused[DijkstraInvalidGovernance("guardrails script hash")] | leaves InvalidGuardrailsScriptHash | reads top.k20,sub.k20 | both
-refused[DijkstraInvalidGovernance("hard fork version cannot follow")] | leaves ProposalCantFollow | reads top.k20,sub.k20 | both
-refused[DijkstraInvalidGovernance("malformed parameter update")] | leaves MalformedProposal | reads top.k20,sub.k20 | both
-refused[DijkstraInvalidGovernance("previous action id")] | leaves InvalidPrevGovActionId | reads top.k20,sub.k20 | both
-refused[DijkstraInvalidGovernance("proposal deposit")] | leaves ProposalDepositIncorrect | reads top.k20,sub.k20 | both
-refused[DijkstraInvalidGovernance("proposal return account not registered")] | leaves ProposalReturnAccountDoesNotExist | reads top.k20,sub.k20 | both
-refused[DijkstraInvalidGovernance("treasury withdrawal account not registered")] | leaves TreasuryWithdrawalReturnAccountsDoNotExist | reads top.k20,sub.k20 | both
-refused[DijkstraInvalidGovernance("unelected committee voter")] | leaves UnelectedCommitteeVoters | reads top.k19,sub.k19 | both
-refused[DijkstraInvalidGovernance("vote on an expired action")] | leaves VotingOnExpiredGovAction | reads top.k19,sub.k19 | both
-refused[DijkstraInvalidGovernance("voter does not exist")] | leaves VotersDoNotExist | reads top.k19,sub.k19 | both
-refused[DijkstraInvalidGovernance("voter may not vote on the action")] | leaves DisallowedVoters | reads top.k19,sub.k19 | both
-refused[DijkstraInvalidGovernance("zero treasury withdrawals")] | leaves ZeroTreasuryWithdrawals | reads top.k20,sub.k20 | both
+refused[DijkstraTreasuryValueMismatch] | leaves DijkstraTreasuryValueMismatch,SubTreasuryValueMismatch | reads top.k21,sub.k21
+refused[DijkstraReferenceScriptsTooLarge] | leaves DijkstraTxRefScriptsSizeTooBig | reads every
+refused[DijkstraInputAlreadySpent] | leaves BadInputsUTxO,SubBadInputsUTxO | reads top.k23
+refused[DijkstraInputWithoutDatum] | leaves UnspendableUTxONoDatumHash,SubUnspendableUTxONoDatumHash | reads top.w5,sub.w5
+refused[DijkstraMalformedGuardDatum] | leaves MalformedGuardDatums,SubMalformedGuardDatums | reads top.k24,sub.k24
+refused[DijkstraPointerInCollateralReturn] | leaves PtrPresentInCollateralReturn | reads top.k16
+refused[DijkstraBootstrapAttributesTooLarge] | leaves OutputBootAddrAttrsTooBig,SubOutputBootAddrAttrsTooBig | reads top.k1,sub.k1
+refused[DijkstraInvalidMetadata] | leaves DecoderErrorDeserialiseFailure | reads top.aux,sub.aux
+refused[DijkstraMalformedScript] | leaves MalformedScriptWitnesses,SubMalformedScriptWitnesses,MalformedReferenceScripts,SubMalformedReferenceScripts | reads top.w3,sub.w3,top.w6,sub.w6,top.w7,sub.w7,top.w8,sub.w8
+refused[DijkstraInvalidCertificate("account balance is not zero")] | leaves StakeKeyHasNonZeroAccountBalanceDELEG | reads top.k4,sub.k4
+refused[DijkstraInvalidCertificate("already registered")] | leaves DelegAccountAlreadyRegistered | reads top.k4,sub.k4
+refused[DijkstraInvalidCertificate("BLS proof of possession")] | leaves BlsKeyInvalidProofOfPossession | reads top.k4,sub.k4
+refused[DijkstraInvalidCertificate("committee member has resigned")] | leaves DijkstraCommitteeHasPreviouslyResigned | reads top.k4,sub.k4
+refused[DijkstraInvalidCertificate("committee member is unknown")] | leaves DijkstraCommitteeIsUnknown | reads top.k4,sub.k4
+refused[DijkstraInvalidCertificate("delegatee DRep not registered")] | leaves DelegateeDRepNotRegisteredDELEG | reads top.k4,sub.k4
+refused[DijkstraInvalidCertificate("delegatee pool not registered")] | leaves DelegateeStakePoolNotRegisteredDELEG | reads top.k4,sub.k4
+refused[DijkstraInvalidCertificate("DRep already registered")] | leaves DijkstraDRepAlreadyRegistered | reads top.k4,sub.k4
+refused[DijkstraInvalidCertificate("DRep deposit")] | leaves DijkstraDRepIncorrectDeposit | reads top.k4,sub.k4
+refused[DijkstraInvalidCertificate("DRep not registered")] | leaves DijkstraDRepNotRegistered | reads top.k4,sub.k4
+refused[DijkstraInvalidCertificate("DRep refund")] | leaves DijkstraDRepIncorrectRefund | reads top.k4,sub.k4
+refused[DijkstraInvalidCertificate("pool cost below the minimum")] | leaves StakePoolCostTooLowPOOL | reads top.k4,sub.k4
+refused[DijkstraInvalidCertificate("pool not registered")] | leaves StakePoolNotRegisteredOnKeyPOOL | reads top.k4,sub.k4
+refused[DijkstraInvalidCertificate("pool retirement epoch")] | leaves StakePoolRetirementWrongEpochPOOL | reads top.k4,sub.k4
+refused[DijkstraInvalidCertificate("refund")] | leaves RefundIncorrectDELEG | reads top.k4,sub.k4
+refused[DijkstraInvalidCertificate("registration deposit")] | leaves DepositIncorrectDELEG | reads top.k4,sub.k4
+refused[DijkstraInvalidCertificate("VRF key hash already registered")] | leaves VRFKeyHashAlreadyRegistered | reads top.k4,sub.k4
+refused[DijkstraInvalidAccount("balance interval names an unregistered account")] | leaves MissingAccountsInAccountBalanceIntervals,MissingAccountsInStartingAccountBalanceIntervals,SubMissingAccountsInAccountBalanceIntervals | reads top.k26,sub.k26,top.k27
+refused[DijkstraInvalidAccount("balance outside its interval")] | leaves BalancesOutsideAccountBalanceIntervals,BalancesOutsideStartingAccountBalanceIntervals,SubBalancesOutsideAccountBalanceIntervals | reads top.k26,sub.k26,top.k27
+refused[DijkstraInvalidAccount("direct deposit names an unregistered account")] | leaves DirectDepositAccountsMissing,SubDirectDepositAccountsMissing | reads top.k25,sub.k25
+refused[DijkstraInvalidAccount("stake credential not registered")] | leaves StakeKeyNotRegisteredDELEG | reads top.k4,sub.k4
+refused[DijkstraInvalidGovernance("governance action does not exist")] | leaves GovActionsDoNotExist | reads top.k19,sub.k19
+refused[DijkstraInvalidGovernance("committee term too small")] | leaves ExpirationEpochTooSmall | reads top.k20,sub.k20
+refused[DijkstraInvalidGovernance("conflicting committee update")] | leaves ConflictingCommitteeUpdate | reads top.k20,sub.k20
+refused[DijkstraInvalidGovernance("guardrails script hash")] | leaves InvalidGuardrailsScriptHash | reads top.k20,sub.k20
+refused[DijkstraInvalidGovernance("hard fork version cannot follow")] | leaves ProposalCantFollow | reads top.k20,sub.k20
+refused[DijkstraInvalidGovernance("malformed parameter update")] | leaves MalformedProposal | reads top.k20,sub.k20
+refused[DijkstraInvalidGovernance("previous action id")] | leaves InvalidPrevGovActionId | reads top.k20,sub.k20
+refused[DijkstraInvalidGovernance("proposal deposit")] | leaves ProposalDepositIncorrect | reads top.k20,sub.k20
+refused[DijkstraInvalidGovernance("proposal return account not registered")] | leaves ProposalReturnAccountDoesNotExist | reads top.k20,sub.k20
+refused[DijkstraInvalidGovernance("treasury withdrawal account not registered")] | leaves TreasuryWithdrawalReturnAccountsDoNotExist | reads top.k20,sub.k20
+refused[DijkstraInvalidGovernance("unelected committee voter")] | leaves UnelectedCommitteeVoters | reads top.k19,sub.k19
+refused[DijkstraInvalidGovernance("vote on an expired action")] | leaves VotingOnExpiredGovAction | reads top.k19,sub.k19
+refused[DijkstraInvalidGovernance("voter does not exist")] | leaves VotersDoNotExist | reads top.k19,sub.k19
+refused[DijkstraInvalidGovernance("voter may not vote on the action")] | leaves DisallowedVoters | reads top.k19,sub.k19
+refused[DijkstraInvalidGovernance("zero treasury withdrawals")] | leaves ZeroTreasuryWithdrawals | reads top.k20,sub.k20
 refused[DijkstraMissingParameters("nonzero price denominator")] | unrepresentable because it names a protocol parameter value, which no transaction under test sets
 refused[DijkstraMissingParameters("reference fee stride")] | unrepresentable because it names a protocol parameter value, which no transaction under test sets
-refused[DijkstraInvalidWithdrawal("account missing from the original state")] | leaves WithdrawalAccountsMissingFromOriginal,SubWithdrawalAccountsMissingFromOriginal | reads top.k5,sub.k5 | both
-refused[DijkstraInvalidWithdrawal("amount exceeds the balance")] | leaves WithdrawalAmountsExceedingOriginalBalance | reads top.k5,sub.k5 | both
-refused[DijkstraInvalidWithdrawal("amount exceeds the original balance")] | leaves WithdrawalAmountsExceedingOriginalBalance | reads top.k5,sub.k5 | both
-refused[DijkstraInvalidWithdrawal("duplicate account")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k5,sub.k5 | accepted_only because no record withdraws from one account twice
-refused[DijkstraInvalidWithdrawal("encoding")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k5,sub.k5 | accepted_only because no record withdraws from an account that does not decode
-refused[DijkstraInvalidWithdrawal("legacy Plutus withdrawals must drain the account")] | leaves WithdrawalAmountsInexactInLegacyMode | reads top.k5,sub.k5 | both
-refused[DijkstraInvalidWithdrawal("unregistered account")] | leaves WithdrawalAccountsMissing,SubWithdrawalAccountsMissing | reads top.k5,sub.k5 | both
-refused[DijkstraMalformed("bootstrap witness")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w2,sub.w2 | both
-refused[DijkstraMalformed("duplicate bootstrap witnesses")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w2,sub.w2 | accepted_only because no record repeats a bootstrap witness
-refused[DijkstraMalformed("duplicate datums")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w4,sub.w4 | both
-refused[DijkstraMalformed("duplicate guards")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k14,sub.k14 | both
-refused[DijkstraMalformed("duplicate key witnesses")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w0,sub.w0 | both
-refused[DijkstraMalformed("duplicate required top-level guards")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k24,sub.k24 | both
-refused[DijkstraMalformed("empty account balance intervals")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k26,sub.k26 | both
-refused[DijkstraMalformed("empty certificates")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k4,sub.k4 | accepted_only because no record holds an empty certificate set
-refused[DijkstraMalformed("empty collateral inputs")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k13 | accepted_only because no record holds an empty collateral input set
-refused[DijkstraMalformed("empty direct deposits")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k25,sub.k25 | both
-refused[DijkstraMalformed("empty proposal procedures")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k20,sub.k20 | accepted_only because no record holds an empty proposal procedure set
-refused[DijkstraMalformed("empty redeemers")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w5,sub.w5 | both
-refused[DijkstraMalformed("empty reference inputs")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k18,sub.k18 | accepted_only because no record holds an empty reference input set
-refused[DijkstraMalformed("empty required top-level guards")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k24,sub.k24 | both
-refused[DijkstraMalformed("empty starting account balance intervals")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k27 | accepted_only because no record holds an empty starting account balance interval map
-refused[DijkstraMalformed("empty subtransactions")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k23 | accepted_only because no record holds an empty subtransaction list
-refused[DijkstraMalformed("empty voting procedures")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k19,sub.k19 | both
-refused[DijkstraMalformed("empty withdrawals")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k5,sub.k5 | both
-refused[DijkstraMalformed("execution units")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w5,sub.w5 | both
-refused[DijkstraMalformed("key witness")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w0,sub.w0 | both
-refused[DijkstraMalformed("multi-asset value")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k1,sub.k1,top.k9,sub.k9 | both
-refused[DijkstraMalformed("protocol parameter update")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k20,sub.k20 | accepted_only because no record proposes a parameter update the decoder refuses
-refused[DijkstraMalformed("zero donation")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k22,sub.k22 | both
-refused[DijkstraScriptContext("account balance intervals")] | leaves CollectErrors | reads top.w5,sub.w5 | accepted_only because no record runs a script beside account balance intervals the context cannot hold
-refused[DijkstraScriptContext("Byron address")] | leaves CollectErrors | reads top.w5,sub.w5 | both
-refused[DijkstraScriptContext("certificate kind")] | leaves CollectErrors | reads top.w5,sub.w5 | both
-refused[DijkstraScriptContext("cost model")] | leaves CollectErrors | reads top.w5,sub.w5 | both
-refused[DijkstraScriptContext("direct deposits")] | leaves CollectErrors | reads top.w5,sub.w5 | accepted_only because no record runs a script beside direct deposits the context cannot hold
-refused[DijkstraScriptContext("inline datum")] | leaves CollectErrors | reads top.w5,sub.w5 | both
-refused[DijkstraScriptContext("inputs that are also reference inputs")] | leaves CollectErrors | reads top.w5,sub.w5 | both
-refused[DijkstraScriptContext("Plutus V1 to V3 script in a subtransaction")] | leaves CollectErrors | reads top.w5,sub.w5 | accepted_only because no record runs a Plutus V1 to V3 script in a subtransaction
-refused[DijkstraScriptContext("pointer address")] | leaves CollectErrors | reads top.w5,sub.w5 | accepted_only because no record runs a script beside a pointer address
-refused[DijkstraScriptContext("proposal procedures")] | leaves CollectErrors | reads top.w5,sub.w5 | both
-refused[DijkstraScriptContext("required top-level guards")] | leaves CollectErrors | reads top.w5,sub.w5 | both
-refused[DijkstraScriptContext("reward account address")] | leaves CollectErrors | reads top.w5,sub.w5 | accepted_only because no record runs a script beside a reward account address the context cannot hold
-refused[DijkstraScriptContext("script guards")] | leaves CollectErrors | reads top.w5,sub.w5 | both
-refused[DijkstraScriptContext("treasury donation")] | leaves CollectErrors | reads top.w5,sub.w5 | both
-refused[DijkstraScriptContext("treasury value")] | leaves CollectErrors | reads top.w5,sub.w5 | both
-refused[DijkstraScriptContext("votes")] | leaves CollectErrors | reads top.w5,sub.w5 | both
-unsupported[auxiliary fields] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.aux,sub.aux | both
+refused[DijkstraInvalidWithdrawal("account missing from the original state")] | leaves WithdrawalAccountsMissingFromOriginal,SubWithdrawalAccountsMissingFromOriginal | reads top.k5,sub.k5
+refused[DijkstraInvalidWithdrawal("amount exceeds the balance")] | leaves WithdrawalAmountsExceedingOriginalBalance | reads top.k5,sub.k5
+refused[DijkstraInvalidWithdrawal("amount exceeds the original balance")] | leaves WithdrawalAmountsExceedingOriginalBalance | reads top.k5,sub.k5
+refused[DijkstraInvalidWithdrawal("duplicate account")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k5,sub.k5
+refused[DijkstraInvalidWithdrawal("encoding")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k5,sub.k5
+refused[DijkstraInvalidWithdrawal("legacy Plutus withdrawals must drain the account")] | leaves WithdrawalAmountsInexactInLegacyMode | reads top.k5,sub.k5
+refused[DijkstraInvalidWithdrawal("unregistered account")] | leaves WithdrawalAccountsMissing,SubWithdrawalAccountsMissing | reads top.k5,sub.k5
+refused[DijkstraMalformed("bootstrap witness")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w2,sub.w2
+refused[DijkstraMalformed("duplicate bootstrap witnesses")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w2,sub.w2
+refused[DijkstraMalformed("duplicate datums")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w4,sub.w4
+refused[DijkstraMalformed("duplicate guards")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k14,sub.k14
+refused[DijkstraMalformed("duplicate key witnesses")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w0,sub.w0
+refused[DijkstraMalformed("duplicate required top-level guards")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k24,sub.k24
+refused[DijkstraMalformed("empty account balance intervals")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k26,sub.k26
+refused[DijkstraMalformed("empty certificates")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k4,sub.k4
+refused[DijkstraMalformed("empty collateral inputs")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k13
+refused[DijkstraMalformed("empty direct deposits")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k25,sub.k25
+refused[DijkstraMalformed("empty proposal procedures")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k20,sub.k20
+refused[DijkstraMalformed("empty redeemers")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w5,sub.w5
+refused[DijkstraMalformed("empty reference inputs")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k18,sub.k18
+refused[DijkstraMalformed("empty required top-level guards")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k24,sub.k24
+refused[DijkstraMalformed("empty starting account balance intervals")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k27
+refused[DijkstraMalformed("empty subtransactions")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k23
+refused[DijkstraMalformed("empty voting procedures")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k19,sub.k19
+refused[DijkstraMalformed("empty withdrawals")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k5,sub.k5
+refused[DijkstraMalformed("execution units")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w5,sub.w5
+refused[DijkstraMalformed("key witness")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w0,sub.w0
+refused[DijkstraMalformed("multi-asset value")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k1,sub.k1,top.k9,sub.k9
+refused[DijkstraMalformed("protocol parameter update")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k20,sub.k20
+refused[DijkstraMalformed("zero donation")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k22,sub.k22
+refused[DijkstraScriptContext("account balance intervals")] | leaves CollectErrors | reads top.w5,sub.w5
+refused[DijkstraScriptContext("Byron address")] | leaves CollectErrors | reads top.w5,sub.w5
+refused[DijkstraScriptContext("certificate kind")] | leaves CollectErrors | reads top.w5,sub.w5
+refused[DijkstraScriptContext("cost model")] | leaves CollectErrors | reads top.w5,sub.w5
+refused[DijkstraScriptContext("direct deposits")] | leaves CollectErrors | reads top.w5,sub.w5
+refused[DijkstraScriptContext("inline datum")] | leaves CollectErrors | reads top.w5,sub.w5
+refused[DijkstraScriptContext("inputs that are also reference inputs")] | leaves CollectErrors | reads top.w5,sub.w5
+refused[DijkstraScriptContext("Plutus V1 to V3 script in a subtransaction")] | leaves CollectErrors | reads top.w5,sub.w5
+refused[DijkstraScriptContext("pointer address")] | leaves CollectErrors | reads top.w5,sub.w5
+refused[DijkstraScriptContext("proposal procedures")] | leaves CollectErrors | reads top.w5,sub.w5
+refused[DijkstraScriptContext("required top-level guards")] | leaves CollectErrors | reads top.w5,sub.w5
+refused[DijkstraScriptContext("reward account address")] | leaves CollectErrors | reads top.w5,sub.w5
+refused[DijkstraScriptContext("script guards")] | leaves CollectErrors | reads top.w5,sub.w5
+refused[DijkstraScriptContext("treasury donation")] | leaves CollectErrors | reads top.w5,sub.w5
+refused[DijkstraScriptContext("treasury value")] | leaves CollectErrors | reads top.w5,sub.w5
+refused[DijkstraScriptContext("votes")] | leaves CollectErrors | reads top.w5,sub.w5
+unsupported[auxiliary fields] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.aux,sub.aux
 unsupported[auxiliary scripts] | unrepresentable because it marks a construct the validator does not implement rather than a ledger rule
-unsupported[body fields] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads every | both
-unsupported[duplicate collateral inputs] | leaves DecoderErrorDeserialiseFailure | reads top.k13 | both
-unsupported[duplicate inputs] | leaves DecoderErrorDeserialiseFailure | reads every | both
-unsupported[duplicate redeemer pointers] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w5,sub.w5 | accepted_only because no record repeats a redeemer pointer
-unsupported[duplicate reference inputs] | leaves DecoderErrorDeserialiseFailure | reads top.k18,sub.k18 | both
+unsupported[body fields] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads every
+unsupported[duplicate collateral inputs] | leaves DecoderErrorDeserialiseFailure | reads top.k13
+unsupported[duplicate inputs] | leaves DecoderErrorDeserialiseFailure | reads every
+unsupported[duplicate redeemer pointers] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w5,sub.w5
+unsupported[duplicate reference inputs] | leaves DecoderErrorDeserialiseFailure | reads top.k18,sub.k18
 unsupported[new script language (requires V3)] | unrepresentable because it marks a construct the validator does not implement rather than a ledger rule
-unsupported[output fields] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k1,sub.k1 | both
+unsupported[output fields] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k1,sub.k1
 unsupported[Plutus validity upper bound requires forecast state] | unrepresentable because it marks node state the validator lacks rather than a ledger rule
 unsupported[new Plutus script validation requires phase2 feature] | unrepresentable because it marks a build without phase two evaluation rather than a ledger rule
 unsupported[protocol version (requires 12.0)] | unrepresentable because it marks a construct the validator does not implement rather than a ledger rule
 unsupported[reference script language (requires V3)] | unrepresentable because it marks a construct the validator does not implement rather than a ledger rule
 unsupported[required top-level guards] | unrepresentable because it marks a construct the validator does not implement rather than a ledger rule
-unsupported[subtransaction body fields] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads sub.k0 | accepted_only because no record holds a subtransaction body field the decoder refuses
+unsupported[subtransaction body fields] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads sub.k0
 unsupported[subtransactions] | unrepresentable because it marks a construct the validator does not implement rather than a ledger rule
 unsupported[unsuccessful block transaction] | unrepresentable because it marks a construct the validator does not implement rather than a ledger rule
-unsupported[witness fields] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads every | both
+unsupported[witness fields] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads every
