@@ -6,6 +6,7 @@ REV=${REV:-feat/ledger-oracle}
 MIN_FREE_G=${MIN_FREE_G:-6}
 OUT=${OUT:-"$ROOT/runs/$(date -u +%Y%m%dT%H%M%SZ)"}
 IN_IMAGE=${IN_IMAGE:-$HERE/in-image.sh}
+GRPCURL=${GRPCURL:-grpcurl}
 # The Dolos test module that judges the corpora and the live node.
 ORACLE_TESTS=serve::grpc::v1::ledger_oracle_tests
 # One line for each unit of the target dir, the tree ids of the scratch trees its last build read and its output files.

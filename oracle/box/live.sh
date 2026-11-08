@@ -1,10 +1,9 @@
 #!/bin/sh
 # Reads a live node and the Dolos endpoint that follows it into one directory, through queries only.
-# Usage: ENDPOINT=host:port NODE=container NODE_DB=dir LABEL=text BATCH_SLOTS="slot..." SERVE_CONFIG=dir [PLAINTEXT=1] live.sh <dir>
+# Usage: ENDPOINT=host:port NODE=container NODE_DB=dir LABEL=text BATCH_SLOTS="slot..." SERVE_CONFIG=dir GRPCURL=path [PLAINTEXT=1] live.sh <dir>
 set -eu
 DIR=$1
-GRPCURL=${GRPCURL:-grpcurl}
-: "${ENDPOINT:?}" "${NODE:?}" "${NODE_DB:?}" "${LABEL:?}" "${BATCH_SLOTS:?}" "${SERVE_CONFIG:?}"
+: "${ENDPOINT:?}" "${NODE:?}" "${NODE_DB:?}" "${LABEL:?}" "${BATCH_SLOTS:?}" "${SERVE_CONFIG:?}" "${GRPCURL:?}"
 mkdir -p "$DIR"
 
 # Calls one endpoint method from the fixed list of reads.

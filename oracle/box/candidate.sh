@@ -8,7 +8,6 @@ DIR=$1
 : "${CANDIDATE_GRPC:?}" "${CANDIDATE_NEED_G:?}"
 NEED_G=$CANDIDATE_NEED_G
 HERE=$(cd "$(dirname "$0")" && pwd)
-GRPCURL=${GRPCURL:-grpcurl}
 NAME=${CANDIDATE_NAME:-dolos-candidate-1028}
 SYNC_MINUTES=${SYNC_MINUTES:-150}
 SAMPLE_MINUTES=${SAMPLE_MINUTES:-5}
@@ -133,8 +132,8 @@ fi
 echo "LIVE-CANDIDATE certifying_slot=$recent"
 
 SLOTS="$FIXED_SLOTS $recent"
-ENDPOINT=$CANDIDATE_GRPC PLAINTEXT=1 LABEL="candidate commit=$COMMIT" BATCH_SLOTS=$SLOTS \
+ENDPOINT=$CANDIDATE_GRPC PLAINTEXT=1 LABEL="candidate commit=$COMMIT" BATCH_SLOTS=$SLOTS GRPCURL=$GRPCURL \
   sh "$HERE/live.sh" "$DIR/candidate"
-LABEL="serving endpoint=$ENDPOINT" BATCH_SLOTS=$SLOTS sh "$HERE/live.sh" "$DIR/serve"
+LABEL="serving endpoint=$ENDPOINT" BATCH_SLOTS=$SLOTS GRPCURL=$GRPCURL sh "$HERE/live.sh" "$DIR/serve"
 echo "LIVE-CANDIDATE read slots=\"$SLOTS\" commit=$COMMIT"
 sh "$HERE/fields.sh" "$DIR"
