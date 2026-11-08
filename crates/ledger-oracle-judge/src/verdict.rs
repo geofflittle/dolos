@@ -154,7 +154,11 @@ impl Fail {
             Fail::UnsupportedUnexpected { label } => {
                 cells.push(CellKey::new(Axis::Unsupported, label));
             }
-            Fail::StaleManifest { dolos, .. } | Fail::UnknownRefusal { dolos } => {
+            Fail::StaleManifest { declared, dolos } => {
+                cells.push(CellKey::new(Axis::Unsupported, declared));
+                cells.push(CellKey::new(Axis::Dolos, answer_member(dolos)));
+            }
+            Fail::UnknownRefusal { dolos } => {
                 cells.push(CellKey::new(Axis::Dolos, answer_member(dolos)));
             }
             Fail::KnownStale { row } => cells.push(CellKey::new(Axis::Row, row)),
@@ -909,6 +913,19 @@ mod tests {
                 declared: "certificate kind".into(),
                 dolos: "accepted".into()
             })
+        );
+        let stale = Fail::StaleManifest {
+            declared: "certificate kind".into(),
+            dolos: "refused[Phase2EvaluationError]".into(),
+        };
+        let cells = stale.cells().iter().map(CellKey::to_string).collect::<Vec<_>>();
+        assert_eq!(
+            cells,
+            [
+                "failure:stale_manifest",
+                "unsupported:certificate_kind",
+                "dolos:Phase2EvaluationError"
+            ]
         );
     }
 

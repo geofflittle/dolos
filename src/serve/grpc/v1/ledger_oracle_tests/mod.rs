@@ -2649,7 +2649,7 @@ async fn the_vote_delegation_ic551_keeps_is_known() {
     assert!(!text.contains("\nKNOWN row=S18 "), "{text}");
     let lines = failing(&deleted, Judge::Accounts);
     assert_eq!(lines.len(), 1, "{lines:?}");
-    let named = " record=ic#551 cells= outcome=disagree account=";
+    let named = " record=ic#551 cells=answer:differ,field:drep outcome=disagree account=";
     assert!(lines[0].contains(named), "{lines:?}");
 }
 

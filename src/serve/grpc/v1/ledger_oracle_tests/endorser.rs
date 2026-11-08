@@ -7,7 +7,7 @@ use dolos_core::SyncExt as _;
 use futures_util::StreamExt as _;
 use ledger_oracle_judge::{
     compare::Tally,
-    judgement::{self, EntryPoint, Judge, RunVerdict, Verdict},
+    judgement::{self, Axis, CellKey, EntryPoint, Judge, RunVerdict, Verdict},
 };
 use pallas::{
     codec::{
@@ -134,6 +134,24 @@ impl Judged {
             (Listed::Same(ids), Listed::Same(bytes)) if ids == bytes => Some(*ids),
             _ => None,
         }
+    }
+
+    /// The cells of a disagreement: each list that differs at an index, or the
+    /// lengths when the lists are equal item by item but not in length.
+    pub(super) fn cells(&self) -> Vec<CellKey> {
+        let mut cells = Vec::new();
+        if let Listed::Differs { .. } = self.ids {
+            cells.push(CellKey::new(Axis::List, "ids"));
+        }
+        if let Listed::Differs { .. } = self.bytes {
+            cells.push(CellKey::new(Axis::List, "bytes"));
+        }
+        if let (Listed::Same(ids), Listed::Same(bytes)) = (&self.ids, &self.bytes) {
+            if ids != bytes {
+                cells.push(CellKey::new(Axis::Answer, "lengths"));
+            }
+        }
+        cells
     }
 
     /// The disagreement lines of the service at the slot, one per list that
@@ -454,23 +472,31 @@ async fn served(
 /// whether every served block agreed.
 #[derive(Debug, Default)]
 pub(super) struct EndorserTally {
-    tally: Tally<String>,
+    tally: Tally<Verdict>,
     txs: usize,
     certifying: usize,
 }
 
 impl EndorserTally {
-    /// Counts one served block, keeping its lines when it disagrees.
+    /// Counts one served block, keeping its failing verdict when it disagrees.
     pub(super) fn add(&mut self, judged: Result<Judged, String>, service: Service, slot: u64) {
+        let fails = |mut cells: Vec<CellKey>, detail: String| {
+            cells.insert(0, CellKey::new(Axis::Service, service));
+            Verdict {
+                cells,
+                ..Verdict::selection_fails(Judge::Endorser, EntryPoint::FetchBlock, detail)
+            }
+        };
         match judged {
             Ok(judged) => {
-                let lines = judged.lines(service, slot);
                 self.txs += judged.agreed().unwrap_or(0);
-                self.tally
-                    .add(judged.agreed().is_some(), || lines.join("\n"));
+                self.tally.add(judged.agreed().is_some(), || {
+                    fails(judged.cells(), judged.lines(service, slot).join(" "))
+                });
             }
             Err(e) => self.tally.add(false, || {
-                format!("ENDORSER-DIFF service={service} slot={slot} unjudged={e}")
+                let detail = format!("ENDORSER-DIFF service={service} slot={slot} unjudged={e}");
+                fails(vec![CellKey::new(Axis::Answer, "unjudged")], detail)
             }),
         }
     }
@@ -492,14 +518,7 @@ impl EndorserTally {
     pub(super) fn report(&self, cases: usize, out: &mut judgement::Tally) {
         let Tally { compared, disagree } = &self.tally;
         out.count(Judge::Endorser, compared - disagree.len());
-        for lines in disagree {
-            let detail = lines.replace('\n', " ");
-            out.add(Verdict::selection_fails(
-                Judge::Endorser,
-                EntryPoint::FetchBlock,
-                detail,
-            ));
-        }
+        disagree.iter().cloned().for_each(|v| out.add(v));
         if *compared != 2 * cases {
             let detail = format!("served={compared} cases={cases}");
             out.add(Verdict::selection_fails(
@@ -683,6 +702,14 @@ fn a_block_agrees_only_when_both_lists_are_the_same() {
     let lines = bytes_differ.lines(Service::FollowTip, 7);
     assert_eq!(lines.len(), 1);
     assert!(lines[0].starts_with("ENDORSER-DIFF service=FollowTip slot=7 list=bytes index=1 "));
+    let shown = |judged: &Judged| judged.cells().iter().map(CellKey::to_string).collect::<Vec<_>>();
+    assert_eq!(shown(&same), Vec::<String>::new());
+    assert_eq!(shown(&bytes_differ), ["list:bytes"]);
+    let lengths = Judged {
+        ids: Listed::Same(2),
+        bytes: Listed::Same(3),
+    };
+    assert_eq!(shown(&lengths), ["answer:lengths"]);
 }
 
 /// A served Dijkstra block with no transactions under the header hash.

@@ -1209,7 +1209,7 @@ mod tests {
         assert!(!passes(&failing));
         assert_eq!(
             lines(&failing),
-            ["VERDICT judge=context entry=redeemer_arguments record=ic#3 cells=purpose:Spend,level:top,language:V1,answer:differ,field:datum outcome=disagree top Spend#0 V1 arg=0 path=root field=datum ledger=1 pallas=2"]
+            ["VERDICT judge=context entry=redeemer_arguments record=ic#3 cells=purpose:Spend,index:0,level:top,language:V1,answer:differ,field:datum outcome=disagree top Spend#0 V1 arg=0 path=root field=datum ledger=1 pallas=2"]
         );
         let known =
             parse_context_known("context-known.txt", "ic#9 top Spend#0 refused x\n").unwrap();
@@ -1218,7 +1218,7 @@ mod tests {
         assert!(!passes(&stale));
         assert_eq!(
             lines(&stale),
-            ["VERDICT judge=context entry=redeemer_arguments record=ic#9 cells=purpose:Spend,level:top,answer:unjudged outcome=disagree top Spend#0 refused x not judged"]
+            ["VERDICT judge=context entry=redeemer_arguments record=ic#9 cells=purpose:Spend,index:0,level:top,answer:unjudged outcome=disagree top Spend#0 refused x not judged"]
         );
         let mut other = tally.clone();
         other.unjudged(&known, CorpusKind::Supp);

@@ -98,10 +98,11 @@ pub struct RowKey {
 }
 
 impl RowKey {
-    /// The purpose and level cells of the row.
+    /// The purpose, index and level cells of the row.
     pub fn cells(&self) -> Vec<CellKey> {
         vec![
             CellKey::new(Axis::Purpose, tag_name(self.purpose.tag)),
+            CellKey::new(Axis::Index, self.purpose.index),
             CellKey::new(Axis::Level, self.level.kind()),
         ]
     }
@@ -204,7 +205,7 @@ pub struct Disagreement {
 }
 
 impl Disagreement {
-    /// The answer cells of each side, with the units that differ when both ran.
+    /// The answer cells of each side, with the units that differ when both ran, the layer's refusal and the listed one.
     pub fn cells(&self) -> Vec<CellKey> {
         let ran = |answer: &Answer| match answer {
             Answer::Ran(_) => "ran",
@@ -230,6 +231,10 @@ impl Disagreement {
                 cells.push(CellKey::new(Axis::Units, "steps"));
             }
         }
+        if let DolosRow::Refused(refusal) = &self.dolos {
+            cells.push(CellKey::new(Axis::Refusal, refusal));
+        }
+        cells.extend(self.listed.iter().map(|l| CellKey::new(Axis::Listed, l)));
         cells
     }
 }
@@ -1013,13 +1018,19 @@ impl RewardOutputTally {
             Ok(DolosAnswer::Refused(refusal)) if refusal == expected => {
                 *self.agree.entry(layer).or_default() += 1;
             }
-            other => self.failing.push(Verdict::disagree(
-                Judge::EvalRewardOutput,
-                EntryPoint::EstimateTx(layer),
-                signed,
-                vec![CellKey::new(Axis::Answer, answer_kind(other))],
-                format!("expected=({expected}) dolos={}", answer_text(other)),
-            )),
+            other => {
+                let mut cells = vec![CellKey::new(Axis::Answer, answer_kind(other))];
+                if let Ok(DolosAnswer::Refused(refusal)) = other {
+                    cells.push(CellKey::new(Axis::Refusal, refusal));
+                }
+                self.failing.push(Verdict::disagree(
+                    Judge::EvalRewardOutput,
+                    EntryPoint::EstimateTx(layer),
+                    signed,
+                    cells,
+                    format!("expected=({expected}) dolos={}", answer_text(other)),
+                ))
+            }
         }
     }
 
@@ -1423,6 +1434,33 @@ mod tests {
     }
 
     #[test]
+    fn a_row_disagreement_names_its_index_the_layer_refusal_and_the_listed_one() {
+        let shown = |cells: Vec<CellKey>| cells.iter().map(CellKey::to_string).collect::<Vec<_>>();
+        assert_eq!(
+            shown(key(Level::Top, 0, 3).cells()),
+            ["purpose:Spend", "index:3", "level:top"]
+        );
+        let disagreement = |listed: Option<Refusal>| Disagreement {
+            ledger: Some(ran(1, 2)),
+            dolos: DolosRow::Refused(refusal("outside the subset")),
+            listed,
+        };
+        assert_eq!(
+            shown(disagreement(None).cells()),
+            ["ledger:ran", "dolos:refused", "refusal:outside_the_subset"]
+        );
+        assert_eq!(
+            shown(disagreement(Some(refusal("other reason"))).cells()),
+            [
+                "ledger:ran",
+                "dolos:refused",
+                "refusal:outside_the_subset",
+                "listed:other_reason"
+            ]
+        );
+    }
+
+    #[test]
     fn a_refused_row_never_agrees_with_a_ledger_failure() {
         let verdict = row_verdict(
             Some(Answer::Failed),
@@ -1750,7 +1788,7 @@ mod tests {
         assert!(verdicts.is_empty());
         assert_eq!(
             lines(&twice.failing),
-            ["VERDICT judge=eval-oracle entry=estimate_tx:v1 record=ic#4 cells=purpose:Spend,level:top,dolos:twice outcome=disagree top Spend#0 answered twice"]
+            ["VERDICT judge=eval-oracle entry=estimate_tx:v1 record=ic#4 cells=purpose:Spend,index:0,level:top,dolos:twice outcome=disagree top Spend#0 answered twice"]
         );
         assert!(!passes(&twice));
         let mut differing_fee = t.clone();
@@ -1762,7 +1800,7 @@ mod tests {
         assert!(!passes(&refused));
         assert_eq!(
             lines(&refused.failing),
-            ["VERDICT judge=eval-oracle entry=estimate_tx:pallas record=ic#2 cells=purpose:Spend,level:sub,ledger:failed,dolos:refused outcome=disagree sub0 Spend#0 ledger=(failed) dolos=(refused r)"]
+            ["VERDICT judge=eval-oracle entry=estimate_tx:pallas record=ic#2 cells=purpose:Spend,index:0,level:sub,ledger:failed,dolos:refused,refusal:r outcome=disagree sub0 Spend#0 ledger=(failed) dolos=(refused r)"]
         );
         let mut slow = t.clone();
         let row = row_verdict(Some(ran(1, 2)), DolosRow::Answered(ran(3, 2)), None);
@@ -2067,8 +2105,8 @@ mod tests {
         assert_eq!(
             lines(&t.draft.failing),
             [
-                "VERDICT judge=eval-draft entry=estimate_tx:v1 record=ic#2 cells=purpose:Spend,level:top,ledger:ran,dolos:failed outcome=disagree top Spend#0 ledger=(ran mem=5 steps=7) dolos=(failed)",
-                "VERDICT judge=eval-draft entry=estimate_tx:pallas record=ic#2 cells=purpose:Spend,level:top,ledger:ran,dolos:refused outcome=disagree top Spend#0 ledger=(ran mem=5 steps=7) dolos=(refused missing key witnesses)"
+                "VERDICT judge=eval-draft entry=estimate_tx:v1 record=ic#2 cells=purpose:Spend,index:0,level:top,ledger:ran,dolos:failed outcome=disagree top Spend#0 ledger=(ran mem=5 steps=7) dolos=(failed)",
+                "VERDICT judge=eval-draft entry=estimate_tx:pallas record=ic#2 cells=purpose:Spend,index:0,level:top,ledger:ran,dolos:refused,refusal:missing_key_witnesses outcome=disagree top Spend#0 ledger=(ran mem=5 steps=7) dolos=(refused missing key witnesses)"
             ]
         );
         let mut underived = EvalTally::default();
@@ -2103,7 +2141,7 @@ mod tests {
         assert_eq!(
             lines(&t.reward_output.failing),
             [
-                "VERDICT judge=eval-reward-output entry=estimate_tx:pallas record=ic#2 cells=answer:refused outcome=disagree expected=(reward account address) dolos=refused[output address (requires Shelley)]",
+                "VERDICT judge=eval-reward-output entry=estimate_tx:pallas record=ic#2 cells=answer:refused,refusal:output_address_(requires_Shelley) outcome=disagree expected=(reward account address) dolos=refused[output address (requires Shelley)]",
                 "VERDICT judge=eval-reward-output entry=estimate_tx:v1 record=ic#2 cells=answer:evaluated outcome=disagree expected=(reward account address) dolos=evaluated[0 rows]"
             ]
         );
