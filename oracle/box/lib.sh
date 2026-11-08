@@ -50,6 +50,7 @@ crate_test() {
 # The arguments that pick an arm's test out of its crate test binary, none when the binary holds that test alone.
 crate_test_filter() {
   case $1 in
+    cost-models) echo "musashi_era_translation_keeps_the_published_v3_cost_model --exact" ;;
     endorser-tx-dropped) echo "$ORACLE_TESTS::endorser::served_endorser_transactions_are_the_nodes --exact" ;;
   esac
 }
