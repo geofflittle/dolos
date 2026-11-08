@@ -458,37 +458,59 @@ mod tests {
         assert!(Construct::BootstrapAttributes.holds(&guarded(&held, &guards)));
     }
 
-    #[test]
-    fn each_witness_set_field_has_a_construct_that_holds_when_it_is_present() {
-        let set = witnesses(&[&[9; 32]], &[0xa0]);
-        let guards = key_guard(Hash::new([0; 28]));
-        let level = guarded(&set, &guards);
-        let WitnessSet {
-            vkeywitness,
-            native_script,
-            bootstrap_witness,
-            plutus_v1_script,
-            plutus_data,
-            redeemer,
-            plutus_v2_script,
-            plutus_v3_script,
-            plutus_v4_script,
-        } = &set;
-        let fields = [
-            (vkeywitness.is_some(), Construct::VKeyWitness),
-            (native_script.is_some(), Construct::NativeScriptWitness),
-            (bootstrap_witness.is_some(), Construct::BootstrapWitness),
-            (plutus_v1_script.is_some(), Construct::PlutusV1),
-            (plutus_data.is_some(), Construct::Datum),
-            (redeemer.is_some(), Construct::Redeemer),
-            (plutus_v2_script.is_some(), Construct::PlutusV2),
-            (plutus_v3_script.is_some(), Construct::PlutusV3),
-            (plutus_v4_script.is_some(), Construct::PlutusV4),
-        ];
-        for (present, construct) in fields {
-            assert_eq!(construct.holds(&level), present, "{}", construct.name());
+    /// A witness set with one entry under each of the keys 0 to 8.
+    fn every_witness_field() -> Result<Vec<u8>, minicbor::encode::Error<std::convert::Infallible>> {
+        let mut e = minicbor::Encoder::new(Vec::new());
+        e.map(9)?;
+        e.u8(0)?.array(1)?.array(2)?.bytes(&[9; 32])?.bytes(&[0; 64])?;
+        e.u8(1)?.array(1)?.array(2)?.u8(4)?.u8(0)?;
+        e.u8(2)?.array(1)?.array(4)?.bytes(&[1; 32])?.bytes(&[0; 64])?;
+        e.bytes(&[2; 32])?.bytes(&[0xa0])?;
+        e.u8(3)?.array(1)?.bytes(&[0])?;
+        e.u8(4)?.array(1)?.u8(0)?;
+        e.u8(5)?.map(1)?.array(2)?.u8(0)?.u8(0)?;
+        e.array(2)?.u8(0)?.array(2)?.u8(0)?.u8(0)?;
+        for key in 6..=8 {
+            e.u8(key)?.array(1)?.bytes(&[0])?;
         }
-        assert_eq!(fields.iter().filter(|(present, _)| *present).count(), 2);
+        Ok(e.into_writer())
+    }
+
+    #[test]
+    fn each_witness_set_field_has_the_one_construct_that_holds_when_it_is_present() {
+        let bytes = every_witness_field().unwrap();
+        let full: WitnessSet = minicbor::decode(&bytes).unwrap();
+        let guards = key_guard(Hash::new([0; 28]));
+        let holding = |set: &WitnessSet| {
+            let level = guarded(set, &guards);
+            let constructs = Construct::ENTRIES.iter().map(|(_, c)| *c);
+            constructs.filter(|c| c.holds(&level)).collect::<BTreeSet<_>>()
+        };
+        macro_rules! each_field {
+            ($($field:ident => $construct:ident),* $(,)?) => {{
+                let WitnessSet { $($field),* } = &full;
+                $(assert!($field.is_some(), stringify!($field));)*
+                let all = BTreeSet::from([$(Construct::$construct),*]);
+                assert!(all.is_subset(&holding(&full)));
+                $(
+                    let mut cleared = full.clone();
+                    cleared.$field = None;
+                    let lost: BTreeSet<_> = all.difference(&holding(&cleared)).copied().collect();
+                    assert_eq!(lost, BTreeSet::from([Construct::$construct]), stringify!($field));
+                )*
+            }};
+        }
+        each_field! {
+            vkeywitness => VKeyWitness,
+            native_script => NativeScriptWitness,
+            bootstrap_witness => BootstrapWitness,
+            plutus_v1_script => PlutusV1,
+            plutus_data => Datum,
+            redeemer => Redeemer,
+            plutus_v2_script => PlutusV2,
+            plutus_v3_script => PlutusV3,
+            plutus_v4_script => PlutusV4,
+        }
     }
 
     #[test]
