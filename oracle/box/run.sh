@@ -198,10 +198,9 @@ value_verdicts() {
     sed -n 's/^AMARU \(amaru-head=[A-Z]*\( amaru-[a-z0-9-]*=[A-Z]*\)*\).*/\1/p' "$OUT/amaru.out" | grep . || echo amaru-head=FAIL)"
   case " $legs " in
     *" value-head=PASS "*" amaru-head=PASS "*)
-      case $legs in
-        *MISSED* | *FAIL* | *FIRED*) ;;
-        *) value_inputs "$pin" >"$LAST_VALUE" ;;
-      esac
+      if passed "head=PASS $legs"; then
+        value_inputs "$pin" >"$LAST_VALUE"
+      fi
       ;;
   esac
   echo "$legs"

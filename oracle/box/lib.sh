@@ -131,15 +131,18 @@ encoding_verdict() {
   fi
 }
 
-# Whether a verdict list holds a passing head and no failed arm or leg.
+# Whether a verdict list holds a passing head and every verdict in it names a passing word.
 passed() {
   case " $1 " in
     *" head=PASS "*) ;;
     *) return 1 ;;
   esac
-  case "$1" in
-    *MISSED* | *FAIL* | *FIRED* | *SKIPPED*) return 1 ;;
-  esac
+  for verdict in $1; do
+    case $verdict in
+      *=PASS | *=CLEAN | *=CAUGHT | *=HELD | value=passed-on-these-inputs) ;;
+      *) return 1 ;;
+    esac
+  done
 }
 
 # Records the commit $2 of a run of the tier $1 whose verdicts $3 pass, in LAST_DONE for the done and ship tiers and in LAST_SHIP with the verdicts and the UTC time for the ship tier and the live leg.

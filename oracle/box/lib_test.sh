@@ -384,6 +384,10 @@ records_of() {
 arms_pass='head=PASS control=CLEAN colret=CAUGHT'
 # Must not fire: a done run that passes writes last-done alone, and a ship or live run whose live leg fails writes neither.
 expect ship_by_done "$(records_of done "$arms_pass")" "exit=0 last-done=c last-ship=absent"
+# Must not fire: every passing word a done run prints. Must fire: a verdict word the pass rule does not name.
+expect done_every_passing_word "$(records_of done "$arms_pass ctx=HELD fix-arms=PASS value=passed-on-these-inputs")" \
+  "exit=0 last-done=c last-ship=absent"
+expect done_unnamed_word "$(records_of done "$arms_pass coin=UNREACHED")" "exit=1 last-done=absent last-ship=absent"
 expect ship_live_failed "$(records_of ship "$arms_pass live-shift=CAUGHT live=FAIL")" "exit=1 last-done=absent last-ship=absent"
 expect ship_shift_missed "$(records_of ship "$arms_pass live-shift=MISSED live=PASS")" "exit=1 last-done=absent last-ship=absent"
 expect live_failed "$(records_of live 'live=FAIL live-shift=CAUGHT')" "exit=1 last-done=absent last-ship=absent"
