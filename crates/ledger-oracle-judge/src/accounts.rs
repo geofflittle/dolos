@@ -4,7 +4,7 @@ use serde::{de::Error as _, Deserialize, Deserializer};
 
 use crate::{
     compare::Tally,
-    judgement::Finding,
+    judgement::{Axis, CellKey, Finding},
     record::{Bytes, RecordId},
 };
 
@@ -180,9 +180,33 @@ pub fn compare(
                 shown(l),
                 shown(d)
             );
-            Finding::new(id, Vec::new(), detail)
+            Finding::new(id, cells(l, d), detail)
         });
     }
+}
+
+/// The cells of a disagreement over one account: which side holds it, and when both do, each field they differ at.
+fn cells(ledger: Option<&Account>, dolos: Option<&Account>) -> Vec<CellKey> {
+    let (ledger, dolos) = match (ledger, dolos) {
+        (Some(ledger), Some(dolos)) => (ledger, dolos),
+        (Some(_), None) => return vec![CellKey::new(Axis::Answer, "ledger_only")],
+        (None, _) => return vec![CellKey::new(Axis::Answer, "dolos_only")],
+    };
+    let Account {
+        balance,
+        pool,
+        drep,
+    } = ledger;
+    let fields = [
+        ("balance", *balance != dolos.balance),
+        ("pool", *pool != dolos.pool),
+        ("drep", *drep != dolos.drep),
+    ];
+    let differing = fields.into_iter().filter(|(_, differs)| *differs);
+    let fields = differing.map(|(field, _)| CellKey::new(Axis::Field, field));
+    std::iter::once(CellKey::new(Axis::Answer, "differ"))
+        .chain(fields)
+        .collect()
 }
 
 #[cfg(test)]
@@ -234,7 +258,7 @@ mod tests {
         assert_eq!(tally.compared, 1);
         assert_eq!(
             tally.disagree,
-            vec![Finding::new(id, Vec::new(), format!(
+            vec![Finding::new(id, vec![CellKey::new(Axis::Answer, "differ"), CellKey::new(Axis::Field, "balance")], format!(
                 "account=keyHash-{KEY} ledger=balance=5,pool={KEY},drep-keyHash-{KEY} dolos=balance=6,pool={KEY},drep-keyHash-{KEY}"
             ))]
         );
@@ -243,5 +267,45 @@ mod tests {
         compare(id, &LedgerAccounts::new(), &same, &mut tally);
         assert_eq!(tally.compared, 1);
         assert!(tally.disagree[0].detail.ends_with(" ledger=none dolos=balance=5,pool=1cca48da7f291b81a09ddc0e132fce0c5a1ef3410e5a70f9fcd5f777,drep-keyHash-1cca48da7f291b81a09ddc0e132fce0c5a1ef3410e5a70f9fcd5f777"));
+    }
+
+    #[test]
+    fn a_disagreement_names_the_side_that_holds_the_account_and_each_field_that_differs() {
+        let ledger = ledger(&account(5));
+        let same: BTreeMap<_, _> = ledger.iter().map(|(c, a)| (*c, a.into())).collect();
+        let id: RecordId = "supp#1".parse().unwrap();
+        let cells = |ledger: &LedgerAccounts, dolos: &BTreeMap<Credential, Account>| {
+            let mut tally = Tally::default();
+            compare(id, ledger, dolos, &mut tally);
+            let found = tally.disagree.iter().map(|f| f.cells.iter().map(CellKey::to_string));
+            found.map(|c| c.collect::<Vec<_>>()).collect::<Vec<_>>()
+        };
+        let off = |change: fn(&mut Account)| {
+            let mut off = same.clone();
+            off.values_mut().for_each(change);
+            off
+        };
+        assert_eq!(cells(&ledger, &same), Vec::<Vec<String>>::new());
+        assert_eq!(
+            cells(&ledger, &off(|a| a.balance += 1)),
+            [["answer:differ", "field:balance"]]
+        );
+        assert_eq!(
+            cells(&ledger, &off(|a| a.pool = None)),
+            [["answer:differ", "field:pool"]]
+        );
+        assert_eq!(
+            cells(&ledger, &off(|a| a.drep = None)),
+            [["answer:differ", "field:drep"]]
+        );
+        assert_eq!(
+            cells(&ledger, &off(|a| (a.balance, a.drep) = (0, None))),
+            [vec!["answer:differ", "field:balance", "field:drep"]]
+        );
+        assert_eq!(
+            cells(&LedgerAccounts::new(), &same),
+            [["answer:dolos_only"]]
+        );
+        assert_eq!(cells(&ledger, &BTreeMap::new()), [["answer:ledger_only"]]);
     }
 }
