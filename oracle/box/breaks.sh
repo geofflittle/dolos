@@ -2,7 +2,7 @@
 # Judges the oracle branch head on both corpora, the control (the head on every arm's records) and each arm on the records plants/<arm>.records names, one oracle run each.
 # Usage: ROOT=dir [REV=ref] [ARMS="head control colret coin ..."] breaks.sh
 # The branch is read from the bare repository $ROOT/dolos.git.
-# An arm whose switch overlay/ adds runs on one build of the overlay with ORACLE_PLANT naming it, and any other arm builds its plants/<arm>.diff.
+# An arm whose switch overlay/ adds runs on one build of the overlay with ORACLE_PLANT naming it, an arm with a plants/<arm>.deselect runs the head's whole judgement without the records it names, and any other arm builds its plants/<arm>.diff.
 set -eu
 : "${ROOT:?}"
 export ROOT
@@ -12,7 +12,7 @@ TEST=$ORACLE_TESTS::ledger_oracle
 mkdir -p "$OUT"
 take_lock
 ARMS=${ARMS:-head control $PLANTED_ARMS}
-unset ORACLE_PLANT
+unset ORACLE_PLANT ORACLE_DESELECT
 require_free
 
 for arm in $ARMS; do
@@ -252,7 +252,9 @@ for arm in $ARMS; do
     head | control) plant=true ;;
     colret) plant=plant_colret_fix ;;
     *)
-      if pallas_arm "$arm"; then
+      if deselect_arm "$arm"; then
+        plant=true
+      elif pallas_arm "$arm"; then
         plant="plant_pallas $arm"
       else
         plant="plant_dolos $arm"
@@ -294,14 +296,21 @@ for arm in $ARMS; do
     continue
   fi
   judge=$(executable "$OUT/$arm.build")
+  deselect=
   case $arm in
     head) test=$TEST records= ;;
-    control) test=${TEST}_records records=$(for a in $PLANTED_ARMS; do crate_test "$a" >/dev/null || cat "$HERE/plants/$a.records"; done | sort -u | paste -sd, -) ;;
-    *) test=${TEST}_records records=$(paste -sd, "$HERE/plants/$arm.records") ;;
+    control) test=${TEST}_records records=$(for a in $PLANTED_ARMS; do crate_test "$a" >/dev/null || deselect_arm "$a" || cat "$HERE/plants/$a.records"; done | sort -u | paste -sd, -) ;;
+    *)
+      if deselect_arm "$arm"; then
+        test=$TEST records= deselect=$(paste -sd, "$HERE/plants/$arm.deselect")
+      else
+        test=${TEST}_records records=$(paste -sd, "$HERE/plants/$arm.records")
+      fi
+      ;;
   esac
-  echo "ARM $arm test=${test##*::} records=$(echo "$records" | tr , '\n' | grep -c . || true) build_seconds=$(($(date +%s) - started))"
+  echo "ARM $arm test=${test##*::} records=$(echo "$records" | tr , '\n' | grep -c . || true)${deselect:+ deselect=$deselect} build_seconds=$(($(date +%s) - started))"
   started=$(date +%s)
-  ORACLE_RECORDS=$records RUST_BACKTRACE=0 sh "$IN_IMAGE" "$SCRATCH" "$judge" "$test" \
+  ORACLE_DESELECT=$deselect ORACLE_RECORDS=$records RUST_BACKTRACE=0 sh "$IN_IMAGE" "$SCRATCH" "$judge" "$test" \
     --exact --ignored --nocapture >"$OUT/$arm.log" 2>&1 || true
   echo "ARM $arm judge_seconds=$(($(date +%s) - started))"
   if [ "$arm" = control ]; then

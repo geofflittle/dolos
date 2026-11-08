@@ -306,7 +306,7 @@ regen_run() {
   fi
   mkdir -p "$REGEN_DIR"
   committed=test_data/ledger-oracle
-  manifests="expected-unsupported.txt known.txt eval-known.txt"
+  manifests="expected-unsupported.txt known.txt eval-known.txt coverage.txt"
   for file in $manifests; do
     cat "$OUT/head.log" "$OUT/live.log" | sed -n "s/^CANDIDATE $file //p" >"$REGEN_DIR/$file"
   done

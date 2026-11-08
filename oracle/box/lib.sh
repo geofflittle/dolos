@@ -7,6 +7,8 @@ MIN_FREE_G=${MIN_FREE_G:-6}
 OUT=${OUT:-"$ROOT/runs/$(date -u +%Y%m%dT%H%M%SZ)"}
 IN_IMAGE=${IN_IMAGE:-$HERE/in-image.sh}
 GRPCURL=${GRPCURL:-grpcurl}
+# The Dolos path of the box scripts, which holds the arms manifest and each arm's plant and records.
+BOX_PATH=oracle/box
 # The Dolos test module that judges the corpora and the live node.
 ORACLE_TESTS=serve::grpc::v1::ledger_oracle_tests
 # One line for each unit of the target dir, the tree ids of the scratch trees its last build read and its output files.
@@ -19,10 +21,15 @@ switches() {
 # The arms that plant a defect, each judged on the records plants/<arm>.records names.
 PLANTED_ARMS=$({
   switches "$HERE"/overlay/*.diff
-  for plant in "$HERE"/plants/*.diff; do
-    if [ -f "$plant" ]; then basename "$plant" .diff; fi
+  for plant in "$HERE"/plants/*.diff "$HERE"/plants/*.deselect; do
+    if [ -f "$plant" ]; then basename "$plant" | sed 's/\.[a-z]*$//'; fi
   done
 } | sort -u | paste -sd ' ' -)
+
+# Whether an arm leaves the records plants/<arm>.deselect names out of the whole run of the head.
+deselect_arm() {
+  [ -f "$HERE/plants/$1.deselect" ]
+}
 
 # Whether an arm is a switch of the overlay, judged on the one overlay build with ORACLE_PLANT naming it.
 overlay_arm() {
@@ -44,6 +51,14 @@ crate_test() {
     cost-models) echo "-p dolos-cardano --features strict --test musashi_cost_models" ;;
     endorser-tx-dropped) echo "-p dolos --lib" ;;
     *) return 1 ;;
+  esac
+}
+
+# The Dolos source file of the crate test an arm runs, none for an arm the judge runs.
+crate_test_source() {
+  case $1 in
+    cost-models) echo crates/cardano/tests/musashi_cost_models.rs ;;
+    endorser-tx-dropped) echo src/serve/grpc/v1/ledger_oracle_tests/endorser.rs ;;
   esac
 }
 
@@ -98,14 +113,32 @@ plant_files() {
       "$HERE/overlay/dolos.diff" | sort -u
     return
   fi
+  if deselect_arm "$1"; then
+    return
+  fi
   sed -n 's#^+++ b/##p' "$HERE/plants/$1.diff"
 }
 
-# The arms whose plant changes a file that differs between the commits $1 and $2 of the scratch tree, one per line, failing when the files cannot be listed.
+# The Dolos files whose change puts an arm in the quick tier, its plant files, its plant or deselection, its records file and the source of its crate test.
+arm_files() {
+  plant_files "$1"
+  if ! overlay_arm "$1"; then
+    echo "$BOX_PATH/plants/$1.diff"
+    echo "$BOX_PATH/plants/$1.deselect"
+  fi
+  echo "$BOX_PATH/plants/$1.records"
+  crate_test_source "$1"
+}
+
+# The arms whose files differ or whose catches differ between the commits $1 and $2 of the scratch tree, one per line, failing when the files cannot be listed.
 touched_arms() {
   differing_files "$ROOT/$SCRATCH" "$1" "$2" >"$OUT/changed" || return
+  git -C "$ROOT/$SCRATCH" show "$1:$BOX_PATH/arms.toml" >"$OUT/arms.from" 2>/dev/null || : >"$OUT/arms.from"
+  git -C "$ROOT/$SCRATCH" show "$2:$BOX_PATH/arms.toml" >"$OUT/arms.to" 2>/dev/null || : >"$OUT/arms.to"
   for arm in $PLANTED_ARMS; do
-    if plant_files "$arm" | grep -q -x -F -f "$OUT/changed"; then
+    if arm_files "$arm" | grep -q -x -F -f "$OUT/changed"; then
+      echo "$arm"
+    elif [ "$(catches "$arm" "$OUT/arms.from")" != "$(catches "$arm" "$OUT/arms.to")" ]; then
       echo "$arm"
     fi
   done
@@ -390,7 +423,7 @@ manifest_rows() {
     }' "$ARMS_MANIFEST"
 }
 
-# The catches the arms manifest gives the arm $1, separated by tabs.
+# The catches the arms manifest, or the manifest file $2, gives the arm $1, separated by tabs.
 catches() {
   awk -v arm="$1" '
     /^\[/ { inside = ($0 == "[catches]"); next }
@@ -402,7 +435,7 @@ catches() {
       gsub(/" *, *"/, "\t", line)
       print line
       exit
-    }' "$ARMS_MANIFEST"
+    }' "${2:-$ARMS_MANIFEST}"
 }
 
 # Prints a REFUSED line for each planted arm with no records file or no catch, and for each records file or catch that names no planted arm.

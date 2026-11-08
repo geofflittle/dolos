@@ -17,4 +17,5 @@ exec docker run --rm --log-driver none --memory "$MEMORY" --memory-swap "$MEMORY
   -e CARGO_PROFILE_RELEASE_DEBUG=0 -e CARGO_TERM_COLOR=never -e RUST_BACKTRACE=short \
   ${LIVE_DIR:+-e "LIVE_DIR=$LIVE_DIR"} ${ORACLE_RECORDS:+-e "ORACLE_RECORDS=$ORACLE_RECORDS"} \
   ${ORACLE_PLANT:+-e "ORACLE_PLANT=$ORACLE_PLANT"} ${FIXTURE_DIR:+-e "FIXTURE_DIR=$FIXTURE_DIR"} \
+  ${ORACLE_DESELECT:+-e "ORACLE_DESELECT=$ORACLE_DESELECT"} \
   -w "/w/$TREE" dolos-build:1 "$@"

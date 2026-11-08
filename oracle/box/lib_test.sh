@@ -196,6 +196,44 @@ touched() {
 expect touched_changed "$(touched "$first")" "exit=0 b"
 expect touched_unlisted "$(touched 0000000000000000000000000000000000000000)" "exit=128"
 
+# Arms d, e, g and h with a plant of their own, cost-models with its crate test and k with a deselection, and a scratch tree whose second commit changes d's catch, e's records, the cost-models test source, k's deselection and the place of h's catch.
+A=$W/armfiles
+rm -rf "$A"
+mkdir -p "$A/box/plants" "$A/scratch/dolos/oracle/box/plants" "$A/scratch/dolos/crates/cardano/tests"
+for arm in d e g h cost-models; do
+  printf '%s\n' '+++ b/crates/core/src/n.rs' >"$A/box/plants/$arm.diff"
+done
+echo 'ic#1' >"$A/box/plants/k.deselect"
+echo 'ic#1' >"$A/scratch/dolos/oracle/box/plants/k.deselect"
+manifest() {
+  printf '%s\n' '[catches]' "$@" >"$A/scratch/dolos/oracle/box/arms.toml"
+}
+manifest 'd = ["judge=validation"]' 'e = ["judge=utxo"]' 'g = ["judge=rules"]' 'h = ["judge=cost"]' 'cost-models = ["test=t"]'
+echo 'ic#1' >"$A/scratch/dolos/oracle/box/plants/e.records"
+echo 'fn t() {}' >"$A/scratch/dolos/crates/cardano/tests/musashi_cost_models.rs"
+git -C "$A/scratch/dolos" init -q
+git -C "$A/scratch/dolos" add -A
+git -C "$A/scratch/dolos" -c user.name=t -c user.email=t@t commit -q -m t
+before=$(git -C "$A/scratch/dolos" rev-parse HEAD)
+manifest 'h = ["judge=cost"]' 'd = ["judge=validation failure:disagree"]' 'e = ["judge=utxo"]' 'g = ["judge=rules"]' 'cost-models = ["test=t"]'
+echo 'ic#2' >"$A/scratch/dolos/oracle/box/plants/e.records"
+echo 'fn t() { assert!(true) }' >"$A/scratch/dolos/crates/cardano/tests/musashi_cost_models.rs"
+echo 'ic#2' >"$A/scratch/dolos/oracle/box/plants/k.deselect"
+git -C "$A/scratch/dolos" add -A
+git -C "$A/scratch/dolos" -c user.name=t -c user.email=t@t commit -q -m t
+# Must fire for the changed catch of d, the records of e, the test source of cost-models and the deselection of k, and must not for g, unchanged, or h, whose catch only moved.
+expect touched_arm_files "$(
+  ROOT=$A OUT=$A HERE=$A/box
+  . "$LIB"
+  touched_arms "$before" HEAD | paste -sd ' ' -
+)" "cost-models d e k"
+# Must name k a deselect arm with no plant files, and must not name d one.
+expect deselect_arm "$(
+  HERE=$A/box
+  . "$LIB"
+  echo "$PLANTED_ARMS|$(deselect_arm k && echo k)|$(deselect_arm d || echo not-d)|$(plant_files k)"
+)" "cost-models d e g h k|k|not-d|"
+
 # A head control log, the same log with another run time, and the same log with one record judged differently.
 L=$W/logs
 rm -rf "$L"
