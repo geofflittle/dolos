@@ -584,7 +584,9 @@ fn field_cell(line: &str) -> Option<CellKey> {
 }
 
 impl ContextTally {
-    /// Keeps a failing verdict for each line of one row of record `id`, each with the row's cells, the answer kind and the field a line names.
+    /// Keeps a failing verdict for each line of one row of record `id`, or
+    /// one for the row when it has no line, each with the row's cells, the
+    /// answer kind and the field a line names.
     fn fail(
         &mut self,
         id: RecordId,
@@ -593,12 +595,17 @@ impl ContextTally {
         answer: &'static str,
         lines: impl Iterator<Item = String>,
     ) {
-        for line in lines {
+        let mut lines = lines.map(Some).peekable();
+        let row = lines.peek().is_none().then_some(None);
+        for line in lines.chain(row) {
             let mut cells = key.cells();
             cells.extend(language.map(|l| CellKey::new("language", l)));
             cells.push(CellKey::new("answer", answer));
-            cells.extend(field_cell(&line));
-            let detail = format!("{key} {line}");
+            cells.extend(line.as_deref().and_then(field_cell));
+            let detail = match line {
+                Some(line) => format!("{key} {line}"),
+                None => key.to_string(),
+            };
             let entry = EntryPoint::RedeemerArguments;
             self.failing
                 .push(Verdict::disagree(Judge::Context, entry, id, cells, detail));
@@ -1112,6 +1119,19 @@ mod tests {
         let mut other = tally.clone();
         other.unjudged(&known, CorpusKind::Supp);
         assert!(passes(&other));
+        let silent = [
+            ContextVerdict::Differ {
+                differences: vec![],
+                listed: None,
+            },
+            ContextVerdict::Stale(Listing::Differences(BTreeSet::new())),
+        ];
+        for verdict in silent {
+            let mut lineless = tally.clone();
+            lineless.add(ic(4), &[(top, None, verdict.clone())]);
+            assert!(!passes(&lineless), "{verdict:?}");
+            assert_eq!(lineless.failing.len(), 1, "{verdict:?}");
+        }
     }
 
     #[test]
