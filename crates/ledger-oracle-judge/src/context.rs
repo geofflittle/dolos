@@ -248,7 +248,7 @@ pub enum ContextVerdict {
     NoLedgerContext,
     /// The arguments differ at each of these places, and from the listing when there is one.
     Differ {
-        differences: Vec<String>,
+        differences: Vec<Difference>,
         listed: Option<Listing>,
     },
     /// The evaluator built a context the ledger refused for this reason, and the listing when there is one.
@@ -332,7 +332,10 @@ fn row_verdict(
             by_differences(differences(args, context), bytes_equal, listed)
         }
         (Some(LedgerContext::Built(args)), PallasRow::Missing) => {
-            let missing = format!("args ledger={} pallas=none", args.len());
+            let missing = Difference::Count {
+                ledger: args.len(),
+                pallas: None,
+            };
             by_differences(vec![missing], false, listed)
         }
         (Some(LedgerContext::Built(_)), PallasRow::Refused(refusal)) => {
@@ -359,14 +362,15 @@ fn row_verdict(
 
 /// The verdict of a row both sides built a context for, from the places its arguments differ and its listing.
 fn by_differences(
-    differences: Vec<String>,
+    differences: Vec<Difference>,
     bytes_equal: bool,
     listed: Option<&Listing>,
 ) -> ContextVerdict {
+    let lines = || differences.iter().map(Difference::to_string);
     match (differences.is_empty(), listed) {
         (true, None) => ContextVerdict::Agree { bytes_equal },
         (true, Some(listing)) => ContextVerdict::Stale(listing.clone()),
-        (false, Some(Listing::Differences(lines))) if differences.iter().eq(lines) => {
+        (false, Some(Listing::Differences(listed))) if lines().eq(listed.iter().cloned()) => {
             ContextVerdict::Known
         }
         (false, listed) => ContextVerdict::Differ {
@@ -387,7 +391,7 @@ fn role(arg: usize, args: usize) -> String {
 }
 
 /// The field a path names in an argument, the ScriptContext and TxInfo fields of a context by the language's declaration order.
-fn field(language: Language, role: &str, path: &[String]) -> String {
+fn field(language: Language, role: &str, path: &[String]) -> Vec<String> {
     let mut names = vec![role.to_string()];
     if role == "context" {
         let index = |n: Option<&String>| n.and_then(|n| n.parse::<usize>().ok());
@@ -397,17 +401,71 @@ fn field(language: Language, role: &str, path: &[String]) -> String {
             names.extend(language.tx_info().get(i).map(|name| name.to_string()));
         }
     }
-    names.join(".")
+    names
 }
 
-/// Each place the evaluator's arguments differ in value from the ledger's, as `<language> arg=<i> path=<p> field=<f> ledger=<v> pallas=<v>`.
-fn differences(args: &[Argument], context: &PallasContext) -> Vec<String> {
+/// One way the evaluator's arguments differ from the ledger's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Difference {
+    /// The two sides hold a different number of arguments, the evaluator none when it built no context.
+    Count { ledger: usize, pallas: Option<usize> },
+    /// The arguments differ in value at a path into argument `arg`, which names `field`.
+    Place {
+        language: Language,
+        arg: usize,
+        path: Vec<String>,
+        field: Vec<String>,
+        ledger: String,
+        pallas: String,
+    },
+}
+
+impl Difference {
+    /// The cell of the innermost field the difference is at.
+    pub fn cell(&self) -> Option<CellKey> {
+        match self {
+            Difference::Count { .. } => None,
+            Difference::Place { field, .. } => field.last().map(|f| CellKey::new(Axis::Field, f)),
+        }
+    }
+}
+
+impl fmt::Display for Difference {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Difference::Count { ledger, pallas } => match pallas {
+                Some(pallas) => write!(f, "args ledger={ledger} pallas={pallas}"),
+                None => write!(f, "args ledger={ledger} pallas=none"),
+            },
+            Difference::Place {
+                language,
+                arg,
+                path,
+                field,
+                ledger,
+                pallas,
+            } => {
+                let path = match path.is_empty() {
+                    true => "root".to_string(),
+                    false => path.join("."),
+                };
+                let field = field.join(".");
+                write!(
+                    f,
+                    "{language} arg={arg} path={path} field={field} ledger={ledger} pallas={pallas}"
+                )
+            }
+        }
+    }
+}
+
+/// Each place the evaluator's arguments differ in value from the ledger's.
+fn differences(args: &[Argument], context: &PallasContext) -> Vec<Difference> {
     if args.len() != context.args.len() {
-        return vec![format!(
-            "args ledger={} pallas={}",
-            args.len(),
-            context.args.len()
-        )];
+        return vec![Difference::Count {
+            ledger: args.len(),
+            pallas: Some(context.args.len()),
+        }];
     }
     let language = context.language;
     let mut out = Vec::new();
@@ -418,15 +476,15 @@ fn differences(args: &[Argument], context: &PallasContext) -> Vec<String> {
             Ok(pallas) => walk(&ledger.data, &pallas, &mut Vec::new(), &mut places),
             Err(_) => places.push((Vec::new(), ledger.data.to_string(), "undecoded".to_string())),
         }
-        for (path, l, p) in places {
-            let field = field(language, &role, &path);
-            let path = match path.is_empty() {
-                true => "root".to_string(),
-                false => path.join("."),
-            };
-            out.push(format!(
-                "{language} arg={i} path={path} field={field} ledger={l} pallas={p}"
-            ));
+        for (path, ledger, pallas) in places {
+            out.push(Difference::Place {
+                language,
+                arg: i,
+                field: field(language, &role, &path),
+                path,
+                ledger,
+                pallas,
+            });
         }
     }
     out
@@ -577,23 +635,22 @@ pub struct ContextTally {
     pub judged: BTreeSet<RecordId>,
 }
 
-/// The cell of the field a difference line names, its path's last component.
-fn field_cell(line: &str) -> Option<CellKey> {
-    let field = line.split(' ').find_map(|w| w.strip_prefix("field="))?;
-    Some(CellKey::new(Axis::Field, field.rsplit('.').next()?))
+/// A failure line that states no computed difference, so names no field.
+fn unplaced(line: String) -> (String, Option<CellKey>) {
+    (line, None)
 }
 
 impl ContextTally {
     /// Keeps a failing verdict for each line of one row of record `id`, or
     /// one for the row when it has no line, each with the row's cells, the
-    /// answer kind and the field a line names.
+    /// answer kind and the cell of the field its difference is at.
     fn fail(
         &mut self,
         id: RecordId,
         key: &RowKey,
         language: &Option<Language>,
         answer: &'static str,
-        lines: impl Iterator<Item = String>,
+        lines: impl Iterator<Item = (String, Option<CellKey>)>,
     ) {
         let mut lines = lines.map(Some).peekable();
         let row = lines.peek().is_none().then_some(None);
@@ -601,9 +658,11 @@ impl ContextTally {
             let mut cells = key.cells();
             cells.extend(language.map(|l| CellKey::new(Axis::Language, l)));
             cells.push(CellKey::new(Axis::Answer, answer));
-            cells.extend(line.as_deref().and_then(field_cell));
             let detail = match line {
-                Some(line) => format!("{key} {line}"),
+                Some((line, field)) => {
+                    cells.extend(field);
+                    format!("{key} {line}")
+                }
                 None => key.to_string(),
             };
             let entry = EntryPoint::RedeemerArguments;
@@ -633,15 +692,16 @@ impl ContextTally {
                     let listed = listed.iter().flat_map(Listing::lines);
                     let lines = differences
                         .iter()
-                        .cloned()
-                        .chain(listed.map(|l| format!("listed {l}")));
+                        .map(|d| (d.to_string(), d.cell()))
+                        .chain(listed.map(|l| unplaced(format!("listed {l}"))));
                     self.fail(id, key, language, "differ", lines);
                 }
                 ContextVerdict::PallasOnly { ledger, listed } => {
                     self.pallas_only += 1;
                     let listed = listed.iter().flat_map(Listing::lines);
                     let lines = std::iter::once(format!("refused {ledger}"))
-                        .chain(listed.map(|l| format!("listed {l}")));
+                        .chain(listed.map(|l| format!("listed {l}")))
+                        .map(unplaced);
                     self.fail(id, key, language, "pallas_only", lines);
                 }
                 ContextVerdict::Stale(listing) => {
@@ -649,7 +709,7 @@ impl ContextTally {
                     let lines = listing
                         .lines()
                         .into_iter()
-                        .map(|l| format!("{l} not shown"));
+                        .map(|l| unplaced(format!("{l} not shown")));
                     self.fail(id, key, language, "stale", lines);
                 }
             }
@@ -677,7 +737,9 @@ impl ContextTally {
             .flat_map(|(id, rows)| rows.iter().map(|(key, l)| (*id, *key, l.lines())))
             .collect();
         for (id, key, lines) in missed {
-            let lines = lines.into_iter().map(|l| format!("{l} not judged"));
+            let lines = lines
+                .into_iter()
+                .map(|l| unplaced(format!("{l} not judged")));
             self.fail(id, &key, &None, "unjudged", lines);
         }
     }
@@ -804,6 +866,10 @@ mod tests {
         verdicts.into_iter().next().unwrap().2
     }
 
+    fn shown(differences: &[Difference]) -> Vec<String> {
+        differences.iter().map(Difference::to_string).collect()
+    }
+
     fn evaluated(row: PallasContext) -> PallasContexts {
         PallasContexts::Built(BTreeMap::from([(key(Level::Top, 0, 0), row)]))
     }
@@ -856,8 +922,8 @@ mod tests {
         };
         assert_eq!(listed, None);
         assert_eq!(
-            differences,
-            vec!["V3 arg=0 path=0.3 field=context.scriptContextTxInfo.txInfoFee ledger=7 pallas=8"]
+            shown(&differences),
+            ["V3 arg=0 path=0.3 field=context.scriptContextTxInfo.txInfoFee ledger=7 pallas=8"]
         );
     }
 
@@ -873,8 +939,8 @@ mod tests {
             panic!("{verdict:?}");
         };
         assert_eq!(
-            differences,
-            vec!["V2 arg=1 path=root field=redeemer ledger=2 pallas=3"]
+            shown(&differences),
+            ["V2 arg=1 path=root field=redeemer ledger=2 pallas=3"]
         );
     }
 
@@ -893,8 +959,8 @@ mod tests {
             panic!("{verdict:?}");
         };
         assert_eq!(
-            differences,
-            vec!["V4 arg=0 path=0.1 field=context.scriptContextTxInfo.txInfoSubTxIx ledger=C0[0] pallas=C1[]"]
+            shown(&differences),
+            ["V4 arg=0 path=0.1 field=context.scriptContextTxInfo.txInfoSubTxIx ledger=C0[0] pallas=C1[]"]
         );
     }
 
@@ -909,8 +975,8 @@ mod tests {
             panic!("{verdict:?}");
         };
         assert_eq!(
-            differences,
-            vec!["V3 arg=0 path=2 field=context.scriptContextScriptInfo ledger=3 pallas=none"]
+            shown(&differences),
+            ["V3 arg=0 path=2 field=context.scriptContextScriptInfo ledger=3 pallas=none"]
         );
     }
 
@@ -929,14 +995,38 @@ mod tests {
         let other = line.replace("pallas=8", "pallas=9");
         for listed in [listing(&[&other]), listing(&[line, &other])] {
             let verdict = one(ledger.clone(), row(), Some(listed.clone()));
-            assert_eq!(
-                verdict,
-                ContextVerdict::Differ {
-                    differences: vec![line.to_string()],
-                    listed: Some(listed),
-                }
-            );
+            let ContextVerdict::Differ {
+                differences,
+                listed: kept,
+            } = verdict
+            else {
+                panic!("{verdict:?}");
+            };
+            assert_eq!(shown(&differences), [line]);
+            assert_eq!(kept, Some(listed));
         }
+    }
+
+    #[test]
+    fn a_field_cell_names_only_a_field_the_row_differs_at() {
+        let listed = "V3 arg=0 path=0.1 field=context.scriptContextTxInfo.txInfoOutputs ledger=1 pallas=2";
+        let listed = Listing::Differences(BTreeSet::from([listed.to_string()]));
+        let verdict = one(
+            Some(built(&[&v3_context(7, true)])),
+            evaluated(pallas(Language::V3, &[&v3_context(8, true)])),
+            Some(listed),
+        );
+        let mut tally = ContextTally::default();
+        tally.add(ic(1), &[(key(Level::Top, 0, 0), Some(Language::V3), verdict)]);
+        let fields: Vec<Vec<String>> = tally
+            .failing
+            .iter()
+            .map(|v| {
+                let fields = v.cells.iter().filter(|c| c.axis == Axis::Field);
+                fields.map(|c| c.member.clone()).collect()
+            })
+            .collect();
+        assert_eq!(fields, [vec!["txInfoFee".to_string()], vec![]]);
     }
 
     #[test]
@@ -1037,10 +1127,17 @@ mod tests {
         assert_eq!(
             verdict,
             ContextVerdict::Differ {
-                differences: vec!["args ledger=2 pallas=none".to_string()],
+                differences: vec![Difference::Count {
+                    ledger: 2,
+                    pallas: None
+                }],
                 listed: None,
             }
         );
+        let ContextVerdict::Differ { differences, .. } = verdict else {
+            panic!("{verdict:?}");
+        };
+        assert_eq!(shown(&differences), ["args ledger=2 pallas=none"]);
     }
 
     #[test]
@@ -1054,8 +1151,8 @@ mod tests {
             panic!("{verdict:?}");
         };
         assert_eq!(
-            differences,
-            vec!["V3 arg=0 path=root field=context ledger=0 pallas=undecoded"]
+            shown(&differences),
+            ["V3 arg=0 path=root field=context ledger=0 pallas=undecoded"]
         );
     }
 
@@ -1097,7 +1194,14 @@ mod tests {
                 top,
                 Some(Language::V1),
                 ContextVerdict::Differ {
-                    differences: vec!["V1 arg=0 path=root field=datum ledger=1 pallas=2".into()],
+                    differences: vec![Difference::Place {
+                        language: Language::V1,
+                        arg: 0,
+                        path: vec![],
+                        field: vec!["datum".to_string()],
+                        ledger: "1".to_string(),
+                        pallas: "2".to_string(),
+                    }],
                     listed: None,
                 },
             )],
