@@ -702,7 +702,13 @@ fn a_block_agrees_only_when_both_lists_are_the_same() {
     let lines = bytes_differ.lines(Service::FollowTip, 7);
     assert_eq!(lines.len(), 1);
     assert!(lines[0].starts_with("ENDORSER-DIFF service=FollowTip slot=7 list=bytes index=1 "));
-    let shown = |judged: &Judged| judged.cells().iter().map(CellKey::to_string).collect::<Vec<_>>();
+    let shown = |judged: &Judged| {
+        judged
+            .cells()
+            .iter()
+            .map(CellKey::to_string)
+            .collect::<Vec<_>>()
+    };
     assert_eq!(shown(&same), Vec::<String>::new());
     assert_eq!(shown(&bytes_differ), ["list:bytes"]);
     let lengths = Judged {

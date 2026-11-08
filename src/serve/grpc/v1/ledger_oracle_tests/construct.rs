@@ -462,9 +462,17 @@ mod tests {
     fn every_witness_field() -> Result<Vec<u8>, minicbor::encode::Error<std::convert::Infallible>> {
         let mut e = minicbor::Encoder::new(Vec::new());
         e.map(9)?;
-        e.u8(0)?.array(1)?.array(2)?.bytes(&[9; 32])?.bytes(&[0; 64])?;
+        e.u8(0)?
+            .array(1)?
+            .array(2)?
+            .bytes(&[9; 32])?
+            .bytes(&[0; 64])?;
         e.u8(1)?.array(1)?.array(2)?.u8(4)?.u8(0)?;
-        e.u8(2)?.array(1)?.array(4)?.bytes(&[1; 32])?.bytes(&[0; 64])?;
+        e.u8(2)?
+            .array(1)?
+            .array(4)?
+            .bytes(&[1; 32])?
+            .bytes(&[0; 64])?;
         e.bytes(&[2; 32])?.bytes(&[0xa0])?;
         e.u8(3)?.array(1)?.bytes(&[0])?;
         e.u8(4)?.array(1)?.u8(0)?;
@@ -484,7 +492,9 @@ mod tests {
         let holding = |set: &WitnessSet| {
             let level = guarded(set, &guards);
             let constructs = Construct::ENTRIES.iter().map(|(_, c)| *c);
-            constructs.filter(|c| c.holds(&level)).collect::<BTreeSet<_>>()
+            constructs
+                .filter(|c| c.holds(&level))
+                .collect::<BTreeSet<_>>()
         };
         macro_rules! each_field {
             ($($field:ident => $construct:ident),* $(,)?) => {{

@@ -408,7 +408,10 @@ fn field(language: Language, role: &str, path: &[String]) -> Vec<String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Difference {
     /// The two sides hold a different number of arguments, the evaluator none when it built no context.
-    Count { ledger: usize, pallas: Option<usize> },
+    Count {
+        ledger: usize,
+        pallas: Option<usize>,
+    },
     /// The arguments differ in value at a path into argument `arg`, which names `field`.
     Place {
         language: Language,
@@ -1009,7 +1012,8 @@ mod tests {
 
     #[test]
     fn a_field_cell_names_only_a_field_the_row_differs_at() {
-        let listed = "V3 arg=0 path=0.1 field=context.scriptContextTxInfo.txInfoOutputs ledger=1 pallas=2";
+        let listed =
+            "V3 arg=0 path=0.1 field=context.scriptContextTxInfo.txInfoOutputs ledger=1 pallas=2";
         let listed = Listing::Differences(BTreeSet::from([listed.to_string()]));
         let verdict = one(
             Some(built(&[&v3_context(7, true)])),
@@ -1017,7 +1021,10 @@ mod tests {
             Some(listed),
         );
         let mut tally = ContextTally::default();
-        tally.add(ic(1), &[(key(Level::Top, 0, 0), Some(Language::V3), verdict)]);
+        tally.add(
+            ic(1),
+            &[(key(Level::Top, 0, 0), Some(Language::V3), verdict)],
+        );
         let fields: Vec<Vec<String>> = tally
             .failing
             .iter()

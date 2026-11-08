@@ -918,7 +918,11 @@ mod tests {
             declared: "certificate kind".into(),
             dolos: "refused[Phase2EvaluationError]".into(),
         };
-        let cells = stale.cells().iter().map(CellKey::to_string).collect::<Vec<_>>();
+        let cells = stale
+            .cells()
+            .iter()
+            .map(CellKey::to_string)
+            .collect::<Vec<_>>();
         assert_eq!(
             cells,
             [

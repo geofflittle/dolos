@@ -361,7 +361,10 @@ pub fn parse_catches(file: &'static str, text: &str) -> Result<Catches, Manifest
         let value = value.ok_or(error(format!("{arm} catch is not a list")))?;
         let mut specs = Vec::new();
         for spec in value.split(',') {
-            let spec = spec.trim().strip_prefix('"').and_then(|s| s.strip_suffix('"'));
+            let spec = spec
+                .trim()
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'));
             let spec = spec.ok_or(error(format!("{arm} catch is not a string")))?;
             let terms = spec.split(' ').map(catch_term).collect::<Result<_, _>>();
             specs.push(terms.map_err(error)?);
@@ -403,7 +406,8 @@ mod tests {
     fn a_catch_naming_no_judge_or_axis_fails_the_load() {
         let text = |catch: &str| format!("[dolos]\na = 1\n\n[catches]\nb = [\"{catch}\"]\n");
         let parsed = |catch| parse_catches("arms", &text(catch));
-        let caught = parsed("judge=eval-tx|utxo !units:mem field:coin|field:datum* test=t").unwrap();
+        let caught =
+            parsed("judge=eval-tx|utxo !units:mem field:coin|field:datum* test=t").unwrap();
         assert_eq!(caught["b"][0].len(), 4);
         let reason = |catch| parsed(catch).unwrap_err().to_string();
         assert_eq!(

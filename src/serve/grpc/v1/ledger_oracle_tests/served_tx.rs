@@ -452,7 +452,11 @@ fn add(
             let dolos = dolos.join(" ");
             let shown = format!("differing={fields} ledger=[{ledger}] dolos=[{dolos}]");
             let mut cells = vec![answer_cell("differ")];
-            cells.extend(differing.iter().map(|(f, _, _)| CellKey::new(Axis::Field, f)));
+            cells.extend(
+                differing
+                    .iter()
+                    .map(|(f, _, _)| CellKey::new(Axis::Field, f)),
+            );
             (differing.is_empty(), shown, cells)
         }
         Answer::Absent => (false, "dolos=none".to_string(), vec![answer_cell("none")]),

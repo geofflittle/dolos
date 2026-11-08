@@ -277,7 +277,10 @@ mod tests {
         let cells = |ledger: &LedgerAccounts, dolos: &BTreeMap<Credential, Account>| {
             let mut tally = Tally::default();
             compare(id, ledger, dolos, &mut tally);
-            let found = tally.disagree.iter().map(|f| f.cells.iter().map(CellKey::to_string));
+            let found = tally
+                .disagree
+                .iter()
+                .map(|f| f.cells.iter().map(CellKey::to_string));
             found.map(|c| c.collect::<Vec<_>>()).collect::<Vec<_>>()
         };
         let off = |change: fn(&mut Account)| {
