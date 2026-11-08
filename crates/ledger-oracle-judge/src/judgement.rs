@@ -227,6 +227,39 @@ impl Outcome {
             Outcome::Disagree(_) => "disagree",
         }
     }
+
+    /// The kind of pass the outcome is, none for a disagreement.
+    pub fn pass(&self) -> Option<Pass> {
+        match self {
+            Outcome::Agree => Some(Pass::Agree),
+            Outcome::Known(_) => Some(Pass::Known),
+            Outcome::Excluded(_) => Some(Pass::Excluded),
+            Outcome::Disagree(_) => None,
+        }
+    }
+}
+
+/// The kind of an outcome that passes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Pass {
+    Agree,
+    Known,
+    Excluded,
+}
+
+/// A passing verdict without its record and text, the key a tally counts passing verdicts under.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Passed {
+    pub judge: Judge,
+    pub entry: EntryPoint,
+    pub cells: Vec<CellKey>,
+    pub pass: Pass,
+}
+
+/// The member of the first of `cells` on `axis`.
+pub fn member(cells: &[CellKey], axis: Axis) -> Option<&str> {
+    let cell = cells.iter().find(|cell| cell.axis == axis);
+    cell.map(|cell| cell.member.as_str())
 }
 
 /// A disagreement on one record that a judge's tally holds until the judge
@@ -303,10 +336,7 @@ impl Verdict {
 
     /// Whether the verdict fails the run.
     pub fn fails(&self) -> bool {
-        match self.outcome {
-            Outcome::Disagree(_) => true,
-            Outcome::Agree | Outcome::Known(_) | Outcome::Excluded(_) => false,
-        }
+        self.outcome.pass().is_none()
     }
 }
 
@@ -335,11 +365,13 @@ impl fmt::Display for Verdict {
     }
 }
 
-/// The verdicts of a run: the count of passing ones by judge and the failing
-/// ones whole.
+/// The verdicts of a run: the count of passing ones by their key and the
+/// failing ones whole.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Tally {
-    pub passing: BTreeMap<Judge, usize>,
+    pub passing: BTreeMap<Passed, usize>,
+    /// The passing verdicts, by judge, of the judges whose own counter holds them.
+    pub counted: BTreeMap<Judge, usize>,
     pub failing: Vec<Verdict>,
 }
 
@@ -354,32 +386,72 @@ pub enum RunVerdict {
 impl Tally {
     /// Counts a passing verdict and keeps a failing one.
     pub fn add(&mut self, verdict: Verdict) {
-        if verdict.fails() {
+        let Some(pass) = verdict.outcome.pass() else {
             self.failing.push(verdict);
-        } else {
-            *self.passing.entry(verdict.judge).or_default() += 1;
-        }
+            return;
+        };
+        let Verdict {
+            judge,
+            entry,
+            cells,
+            ..
+        } = verdict;
+        let passed = Passed {
+            judge,
+            entry,
+            cells,
+            pass,
+        };
+        *self.passing.entry(passed).or_default() += 1;
     }
 
     /// Counts `n` passing verdicts of `judge` that its own counter holds.
     pub fn count(&mut self, judge: Judge, n: usize) {
-        *self.passing.entry(judge).or_default() += n;
+        *self.counted.entry(judge).or_default() += n;
     }
 
     /// Adds the verdicts of another tally after this one's.
     pub fn merge(&mut self, other: Tally) {
-        let Tally { passing, failing } = other;
-        for (judge, n) in passing {
+        let Tally {
+            passing,
+            counted,
+            failing,
+        } = other;
+        for (passed, n) in passing {
+            *self.passing.entry(passed).or_default() += n;
+        }
+        for (judge, n) in counted {
             self.count(judge, n);
         }
         self.failing.extend(failing);
     }
 
+    /// The passing verdicts of `judge` with the number of each.
+    pub fn passed(&self, judge: Judge) -> impl Iterator<Item = (&Passed, usize)> {
+        let passing = self.passing.iter().filter(move |(p, _)| p.judge == judge);
+        passing.map(|(passed, n)| (passed, *n))
+    }
+
+    /// The failing verdicts of `judge`.
+    pub fn failed(&self, judge: Judge) -> impl Iterator<Item = &Verdict> {
+        self.failing.iter().filter(move |v| v.judge == judge)
+    }
+
+    /// The number of passing verdicts of each judge.
+    pub fn by_judge(&self) -> BTreeMap<Judge, usize> {
+        let mut by_judge = self.counted.clone();
+        for (passed, n) in &self.passing {
+            *by_judge.entry(passed.judge).or_default() += n;
+        }
+        by_judge
+    }
+
     /// Adds a failing verdict for each judge of `required` that passed no
     /// verdict, so a judge that judged nothing fails the run.
     pub fn require(&mut self, required: &[(Judge, EntryPoint)]) {
+        let by_judge = self.by_judge();
         for (judge, entry) in required {
-            if self.passing.get(judge).copied().unwrap_or(0) == 0
+            if by_judge.get(judge).copied().unwrap_or(0) == 0
                 && !self.failing.iter().any(|v| v.judge == *judge)
             {
                 self.add(Verdict::selection_fails(*judge, *entry, "judged=0"));
@@ -389,11 +461,10 @@ impl Tally {
 
     /// The run's verdict: a pass when no verdict fails and at least one passes.
     pub fn verdict(&self) -> RunVerdict {
-        let passed = self.passing.values().any(|n| *n > 0);
+        let passing = self.by_judge();
+        let passed = passing.values().any(|n| *n > 0);
         if self.failing.is_empty() && passed {
-            RunVerdict::Pass {
-                passing: self.passing.clone(),
-            }
+            RunVerdict::Pass { passing }
         } else {
             RunVerdict::Fail {
                 failing: self.failing.len(),
@@ -404,11 +475,12 @@ impl Tally {
 
 impl fmt::Display for Tally {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Tally { passing, failing } = self;
+        let failing = &self.failing;
         for verdict in failing {
             writeln!(f, "{verdict}")?;
         }
-        let passing: Vec<String> = passing.iter().map(|(j, n)| format!("{j}:{n}")).collect();
+        let by_judge = self.by_judge();
+        let passing: Vec<String> = by_judge.iter().map(|(j, n)| format!("{j}:{n}")).collect();
         write!(
             f,
             "VERDICTS passing={} failing={}",
@@ -469,6 +541,44 @@ mod tests {
     }
 
     #[test]
+    fn a_tally_counts_each_passing_verdict_under_its_judge_entry_cells_and_kind() {
+        let spend = |judge, outcome| Verdict {
+            cells: vec![CellKey::new(Axis::Purpose, "Spend")],
+            outcome,
+            ..agree(judge)
+        };
+        let mut tally = Tally::default();
+        tally.add(spend(Judge::EvalOracle, Outcome::Agree));
+        tally.add(spend(Judge::EvalOracle, Outcome::Agree));
+        tally.add(spend(
+            Judge::EvalOracle,
+            Outcome::Excluded("no carrier".into()),
+        ));
+        tally.add(spend(Judge::EvalDraft, Outcome::Agree));
+        tally.count(Judge::Cost, 3);
+        let passed = |pass| Passed {
+            judge: Judge::EvalOracle,
+            entry: EntryPoint::MinFee,
+            cells: vec![CellKey::new(Axis::Purpose, "Spend")],
+            pass,
+        };
+        let oracle: Vec<(&Passed, usize)> = tally.passed(Judge::EvalOracle).collect();
+        assert_eq!(
+            oracle,
+            [(&passed(Pass::Agree), 2), (&passed(Pass::Excluded), 1)]
+        );
+        assert_eq!(
+            tally.by_judge(),
+            BTreeMap::from([
+                (Judge::EvalOracle, 3),
+                (Judge::EvalDraft, 1),
+                (Judge::Cost, 3)
+            ])
+        );
+        assert_eq!(tally.passed(Judge::Cost).count(), 0);
+    }
+
+    #[test]
     fn one_disagreement_of_any_judge_fails_the_tally() {
         for judge in Judge::ALL {
             let mut tally = Tally::default();
@@ -515,7 +625,7 @@ mod tests {
             "x",
         ));
         a.merge(b);
-        assert_eq!(a.passing, BTreeMap::from([(Judge::Cost, 2)]));
+        assert_eq!(a.by_judge(), BTreeMap::from([(Judge::Cost, 2)]));
         assert_eq!(a.failing.len(), 1);
     }
 

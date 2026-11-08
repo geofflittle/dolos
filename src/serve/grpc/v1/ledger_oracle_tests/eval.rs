@@ -291,11 +291,10 @@ async fn judge_reward_output(group: &Group, draft: &Draft, tally: &mut EvalTally
     let expected = reward_output_refusal();
     let wires = wire_evals(group, &draft.bytes).await;
     let evaluator = evaluator(group.estimate(&draft.bytes));
-    let tally = &mut tally.reward_output;
     for (layer, answer) in wire_answers(&wires, &evaluator) {
-        tally.add(layer, draft.signed, &expected, &answer);
+        tally.add_reward_output(layer, draft.signed, &expected, &answer);
     }
-    tally.add(Layer::Pallas, draft.signed, &expected, &evaluator.answer);
+    tally.add_reward_output(Layer::Pallas, draft.signed, &expected, &evaluator.answer);
 }
 
 /// Judges the evaluator's and each EvalTx version's answer for a draft against the signed record's ledger rows.
@@ -309,12 +308,10 @@ async fn judge_draft(
     let wires = wire_evals(group, &draft.bytes).await;
     let evaluator = evaluator(group.estimate(&draft.bytes));
     for (layer, answer) in wire_answers(&wires, &evaluator) {
-        tally.draft.add(layer, draft.signed, ledger, listed, answer);
+        tally.add_draft(layer, draft.signed, ledger, listed, answer);
     }
     let pallas = evaluator.answer;
-    tally
-        .draft
-        .add(Layer::Pallas, draft.signed, ledger, listed, pallas);
+    tally.add_draft(Layer::Pallas, draft.signed, ledger, listed, pallas);
 }
 
 /// Judges the evaluator's and each EvalTx version's answer for one record against the ledger's rows, the rows the known list gives it and, when the ledger evaluated none, its outcome's demand and the answer the transaction known list gives it, and returns the builtins called by each redeemer the evaluator ran in the ledger's units.
@@ -345,7 +342,7 @@ pub(super) async fn judge_record(
     let mut judge_tx = |layer: Layer, answer: &Result<DolosAnswer, Malformed>| {
         if let Some(demand) = demand {
             let verdict = eval::tx_verdict(demand, answer, tx_listed);
-            tally.tx.add(layer, id, &verdict);
+            tally.add_tx(layer, id, &verdict);
         }
     };
     let answers = wire_answers(&wires, &evaluator);
@@ -365,11 +362,11 @@ pub(super) async fn judge_record(
                 if runs_top {
                     match draft.with_reward_output() {
                         Ok(paid) => judge_reward_output(group, &paid, tally).await,
-                        Err(why) => tally.draft.underived(id, why),
+                        Err(why) => tally.draft_underived(id, why),
                     }
                 }
             }
-            Err(why) => tally.draft.underived(id, why),
+            Err(why) => tally.draft_underived(id, why),
         }
     }
     let verdicts = tally.add_answer(Layer::Pallas, id, &ledger, listed, evaluator.answer);

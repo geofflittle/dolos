@@ -28,8 +28,7 @@ use dolos_cardano::{
 };
 use dolos_core::{
     AsyncQueryFacade, BlockHash, ChainPoint, Domain as _, DomainError, EraCbor, MempoolStore as _,
-    MempoolTx,
-    RawBlock, StateStore as _, SubmitExt as _, SyncExt as _, TxHash, TxoRef,
+    MempoolTx, RawBlock, StateStore as _, SubmitExt as _, SyncExt as _, TxHash, TxoRef,
 };
 use itertools::Itertools as _;
 use ledger_oracle_judge::{
@@ -1336,9 +1335,17 @@ trait Carried {
     /// The Dolos side of a finding line for a served item the ledger does not hold.
     fn unheld(served: &Self::Served) -> String;
     /// Whether the served item is the held one, with the Dolos side of its finding line.
-    fn judged(id: RecordId, hash: Self::Hash, held: &Self::Held, served: Self::Served)
-        -> (bool, String);
+    fn judged(
+        id: RecordId,
+        hash: Self::Hash,
+        held: &Self::Held,
+        served: Self::Served,
+    ) -> (bool, String);
 }
+
+/// The record that first names each item hash, with the held item and its place once a record holds it.
+type Expected<C> =
+    BTreeMap<<C as Carried>::Hash, (RecordId, Option<(<C as Carried>::Held, CarriedAt)>)>;
 
 /// Counts each item hash of the groups whose block rolled or was never made against what the lookup serves for it, the item in the witnesses or on the produced outputs of an accepted record, or nothing otherwise.
 async fn compare_carried<C: Carried>(
@@ -1347,8 +1354,7 @@ async fn compare_carried<C: Carried>(
     blocks: &[GroupBlock<'_>],
     tally: &mut Tally,
 ) {
-    let mut expected: BTreeMap<C::Hash, (RecordId, Option<(C::Held, CarriedAt)>)> =
-        BTreeMap::new();
+    let mut expected: Expected<C> = BTreeMap::new();
     for (record, _) in judged_records(blocks) {
         let id = RecordId {
             corpus: kind,
@@ -1398,7 +1404,11 @@ async fn compare_carried<C: Carried>(
             (Some((held, _)), Ok(Some(served))) => C::judged(id, hash, held, served),
         };
         tally.add(agrees, || {
-            let detail = format!("{}={} ledger={shown} dolos={dolos}", C::KEY, hex::encode(hash));
+            let detail = format!(
+                "{}={} ledger={shown} dolos={dolos}",
+                C::KEY,
+                hex::encode(hash)
+            );
             Finding::new(id, vec![CellKey::new(Axis::Ledger, held(&ledger))], detail)
         });
     }
@@ -1474,7 +1484,9 @@ impl Carried for Datum {
 
     fn witnessed(tx: &MultiEraTx<'_>) -> Vec<([u8; 32], Vec<u8>)> {
         let data = tx.plutus_data();
-        let data = data.iter().map(|d| (*d.original_hash(), d.raw_cbor().to_vec()));
+        let data = data
+            .iter()
+            .map(|d| (*d.original_hash(), d.raw_cbor().to_vec()));
         data.collect()
     }
 
@@ -1977,7 +1989,7 @@ async fn judge(corpus: &Corpus, manifests: &Manifests, edits: &Edits<'_>) -> Jud
     }
     manifests.unjudged(corpus.kind, &judged_ids, &mut judged.validation);
     judged.eval.unjudged(&manifests.eval, corpus.kind);
-    judged.eval.tx.unjudged(&manifests.tx, corpus.kind);
+    judged.eval.tx_unjudged(&manifests.tx, corpus.kind);
     judged.context.unjudged(&manifests.context, corpus.kind);
     judged
         .state
