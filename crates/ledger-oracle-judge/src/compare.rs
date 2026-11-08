@@ -1,8 +1,11 @@
 use std::{collections::BTreeMap, fmt};
 
 use crate::{
+    eval::Layer,
+    judgement::{self, CellKey, EntryPoint, Finding, Judge, Verdict},
     manifest::{KnownList, Locus},
     record::{CorpusKind, RecordId},
+    row::Row,
 };
 
 /// The result of comparing the ledger's bytes for one item with the node's.
@@ -39,6 +42,18 @@ impl ByteVerdict {
     pub fn agrees(&self) -> bool {
         matches!(self, ByteVerdict::Equal)
     }
+
+    /// The cell the comparison touches, which side holds bytes and whether they
+    /// are equal.
+    pub fn cell(&self) -> CellKey {
+        let member = match self {
+            ByteVerdict::Equal => "equal",
+            ByteVerdict::Differ { .. } => "differ",
+            ByteVerdict::LedgerOnly(_) => "ledger_only",
+            ByteVerdict::NodeOnly(_) => "dolos_only",
+        };
+        CellKey::new("bytes", member)
+    }
 }
 
 impl fmt::Display for ByteVerdict {
@@ -61,26 +76,51 @@ pub fn first_difference(a: &[u8], b: &[u8]) -> Option<usize> {
     }
 }
 
-/// The number of items one comparison checked and a description of each that disagreed.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct Tally {
+/// The number of items one comparison checked and the finding of each that
+/// disagreed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tally<F = Finding> {
     pub compared: usize,
-    pub disagree: Vec<String>,
+    pub disagree: Vec<F>,
 }
 
-impl Tally {
-    /// Counts one compared item, keeping its description when it disagrees.
-    pub fn add(&mut self, agrees: bool, describe: impl FnOnce() -> String) {
+impl<F> Default for Tally<F> {
+    fn default() -> Self {
+        Tally {
+            compared: 0,
+            disagree: Vec::new(),
+        }
+    }
+}
+
+impl<F> Tally<F> {
+    /// Counts one compared item, keeping its finding when it disagrees.
+    pub fn add(&mut self, agrees: bool, describe: impl FnOnce() -> F) {
         self.compared += 1;
         if !agrees {
             self.disagree.push(describe());
         }
     }
 
+    /// Counts one compared item that agrees.
+    pub fn agree(&mut self) {
+        self.compared += 1;
+    }
+
     /// Counts the items and keeps the disagreements of another tally.
-    pub fn merge(&mut self, other: Tally) {
+    pub fn merge(&mut self, other: Tally<F>) {
         self.compared += other.compared;
         self.disagree.extend(other.disagree);
+    }
+}
+
+impl Tally {
+    /// Adds the verdicts of the tally as the judgement of `judge` at `entry`.
+    pub fn report(&self, judge: Judge, entry: EntryPoint, out: &mut judgement::Tally) {
+        out.count(judge, self.compared - self.disagree.len());
+        for finding in &self.disagree {
+            out.add(finding.clone().verdict(judge, entry));
+        }
     }
 }
 
@@ -130,12 +170,13 @@ pub struct StateTallies {
     pub served_tx: Tally,
     pub known: Vec<String>,
     pub known_fired: KnownList,
-    pub known_stale: Vec<String>,
+    pub known_stale: Vec<Verdict>,
 }
 
 impl StateTallies {
-    /// Each tally a passing corpus compares at least once, by name.
-    fn named(&self) -> [(&'static str, &Tally); 10] {
+    /// Each tally a passing corpus compares at least once, by its judge and the
+    /// entry point it drives.
+    fn named(&self) -> [(Judge, EntryPoint, &Tally); 10] {
         let StateTallies {
             roll_fail: _,
             utxo,
@@ -157,27 +198,54 @@ impl StateTallies {
             known_stale: _,
         } = self;
         [
-            ("utxo", utxo),
-            ("as_output", as_output),
-            ("accounts", accounts),
-            ("undo", undo),
-            ("params", params),
-            ("readtx", readtx),
-            ("script", script),
-            ("datum", datum),
-            ("plutus_data", plutus_data),
-            ("served_tx", served_tx),
+            (Judge::Utxo, EntryPoint::ReadUtxos, utxo),
+            (Judge::AsOutput, EntryPoint::FetchBlock, as_output),
+            (Judge::Accounts, EntryPoint::ReadAccounts, accounts),
+            (Judge::Undo, EntryPoint::ApplyBlock, undo),
+            (Judge::Params, EntryPoint::ReadParams, params),
+            (Judge::ReadTx, EntryPoint::ReadTx(Layer::V1), readtx),
+            (Judge::Script, EntryPoint::ReadData, script),
+            (Judge::Datum, EntryPoint::ReadData, datum),
+            (Judge::PlutusData, EntryPoint::ReadData, plutus_data),
+            (Judge::ServedTx, EntryPoint::FetchBlock, served_tx),
         ]
     }
 
-    /// Whether every block rolled forward, every named tally compared at least one item, no tally holds a disagreement, and no known entry is stale.
-    pub fn pass(&self) -> bool {
-        let tallies = self.named();
-        let agree = tallies
-            .iter()
-            .all(|(_, t)| t.compared > 0 && t.disagree.is_empty());
-        let revalidated = self.revalidate.disagree.is_empty();
-        agree && revalidated && self.known_stale.is_empty() && self.roll_fail.is_empty()
+    /// Adds the verdicts of every tally, each block that did not roll forward
+    /// and each stale known entry, and requires each named tally to have
+    /// compared an item.
+    pub fn report(&self, out: &mut judgement::Tally) {
+        let revalidate = (Judge::Revalidate, EntryPoint::Revalidate, &self.revalidate);
+        let mut required = Vec::new();
+        for (judge, entry, tally) in self.named().into_iter().chain([revalidate]) {
+            tally.report(judge, entry, out);
+            if judge != Judge::Revalidate {
+                required.push((judge, entry));
+            }
+        }
+        for ((locus, id), row) in &self.known_fired {
+            let (judge, entry) = locus.judge();
+            out.add(Verdict {
+                judge,
+                entry,
+                subject: judgement::Subject::Record(*id),
+                cells: vec![CellKey::new("row", row)],
+                outcome: judgement::Outcome::Known(format!("row={row}")),
+            });
+        }
+        for fail in &self.roll_fail {
+            out.add(Verdict::disagree(
+                Judge::ApplyBlock,
+                EntryPoint::ApplyBlock,
+                fail.first,
+                vec![CellKey::new("answer", "refused")],
+                fail.to_string(),
+            ));
+        }
+        for stale in &self.known_stale {
+            out.add(stale.clone());
+        }
+        out.require(&required);
     }
 
     /// Adds the comparisons of another arm part after this one's.
@@ -256,22 +324,31 @@ impl StateTallies {
         checks: BTreeMap<RecordId, Tally>,
         known: &KnownList,
     ) {
+        let (judge, entry) = locus.judge();
+        let stale = |id: RecordId, row: &Row, detail: String| {
+            let cells = vec![
+                CellKey::new("failure", "known_stale"),
+                CellKey::new("row", row),
+            ];
+            Verdict::disagree(judge, entry, id, cells, detail)
+        };
         for (id, tally) in &checks {
             tally_of(self).compared += tally.compared;
             match known.get(&(locus, *id)) {
                 None => {
-                    let lines = tally.disagree.iter().map(|d| format!("{id} {d}"));
-                    tally_of(self).disagree.extend(lines);
+                    tally_of(self)
+                        .disagree
+                        .extend(tally.disagree.iter().cloned());
                 }
                 Some(row) if tally.disagree.is_empty() => {
                     self.known_stale
-                        .push(format!("{id} row={row} locus={locus}"));
+                        .push(stale(*id, row, format!("row={row} locus={locus}")));
                 }
                 Some(row) => {
                     let lines = tally
                         .disagree
                         .iter()
-                        .map(|d| format!("row={row} ids={id} {locus} {d}"));
+                        .map(|d| format!("row={row} ids={id} {locus} {}", d.detail));
                     self.known.extend(lines);
                     self.known_fired.insert((locus, *id), *row);
                 }
@@ -279,8 +356,8 @@ impl StateTallies {
         }
         for ((entry, id), row) in known {
             if *entry == locus && id.corpus == kind && !checks.contains_key(id) {
-                self.known_stale
-                    .push(format!("{id} row={row} locus={locus} not_compared"));
+                let detail = format!("row={row} locus={locus} not_compared");
+                self.known_stale.push(stale(*id, row, detail));
             }
         }
     }
@@ -289,7 +366,7 @@ impl StateTallies {
 impl fmt::Display for StateTallies {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let StateTallies {
-            roll_fail,
+            roll_fail: _,
             utxo,
             as_output,
             sub_only,
@@ -306,7 +383,7 @@ impl fmt::Display for StateTallies {
             served_tx,
             known,
             known_fired: _,
-            known_stale,
+            known_stale: _,
         } = self;
         write!(
             f,
@@ -327,26 +404,8 @@ impl fmt::Display for StateTallies {
             served_tx.compared,
             self.rolled_failed()
         )?;
-        for line in roll_fail {
-            write!(f, "\nROLL_FAIL {line}")?;
-        }
         for line in known {
             write!(f, "\nKNOWN {line}")?;
-        }
-        for line in known_stale {
-            write!(f, "\nKNOWN_STALE {line}")?;
-        }
-        let revalidate = [("revalidate", &self.revalidate)];
-        for (name, t) in self.named().into_iter().chain(revalidate) {
-            if !t.disagree.is_empty() {
-                write!(f, "\nSTATE {name} disagree={}", t.disagree.len())?;
-                if name == "as_output" {
-                    write!(f, " of sub_only={sub_only}")?;
-                }
-                for d in t.disagree.iter().take(20) {
-                    write!(f, "\nDIFF {name} {d}")?;
-                }
-            }
         }
         Ok(())
     }
@@ -376,9 +435,9 @@ mod tests {
         let mut checks = BTreeMap::new();
         for (n, disagree) in entries {
             let tally: &mut Tally = checks.entry(supp(*n)).or_default();
-            tally.add(true, String::new);
+            tally.agree();
             for d in *disagree {
-                tally.add(false, || d.to_string());
+                tally.add(false, || Finding::new(supp(*n), Vec::new(), *d));
             }
         }
         checks
@@ -386,24 +445,52 @@ mod tests {
 
     fn compared() -> StateTallies {
         let mut state = StateTallies::default();
-        state.utxo.add(true, String::new);
-        state.accounts.add(true, String::new);
-        state.undo.add(true, String::new);
-        state.revalidate.add(true, String::new);
-        state.params.add(true, String::new);
-        state.readtx.add(true, String::new);
-        state.script.add(true, String::new);
-        state.datum.add(true, String::new);
-        state.plutus_data.add(true, String::new);
-        state.served_tx.add(true, String::new);
+        state.utxo.agree();
+        state.accounts.agree();
+        state.undo.agree();
+        state.revalidate.agree();
+        state.params.agree();
+        state.readtx.agree();
+        state.script.agree();
+        state.datum.agree();
+        state.plutus_data.agree();
+        state.served_tx.agree();
         state
+    }
+
+    /// The verdicts the state reports.
+    fn reported(state: &StateTallies) -> judgement::Tally {
+        let mut out = judgement::Tally::default();
+        state.report(&mut out);
+        out
+    }
+
+    /// Whether the verdicts the state reports pass a run.
+    fn passes(state: &StateTallies) -> bool {
+        matches!(
+            reported(state).verdict(),
+            judgement::RunVerdict::Pass { .. }
+        )
     }
 
     fn tally(lines: &[&str]) -> Tally {
         Tally {
             compared: 2 * lines.len(),
-            disagree: lines.iter().map(|l| l.to_string()).collect(),
+            disagree: lines
+                .iter()
+                .map(|l| Finding::new(supp(0), Vec::new(), *l))
+                .collect(),
         }
+    }
+
+    fn stale(line: &str) -> Verdict {
+        Verdict::disagree(
+            Judge::Accounts,
+            EntryPoint::ReadAccounts,
+            supp(0),
+            Vec::new(),
+            line,
+        )
     }
 
     fn roll_fail(n: u32) -> RollFail {
@@ -437,7 +524,7 @@ mod tests {
             served_tx: tally(&lines),
             known: vec![line.clone()],
             known_fired: BTreeMap::from([((Locus::Accounts, supp(n)), row)]),
-            known_stale: vec![line],
+            known_stale: vec![stale(&line)],
         }
     }
 
@@ -467,7 +554,7 @@ mod tests {
                 ((Locus::Accounts, supp(0)), Row::S1),
                 ((Locus::Accounts, supp(1)), Row::S2),
             ]),
-            known_stale: vec!["line0".to_string(), "line1".to_string()],
+            known_stale: vec![stale("line0"), stale("line1")],
         };
         assert_eq!(merged, both);
     }
@@ -482,8 +569,8 @@ mod tests {
     #[test]
     fn a_comparison_that_looked_at_nothing_fails() {
         let mut state = compared();
-        state.as_output.add(true, String::new);
-        assert!(state.pass(), "{state}");
+        state.as_output.agree();
+        assert!(passes(&state), "{state}");
         let empties: [fn(&mut StateTallies) -> &mut Tally; 10] = [
             |s| &mut s.utxo,
             |s| &mut s.as_output,
@@ -499,7 +586,9 @@ mod tests {
         for empty in empties {
             let mut state = state.clone();
             *empty(&mut state) = Tally::default();
-            assert!(!state.pass(), "{state}");
+            let out = reported(&state);
+            assert_eq!(out.failing.len(), 1, "{out}");
+            assert!(out.failing[0].to_string().ends_with("judged=0"), "{out}");
         }
         assert!(state.to_string().contains(
             " seeded_unjudged=0 accounts=1 undo=1 revalidate=1 of dependents=0 params=1 \
@@ -510,18 +599,23 @@ mod tests {
     #[test]
     fn a_corpus_with_no_dependent_passes_and_a_kept_dependent_fails() {
         let mut state = compared();
-        state.as_output.add(true, String::new);
+        state.as_output.agree();
         state.revalidate = Tally::default();
-        assert!(state.pass(), "{state}");
-        state.revalidate.add(true, String::new);
-        assert!(state.pass(), "{state}");
-        let line = "supp#2 kept_after_rollback_to=Slot(40)";
-        state.revalidate.add(false, || line.to_string());
-        assert!(!state.pass(), "{state}");
-        let text = state.to_string();
-        assert!(text.contains("\nSTATE revalidate disagree=1\n"), "{text}");
+        assert!(passes(&state), "{state}");
+        state.revalidate.agree();
+        assert!(passes(&state), "{state}");
+        let cells = vec![CellKey::new("rollback", "kept")];
+        let line = "kept_after_rollback_to=Slot(40)";
+        state
+            .revalidate
+            .add(false, || Finding::new(supp(2), cells, line));
+        assert!(!passes(&state), "{state}");
+        let text = reported(&state).to_string();
         assert!(
-            text.contains(&format!("\nDIFF revalidate {line}")),
+            text.contains(&format!(
+                "VERDICT judge=revalidate entry=revalidate record=supp#2 \
+                 cells=rollback:kept outcome=disagree {line}\n"
+            )),
             "{text}"
         );
     }
@@ -529,10 +623,10 @@ mod tests {
     #[test]
     fn a_group_that_did_not_roll_prints_one_line_and_fails() {
         let mut state = compared();
-        state.as_output.add(true, String::new);
-        assert!(state.pass(), "{state}");
+        state.as_output.agree();
+        assert!(passes(&state), "{state}");
         assert!(state.to_string().contains(" served_tx=1 rolled_failed=0"));
-        assert!(!state.to_string().contains("ROLL_FAIL"));
+        assert!(reported(&state).failing.is_empty());
         state.roll_fail.push(RollFail {
             first: supp(3),
             last: supp(5),
@@ -540,12 +634,13 @@ mod tests {
             slot: 40,
             cause: "panic at=a.rs:1:2 explicit panic".to_string(),
         });
-        assert!(!state.pass(), "{state}");
-        let text = state.to_string();
-        assert!(text.contains(" served_tx=1 rolled_failed=3\n"), "{text}");
+        assert!(!passes(&state), "{state}");
+        assert!(state.to_string().ends_with(" served_tx=1 rolled_failed=3"));
+        let text = reported(&state).to_string();
         assert!(
             text.contains(
-                "\nROLL_FAIL group=supp#3..supp#5 records=3 slot=40 panic at=a.rs:1:2 explicit panic"
+                "VERDICT judge=apply-block entry=apply_block record=supp#3 cells=answer:refused \
+                 outcome=disagree group=supp#3..supp#5 records=3 slot=40 panic at=a.rs:1:2 explicit panic\n"
             ),
             "{text}"
         );
@@ -561,7 +656,7 @@ mod tests {
         );
         assert_eq!(state.as_output.compared, 2);
         assert!(state.known.is_empty() && state.known_stale.is_empty());
-        assert!(state.pass(), "{state}");
+        assert!(passes(&state), "{state}");
     }
 
     #[test]
@@ -576,7 +671,7 @@ mod tests {
         );
         assert_eq!(state.known_fired, known);
         assert!(state.as_output.disagree.is_empty());
-        assert!(state.pass(), "{state}");
+        assert!(passes(&state), "{state}");
     }
 
     #[test]
@@ -598,30 +693,38 @@ mod tests {
             ((Locus::Validation, supp(11)), Row::V1),
         ]);
         state.settle_as_output(CorpusKind::Supp, checks(&[(9, &[])]), &known);
+        let lines: Vec<String> = state.known_stale.iter().map(Verdict::to_string).collect();
         assert_eq!(
-            state.known_stale,
+            lines,
             vec![
-                "supp#9 row=S3 locus=as_output".to_string(),
-                "supp#10 row=S3 locus=as_output not_compared".to_string()
+                "VERDICT judge=as-output entry=fetch_block record=supp#9 \
+                 cells=failure:known_stale,row:S3 outcome=disagree row=S3 locus=as_output"
+                    .to_string(),
+                "VERDICT judge=as-output entry=fetch_block record=supp#10 \
+                 cells=failure:known_stale,row:S3 outcome=disagree row=S3 locus=as_output not_compared"
+                    .to_string()
             ]
         );
         assert!(state.known_fired.is_empty());
-        assert!(!state.pass());
+        assert!(!passes(&state));
     }
 
     #[test]
     fn an_account_disagreement_off_the_known_list_fails_and_a_known_one_passes() {
         let diff = "account=keyHash-00 ledger=balance=0,pool=none,drep=none dolos=balance=0";
         let mut state = compared();
-        state.as_output.add(true, String::new);
+        state.as_output.agree();
         let as_output = KnownList::from([((Locus::AsOutput, supp(9)), Row::S3)]);
         state.settle_accounts(CorpusKind::Supp, checks(&[(9, &[diff])]), &as_output);
-        assert_eq!(state.accounts.disagree, vec![format!("supp#9 {diff}")]);
+        assert_eq!(
+            state.accounts.disagree,
+            vec![Finding::new(supp(9), Vec::new(), diff)]
+        );
         assert!(state.known.is_empty());
-        assert!(!state.pass(), "{state}");
+        assert!(!passes(&state), "{state}");
 
         let mut state = compared();
-        state.as_output.add(true, String::new);
+        state.as_output.agree();
         let known = KnownList::from([((Locus::Accounts, supp(9)), Row::S18)]);
         state.settle_accounts(CorpusKind::Supp, checks(&[(9, &[diff])]), &known);
         assert_eq!(
@@ -630,7 +733,7 @@ mod tests {
         );
         assert_eq!(state.known_fired, known);
         assert!(state.accounts.disagree.is_empty());
-        assert!(state.pass(), "{state}");
+        assert!(passes(&state), "{state}");
     }
 
     #[test]
@@ -638,11 +741,16 @@ mod tests {
         let mut state = compared();
         let diff = "ledger=ab dolos=none input=00#1 services=FetchBlock";
         state.settle_as_output(CorpusKind::Supp, checks(&[(9, &[diff])]), &KnownList::new());
-        assert_eq!(state.as_output.disagree, vec![format!("supp#9 {diff}")]);
-        assert!(!state.pass());
-        assert!(state
-            .to_string()
-            .contains("\nSTATE as_output disagree=1 of sub_only=0\n"));
+        assert_eq!(
+            state.as_output.disagree,
+            vec![Finding::new(supp(9), Vec::new(), diff)]
+        );
+        let out = reported(&state);
+        assert_eq!(out.failing.len(), 1, "{out}");
+        assert_eq!(
+            out.failing[0].to_string(),
+            format!("VERDICT judge=as-output entry=fetch_block record=supp#9 cells= outcome=disagree {diff}")
+        );
     }
 
     #[test]

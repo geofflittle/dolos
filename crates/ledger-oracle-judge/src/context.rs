@@ -8,6 +8,7 @@ use std::{
 use crate::{
     cbor::{self, Data},
     eval::{parse_purpose, Level, Refusal, RowKey},
+    judgement::{self, CellKey, EntryPoint, Judge, Verdict},
     manifest::ManifestError,
     record::{Argument, CorpusKind, Evaluation, LedgerRedeemers, Record, RecordId, Redeemers},
 };
@@ -572,12 +573,39 @@ pub struct ContextTally {
     pub bytes_equal: usize,
     pub languages: BTreeMap<Language, Counts>,
     pub levels: BTreeMap<&'static str, Counts>,
-    pub failures: Vec<String>,
+    pub failing: Vec<Verdict>,
     pub judged: BTreeSet<RecordId>,
 }
 
+/// The cell of the field a difference line names, its path's last component.
+fn field_cell(line: &str) -> Option<CellKey> {
+    let field = line.split(' ').find_map(|w| w.strip_prefix("field="))?;
+    Some(CellKey::new("field", field.rsplit('.').next()?))
+}
+
 impl ContextTally {
-    /// Counts each row verdict of one record, keeping a line for each that fails.
+    /// Keeps a failing verdict for each line of one row of record `id`, each with the row's cells, the answer kind and the field a line names.
+    fn fail(
+        &mut self,
+        id: RecordId,
+        key: &RowKey,
+        language: &Option<Language>,
+        answer: &'static str,
+        lines: impl Iterator<Item = String>,
+    ) {
+        for line in lines {
+            let mut cells = key.cells();
+            cells.extend(language.map(|l| CellKey::new("language", l)));
+            cells.push(CellKey::new("answer", answer));
+            cells.extend(field_cell(&line));
+            let detail = format!("{key} {line}");
+            let entry = EntryPoint::RedeemerArguments;
+            self.failing
+                .push(Verdict::disagree(Judge::Context, entry, id, cells, detail));
+        }
+    }
+
+    /// Counts each row verdict of one record, keeping a failing verdict for each line that fails.
     pub fn add(&mut self, id: RecordId, verdicts: &[(RowKey, Option<Language>, ContextVerdict)]) {
         self.judged.insert(id);
         for (key, language, verdict) in verdicts {
@@ -600,22 +628,22 @@ impl ContextTally {
                         .iter()
                         .cloned()
                         .chain(listed.map(|l| format!("listed {l}")));
-                    self.failures
-                        .extend(lines.map(|l| format!("CONTEXT-DIFF {id} {key} {l}")));
+                    self.fail(id, key, language, "differ", lines);
                 }
                 ContextVerdict::PallasOnly { ledger, listed } => {
                     self.pallas_only += 1;
                     let listed = listed.iter().flat_map(Listing::lines);
                     let lines = std::iter::once(format!("refused {ledger}"))
                         .chain(listed.map(|l| format!("listed {l}")));
-                    self.failures
-                        .extend(lines.map(|l| format!("CONTEXT-PALLAS-ONLY {id} {key} {l}")));
+                    self.fail(id, key, language, "pallas_only", lines);
                 }
                 ContextVerdict::Stale(listing) => {
                     counts.differ += 1;
-                    let lines = listing.lines().into_iter();
-                    self.failures
-                        .extend(lines.map(|l| format!("CONTEXT-STALE {id} {key} {l} not shown")));
+                    let lines = listing
+                        .lines()
+                        .into_iter()
+                        .map(|l| format!("{l} not shown"));
+                    self.fail(id, key, language, "stale", lines);
                 }
             }
             self.agree += counts.agree;
@@ -638,13 +666,12 @@ impl ContextTally {
         let missed = known
             .iter()
             .filter(|(id, _)| id.corpus == corpus && !self.judged.contains(id));
-        for (id, rows) in missed {
-            for (key, listing) in rows {
-                for line in listing.lines() {
-                    self.failures
-                        .push(format!("CONTEXT-STALE {id} {key} {line} not judged"));
-                }
-            }
+        let missed: Vec<(RecordId, RowKey, Vec<String>)> = missed
+            .flat_map(|(id, rows)| rows.iter().map(|(key, l)| (*id, *key, l.lines())))
+            .collect();
+        for (id, key, lines) in missed {
+            let lines = lines.into_iter().map(|l| format!("{l} not judged"));
+            self.fail(id, &key, &None, "unjudged", lines);
         }
     }
 
@@ -660,7 +687,7 @@ impl ContextTally {
             bytes_equal,
             languages,
             levels,
-            failures,
+            failing,
             judged,
         } = other;
         self.agree += agree;
@@ -676,13 +703,14 @@ impl ContextTally {
         for (level, counts) in levels {
             self.levels.entry(level).or_default().merge(counts);
         }
-        self.failures.extend(failures);
+        self.failing.extend(failing);
         self.judged.extend(judged);
     }
 
-    /// Whether no row differs, no context is built by the evaluator alone and every listing is shown.
-    pub fn pass(&self) -> bool {
-        self.differ == 0 && self.pallas_only == 0 && self.failures.is_empty()
+    /// Adds the passing count and the failing verdicts to `out`.
+    pub fn report(&self, out: &mut judgement::Tally) {
+        out.count(Judge::Context, self.agree + self.known);
+        self.failing.iter().cloned().for_each(|v| out.add(v));
     }
 }
 
@@ -712,11 +740,7 @@ impl fmt::Display for ContextTally {
             self.no_ledger_context,
             self.pallas_only,
             self.bytes_equal,
-        )?;
-        for line in &self.failures {
-            write!(f, "\n{line}")?;
-        }
-        Ok(())
+        )
     }
 }
 
@@ -1048,7 +1072,13 @@ mod tests {
                 (sub, None, ContextVerdict::NoLedgerContext),
             ],
         );
-        assert!(tally.pass());
+        let passes = |t: &ContextTally| {
+            let mut out = judgement::Tally::default();
+            t.report(&mut out);
+            out.verdict().to_string().starts_with("RESULT PASS")
+        };
+        let lines = |t: &ContextTally| t.failing.iter().map(Verdict::to_string).collect::<Vec<_>>();
+        assert!(passes(&tally));
         assert_eq!(
             tally.to_string(),
             "CONTEXT compared=2 agree=2 differ=0 known=0 unbuilt=1 no_ledger_context=1 pallas_only=0 bytes_equal=1 by_language=V3:1/0/0,V4:1/0/0 by_level=sub:1/0/0,top:1/0/0"
@@ -1065,21 +1095,23 @@ mod tests {
                 },
             )],
         );
-        assert!(!failing.pass());
-        assert!(failing.to_string().ends_with(
-            "\nCONTEXT-DIFF ic#3 top Spend#0 V1 arg=0 path=root field=datum ledger=1 pallas=2"
-        ));
+        assert!(!passes(&failing));
+        assert_eq!(
+            lines(&failing),
+            ["VERDICT judge=context entry=redeemer_arguments record=ic#3 cells=purpose:Spend,level:top,language:V1,answer:differ,field:datum outcome=disagree top Spend#0 V1 arg=0 path=root field=datum ledger=1 pallas=2"]
+        );
         let known =
             parse_context_known("context-known.txt", "ic#9 top Spend#0 refused x\n").unwrap();
         let mut stale = tally.clone();
         stale.unjudged(&known, CorpusKind::Ic);
-        assert!(!stale.pass());
-        assert!(stale
-            .to_string()
-            .ends_with("\nCONTEXT-STALE ic#9 top Spend#0 refused x not judged"));
+        assert!(!passes(&stale));
+        assert_eq!(
+            lines(&stale),
+            ["VERDICT judge=context entry=redeemer_arguments record=ic#9 cells=purpose:Spend,level:top,answer:unjudged outcome=disagree top Spend#0 refused x not judged"]
+        );
         let mut other = tally.clone();
         other.unjudged(&known, CorpusKind::Supp);
-        assert!(other.pass());
+        assert!(passes(&other));
     }
 
     #[test]

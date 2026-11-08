@@ -6,10 +6,9 @@ use std::{
 
 use ledger_oracle_judge::{
     cbor::{self, EraBound, NodeEra, TxIn},
-    compare::Tally,
     live::{
         block_bytes, chunk_blocks, compare_era_summary, compare_utxos, settle, Aligned, AtPoint,
-        Endorsed, NodeBlock, NodeSlot, NodeTime, NodeTip, Point, ServedEra, ServedTime,
+        Endorsed, NodeBlock, NodeSlot, NodeTime, NodeTip, Point, ServedEra, ServedTime, Tally,
         UtxoBracket, UtxoReads,
     },
     manifest::{self, Candidates, Known, LiveLocus},
@@ -493,10 +492,10 @@ fn live() {
         let (ledger, served) = aligned.value();
         let label = format!("epoch={}", aligned.epoch());
         params::compare(
-            label,
             ledger,
             served,
             tallies.entry(LiveLocus::Params).or_default(),
+            |_, difference| format!("{label} {difference}"),
         );
     }
     let history = node_eras(&dir);

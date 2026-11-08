@@ -5,19 +5,26 @@
 # The quick tier judges the head on both corpora, the control and each arm whose plant changes a file that differs between BASE and REV, a pallas arm when the pallas entries of Cargo.toml or Cargo.lock differ. BASE defaults to the commit of the last done or ship run that passed, and when there is none every arm runs. The done tier, run per change, judges the head, the control and every arm, and fails on a fix commit that arms.toml gives neither an arm nor an exclusion. The ship tier, run before a rollout of the dolos-serve image, is the done tier while the live leg syncs a candidate from genesis. Only the ship tier and the live leg read the live node. The done and ship tiers record their commit in runs/last-done when they pass, and the ship tier and the live leg record theirs in runs/last-ship when the live leg passes.
 # The live leg reads ENDPOINT, NODE, NODE_DB, GRPCURL, SERVE_CONFIG and CANDIDATE_GRPC from $LIVE_ENV.
 set -eu
+# Prints the run's exit status as its last line, after releasing the box lock when this run holds it.
+finish() {
+  status=$?
+  if command -v release_lock >/dev/null; then
+    release_lock
+  fi
+  echo "run-exit=$status"
+}
+trap finish EXIT
 : "${ROOT:?}"
-REV=${REV:-feat/ledger-oracle}
 BASE=${BASE:-}
-MIN_FREE_G=${MIN_FREE_G:-6}
 CANDIDATE_NEED_G=${CANDIDATE_NEED_G:-12}
 LAST_DONE="$ROOT/runs/last-done"
 LAST_SHIP="$ROOT/runs/last-ship"
 HERE=$(cd "$(dirname "$0")" && pwd)
 LIVE_ENV=${LIVE_ENV:-$ROOT/live.env}
 REGEN_DIR=${REGEN_DIR:-$ROOT/regen}
-SCRATCH=scratch/dolos
-TEST=serve::grpc::v1::ledger_oracle_tests
-OUT=${OUT:-"$ROOT/runs/$(date -u +%Y%m%dT%H%M%SZ)"}
+. "$HERE/lib.sh"
+. "$HERE/value.sh"
+. "$HERE/amaru.sh"
 case $OUT in
   "$ROOT"/*) ;;
   *) echo "REFUSED OUT=$OUT is outside $ROOT" ; exit 2 ;;
@@ -26,10 +33,8 @@ case ${1:-} in
   quick | done | ship | live | regen | value) ;;
   *) echo "usage: run.sh quick|done|ship|live|regen|value" ; exit 2 ;;
 esac
-. "$HERE/lib.sh"
-. "$HERE/value.sh"
-. "$HERE/amaru.sh"
 take_lock
+trap finish EXIT
 # The tier runs the scripts and plants of the commit it judges, from that
 # commit's oracle/box in $OUT/box.
 if [ -z "${JUDGED:-}" ]; then
@@ -94,9 +99,14 @@ sync_candidate() {
 judge_live() {
   # The judge runs in the run's own dir, since the arms check other commits out in the scratch tree meanwhile.
   [ -f "$OUT/bin/judge" ] && [ -f "$OUT/live/candidate/image.txt" ] &&
-    LIVE_DIR="/w/${OUT#"$ROOT"/}/live/candidate" sh "$HERE/in-image.sh" "${OUT#"$ROOT"/}" \
-      "/w/${OUT#"$ROOT"/}/bin/judge" "$TEST::live::live" --exact --ignored --nocapture \
+    LIVE_DIR="/w/${OUT#"$ROOT"/}/live/candidate" sh "$IN_IMAGE" "${OUT#"$ROOT"/}" \
+      "/w/${OUT#"$ROOT"/}/bin/judge" "$ORACLE_TESTS::live::live" --exact --ignored --nocapture \
       >"$OUT/live.log" 2>&1
+}
+
+# Prints the live judge's verdict lines from $OUT/live.log.
+live_lines() {
+  grep -E '^(LIVE|KNOWN|KNOWN_STALE|LIVE-DIFF|LIVE-GAP) ' "$OUT/live.log" | cut -c1-400 || true
 }
 
 # Judges a copy of the candidate's reads with the served era start and tip one second late, the reads of a system start one second late, and prints the verdict of the arm that requires both times to disagree with the node.
@@ -108,8 +118,8 @@ live_shift() {
     jq '.cardano.summaries[-1].start.time |= (tonumber + 1000 | tostring)' \
       "$OUT/live/candidate/era.json" >"$shifted/era.json" &&
     jq '.tip.timestamp |= (tonumber + 1000 | tostring)' "$OUT/live/candidate/tip.json" >"$shifted/tip.json"; then
-    LIVE_DIR="/w/${OUT#"$ROOT"/}/live/shifted" sh "$HERE/in-image.sh" "${OUT#"$ROOT"/}" \
-      "/w/${OUT#"$ROOT"/}/bin/judge" "$TEST::live::live" --exact --ignored --nocapture \
+    LIVE_DIR="/w/${OUT#"$ROOT"/}/live/shifted" sh "$IN_IMAGE" "${OUT#"$ROOT"/}" \
+      "/w/${OUT#"$ROOT"/}/bin/judge" "$ORACLE_TESTS::live::live" --exact --ignored --nocapture \
       >"$OUT/live-shift.log" 2>&1 || true
     times='slot=[0-9]+ time=[0-9]+ node_slot=[0-9]+ '
     if grep -E "^LIVE-DIFF row=[^ ]* locus=era_summary era=[a-z]+ start_time $times" "$OUT/live-shift.log" &&
@@ -140,20 +150,10 @@ live_run() {
   if live_leg; then
     live=PASS
   fi
-  grep -E '^(LIVE|KNOWN|KNOWN_STALE|LIVE-DIFF|LIVE-GAP) ' "$OUT/live.log" | cut -c1-400 || true
+  live_lines
   shift_verdict=$(live_shift | tail -1)
   echo "LIVE-LEG live=$live $shift_verdict commit=$commit logs=$OUT"
   record_pass live "$commit" "live=$live $shift_verdict"
-}
-
-# The arms whose plant changes a file that differs between the commits $1 and $2 of the scratch tree, one per line.
-touched_arms() {
-  differing_files "$ROOT/$SCRATCH" "$1" "$2" >"$OUT/changed"
-  for arm in $PLANTED_ARMS; do
-    if plant_files "$arm" | grep -q -x -F -f "$OUT/changed"; then
-      echo "$arm"
-    fi
-  done
 }
 
 # Judges the head, the control and the arms the change from BASE touches, every arm when no BASE is known.
@@ -171,7 +171,8 @@ quick_run() {
   if [ -n "$BASE" ]; then
     git -C "$ROOT/$SCRATCH" fetch -q "$ROOT/dolos.git" "$BASE"
     base=$(git -C "$ROOT/$SCRATCH" rev-parse FETCH_HEAD)
-    arms=$(touched_arms "$base" "$commit" | paste -sd ' ' -)
+    touched_arms "$base" "$commit" >"$OUT/arms"
+    arms=$(paste -sd ' ' - <"$OUT/arms")
   fi
   echo "QUICK base=$base arms=\"$arms\""
   ARMS="head control${arms:+ $arms}" sh "$HERE/breaks.sh" | tee "$OUT/breaks.out"
@@ -276,7 +277,7 @@ ship_run() {
   cat "$OUT/live-leg.out"
   verdicts=$(sed -n 's/^ARMS \(.*\) logs=.*/\1/p' "$OUT/breaks.out")
   verdicts="$verdicts $(due_value_verdicts)"
-  grep -E '^(LIVE|KNOWN|KNOWN_STALE|LIVE-DIFF|LIVE-GAP) ' "$OUT/live.log" | cut -c1-400 || true
+  live_lines
   shift_verdict=$(live_shift | tail -1)
   echo "DONE tier=ship $verdicts $shift_verdict live=$live commit=$commit logs=$OUT"
   record_pass ship "$commit" "$verdicts $shift_verdict live=$live"
@@ -293,7 +294,7 @@ regen_run() {
     echo "REGEN REFUSED the judge build $built"
     exit 1
   fi
-  sh "$IN_IMAGE" "$SCRATCH" "$(executable "$OUT/head.build")" "$TEST::ledger_oracle" \
+  sh "$IN_IMAGE" "$SCRATCH" "$(executable "$OUT/head.build")" "$ORACLE_TESTS::ledger_oracle" \
     --exact --ignored --nocapture >"$OUT/head.log" 2>&1 || true
   if ! grep -q '^RESULT ' "$OUT/head.log"; then
     echo "REGEN REFUSED the head run printed no RESULT log=$OUT/head.log"

@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, fmt, str::FromStr};
 use thiserror::Error;
 
 use crate::{
+    judgement::{EntryPoint, Judge},
     record::{CorpusKind, RecordId},
     row::{coverage, Check, Row},
 };
@@ -35,6 +36,16 @@ impl Locus {
             Locus::Validation => Check::Validation,
             Locus::AsOutput => Check::AsOutput,
             Locus::Accounts => Check::Accounts,
+        }
+    }
+
+    /// The judge of the comparison the locus names and the entry point it
+    /// drives.
+    pub fn judge(self) -> (Judge, EntryPoint) {
+        match self {
+            Locus::Validation => (Judge::Validation, EntryPoint::SubmitTx),
+            Locus::AsOutput => (Judge::AsOutput, EntryPoint::FetchBlock),
+            Locus::Accounts => (Judge::Accounts, EntryPoint::ReadAccounts),
         }
     }
 }

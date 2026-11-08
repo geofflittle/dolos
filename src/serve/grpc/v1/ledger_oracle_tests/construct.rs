@@ -3,7 +3,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ledger_oracle_judge::record::RecordId;
+use ledger_oracle_judge::{
+    judgement::{self, CellKey, EntryPoint, Judge, Outcome, Subject, Verdict},
+    record::RecordId,
+};
 use pallas::{
     codec::minicbor,
     crypto::hash::{Hash, Hasher},
@@ -252,33 +255,40 @@ impl Coverage {
         }
     }
 
-    /// The line of each construct at each depth, a count line, and whether
-    /// every one has a record.
-    pub(super) fn bar(&self) -> (Vec<String>, bool) {
+    /// The line of each covered construct at each depth and a count line,
+    /// adding a failing verdict for each construct no record holds.
+    pub(super) fn bar(&self, out: &mut judgement::Tally) -> Vec<String> {
         let mut lines = Vec::new();
         let (mut covered, mut agreed) = (0, 0);
         let entries = Construct::ENTRIES;
         for (depth, construct) in entries {
             let name = format!("{}_{}", depth.name(), construct.name());
-            lines.push(match self.0.get(&(*depth, *construct)) {
+            match self.0.get(&(*depth, *construct)) {
                 Some((Answer::Agree, id)) => {
                     covered += 1;
                     agreed += 1;
-                    format!("CONSTRUCT {name} record={id} dolos=agree")
+                    lines.push(format!("CONSTRUCT {name} record={id} dolos=agree"));
                 }
                 Some((Answer::Declared { label }, id)) => {
                     covered += 1;
-                    format!("CONSTRUCT {name} record={id} dolos=declared label={label}")
+                    let line = format!("CONSTRUCT {name} record={id} dolos=declared label={label}");
+                    lines.push(line);
                 }
-                None => format!("CONSTRUCT_UNCOVERED {name}"),
-            });
+                None => out.add(Verdict {
+                    judge: Judge::Construct,
+                    entry: EntryPoint::SubmitTx,
+                    subject: Subject::Selection,
+                    cells: vec![CellKey::new("construct", &name)],
+                    outcome: Outcome::Disagree("uncovered".to_string()),
+                }),
+            }
         }
-        let pass = covered == entries.len();
+        out.count(Judge::Construct, covered);
         lines.push(format!(
-            "CONSTRUCT covered={covered}/{} agreed={agreed} pass={pass}",
+            "CONSTRUCT covered={covered}/{} agreed={agreed}",
             entries.len()
         ));
-        (lines, pass)
+        lines
     }
 }
 
@@ -300,6 +310,12 @@ mod tests {
         }
     }
 
+    fn bar(coverage: &Coverage) -> (Vec<String>, Vec<String>) {
+        let mut out = judgement::Tally::default();
+        let lines = coverage.bar(&mut out);
+        (lines, out.failing.iter().map(Verdict::to_string).collect())
+    }
+
     fn declared() -> Answer {
         Answer::Declared {
             label: "witness fields".to_string(),
@@ -310,14 +326,14 @@ mod tests {
     fn a_bar_with_a_record_for_every_entry_passes() {
         let mut coverage = Coverage::default();
         coverage.add(supp(3), Answer::Agree, every_entry());
-        let (lines, pass) = coverage.bar();
-        assert!(pass, "{lines:?}");
+        let (lines, failing) = bar(&coverage);
+        assert!(failing.is_empty(), "{failing:?}");
         assert_eq!(
             lines[0],
             "CONSTRUCT top_witness_vkey record=supp#3 dolos=agree"
         );
         let entries = every_entry().len();
-        let last = format!("CONSTRUCT covered={entries}/{entries} agreed={entries} pass=true");
+        let last = format!("CONSTRUCT covered={entries}/{entries} agreed={entries}");
         assert_eq!(lines.last(), Some(&last));
     }
 
@@ -334,7 +350,7 @@ mod tests {
             for (id, answer) in answers {
                 coverage.add(id, answer, entry.clone());
             }
-            let (lines, _) = coverage.bar();
+            let (lines, _) = bar(&coverage);
             assert_eq!(
                 lines[0],
                 "CONSTRUCT top_witness_vkey record=supp#1 dolos=agree"
@@ -346,12 +362,12 @@ mod tests {
     fn a_declared_record_covers_an_entry_and_names_its_label() {
         let mut coverage = Coverage::default();
         coverage.add(supp(4), declared(), every_entry());
-        let (lines, pass) = coverage.bar();
-        assert!(pass);
+        let (lines, failing) = bar(&coverage);
+        assert!(failing.is_empty(), "{failing:?}");
         let first = "CONSTRUCT top_witness_vkey record=supp#4 dolos=declared label=witness fields";
         assert_eq!(lines[0], first);
         let entries = every_entry().len();
-        let last = format!("CONSTRUCT covered={entries}/{entries} agreed=0 pass=true");
+        let last = format!("CONSTRUCT covered={entries}/{entries} agreed=0");
         assert_eq!(lines.last(), Some(&last));
     }
 
@@ -361,12 +377,10 @@ mod tests {
         held.remove(&(Depth::Sub, Construct::GuardByBootstrap));
         let mut coverage = Coverage::default();
         coverage.add(supp(3), Answer::Agree, held);
-        let (lines, pass) = coverage.bar();
-        assert!(!pass);
-        let uncovered: Vec<_> = lines.iter().filter(|l| l.contains("UNCOVERED")).collect();
+        let (_, failing) = bar(&coverage);
         assert_eq!(
-            uncovered,
-            ["CONSTRUCT_UNCOVERED sub_guard_key_only_bootstrap"]
+            failing,
+            ["VERDICT judge=construct entry=submit_tx record=selection cells=construct:sub_guard_key_only_bootstrap outcome=disagree uncovered"]
         );
     }
 
@@ -442,6 +456,39 @@ mod tests {
         assert!(!Construct::BootstrapAttributes.holds(&guarded(&empty, &guards)));
         let held = witnesses(&[], &[0xa1, 0x03, 0x41, 0x00]);
         assert!(Construct::BootstrapAttributes.holds(&guarded(&held, &guards)));
+    }
+
+    #[test]
+    fn each_witness_set_field_has_a_construct_that_holds_when_it_is_present() {
+        let set = witnesses(&[&[9; 32]], &[0xa0]);
+        let guards = key_guard(Hash::new([0; 28]));
+        let level = guarded(&set, &guards);
+        let WitnessSet {
+            vkeywitness,
+            native_script,
+            bootstrap_witness,
+            plutus_v1_script,
+            plutus_data,
+            redeemer,
+            plutus_v2_script,
+            plutus_v3_script,
+            plutus_v4_script,
+        } = &set;
+        let fields = [
+            (vkeywitness.is_some(), Construct::VKeyWitness),
+            (native_script.is_some(), Construct::NativeScriptWitness),
+            (bootstrap_witness.is_some(), Construct::BootstrapWitness),
+            (plutus_v1_script.is_some(), Construct::PlutusV1),
+            (plutus_data.is_some(), Construct::Datum),
+            (redeemer.is_some(), Construct::Redeemer),
+            (plutus_v2_script.is_some(), Construct::PlutusV2),
+            (plutus_v3_script.is_some(), Construct::PlutusV3),
+            (plutus_v4_script.is_some(), Construct::PlutusV4),
+        ];
+        for (present, construct) in fields {
+            assert_eq!(construct.holds(&level), present, "{}", construct.name());
+        }
+        assert_eq!(fields.iter().filter(|(present, _)| *present).count(), 2);
     }
 
     #[test]

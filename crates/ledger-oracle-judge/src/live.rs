@@ -4,10 +4,14 @@ use serde::Deserialize;
 
 use crate::{
     cbor::{EraBound, NodeEra},
-    compare::Tally,
+    compare,
     manifest::{KnownLive, LiveLocus},
     row::{judged_by, Row},
 };
+
+/// The comparisons of one live locus, each disagreement shown as text since a
+/// live chain has no corpus record.
+pub type Tally = compare::Tally<String>;
 
 /// The node's tip as its tip query prints it.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

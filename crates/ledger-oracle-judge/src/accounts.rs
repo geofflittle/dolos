@@ -2,7 +2,11 @@ use std::{collections::BTreeMap, fmt};
 
 use serde::{de::Error as _, Deserialize, Deserializer};
 
-use crate::{compare::Tally, record::Bytes};
+use crate::{
+    compare::Tally,
+    judgement::Finding,
+    record::{Bytes, RecordId},
+};
 
 /// A stake credential, printed as the ledger keys it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -155,8 +159,13 @@ impl fmt::Display for Account {
     }
 }
 
-/// Counts each account either side holds against the other side's account for that credential.
-pub fn compare(ledger: &LedgerAccounts, dolos: &BTreeMap<Credential, Account>, tally: &mut Tally) {
+/// Counts each account either side holds after record `id` against the other side's account for that credential.
+pub fn compare(
+    id: RecordId,
+    ledger: &LedgerAccounts,
+    dolos: &BTreeMap<Credential, Account>,
+    tally: &mut Tally,
+) {
     let ledger: BTreeMap<&Credential, Account> =
         ledger.iter().map(|(c, a)| (c, a.into())).collect();
     let mut credentials: Vec<&Credential> = ledger.keys().copied().chain(dolos.keys()).collect();
@@ -166,11 +175,12 @@ pub fn compare(ledger: &LedgerAccounts, dolos: &BTreeMap<Credential, Account>, t
     for credential in credentials {
         let (l, d) = (ledger.get(credential), dolos.get(credential));
         tally.add(l == d, || {
-            format!(
+            let detail = format!(
                 "account={credential} ledger={} dolos={}",
                 shown(l),
                 shown(d)
-            )
+            );
+            Finding::new(id, Vec::new(), detail)
         });
     }
 }
@@ -206,8 +216,9 @@ mod tests {
     fn equal_accounts_agree_and_one_lovelace_or_a_missing_account_disagrees() {
         let ledger = ledger(&account(5));
         let same: BTreeMap<_, _> = ledger.iter().map(|(c, a)| (*c, a.into())).collect();
+        let id: RecordId = "supp#1".parse().unwrap();
         let mut tally = Tally::default();
-        compare(&ledger, &same, &mut tally);
+        compare(id, &ledger, &same, &mut tally);
         assert_eq!(
             tally,
             Tally {
@@ -219,18 +230,18 @@ mod tests {
         let mut off = same.clone();
         off.values_mut().for_each(|a: &mut Account| a.balance += 1);
         let mut tally = Tally::default();
-        compare(&ledger, &off, &mut tally);
+        compare(id, &ledger, &off, &mut tally);
         assert_eq!(tally.compared, 1);
         assert_eq!(
             tally.disagree,
-            vec![format!(
+            vec![Finding::new(id, Vec::new(), format!(
                 "account=keyHash-{KEY} ledger=balance=5,pool={KEY},drep-keyHash-{KEY} dolos=balance=6,pool={KEY},drep-keyHash-{KEY}"
-            )]
+            ))]
         );
 
         let mut tally = Tally::default();
-        compare(&LedgerAccounts::new(), &same, &mut tally);
+        compare(id, &LedgerAccounts::new(), &same, &mut tally);
         assert_eq!(tally.compared, 1);
-        assert!(tally.disagree[0].ends_with(" ledger=none dolos=balance=5,pool=1cca48da7f291b81a09ddc0e132fce0c5a1ef3410e5a70f9fcd5f777,drep-keyHash-1cca48da7f291b81a09ddc0e132fce0c5a1ef3410e5a70f9fcd5f777"));
+        assert!(tally.disagree[0].detail.ends_with(" ledger=none dolos=balance=5,pool=1cca48da7f291b81a09ddc0e132fce0c5a1ef3410e5a70f9fcd5f777,drep-keyHash-1cca48da7f291b81a09ddc0e132fce0c5a1ef3410e5a70f9fcd5f777"));
     }
 }

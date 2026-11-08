@@ -365,11 +365,11 @@ pub(super) async fn judge_record(
                 if runs_top {
                     match draft.with_reward_output() {
                         Ok(paid) => judge_reward_output(group, &paid, tally).await,
-                        Err(why) => tally.draft.underived.push(format!("{id} {why}")),
+                        Err(why) => tally.draft.underived(id, why),
                     }
                 }
             }
-            Err(why) => tally.draft.underived.push(format!("{id} {why}")),
+            Err(why) => tally.draft.underived(id, why),
         }
     }
     let verdicts = tally.add_answer(Layer::Pallas, id, &ledger, listed, evaluator.answer);

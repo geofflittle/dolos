@@ -105,6 +105,96 @@ arms() {
 }
 # Must fire for a and b, and must not for c, d, e and f, and b's quick tier files are the one file its switch is in.
 expect arms "$(arms)" "a:yy:Cargo.toml,Cargo.lock b:yn:src/one.rs c:nn: d:ny:Cargo.toml,Cargo.lock e:nn:crates/core/src/n.rs f:nn:"
+# Must name the overlay's switches and the arms with a plant of their own, and must not name c or f.
+expect planted "$(
+  HERE=$H
+  . "$LIB"
+  echo "$PLANTED_ARMS"
+)" "a b d e"
+
+# A manifest of catches, a records file for a, and a head log holding one line a's catch selects.
+printf '%s\n' '[dolos]' 'base = "0"' '' '[catches]' \
+  'a = ["judge=validation failure:disagree dolos:Cbor*", "judge=eval-oracle entry=estimate_tx:pallas units:mem !units:steps"]' \
+  'b = ["judge=endorser"]' 'c = ["test=c_bootstrap"]' >"$H/catches.toml"
+printf '%s\n' 'ic#1' 'ic#2' >"$H/a.records"
+printf '%s\n' 'slot=7' >"$H/b.records"
+printf '%s\n' "'c_bootstrap'" >"$H/c.records"
+v='VERDICT judge=validation entry=submit_tx'
+e='VERDICT judge=eval-oracle entry=estimate_tx:pallas'
+printf '%s\n' "$v record=ic#2 cells=failure:disagree,dolos:CborDecodingError outcome=disagree in the head" >"$H/head.log"
+printf '%s\n' \
+  "$v record=ic#1 cells=failure:disagree,ledger:accepted,dolos:CborDecodingError outcome=disagree fires" \
+  "$v record=ic#3 cells=failure:disagree,dolos:CborDecodingError outcome=disagree another record" \
+  "$v record=ic#1 cells=failure:disagree,dolos:accepted outcome=disagree another answer" \
+  "VERDICT judge=rules entry=submit_tx record=ic#1 cells=failure:disagree,dolos:CborDecodingError outcome=disagree another judge" \
+  "$v record=ic#2 cells=failure:disagree,dolos:CborDecodingError outcome=disagree in the head" \
+  "$e record=ic#2 cells=units:mem outcome=disagree mem alone" \
+  "$e record=ic#2 cells=units:mem,units:steps outcome=disagree both units" \
+  "VERDICT judge=eval-oracle entry=estimate_tx:v1 record=ic#2 cells=units:mem outcome=disagree another layer" \
+  "DISAGREE ic#1 ledger=accepted dolos=refused[CborDecodingError]" \
+  'VERDICT judge=endorser entry=fetch_block record=selection cells= outcome=disagree ENDORSER-DIFF service=FetchBlock slot=7 list=ids index=0' \
+  'VERDICT judge=endorser entry=fetch_block record=selection cells= outcome=disagree ENDORSER-DIFF service=FetchBlock slot=70 list=ids index=0' \
+  "thread 'c_bootstrap' (9) panicked at x.rs:1:1:" "thread 'c_other' (9) panicked at x.rs:1:1:" >"$H/arm.log"
+caught_by() {
+  (
+    HERE=$H ARMS_MANIFEST=$H/catches.toml
+    . "$LIB"
+    verdict_catch "$1" "$H/arm.log" "$H/$1.records" "$H/head.log" 2>&1 | sed 's/.* outcome=disagree //; s/ ([0-9]*) panicked.*//' | paste -sd '|' -
+  )
+}
+# Must fire on each catch's own line, and must not fire on another record, answer, judge, entry point or test, both units, a line the head holds or a line not of the verdict type.
+expect caught_cells "$(caught_by a)" "fires|mem alone"
+expect caught_selection "$(caught_by b)" "ENDORSER-DIFF service=FetchBlock slot=7 list=ids index=0"
+expect caught_test "$(caught_by c)" "thread 'c_bootstrap'"
+expect caught_none "$(caught_by d)" "ARM d NO_CATCH"
+
+# An arm set whose switches, records files and catches agree.
+S=$W/armset
+rm -rf "$S"
+mkdir -p "$S/overlay" "$S/plants"
+printf '%s\n' '+++ b/src/one.rs' '+oracle_plant("a")' '+oracle_plant("b")' >"$S/overlay/dolos.diff"
+printf '%s\n' 'ic#1' >"$S/plants/a.records"
+printf '%s\n' 'ic#2' >"$S/plants/b.records"
+printf '%s\n' '[catches]' 'a = ["judge=validation"]' 'b = ["judge=utxo"]' >"$S/arms.toml"
+mismatches() {
+  (
+    HERE=$S ARMS_MANIFEST=$S/arms.toml
+    . "$LIB"
+    arm_mismatches | paste -sd '|' -
+  )
+}
+# Must not fire when every arm has its switch, records and catch.
+expect arm_set_agrees "$(mismatches)" ""
+printf '%s\n' '+++ b/src/one.rs' '+oracle_plant("a")' >"$S/overlay/dolos.diff"
+# Must fire on the records file and the catch of an arm whose switch is gone.
+expect arm_switch_removed "$(mismatches)" "REFUSED plants/b.records names no planted arm|REFUSED the catch of b names no planted arm"
+
+# A scratch tree whose second commit adds src/one.rs, the file b's switch is in.
+T=$W/touched
+rm -rf "$T"
+mkdir -p "$T/scratch/dolos/src"
+git -C "$T/scratch/dolos" init -q
+echo 1 >"$T/scratch/dolos/a.rs"
+git -C "$T/scratch/dolos" add -A
+git -C "$T/scratch/dolos" -c user.name=t -c user.email=t@t commit -q -m t
+first=$(git -C "$T/scratch/dolos" rev-parse HEAD)
+echo 1 >"$T/scratch/dolos/src/one.rs"
+git -C "$T/scratch/dolos" add -A
+git -C "$T/scratch/dolos" -c user.name=t -c user.email=t@t commit -q -m t
+touched() {
+  (
+    ROOT=$T OUT=$T HERE=$H
+    . "$LIB"
+    if touched_arms "$1" HEAD >"$T/arms" 2>/dev/null; then
+      echo "exit=0 $(paste -sd ' ' - <"$T/arms")"
+    else
+      echo "exit=$?"
+    fi
+  )
+}
+# Must name b for its changed file, and must fail rather than name no arm when the files between the commits cannot be listed.
+expect touched_changed "$(touched "$first")" "exit=0 b"
+expect touched_unlisted "$(touched 0000000000000000000000000000000000000000)" "exit=128"
 
 # A head control log, the same log with another run time, and the same log with one record judged differently.
 L=$W/logs
@@ -369,7 +459,7 @@ await_waiting() {
 # Must not fire: with no lock the run goes on to the floor holding the lock, and empties its record.
 lock_root lock-free
 tier "$K"
-expect lock_free "$(run_out "$K")" "REFUSED free exit=2"
+expect lock_free "$(run_out "$K")" "REFUSED free run-exit=2 exit=2"
 expect lock_free_held "$(paste -sd ' ' - <"$K/df.seen")" lock=held
 expect lock_free_released "$(record_left "$K")" released
 
@@ -383,7 +473,7 @@ expect lock_waits "$(paste -sd ' ' - <"$K/run.out")" "WAITING lock_pid=$holder"
 touch "$K/run.lock.go"
 wait "$holder" || true
 wait "$runner" || true
-expect lock_goes_on "$(run_out "$K")" "WAITING lock_pid=$holder REFUSED free exit=2"
+expect lock_goes_on "$(run_out "$K")" "WAITING lock_pid=$holder REFUSED free run-exit=2 exit=2"
 expect lock_taken "$(paste -sd ' ' - <"$K/df.seen")" lock=held
 expect lock_held_released "$(record_left "$K")" released
 
@@ -396,7 +486,7 @@ await_waiting "$K"
 kill -9 "$holder"
 wait "$holder" 2>/dev/null || true
 wait "$runner" || true
-expect lock_holder_killed "$(run_out "$K")" "WAITING lock_pid=$holder LOCK stale pid=$holder removed REFUSED free exit=2"
+expect lock_holder_killed "$(run_out "$K")" "WAITING lock_pid=$holder LOCK stale pid=$holder removed REFUSED free run-exit=2 exit=2"
 expect lock_killed_held "$(paste -sd ' ' - <"$K/df.seen")" lock=held
 
 # Must fire: a record of a process that has exited is reported, and the run takes the lock without waiting.
@@ -406,7 +496,7 @@ dead=$!
 wait "$dead"
 echo "$dead" >"$K/run.lock"
 tier "$K"
-expect lock_stale "$(run_out "$K")" "LOCK stale pid=$dead removed REFUSED free exit=2"
+expect lock_stale "$(run_out "$K")" "LOCK stale pid=$dead removed REFUSED free run-exit=2 exit=2"
 expect lock_stale_held "$(paste -sd ' ' - <"$K/df.seen")" lock=held
 expect lock_stale_released "$(record_left "$K")" released
 
@@ -417,7 +507,7 @@ reused=$!
 echo "$reused" >"$K/run.lock"
 tier "$K"
 kill "$reused"
-expect lock_reused "$(run_out "$K")" "LOCK stale pid=$reused removed REFUSED free exit=2"
+expect lock_reused "$(run_out "$K")" "LOCK stale pid=$reused removed REFUSED free run-exit=2 exit=2"
 expect lock_reused_held "$(paste -sd ' ' - <"$K/df.seen")" lock=held
 
 # Must fire: the entry run.sh holds the lock while the run.sh of a judged commit older than the lock runs, which here records whether the lock is held and its own pid.
@@ -434,6 +524,8 @@ git clone -q --bare "$K/old" "$K/dolos.git"
   tier "$K" entry
 )
 expect lock_old "$(cat "$K/old.seen")" "lock=held pid=$(cat "$K/run.lock")"
+# Must not fire: the entry run.sh prints no exit line of its own when it hands the run to the judged commit's run.sh.
+expect lock_old_exit "$(run_out "$K")" "exit=0"
 
 # Must fire: breaks.sh and candidate.sh, each run alone, hold the lock when they read free space, candidate.sh with a config to copy.
 lock_root lock-breaks

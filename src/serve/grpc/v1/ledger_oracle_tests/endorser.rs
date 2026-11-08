@@ -5,7 +5,10 @@ use std::{io::Read as _, path::PathBuf, sync::Arc};
 
 use dolos_core::SyncExt as _;
 use futures_util::StreamExt as _;
-use ledger_oracle_judge::compare::Tally;
+use ledger_oracle_judge::{
+    compare::Tally,
+    judgement::{self, EntryPoint, Judge, RunVerdict, Verdict},
+};
 use pallas::{
     codec::{
         minicbor::{self, data::Type, Decoder},
@@ -451,7 +454,7 @@ async fn served(
 /// whether every served block agreed.
 #[derive(Debug, Default)]
 pub(super) struct EndorserTally {
-    tally: Tally,
+    tally: Tally<String>,
     txs: usize,
     certifying: usize,
 }
@@ -472,26 +475,47 @@ impl EndorserTally {
         }
     }
 
-    /// The tally line and the disagreement lines.
-    pub(super) fn lines(&self) -> Vec<String> {
+    /// The tally line.
+    pub(super) fn line(&self) -> String {
         let Tally { compared, disagree } = &self.tally;
-        let mut lines = vec![format!(
+        format!(
             "ENDORSER compared={compared} agree={} disagree={} certifying={} txs={}",
             compared - disagree.len(),
             disagree.len(),
             self.certifying,
             self.txs
-        )];
-        lines.extend(disagree.iter().cloned());
-        lines
+        )
     }
 
-    /// Whether every served block agreed and the cases judged served blocks of
-    /// each kind.
-    pub(super) fn pass(&self, cases: usize) -> bool {
-        let served = self.tally.compared == 2 * cases;
-        let kinds = self.certifying > 0 && self.certifying < cases;
-        served && kinds && self.tally.disagree.is_empty()
+    /// Adds the verdict of each served block, and a failing one when the cases
+    /// did not judge two served blocks each or lack a block of either kind.
+    pub(super) fn report(&self, cases: usize, out: &mut judgement::Tally) {
+        let Tally { compared, disagree } = &self.tally;
+        out.count(Judge::Endorser, compared - disagree.len());
+        for lines in disagree {
+            let detail = lines.replace('\n', " ");
+            out.add(Verdict::selection_fails(
+                Judge::Endorser,
+                EntryPoint::FetchBlock,
+                detail,
+            ));
+        }
+        if *compared != 2 * cases {
+            let detail = format!("served={compared} cases={cases}");
+            out.add(Verdict::selection_fails(
+                Judge::Endorser,
+                EntryPoint::FetchBlock,
+                detail,
+            ));
+        }
+        if self.certifying == 0 || self.certifying == cases {
+            let detail = format!("certifying={} cases={cases}", self.certifying);
+            out.add(Verdict::selection_fails(
+                Judge::Endorser,
+                EntryPoint::FetchBlock,
+                detail,
+            ));
+        }
     }
 }
 
@@ -526,10 +550,11 @@ pub(super) async fn judge(cases: &[Case]) -> EndorserTally {
 async fn served_endorser_transactions_are_the_nodes() {
     let cases = load(&fixture_path());
     let tally = judge(&cases).await;
-    for line in tally.lines() {
-        println!("{line}");
-    }
-    assert!(tally.pass(cases.len()));
+    println!("{}", tally.line());
+    let mut out = judgement::Tally::default();
+    tally.report(cases.len(), &mut out);
+    println!("{out}");
+    assert!(matches!(out.verdict(), RunVerdict::Pass { .. }));
 }
 
 #[tokio::test]
@@ -583,7 +608,8 @@ fn endpoint_endorser() {
         });
         tally.add(judged, Service::FetchBlock, slot);
     }
-    for line in tally.lines() {
+    println!("{}", tally.line());
+    for line in &tally.tally.disagree {
         println!("{line}");
     }
     assert_eq!(tally.tally.compared, cases);

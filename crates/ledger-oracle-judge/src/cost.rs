@@ -1,6 +1,10 @@
 use std::fmt;
 
-use crate::{compare::Tally, record::LedgerOutcome};
+use crate::{
+    compare::Tally,
+    judgement::{self, CellKey, EntryPoint, Finding, Judge},
+    record::{LedgerOutcome, RecordId},
+};
 
 /// The minimum fee comparisons of one arm.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -16,7 +20,7 @@ impl CostTallies {
     /// Counts the minimum fee of one record.
     pub fn add_fee(
         &mut self,
-        id: impl fmt::Display,
+        id: RecordId,
         ledger: Option<u64>,
         node: Result<u64, String>,
         outcome: &LedgerOutcome,
@@ -31,8 +35,14 @@ impl CostTallies {
         }
         let agrees = node.as_ref() == Ok(&ledger);
         self.fee.add(agrees, || match &node {
-            Ok(n) => format!("{id} ledger={ledger} dolos={n}"),
-            Err(e) => format!("{id} ledger={ledger} dolos=none {e}"),
+            Ok(n) => {
+                let cells = vec![CellKey::new("answer", "differ")];
+                Finding::new(id, cells, format!("ledger={ledger} dolos={n}"))
+            }
+            Err(e) => {
+                let cells = vec![CellKey::new("answer", "none")];
+                Finding::new(id, cells, format!("ledger={ledger} dolos=none {e}"))
+            }
         });
     }
 
@@ -50,9 +60,9 @@ impl CostTallies {
         self.skipped_cascade += skipped_cascade;
     }
 
-    /// Whether some fee was compared with none differing.
-    pub fn pass(&self) -> bool {
-        self.fee.compared > 0 && self.fee.disagree.is_empty()
+    /// Adds the verdict of each compared fee.
+    pub fn report(&self, out: &mut judgement::Tally) {
+        self.fee.report(Judge::Cost, EntryPoint::MinFee, out);
     }
 }
 
@@ -65,14 +75,7 @@ impl fmt::Display for CostTallies {
             self.fee_unresolved_refused,
             self.fee_undecoded,
             self.skipped_cascade
-        )?;
-        if !self.fee.disagree.is_empty() {
-            write!(f, "\nCOST fee disagree={}", self.fee.disagree.len())?;
-            for d in self.fee.disagree.iter().take(20) {
-                write!(f, "\nDIFF fee {d}")?;
-            }
-        }
-        Ok(())
+        )
     }
 }
 
@@ -81,12 +84,32 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::record::{FailurePath, NonEmpty};
+    use crate::{
+        judgement::RunVerdict,
+        record::{FailurePath, NonEmpty},
+    };
+
+    fn id(s: &str) -> RecordId {
+        s.parse().unwrap()
+    }
+
+    fn passes(t: &CostTallies) -> bool {
+        let mut out = judgement::Tally::default();
+        t.report(&mut out);
+        matches!(out.verdict(), RunVerdict::Pass { .. })
+    }
+
+    fn details(t: &CostTallies) -> Vec<String> {
+        t.fee.disagree.iter().map(Finding::to_string).collect()
+    }
 
     fn tally(lines: &[&str]) -> Tally {
         Tally {
             compared: 2 * lines.len(),
-            disagree: lines.iter().map(|l| l.to_string()).collect(),
+            disagree: lines
+                .iter()
+                .map(|l| Finding::new(id("ic#1"), Vec::new(), *l))
+                .collect(),
         }
     }
 
@@ -139,10 +162,10 @@ mod tests {
     #[test]
     fn an_equal_fee_passes_and_no_fee_compared_fails() {
         let mut t = CostTallies::default();
-        assert!(!t.pass());
-        t.add_fee("supp#1", Some(7), Ok(7), &ACCEPTED);
+        assert!(!passes(&t));
+        t.add_fee(id("supp#1"), Some(7), Ok(7), &ACCEPTED);
         t.skipped_cascade += 1;
-        assert!(t.pass(), "{t}");
+        assert!(passes(&t), "{t}");
         assert_eq!(
             t.to_string(),
             "COST fees=1 fees_unresolved_refused=0 fees_undecoded=0 skipped_cascade=1"
@@ -152,44 +175,49 @@ mod tests {
     #[test]
     fn a_refused_record_compares_a_fee_the_node_computes_and_counts_one_it_cannot_apart() {
         let mut t = CostTallies::default();
-        t.add_fee("ic#1", Some(7), Ok(7), &refused());
+        t.add_fee(id("ic#1"), Some(7), Ok(7), &refused());
         t.add_fee(
-            "ic#2",
+            id("ic#2"),
             Some(7),
             Err("missing input".to_string()),
             &refused(),
         );
-        assert!(t.pass(), "{t}");
+        assert!(passes(&t), "{t}");
         assert_eq!((t.fee.compared, t.fee_unresolved_refused), (1, 1));
-        t.add_fee("ic#3", Some(9), Ok(7), &refused());
-        assert_eq!(t.fee.disagree, vec!["ic#3 ledger=9 dolos=7"]);
-        assert!(!t.pass());
+        t.add_fee(id("ic#3"), Some(9), Ok(7), &refused());
+        assert_eq!(details(&t), vec!["ic#3 ledger=9 dolos=7"]);
+        assert!(!passes(&t));
     }
 
     #[test]
     fn bytes_the_ledger_does_not_decode_have_no_fee_to_compare() {
         let mut t = CostTallies::default();
-        t.add_fee("supp#1", None, Ok(7), &refused());
-        t.add_fee("supp#2", None, Err("cbor error".to_string()), &refused());
+        t.add_fee(id("supp#1"), None, Ok(7), &refused());
+        t.add_fee(
+            id("supp#2"),
+            None,
+            Err("cbor error".to_string()),
+            &refused(),
+        );
         assert_eq!((t.fee.compared, t.fee_undecoded), (0, 2));
         assert!(t.fee.disagree.is_empty());
-        t.add_fee("supp#3", Some(9), Ok(7), &refused());
-        assert_eq!(t.fee.disagree, vec!["supp#3 ledger=9 dolos=7"]);
+        t.add_fee(id("supp#3"), Some(9), Ok(7), &refused());
+        assert_eq!(details(&t), vec!["supp#3 ledger=9 dolos=7"]);
     }
 
     #[test]
     fn a_differing_fee_or_one_the_node_cannot_compute_disagrees() {
         let mut t = CostTallies::default();
-        t.add_fee("supp#1", Some(7), Ok(8), &ACCEPTED);
+        t.add_fee(id("supp#1"), Some(7), Ok(8), &ACCEPTED);
         t.add_fee(
-            "supp#2",
+            id("supp#2"),
             Some(7),
             Err("no parameters".to_string()),
             &ACCEPTED,
         );
-        assert!(!t.pass());
+        assert!(!passes(&t));
         assert_eq!(
-            t.fee.disagree,
+            details(&t),
             vec![
                 "supp#1 ledger=7 dolos=8",
                 "supp#2 ledger=7 dolos=none no parameters"

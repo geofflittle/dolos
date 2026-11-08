@@ -7,6 +7,7 @@ use std::{
 
 use crate::{
     cbor::{tx_fields, CborError, Field},
+    judgement::{self, CellKey, EntryPoint, Judge, Verdict},
     manifest::ManifestError,
     record::{LedgerOutcome, RecordId},
     refusal::LedgerLeaf,
@@ -223,7 +224,7 @@ pub struct RuleTally {
     accepted: BTreeMap<String, usize>,
     unrepresentable: BTreeMap<String, usize>,
     judged: BTreeSet<RecordId>,
-    failures: Vec<(RuleFail, String)>,
+    failures: Vec<(RuleFail, Verdict)>,
     known: Vec<String>,
 }
 
@@ -233,6 +234,17 @@ enum RuleFail {
     Mismatch,
     Unmapped,
     KnownStale,
+}
+
+impl RuleFail {
+    /// The name of the failure, as its cell shows it.
+    fn name(self) -> &'static str {
+        match self {
+            RuleFail::Mismatch => "mismatch",
+            RuleFail::Unmapped => "unmapped",
+            RuleFail::KnownStale => "known_stale",
+        }
+    }
 }
 
 impl RuleTally {
@@ -345,31 +357,30 @@ impl Rules {
         };
         let ledger = ledger_answer(ledger);
         let both = format!("dolos={answer} ledger={ledger}");
-        let failure = match (shown, self.known.get(&id)) {
+        let (kind, detail) = match (shown, self.known.get(&id)) {
             (Shown::Mismatch, Some(k)) if k.dolos == answer && k.ledger == ledger => {
                 tally.known.push(format!("RULE_KNOWN {id} {both}"));
                 return Ok(());
             }
             (_, Some(k)) => (
                 RuleFail::KnownStale,
-                format!(
-                    "RULE_KNOWN_STALE {id} {both} known_dolos={} known_ledger={}",
-                    k.dolos, k.ledger
-                ),
+                format!("{both} known_dolos={} known_ledger={}", k.dolos, k.ledger),
             ),
-            (Shown::Mismatch, None) => (RuleFail::Mismatch, format!("RULE_MISMATCH {id} {both}")),
-            (Shown::Unmapped, None) => (RuleFail::Unmapped, format!("RULE_UNMAPPED {id} {both}")),
+            (Shown::Mismatch, None) => (RuleFail::Mismatch, both),
+            (Shown::Unmapped, None) => (RuleFail::Unmapped, both),
             (Shown::Agrees | Shown::Unrepresentable | Shown::Unjudged, None) => return Ok(()),
         };
-        tally.failures.push(failure);
+        let cells = vec![CellKey::new("failure", kind.name())];
+        let verdict = Verdict::disagree(Judge::Rules, EntryPoint::SubmitTx, id, cells, detail);
+        tally.failures.push((kind, verdict));
         Ok(())
     }
 
-    /// The line of each rule and each failing record, the count line, and whether the table holds, comparing each rule's sides with the table only when `whole` says the tally covers every corpus.
-    pub fn bar(&self, tally: &RuleTally, whole: bool) -> (Vec<String>, bool) {
+    /// The line of each rule and the count line, adding the table's verdicts to `out`, comparing each rule's sides with the table only when `whole` says the tally covers every corpus.
+    pub fn bar(&self, tally: &RuleTally, whole: bool, out: &mut judgement::Tally) -> Vec<String> {
         let mut lines = Vec::new();
         let mut sides: BTreeMap<Side, usize> = BTreeMap::new();
-        let (mut rules, mut unrepresentable, mut wrong_side) = (0, 0, 0);
+        let (mut rules, mut unrepresentable) = (0, 0);
         let count = |counts: &BTreeMap<String, usize>, answer: &String| {
             counts.get(answer).copied().unwrap_or_default()
         };
@@ -385,10 +396,12 @@ impl Rules {
                         "RULE {answer} refused={refused} accepted={accepted} side={found}"
                     ));
                     if whole && found != declared.side() {
-                        wrong_side += 1;
-                        lines.push(format!(
-                            "RULE_SIDE {answer} declared={} found={found}",
-                            declared.side()
+                        let detail =
+                            format!("rule={answer} declared={} found={found}", declared.side());
+                        out.add(Verdict::selection_fails(
+                            Judge::Rules,
+                            EntryPoint::SubmitTx,
+                            detail,
                         ));
                     }
                 }
@@ -402,7 +415,6 @@ impl Rules {
             }
         }
         lines.extend(tally.known.iter().cloned());
-        lines.extend(tally.failures.iter().map(|(_, line)| line.clone()));
         let failed = |kind: RuleFail| tally.failures.iter().filter(|(k, _)| *k == kind).count();
         let (mismatch, unmapped) = (failed(RuleFail::Mismatch), failed(RuleFail::Unmapped));
         let unjudged: Vec<&RecordId> = match whole {
@@ -413,11 +425,20 @@ impl Rules {
                 .collect(),
             false => Vec::new(),
         };
-        lines.extend(
-            unjudged
-                .iter()
-                .map(|id| format!("RULE_KNOWN_UNJUDGED {id}")),
-        );
+        let passing = tally.judged.len().saturating_sub(tally.failures.len());
+        out.count(Judge::Rules, passing);
+        tally.failures.iter().for_each(|(_, v)| out.add(v.clone()));
+        for id in unjudged {
+            let cells = vec![CellKey::new("answer", "unjudged")];
+            let entry = EntryPoint::SubmitTx;
+            out.add(Verdict::disagree(
+                Judge::Rules,
+                entry,
+                *id,
+                cells,
+                "known not judged",
+            ));
+        }
         let side = |s: Side| sides.get(&s).copied().unwrap_or_default();
         lines.push(format!(
             "PHASE1-RULES rules={rules} both={} refused_only={} accepted_only={} neither={} \
@@ -427,8 +448,7 @@ impl Rules {
             side(Side::AcceptedOnly),
             side(Side::Neither),
         ));
-        let pass = tally.failures.is_empty() && wrong_side == 0 && unjudged.is_empty();
-        (lines, pass)
+        lines
     }
 }
 
@@ -533,11 +553,18 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         tally
     }
 
+    /// The table's lines over `tally` and the failing verdicts as their lines.
+    fn bar(rules: &Rules, tally: &RuleTally, whole: bool) -> (Vec<String>, Vec<String>) {
+        let mut out = judgement::Tally::default();
+        let lines = rules.bar(tally, whole, &mut out);
+        (lines, out.failing.iter().map(Verdict::to_string).collect())
+    }
+
     #[test]
     fn rules_on_their_declared_sides_pass_and_count_each_side() {
         let rules = rules(TABLE);
-        let (lines, pass) = rules.bar(&every_side(&rules), true);
-        assert!(pass, "{lines:?}");
+        let (lines, failing) = bar(&rules, &every_side(&rules), true);
+        assert_eq!(failing, Vec::<String>::new(), "{lines:?}");
         assert_eq!(
             lines.last().map(String::as_str),
             Some(
@@ -560,11 +587,14 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         let swapped = dolos(REFUND);
         let ledger = refused(&["DepositIncorrectDELEG"]);
         judge(&rules, 6, &ledger, &swapped, &mut tally);
-        let (lines, pass) = rules.bar(&tally, false);
-        assert!(!pass);
-        assert!(lines.contains(&format!(
-            "RULE_MISMATCH supp#6 dolos=refused[{REFUND}] ledger=refused[DepositIncorrectDELEG]"
-        )));
+        let (lines, failing) = bar(&rules, &tally, false);
+        assert_eq!(
+            failing,
+            [format!(
+                "VERDICT judge=rules entry=submit_tx record=supp#6 cells=failure:mismatch \
+                 outcome=disagree dolos=refused[{REFUND}] ledger=refused[DepositIncorrectDELEG]"
+            )]
+        );
         assert!(lines.last().unwrap().contains(" mismatch=1 unmapped=0 "));
     }
 
@@ -575,13 +605,15 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         let ledger = refused(&["FeeTooSmallUTxO"]);
         let unlisted = dolos("PostAlonzo(MaxTxSizeExceeded)");
         judge(&rules, 7, &ledger, &unlisted, &mut tally);
-        let (lines, pass) = rules.bar(&tally, false);
-        assert!(!pass);
-        assert!(lines.contains(
-            &"RULE_UNMAPPED supp#7 dolos=refused[PostAlonzo(MaxTxSizeExceeded)] \
+        let (lines, failing) = bar(&rules, &tally, false);
+        assert_eq!(
+            failing,
+            [
+                "VERDICT judge=rules entry=submit_tx record=supp#7 cells=failure:unmapped \
+              outcome=disagree dolos=refused[PostAlonzo(MaxTxSizeExceeded)] \
               ledger=refused[FeeTooSmallUTxO]"
-                .to_string()
-        ));
+            ]
+        );
         assert!(lines.last().unwrap().contains(" mismatch=0 unmapped=1 "));
     }
 
@@ -593,8 +625,8 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         let mut tally = every_side(&rules);
         let evaluation = DolosVerdict::Phase2Unsupported(INTEGER.to_string());
         judge(&rules, 8, &accepted(), &evaluation, &mut tally);
-        let (lines, pass) = rules.bar(&tally, false);
-        assert!(pass, "{lines:?}");
+        let (lines, failing) = bar(&rules, &tally, false);
+        assert_eq!(failing, Vec::<String>::new(), "{lines:?}");
         assert!(lines.last().unwrap().contains(" mismatch=0 unmapped=0 "));
     }
 
@@ -604,11 +636,14 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         let mut tally = every_side(&rules);
         let feature = DolosVerdict::Unsupported(INTEGER.to_string());
         judge(&rules, 8, &accepted(), &feature, &mut tally);
-        let (lines, pass) = rules.bar(&tally, false);
-        assert!(!pass);
-        assert!(lines.contains(&format!(
-            "RULE_UNMAPPED supp#8 dolos=unsupported[{INTEGER}] ledger=accepted"
-        )));
+        let (_, failing) = bar(&rules, &tally, false);
+        assert_eq!(
+            failing,
+            [format!(
+                "VERDICT judge=rules entry=submit_tx record=supp#8 cells=failure:unmapped \
+                 outcome=disagree dolos=unsupported[{INTEGER}] ledger=accepted"
+            )]
+        );
     }
 
     #[test]
@@ -617,14 +652,17 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         let mut tally = RuleTally::default();
         let fee = dolos("PostAlonzo(FeeBelowMin)");
         judge(&rules, 1, &refused(&["FeeTooSmallUTxO"]), &fee, &mut tally);
-        let (_, pass) = rules.bar(&tally, false);
-        assert!(pass);
-        let (lines, pass) = rules.bar(&tally, true);
-        assert!(!pass);
-        assert!(lines.contains(
-            &"RULE_SIDE refused[PostAlonzo(FeeBelowMin)] declared=both found=refused_only"
-                .to_string()
-        ));
+        let (_, failing) = bar(&rules, &tally, false);
+        assert_eq!(failing, Vec::<String>::new());
+        let (_, failing) = bar(&rules, &tally, true);
+        assert!(
+            failing.contains(
+                &"VERDICT judge=rules entry=submit_tx record=selection cells= outcome=disagree \
+                  rule=refused[PostAlonzo(FeeBelowMin)] declared=both found=refused_only"
+                    .to_string()
+            ),
+            "{failing:?}"
+        );
     }
 
     #[test]
@@ -635,21 +673,23 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         let ledger = refused(&["DepositIncorrectDELEG"]);
         let mut tally = every_side(&rules);
         judge(&rules, 6, &ledger, &dolos(REFUND), &mut tally);
-        let (lines, pass) = rules.bar(&tally, true);
-        assert!(pass, "{lines:?}");
+        let (lines, failing) = bar(&rules, &tally, true);
+        assert_eq!(failing, Vec::<String>::new(), "{lines:?}");
         assert!(lines.contains(&format!(
             "RULE_KNOWN supp#6 dolos=refused[{REFUND}] ledger=refused[DepositIncorrectDELEG]"
         )));
         let mut tally = every_side(&rules);
         let fee = dolos("PostAlonzo(FeeBelowMin)");
         judge(&rules, 6, &ledger, &fee, &mut tally);
-        let (lines, pass) = rules.bar(&tally, true);
-        assert!(!pass);
-        assert!(
-            lines
-                .iter()
-                .any(|l| l.starts_with("RULE_KNOWN_STALE supp#6 ")),
-            "{lines:?}"
+        let (_, failing) = bar(&rules, &tally, true);
+        assert_eq!(
+            failing,
+            [format!(
+                "VERDICT judge=rules entry=submit_tx record=supp#6 cells=failure:known_stale \
+                 outcome=disagree dolos=refused[PostAlonzo(FeeBelowMin)] \
+                 ledger=refused[DepositIncorrectDELEG] known_dolos=refused[{REFUND}] \
+                 known_ledger=refused[DepositIncorrectDELEG]"
+            )]
         );
     }
 
@@ -659,11 +699,16 @@ unsupported[witness fields] | unrepresentable because the native validator does 
             format!("{TABLE}known supp#9 | refused[{REFUND}] | refused[DepositIncorrectDELEG]\n");
         let rules = rules(&known);
         let tally = every_side(&rules);
-        let (_, pass) = rules.bar(&tally, false);
-        assert!(pass);
-        let (lines, pass) = rules.bar(&tally, true);
-        assert!(!pass);
-        assert!(lines.contains(&"RULE_KNOWN_UNJUDGED supp#9".to_string()));
+        let (_, failing) = bar(&rules, &tally, false);
+        assert_eq!(failing, Vec::<String>::new());
+        let (_, failing) = bar(&rules, &tally, true);
+        assert_eq!(
+            failing,
+            [
+                "VERDICT judge=rules entry=submit_tx record=supp#9 cells=answer:unjudged \
+              outcome=disagree known not judged"
+            ]
+        );
     }
 
     #[test]

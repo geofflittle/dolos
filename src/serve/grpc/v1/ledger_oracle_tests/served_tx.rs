@@ -10,6 +10,7 @@ use itertools::Itertools as _;
 use ledger_oracle_judge::{
     compare::Tally,
     eval::{Layer, WireFee},
+    judgement::{CellKey, Finding},
     record::{CorpusKind, LedgerOutcome, RecordId},
 };
 use pallas::{
@@ -438,7 +439,8 @@ fn add(
     ledger: &LedgerTx,
     answer: Answer<MappedTx>,
 ) {
-    let (agrees, dolos) = match answer {
+    let answer_cell = |member: &str| CellKey::new("answer", member);
+    let (agrees, dolos, mut cells) = match answer {
         Answer::Mapped(mapped) => {
             let differing = differing(ledger, &mapped);
             let fields = differing.iter().map(|(f, _, _)| f).join(",");
@@ -447,13 +449,27 @@ fn add(
             let mut dolos = differing.iter().map(|(f, _, d)| format!("{f}={d}"));
             let dolos = dolos.join(" ");
             let shown = format!("differing={fields} ledger=[{ledger}] dolos=[{dolos}]");
-            (differing.is_empty(), shown)
+            let mut cells = vec![answer_cell("differ")];
+            cells.extend(differing.iter().map(|(f, _, _)| CellKey::new("field", f)));
+            (differing.is_empty(), shown, cells)
         }
-        Answer::Absent => (false, "dolos=none".to_string()),
-        Answer::Status(code) => (false, format!("status={code:?}")),
-        Answer::Panicked(message) => (false, format!("panicked={message}")),
+        Answer::Absent => (false, "dolos=none".to_string(), vec![answer_cell("none")]),
+        Answer::Status(code) => (
+            false,
+            format!("status={code:?}"),
+            vec![answer_cell("status")],
+        ),
+        Answer::Panicked(message) => (
+            false,
+            format!("panicked={message}"),
+            vec![answer_cell("panicked")],
+        ),
     };
-    tally.add(agrees, || format!("{id} {layer} {name} {dolos}"));
+    cells.insert(0, CellKey::new("layer", layer));
+    cells.insert(1, CellKey::new("tx", name.kind()));
+    tally.add(agrees, || {
+        Finding::new(id, cells, format!("{layer} {name} {dolos}"))
+    });
 }
 
 /// Evidence that ReadTx v1 mapped each accepted transaction of a run without a

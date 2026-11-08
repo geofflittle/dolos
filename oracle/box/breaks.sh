@@ -6,15 +6,10 @@
 set -eu
 : "${ROOT:?}"
 export ROOT
-REV=${REV:-feat/ledger-oracle}
-MIN_FREE_G=${MIN_FREE_G:-6}
 HERE=$(cd "$(dirname "$0")" && pwd)
-IMAGE="$HERE/in-image.sh"
-SCRATCH=${SCRATCH:-scratch/dolos}
-TEST=serve::grpc::v1::ledger_oracle_tests::ledger_oracle
-OUT=${OUT:-"$ROOT/runs/$(date -u +%Y%m%dT%H%M%SZ)"}
-mkdir -p "$OUT"
 . "$HERE/lib.sh"
+TEST=$ORACLE_TESTS::ledger_oracle
+mkdir -p "$OUT"
 take_lock
 ARMS=${ARMS:-head control $PLANTED_ARMS}
 unset ORACLE_PLANT
@@ -27,19 +22,20 @@ for arm in $ARMS; do
   esac
 done
 for switch in $(switches "$HERE"/overlay/*.diff); do
-  case " $PLANTED_ARMS " in
-    *" $switch "*) ;;
-    *) echo "REFUSED overlay switch $switch names no planted arm" ; exit 2 ;;
-  esac
   if [ -f "$HERE/plants/$switch.diff" ]; then
     echo "REFUSED arm $switch has both an overlay switch and plants/$switch.diff"
     exit 2
   fi
 done
+mismatches=$(arm_mismatches)
+if [ -n "$mismatches" ]; then
+  echo "$mismatches"
+  exit 2
+fi
 
 # The source cargo resolves pallas-validate from, as the scratch tree's build sees it.
 pallas_source() {
-  sh "$IMAGE" "$SCRATCH" cargo tree -q -i pallas-validate --depth 0 -e normal 2>/dev/null |
+  sh "$IN_IMAGE" "$SCRATCH" cargo tree -q -i pallas-validate --depth 0 -e normal 2>/dev/null |
     head -1 | sed -n 's/.*(\(.*\)).*/\1/p'
 }
 
@@ -67,7 +63,7 @@ run_crate_test() {
     echo "BUILD_REFUSED $built" >"$2"
     return
   fi
-  RUST_BACKTRACE=0 sh "$IMAGE" "$SCRATCH" "$(executable "$2.build")" $(crate_test_filter "$1") --nocapture >"$2" 2>&1 || true
+  RUST_BACKTRACE=0 sh "$IN_IMAGE" "$SCRATCH" "$(executable "$2.build")" $(crate_test_filter "$1") --nocapture >"$2" 2>&1 || true
 }
 
 # Applies the named pallas plant over the pinned pallas commit.
@@ -120,101 +116,25 @@ build_overlay() {
 run_overlay() {
   bin="/w/${OUT#"$ROOT"/}/bin"
   if crate_test "$1" >/dev/null; then
-    ORACLE_PLANT=$2 RUST_BACKTRACE=0 sh "$IMAGE" "$SCRATCH" "$bin/overlay-$1" $(crate_test_filter "$1") --nocapture >"$3" 2>&1 || true
+    ORACLE_PLANT=$2 RUST_BACKTRACE=0 sh "$IN_IMAGE" "$SCRATCH" "$bin/overlay-$1" $(crate_test_filter "$1") --nocapture >"$3" 2>&1 || true
   else
-    ORACLE_PLANT=$2 ORACLE_RECORDS=$4 RUST_BACKTRACE=0 sh "$IMAGE" "$SCRATCH" "$bin/overlay-judge" "${TEST}_records" \
+    ORACLE_PLANT=$2 ORACLE_RECORDS=$4 RUST_BACKTRACE=0 sh "$IN_IMAGE" "$SCRATCH" "$bin/overlay-judge" "${TEST}_records" \
       --exact --ignored --nocapture >"$3" 2>&1 || true
   fi
 }
 
-# Whether an arm's log holds the line its plant must produce and the head log lacks.
+# Whether an arm's log holds a line its catch selects on one of its records and the head log lacks.
 caught() {
   arm=$1
-  case $arm in
-    head) return 1 ;;
-    colret) pattern='^(DIFF utxo .* ledger=none dolos=|DISAGREE [a-z]+#[0-9]+ |KNOWN_STALE [a-z]+#[0-9]+ row=)' ;;
-    coin) pattern='^DIFF utxo .* fields=([a-z_]+,)*coin(,|$)' ;;
-    inflight) pattern='^DISAGREE [a-z]+#[0-9]+ held=' ;;
-    rodrigo-reverted | archive-outputs-only) pattern='^DIFF as_output [a-z]+#[0-9]+ ' ;;
-    rob-reverted) pattern='^(UNSUPPORTED_UNEXPECTED|DISAGREE|REASON_MISMATCH|STALE_MANIFEST) [a-z]+#[0-9]+ ' ;;
-    cost) pattern='^EVAL-DIFF pallas supp#[0-9]+ top [A-Za-z]+#[0-9]+ ledger=\(ran ' ;;
-    eval-purpose) pattern='^EVAL-DIFF pallas [a-z]+#[0-9]+ top Vote#[0-9]+ ledger=\(none\) dolos=\((ran|failed)' ;;
-    eval-index) pattern='^EVAL-DIFF pallas [a-z]+#[0-9]+ top Spend#[1-9][0-9]* ledger=\(none\) dolos=\((ran|failed)' ;;
-    eval-mem) pattern='^EVAL-DIFF pallas [a-z]+#[0-9]+ top [A-Za-z]+#[0-9]+ ledger=\(ran mem=[0-9]+ steps=([0-9]+)\) dolos=\(ran mem=[0-9]+ steps=\1\)$' ;;
-    eval-steps) pattern='^EVAL-DIFF pallas [a-z]+#[0-9]+ top [A-Za-z]+#[0-9]+ ledger=\(ran mem=([0-9]+) steps=[0-9]+\) dolos=\(ran mem=\1 steps=[0-9]+\)$' ;;
-    eval-ran) pattern='^EVAL-DIFF pallas [a-z]+#[0-9]+ top [A-Za-z]+#[0-9]+ ledger=\(ran mem=[0-9]+ steps=[0-9]+\) dolos=\(failed\)$' ;;
-    v4-v3-context) pattern='^EVAL-DIFF pallas [a-z]+#[0-9]+ top [A-Za-z]+#[0-9]+ ledger=\(ran mem=[0-9]+ steps=[0-9]+\) dolos=\((ran mem=[0-9]+ steps=[0-9]+|failed)\)$' ;;
-    guarding-purpose) pattern='^EVAL-DIFF pallas [a-z]+#[0-9]+ top Guarding#[0-9]+ ledger=\(ran mem=[0-9]+ steps=[0-9]+\) dolos=\((ran mem=[0-9]+ steps=[0-9]+|failed)\)$' ;;
-    eval-level) pattern='^EVAL-DIFF pallas [a-z]+#[0-9]+ sub[0-9]+ [A-Za-z]+#[0-9]+ ledger=\((ran|failed)[^)]*\) dolos=\(none\)$' ;;
-    v1-guarding) pattern='^EVAL-DIFF v1 [a-z]+#[0-9]+ [a-z0-9]+ Guarding#[0-9]+ ' ;;
-    v1beta-eval-mapped) pattern='^EVAL-DIFF v1beta [a-z]+#[0-9]+ ' ;;
-    v1alpha-eval-mapped) pattern='^EVAL-DIFF v1alpha [a-z]+#[0-9]+ ' ;;
-    requests-scripts-reverted | missing-script-refusal-reverted) pattern='^EVAL-TX-DIFF [a-z0-9]+ [a-z]+#[0-9]+ demand=refuse' ;;
-    estimate-needs-vkeys) pattern='^EVAL-DRAFT-DIFF [a-z0-9]+ [a-z]+#[0-9]+ ' ;;
-    requires-sub-inputs-dropped | withdrawal-accounts-absent | era-trial-decoded) pattern='^DISAGREE [a-z]+#[0-9]+ ' ;;
-    v3-reg-deposit-omitted) pattern='^CONTEXT-DIFF [a-z]+#[0-9]+ [a-z0-9]+ [A-Za-z]+#[0-9]+ V3 ' ;;
-    revalidate) pattern='^DIFF revalidate [a-z]+#[0-9]+ kept_after_rollback_to=' ;;
-    revalidate-drops) pattern='^DIFF revalidate [a-z]+#[0-9]+ dropped_after_rollback_to=' ;;
-    subouts) pattern='^DIFF (undo|as_output) [a-z]+#[0-9]+ ' ;;
-    byron-attrs | byron-signer | byron-guard | chaincode | emptyguards | tag24 | tag24-ref | unreg-refund | drep-deposit | upper-inclusive | slot-off-by-one | horizon-removed | system-start) pattern='^DISAGREE [a-z]+#[0-9]+ ' ;;
-    cost-models) pattern="^thread 'musashi_bootstrap_uses_the_published_cost_models' \([0-9]+\) panicked at crates/cardano/tests/musashi_cost_models.rs:32:" ;;
-    byron-out) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=(bootstrap or reward address|output address)' ;;
-    minfee-subtx) pattern='^DIFF fee [a-z]+#[0-9]+ ledger=[0-9]+ dolos=[0-9]+$' ;;
-    v1v2) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=new script language ' ;;
-    native-ref-reencoded | v2-ref-dropped | v1-ref-exposed | script-payment-swap | signatories-unsorted | withdrawal-order | cert-unwrapped | script-guard-admitted) pattern='^DISAGREE [a-z]+#[0-9]+ ' ;;
-    v3-cert-wrapped | v2-withdrawal-unwrapped | top-guards-admitted) pattern='^DISAGREE [a-z]+#[0-9]+ ' ;;
-    guard-ref-reverted) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=native script guards$' ;;
-    v4-ref-refused) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=reference script language ' ;;
-    pointer-refused) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=pointer address ' ;;
-    collateral-unsupported) pattern='^UNSUPPORTED_UNEXPECTED [a-z]+#[0-9]+ label=collateral without Plutus$' ;;
-    indef-strings-refused | flat-enum-definite | indef-array-refused) pattern='^DISAGREE [a-z]+#[0-9]+ ledger=accepted dolos=refused\[CborDecodingError\]$' ;;
-    sub-valid-always) pattern='^DIFF (utxo|accounts) [a-z]+#[0-9]+ ' ;;
-    pointer-output-refused) pattern='^DISAGREE [a-z0-9]+#[0-9]+ ledger=refused\[PtrPresentInCollateralReturn\] dolos=accepted$' ;;
-    native-guard-datum-required) pattern='^DISAGREE [a-z]+#[0-9]+ ledger=accepted dolos=refused\[DijkstraMalformedGuardDatum\]$' ;;
-    plutus-guard-datum-optional) pattern='^DISAGREE [a-z]+#[0-9]+ ledger=refused\[SubMalformedGuardDatums\] dolos=accepted$' ;;
-    horizon-unbounded) pattern='^DISAGREE [a-z]+#[0-9]+ ledger=refused\[CollectErrors\] dolos=accepted$' ;;
-    builtin-term-walk | builtin-call-unaudited) pattern='^EVAL-DIFF pallas [a-z]+#[0-9]+ top [A-Za-z]+#[0-9]+ ledger=\(ran mem=[0-9]+ steps=[0-9]+\) dolos=\(refused V3 builtin outside audited protocol-12 subset\)$' ;;
-    block-made-unserved) pattern='^DIFF undo [a-z]+#[0-9]+ ' ;;
-    scripts-sub-unsearched) pattern='^DIFF script [a-z]+#[0-9]+ ' ;;
-    gov-proposal-panics | dijkstra-scripts-panic) pattern='^DIFF served_tx [a-z]+#[0-9]+ v1 tx=[0-9a-f]+ panicked=' ;;
-    guarding-redeemer-panics) pattern='^DIFF served_tx [a-z]+#[0-9]+ v1(beta|alpha) (sub_)?tx=[0-9a-f]+ panicked=' ;;
-    fee-absent-zero) pattern='^DIFF served_tx [a-z]+#[0-9]+ v1(beta|alpha) sub_tx=[0-9a-f]+ differing=([a-z]+,)*fee(,|$| )' ;;
-    witness-v3-v4-dropped) pattern='^DIFF served_tx [a-z]+#[0-9]+ v1[a-z]* (sub_)?tx=[0-9a-f]+ differing=([a-z]+,)*scripts(,|$| )' ;;
-    rational-truncated) pattern='^DIFF served_tx [a-z]+#[0-9]+ v1[a-z]* tx=[0-9a-f]+ differing=([a-z]+,)*quorum(,|$| )' ;;
-    datum-sub-unsearched) pattern='^DIFF plutus_data [a-z]+#[0-9]+ ' ;;
-    bigint-truncated) pattern='^DIFF utxo .* fields=([a-z_]+,)*datum(,|$)' ;;
-    aux-plutus-dropped) pattern='^DIFF served_tx [a-z]+#[0-9]+ v1[a-z]* (sub_)?tx=[0-9a-f]+ differing=([a-z_]+,)*aux_scripts(,|$| )' ;;
-    update-keys-dropped) pattern='^DIFF served_tx [a-z]+#[0-9]+ v1 (sub_)?tx=[0-9a-f]+ differing=([a-z_]+,)*dijkstra_keys(,|$| )' ;;
-    proposal-keys-dropped) pattern='^CONTEXT-DIFF [a-z]+#[0-9]+ [a-z0-9]+ [A-Za-z]+#[0-9]+ V[34] arg=0 path=[0-9.]+ field=context\.scriptContextTxInfo\.txInfoProposalProcedures ' ;;
-    pending-registrations-ignored) pattern='^DISAGREE [a-z]+#[0-9]+ ledger=accepted dolos=refused\[DijkstraInvalidAccount\(' ;;
-    endorser-tx-dropped) pattern='^ENDORSER-DIFF service=(FetchBlock|FollowTip) slot=[0-9]+ list=(ids|bytes) index=[0-9]+ ' ;;
-    fee-min-deleted | aux-refused | integrity-top-deleted) pattern='^(DISAGREE|REASON_MISMATCH|RULE_MISMATCH) [a-z0-9]+#[0-9]+ ' ;;
-    refund-deposit-swap) pattern='^RULE_MISMATCH [a-z0-9]+#[0-9]+ ' ;;
-    ctx-sub-top-info) pattern='^CONTEXT-DIFF [a-z]+#[0-9]+ sub[0-9]+ [A-Za-z]+#[0-9]+ V4 arg=0 path=0\.[0-9.]+ field=context\.scriptContextTxInfo\.txInfo[A-Za-z]+ ' ;;
-    ctx-v3-fee) pattern='^CONTEXT-DIFF [a-z]+#[0-9]+ top [A-Za-z]+#[0-9]+ V3 arg=0 path=0\.3 field=context\.scriptContextTxInfo\.txInfoFee ledger=[0-9]+ pallas=[0-9]+$' ;;
-    ctx-v4-subtx-index) pattern='^CONTEXT-DIFF [a-z]+#[0-9]+ sub[0-9]+ [A-Za-z]+#[0-9]+ V4 arg=0 path=0\.1 field=context\.scriptContextTxInfo\.txInfoSubTxIx ' ;;
-    ctx-encoding) pattern='^CONTEXT-(DIFF|PALLAS-ONLY|STALE) [a-z]+#[0-9]+ ' ;;
-    reward-output-unsupported) pattern='^EVAL-REWARD-OUTPUT-DIFF [a-z0-9]+ [a-z]+#[0-9]+ expected=\(couldn.t evaluate phase-2 script: invalid native Dijkstra evaluation: reward account address\) dolos=refused\[output address \(requires Shelley\)\]$' ;;
-    unsupported-untyped) pattern='^STALE_MANIFEST [a-z]+#[0-9]+ declared=integer operand outside audited registration range dolos=refused\[Phase2EvaluationError\]$' ;;
-    *)
-      echo "ARM $arm NO_PATTERN"
-      return 1
-      ;;
-  esac
   if [ ! -f "$OUT/head.log" ]; then
     echo "ARM $arm NO_HEAD_LOG"
     return 1
   fi
-  log=$2
   at=$3
-  grep -E "$pattern" "$log" >"$at.expected" || true
-  # Keeps the lines the head run lacks that name one of the arm's records.
-  sed 's/^/ /; s/$/ /' "$HERE/plants/$arm.records" >"$at.ids"
-  grep -E "$pattern" "$OUT/head.log" | grep -v -x -F -f - "$at.expected" |
-    sed 's/$/ /' | grep -F -f "$at.ids" | sed 's/ $//' >"$at.new" || true
+  verdict_catch "$arm" "$2" "$HERE/plants/$arm.records" "$OUT/head.log" >"$at.new" || return 1
   # The subouts arm counts only records that no known row names.
   if [ "$arm" = subouts ]; then
-    sed -n 's/^[^ ]* [^ ]* \([a-z]*#[0-9]*\).*/ \1 /p' "$ROOT/$SCRATCH/test_data/ledger-oracle/known.txt" >"$OUT/known.ids"
+    sed -n 's/^[^ ]* [^ ]* \([a-z]*#[0-9]*\).*/ record=\1 /p' "$ROOT/$SCRATCH/test_data/ledger-oracle/known.txt" >"$OUT/known.ids"
     grep -v -F -f "$OUT/known.ids" "$at.new" >"$at.unknown" || true
     mv "$at.unknown" "$at.new"
   fi
@@ -381,7 +301,7 @@ for arm in $ARMS; do
   esac
   echo "ARM $arm test=${test##*::} records=$(echo "$records" | tr , '\n' | grep -c . || true) build_seconds=$(($(date +%s) - started))"
   started=$(date +%s)
-  ORACLE_RECORDS=$records RUST_BACKTRACE=0 sh "$IMAGE" "$SCRATCH" "$judge" "$test" \
+  ORACLE_RECORDS=$records RUST_BACKTRACE=0 sh "$IN_IMAGE" "$SCRATCH" "$judge" "$test" \
     --exact --ignored --nocapture >"$OUT/$arm.log" 2>&1 || true
   echo "ARM $arm judge_seconds=$(($(date +%s) - started))"
   if [ "$arm" = control ]; then
@@ -401,8 +321,7 @@ for arm in $ARMS; do
     echo "control=$control"
     verdicts="$verdicts control=$control"
   elif [ "$arm" = head ]; then
-    grep -E '^(CORPUS|VALIDATION|DEPENDENT|KNOWN|STATE|COST|EVAL-ORACLE|EVAL-DIFF|EVAL-TOTAL|EVAL-UNNAMED|EVAL-FEE|EVAL-TX|EVAL-TX-DIFF|EVAL-DRAFT|EVAL-DRAFT-DIFF|EVAL-DRAFT-UNDERIVED|EVAL-REWARD-OUTPUT|EVAL-REWARD-OUTPUT-DIFF|CONTEXT|CONTEXT-DIFF|CONTEXT-PALLAS-ONLY|CONTEXT-STALE|REVALIDATE|BUILTIN|ROLL_FAIL|RESULT|DISAGREE|REASON_MISMATCH|CASCADE|UNSUPPORTED_UNEXPECTED|STALE_MANIFEST|KNOWN_STALE|UNKNOWN_REFUSAL|ENDORSER|ENDORSER-DIFF|PHASE1-RULES|RULE_SIDE|RULE_MISMATCH|RULE_UNMAPPED|RULE_KNOWN_STALE|RULE_KNOWN_UNJUDGED) ' "$OUT/$arm.log" |
-      cut -c1-400 || true
+    grep -E '^(VERDICT|VERDICTS|RESULT) ' "$OUT/$arm.log" | cut -c1-400 || true
     if grep -q '^RESULT PASS' "$OUT/$arm.log" && ! grep -q '^RESULT FAIL' "$OUT/$arm.log"; then
       head_result=PASS
     else
@@ -420,7 +339,4 @@ done
 reset_scratch
 
 echo "ARMS$verdicts logs=$OUT"
-case "$verdicts" in
-  *MISSED* | *FAIL* | *FIRED* | *SKIPPED*) exit 1 ;;
-esac
-[ "$head_result" = PASS ]
+passed "$verdicts"

@@ -1,16 +1,27 @@
-# Functions the oracle box scripts share, reading ROOT, SCRATCH, REV, MIN_FREE_G, HERE, TARGET, IN_IMAGE, LOCK_POLL_SECONDS, RUN_LOCK, LAST_DONE, LAST_SHIP, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_FSYNC, NODE, ENDPOINT, GRPCURL and the IO_ limits.
+# Functions and defaults the oracle box scripts share, reading ROOT, SCRATCH, REV, MIN_FREE_G, OUT, HERE, TARGET, IN_IMAGE, LOCK_POLL_SECONDS, RUN_LOCK, LAST_DONE, LAST_SHIP, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_FSYNC, NODE, ENDPOINT, GRPCURL and the IO_ limits.
 
 PALLAS=${PALLAS:-scratch/pallas}
+SCRATCH=${SCRATCH:-scratch/dolos}
+REV=${REV:-feat/ledger-oracle}
+MIN_FREE_G=${MIN_FREE_G:-6}
+OUT=${OUT:-"$ROOT/runs/$(date -u +%Y%m%dT%H%M%SZ)"}
 IN_IMAGE=${IN_IMAGE:-$HERE/in-image.sh}
+# The Dolos test module that judges the corpora and the live node.
+ORACLE_TESTS=serve::grpc::v1::ledger_oracle_tests
 # One line for each unit of the target dir, the tree ids of the scratch trees its last build read and its output files.
 BUILT="$ROOT/${TARGET:-target}/built-units"
-# The arms that plant a defect, each judged on the records plants/<arm>.records names.
-PLANTED_ARMS="colret coin inflight rodrigo-reverted rob-reverted cost revalidate revalidate-drops subouts byron-attrs byron-signer byron-guard chaincode minfee-subtx emptyguards tag24 v1v2 byron-out tag24-ref unreg-refund drep-deposit upper-inclusive slot-off-by-one horizon-removed system-start cost-models guard-ref-reverted native-ref-reencoded v2-ref-dropped v4-ref-refused v1-ref-exposed pointer-refused script-payment-swap signatories-unsorted withdrawal-order cert-unwrapped script-guard-admitted v3-cert-wrapped v2-withdrawal-unwrapped top-guards-admitted eval-purpose eval-index eval-mem eval-steps eval-ran eval-level v1-guarding v4-v3-context guarding-purpose collateral-unsupported endorser-tx-dropped fee-min-deleted aux-refused refund-deposit-swap integrity-top-deleted ctx-sub-top-info ctx-v3-fee ctx-v4-subtx-index ctx-encoding requests-scripts-reverted missing-script-refusal-reverted estimate-needs-vkeys requires-sub-inputs-dropped withdrawal-accounts-absent era-trial-decoded v1beta-eval-mapped v1alpha-eval-mapped v3-reg-deposit-omitted indef-strings-refused sub-valid-always pointer-output-refused native-guard-datum-required plutus-guard-datum-optional horizon-unbounded builtin-term-walk builtin-call-unaudited pending-registrations-ignored archive-outputs-only block-made-unserved scripts-sub-unsearched gov-proposal-panics dijkstra-scripts-panic guarding-redeemer-panics fee-absent-zero witness-v3-v4-dropped rational-truncated datum-sub-unsearched bigint-truncated aux-plutus-dropped flat-enum-definite indef-array-refused update-keys-dropped proposal-keys-dropped reward-output-unsupported unsupported-untyped"
-
 # The arms whose switch an overlay diff adds, one per line.
 switches() {
   sed -n 's/^+.*oracle_plant("\([a-z0-9-]*\)").*/\1/p' "$@" | sort -u
 }
+
+# The arms that plant a defect, each judged on the records plants/<arm>.records names.
+PLANTED_ARMS=$({
+  switches "$HERE"/overlay/*.diff
+  for plant in "$HERE"/plants/*.diff; do
+    if [ -f "$plant" ]; then basename "$plant" .diff; fi
+  done
+} | sort -u | paste -sd ' ' -)
 
 # Whether an arm is a switch of the overlay, judged on the one overlay build with ORACLE_PLANT naming it.
 overlay_arm() {
@@ -38,7 +49,7 @@ crate_test() {
 # The arguments that pick an arm's test out of its crate test binary, none when the binary holds that test alone.
 crate_test_filter() {
   case $1 in
-    endorser-tx-dropped) echo "serve::grpc::v1::ledger_oracle_tests::endorser::served_endorser_transactions_are_the_nodes --exact" ;;
+    endorser-tx-dropped) echo "$ORACLE_TESTS::endorser::served_endorser_transactions_are_the_nodes --exact" ;;
   esac
 }
 
@@ -86,6 +97,16 @@ plant_files() {
     return
   fi
   sed -n 's#^+++ b/##p' "$HERE/plants/$1.diff"
+}
+
+# The arms whose plant changes a file that differs between the commits $1 and $2 of the scratch tree, one per line, failing when the files cannot be listed.
+touched_arms() {
+  differing_files "$ROOT/$SCRATCH" "$1" "$2" >"$OUT/changed" || return
+  for arm in $PLANTED_ARMS; do
+    if plant_files "$arm" | grep -q -x -F -f "$OUT/changed"; then
+      echo "$arm"
+    fi
+  done
 }
 
 # Whether two test logs are the same but for the test harness's run time.
@@ -362,6 +383,116 @@ manifest_rows() {
       split(line, w, " ")
       print w[3], w[4] "=" w[6], (w[7] == "why" && w[9] != "" ? "why" : "")
     }' "$ARMS_MANIFEST"
+}
+
+# The catches the arms manifest gives the arm $1, separated by tabs.
+catches() {
+  awk -v arm="$1" '
+    /^\[/ { inside = ($0 == "[catches]"); next }
+    !inside || $1 != arm || $2 != "=" { next }
+    {
+      line = $0
+      sub(/^[^[]*\[ *"/, "", line)
+      sub(/" *\] *$/, "", line)
+      gsub(/" *, *"/, "\t", line)
+      print line
+      exit
+    }' "$ARMS_MANIFEST"
+}
+
+# Prints a REFUSED line for each planted arm with no records file or no catch, and for each records file or catch that names no planted arm.
+arm_mismatches() {
+  for arm in $PLANTED_ARMS; do
+    if [ ! -s "$HERE/plants/$arm.records" ]; then
+      echo "REFUSED arm $arm has no plants/$arm.records"
+    fi
+    if [ -z "$(catches "$arm")" ]; then
+      echo "REFUSED arm $arm has no catch in $ARMS_MANIFEST"
+    fi
+  done
+  {
+    for records in "$HERE"/plants/*.records; do
+      if [ -f "$records" ]; then
+        echo "plants/$(basename "$records")	$(basename "$records" .records)"
+      fi
+    done
+    awk '/^\[/ { inside = ($0 == "[catches]"); next } inside && $2 == "=" { print "the catch of " $1 "\t" $1 }' "$ARMS_MANIFEST"
+  } | while IFS='	' read -r source arm; do
+    case " $PLANTED_ARMS " in
+      *" $arm "*) ;;
+      *) echo "REFUSED $source names no planted arm" ;;
+    esac
+  done
+}
+
+# Prints each line of the log $2 that a catch of the arm $1 selects, that names a record of the file $3 by its record field or, for a line about no one record, anywhere in it, and that the log $4 lacks.
+verdict_catch() {
+  specs=$(catches "$1")
+  if [ -z "$specs" ]; then
+    echo "ARM $1 NO_CATCH" >&2
+    return 1
+  fi
+  awk -v specs="$specs" -v records="$3" -v head="$4" '
+    function holds(want, cells, n, c) {
+      n = length(want)
+      for (c in cells) {
+        if (substr(want, n) == "*" ? index(c, substr(want, 1, n - 1)) == 1 : c == want) return 1
+      }
+      return 0
+    }
+    function any(alternatives, cells, a, n, i) {
+      n = split(alternatives, a, "|")
+      for (i = 1; i <= n; i++) if (holds(a[i], cells)) return 1
+      return 0
+    }
+    function one_of(alternatives, value, a, n, i) {
+      n = split(alternatives, a, "|")
+      for (i = 1; i <= n; i++) if (a[i] == value) return 1
+      return 0
+    }
+    function selects(spec, line, w, terms, n, i, t, verdict, cells, list, k) {
+      split(line, w, " ")
+      verdict = w[1] == "VERDICT" && w[6] == "outcome=disagree"
+      split("", cells)
+      k = split(substr(w[5], 7), list, ",")
+      for (i = 1; i <= k; i++) cells[list[i]] = 1
+      n = split(spec, terms, " ")
+      for (i = 1; i <= n; i++) {
+        t = terms[i]
+        if (t ~ /^test=/) {
+          if (index(line, "thread \047" substr(t, 6) "\047 ") != 1 || !index(line, " panicked at ")) return 0
+        } else if (!verdict) {
+          return 0
+        } else if (t ~ /^judge=/) {
+          if (!one_of(substr(t, 7), substr(w[2], 7))) return 0
+        } else if (t ~ /^entry=/) {
+          if (!one_of(substr(t, 7), substr(w[3], 7))) return 0
+        } else if (t ~ /^!/) {
+          if (holds(substr(t, 2), cells)) return 0
+        } else if (!any(t, cells)) {
+          return 0
+        }
+      }
+      return 1
+    }
+    function names_record(line, w, r) {
+      split(line, w, " ")
+      if (w[1] == "VERDICT" && w[4] != "record=selection") return (substr(w[4], 8) in ids)
+      for (r in ids) if (index(" " line " ", " " r " ")) return 1
+      return 0
+    }
+    BEGIN { nspecs = split(specs, spec, "\t") }
+    FILENAME == records { if (NF) ids[$1] = 1; next }
+    FILENAME == head { seen[$0] = 1; next }
+    ($0 in seen) || !names_record($0) { next }
+    {
+      for (i = 1; i <= nspecs; i++) {
+        if (selects(spec[i], $0)) {
+          print
+          next
+        }
+      }
+    }' "$3" "$4" "$2"
 }
 
 # Prints a FIX-ARM line for each fix subject commit of the repository $1 from the base of the manifest section $2 to the commit $3 that the section gives no arm of PLANTED_ARMS and no known exclusion, then a FIX-ARMS line of counts, and fails when it printed a FIX-ARM line.

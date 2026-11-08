@@ -39,6 +39,7 @@ use ledger_oracle_judge::{
     corpus::{self, Corpus},
     cost::CostTallies,
     eval::{ledger_rows, Answer, EvalKnown, EvalTally, Layer, TxKnown},
+    judgement::{self, CellKey, EntryPoint, Finding, Judge, RunVerdict},
     manifest::{self, Candidates, Declared, Feature, Known, KnownList, Locus},
     parallel::in_parallel,
     record::{CorpusKind, LedgerOutcome, PParams, Phase2, Record, RecordId, UtxoEntry},
@@ -181,7 +182,7 @@ async fn compare_utxos<'a>(
         let bytes = ledger.map(|l| written.get(input).map_or(l, Vec::as_slice));
         let item = served.get(input);
         let Some(verdict) = ByteVerdict::of(bytes, item.map(|i| i.native_bytes.as_ref())) else {
-            tally.add(true, String::new);
+            tally.agree();
             continue;
         };
         let fields = match (ledger, item) {
@@ -194,13 +195,13 @@ async fn compare_utxos<'a>(
         };
         tally.add(verdict.agrees() && fields.is_empty(), || {
             let shown = show_input(input);
-            match fields.is_empty() {
-                true => format!("{id} input={shown} {verdict}"),
-                false => format!(
-                    "{id} input={shown} {verdict} fields={}",
-                    fields.iter().join(",")
-                ),
-            }
+            let mut cells = vec![verdict.cell()];
+            cells.extend(fields.iter().map(|f| CellKey::new("field", f)));
+            let detail = match fields.is_empty() {
+                true => format!("input={shown} {verdict}"),
+                false => format!("input={shown} {verdict} fields={}", fields.iter().join(",")),
+            };
+            Finding::new(id, cells, detail)
         });
     }
 }
@@ -324,8 +325,17 @@ fn builtin_bar(coverage: &Coverage) -> Vec<String> {
 }
 
 impl Judged {
-    fn pass(&self) -> bool {
-        self.validation.pass() && self.state.pass() && self.eval.pass() && self.context.pass()
+    /// The verdicts of the validation, state, fee, evaluation and script
+    /// context judges.
+    fn report(&self) -> judgement::Tally {
+        let mut out = judgement::Tally::default();
+        self.validation.report(&mut out);
+        self.state.report(&mut out);
+        self.cost.report(&mut out);
+        self.eval.report(&mut out);
+        self.context.report(&mut out);
+        out.require(&[(Judge::Validation, EntryPoint::SubmitTx)]);
+        out
     }
 
     /// Adds the judgement of another part of the corpus after this one's.
@@ -384,22 +394,65 @@ fn judged_part(uncompared: &[&str]) -> Judged {
     ];
     for (name, tally) in tallies {
         if !uncompared.contains(&name) {
-            tally.add(true, String::new);
+            tally.agree();
         }
     }
     judged
 }
 
+/// The text of each disagreement.
+#[cfg(test)]
+fn shown(findings: &[Finding]) -> Vec<String> {
+    findings.iter().map(Finding::to_string).collect()
+}
+
+/// The failing verdict lines of `judge` in a corpus judgement.
+#[cfg(test)]
+fn failing(judged: &Judged, judge: Judge) -> Vec<String> {
+    let failing = judged.report().failing.into_iter();
+    let of_judge = failing.filter(|v| v.judge == judge);
+    of_judge.map(|v| v.to_string()).collect()
+}
+
+/// Whether `judged` holds a failing verdict of `judge` on `record` whose line
+/// ends with `tail`.
+#[cfg(test)]
+fn fails_with(judged: &Judged, judge: Judge, record: &str, tail: &str) -> bool {
+    let record = format!(" record={record} ");
+    let lines = failing(judged, judge);
+    lines
+        .iter()
+        .any(|l| l.contains(&record) && l.ends_with(tail))
+}
+
+#[cfg(test)]
+fn passes(judged: &Judged) -> bool {
+    matches!(judged.report().verdict(), RunVerdict::Pass { .. })
+}
+
 #[test]
 fn a_selection_passes_when_its_corpus_parts_together_compare_each_state_tally() {
     let mut selection = judged_part(&["accounts", "datum"]);
-    assert!(!selection.pass());
+    assert!(!passes(&selection));
     selection.merge(judged_part(&["script"]));
-    assert!(selection.pass());
+    assert!(passes(&selection));
 
     let mut neither = judged_part(&["accounts"]);
     neither.merge(judged_part(&["accounts", "datum"]));
-    assert!(!neither.pass());
+    assert!(!passes(&neither));
+}
+
+#[test]
+fn a_selection_fails_on_a_fee_disagreement_alone() {
+    let mut selection = judged_part(&[]);
+    assert!(passes(&selection));
+    let finding = Finding::new(
+        supp(1),
+        vec![CellKey::new("answer", "differ")],
+        "ledger=7 dolos=8",
+    );
+    selection.cost.fee.add(false, || finding);
+    assert!(!passes(&selection));
 }
 
 /// The redeemer tag number the ledger writes in a purpose.
@@ -436,6 +489,27 @@ fn guarding_result_uses_ledger_tag_and_original_index() {
         failure_message: None,
     };
     assert_eq!(purpose(&result), Purpose { tag: 6, index: 9 });
+}
+
+#[test]
+fn each_tag_the_dijkstra_decoder_accepts_has_its_ledger_name_and_number() {
+    use pallas::{codec::minicbor, ledger::primitives::dijkstra::RedeemerTag as Tag};
+    let mut decoded = 0;
+    for n in 0..=u8::MAX {
+        let bytes = minicbor::to_vec(n).unwrap();
+        match minicbor::decode::<Tag>(&bytes) {
+            Ok(tag) => {
+                decoded += 1;
+                assert_eq!(
+                    ledger_oracle_judge::eval::tag_name(n.into()),
+                    format!("{tag:?}")
+                );
+                assert_eq!(tag_number(&tag.into()), u64::from(n), "{tag:?}");
+            }
+            Err(_) => assert_eq!(ledger_oracle_judge::eval::tag_name(n.into()), n.to_string()),
+        }
+    }
+    assert!(decoded > 0);
 }
 
 /// Counts the minimum fee Dolos computes for one record against the ledger's.
@@ -832,7 +906,7 @@ async fn validate_run<'r>(
         compare_datums(group.domain(), id_of(last), &made, edits, &mut state.datum).await;
         let served = dolos_accounts(group.domain());
         let checks = account_checks.entry(id_of(last)).or_default();
-        accounts::compare(accounts_post, &served, checks);
+        accounts::compare(id_of(last), accounts_post, &served, checks);
     }
     (blocks, account_checks)
 }
@@ -883,26 +957,30 @@ async fn compare_datums(
     let served = read_datums(domain, expected.keys()).await;
     for (input, (maker, hash, ledger)) in &expected {
         let served = served.get(input).cloned().flatten();
-        let (agrees, dolos) = match ledger {
+        let (agrees, dolos, cell) = match ledger {
             ExpectedDatum::Witnessed(bytes) => {
                 let verdict = ByteVerdict::against(bytes, served.as_deref());
-                (verdict.agrees(), verdict.to_string())
+                (verdict.agrees(), verdict.to_string(), verdict.cell())
             }
-            ExpectedDatum::Unwitnessed => match served {
-                None => (true, "unwitnessed dolos=none".to_string()),
-                Some(bytes) => {
-                    let served_hash = *Hasher::<256>::hash(&bytes);
-                    let dolos = format!("unwitnessed dolos_hash={}", hex::encode(served_hash));
-                    (served_hash == *hash, dolos)
+            ExpectedDatum::Unwitnessed => {
+                let cell = CellKey::new("datum", "unwitnessed");
+                match served {
+                    None => (true, "unwitnessed dolos=none".to_string(), cell),
+                    Some(bytes) => {
+                        let served_hash = *Hasher::<256>::hash(&bytes);
+                        let dolos = format!("unwitnessed dolos_hash={}", hex::encode(served_hash));
+                        (served_hash == *hash, dolos, cell)
+                    }
                 }
-            },
+            }
         };
         tally.add(agrees, || {
-            format!(
-                "{id} input={} made_by={maker} datum={} {dolos}",
+            let detail = format!(
+                "input={} made_by={maker} datum={} {dolos}",
                 show_input(input),
                 hex::encode(hash)
-            )
+            );
+            Finding::new(id, vec![cell], detail)
         });
     }
 }
@@ -1079,6 +1157,24 @@ enum TxName {
     Sub([u8; 32]),
 }
 
+impl TxName {
+    /// Whether the name is of a top level or a sub transaction.
+    fn kind(&self) -> &'static str {
+        match self {
+            TxName::Top(_) => "top",
+            TxName::Sub(_) => "sub",
+        }
+    }
+}
+
+/// Whether the ledger holds the item a lookup serves, as its cell shows it.
+fn held<T>(ledger: &Option<T>) -> &'static str {
+    match ledger {
+        Some(_) => "held",
+        None => "none",
+    }
+}
+
 impl fmt::Display for TxName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1165,7 +1261,8 @@ async fn compare_read_tx(
             }
         };
         tally.add(agrees, || {
-            format!("{id} {name} ledger={shown} dolos={dolos}")
+            let cells = vec![CellKey::new("tx", name.kind())];
+            Finding::new(id, cells, format!("{name} ledger={shown} dolos={dolos}"))
         });
     }
 }
@@ -1284,10 +1381,8 @@ async fn compare_scripts(
             }
         };
         tally.add(agrees, || {
-            format!(
-                "{id} script={} ledger={shown} dolos={dolos}",
-                hex::encode(hash)
-            )
+            let detail = format!("script={} ledger={shown} dolos={dolos}", hex::encode(hash));
+            Finding::new(id, vec![CellKey::new("ledger", held(&ledger))], detail)
         });
     }
 }
@@ -1376,10 +1471,8 @@ async fn compare_plutus_data(
             }
         };
         tally.add(agrees, || {
-            format!(
-                "{id} datum={} ledger={shown} dolos={dolos}",
-                hex::encode(hash)
-            )
+            let detail = format!("datum={} ledger={shown} dolos={dolos}", hex::encode(hash));
+            Finding::new(id, vec![CellKey::new("ledger", held(&ledger))], detail)
         });
     }
 }
@@ -1504,7 +1597,10 @@ fn compare_served(
                     continue;
                 }
                 InputOrigin::AbsentFromPre => {
-                    tally.add(false, || format!("absent_from_pre input={shown}"));
+                    tally.add(false, || {
+                        let cells = vec![CellKey::new("input", "absent_from_pre")];
+                        Finding::new(id, cells, format!("absent_from_pre input={shown}"))
+                    });
                     continue;
                 }
                 InputOrigin::InRun { made_by } => format!("in_run made_by={made_by}"),
@@ -1519,12 +1615,15 @@ fn compare_served(
                 .output;
             let failures = served_verdicts(id, &hash, &input, &ledger.0, services);
             tally.add(failures.is_empty(), || {
+                let services = failures.values().flatten();
+                let cells = services.map(|s| CellKey::new("service", s));
                 let lines = failures.iter().map(|(verdict, services)| {
                     let mut names = services.iter().map(Service::to_string);
                     let names = names.join(",");
                     format!("{verdict} input={shown} {made} services={names}")
                 });
-                lines.collect::<Vec<_>>().join(" and ")
+                let detail = lines.collect::<Vec<_>>().join(" and ");
+                Finding::new(id, cells.unique().collect(), detail)
             });
         }
     }
@@ -1653,30 +1752,28 @@ async fn sweep(
             .drop_pending(&kept)
             .unwrap_or_else(|e| panic!("RUN {id} drop pending {e}"));
         if let Err(e) = rolled_back {
-            let line = || format!("{id} rollback to={to} {e}");
-            state.undo.add(false, line);
+            state.undo.add(false, || {
+                let cells = vec![CellKey::new("rollback", "refused")];
+                Finding::new(id, cells, format!("rollback to={to} {e}"))
+            });
             return;
         }
+        let rollback = |rid: RecordId, member: &'static str| {
+            let cells = vec![CellKey::new("rollback", member)];
+            Finding::new(rid, cells, format!("{member}_after_rollback_to={to}"))
+        };
         for (rid, hash) in &held {
             let dropped = !pending.contains(hash);
-            state
-                .revalidate
-                .add(dropped, || format!("{rid} kept_after_rollback_to={to}"));
+            state.revalidate.add(dropped, || rollback(*rid, "kept"));
         }
         if let Some((rid, hash)) = &undone {
             let kept = pending.contains(hash);
-            state
-                .revalidate
-                .add(kept, || format!("{rid} dropped_after_rollback_to={to}"));
+            state.revalidate.add(kept, || rollback(*rid, "dropped"));
         }
         let tally = &mut state.undo;
         let services = streams.read(Event::Undo, 1, block.records.len()).await;
-        for (record, checked) in compare_served(kind, run, &makers, block, &services).records {
-            tally.compared += checked.compared;
-            let lines = checked.disagree.into_iter();
-            tally
-                .disagree
-                .extend(lines.map(|d| format!("{record} {d}")));
+        for (_, checked) in compare_served(kind, run, &makers, block, &services).records {
+            tally.merge(checked);
         }
         let wrote: BTreeMap<TxIn, Vec<u8>> = run.records().iter().flat_map(written).collect();
         for record in &block.records {
@@ -1697,11 +1794,7 @@ async fn sweep(
     }
     let tally = &mut state.undo;
     compare_utxos(domain, id, [], run.seed(), &BTreeMap::new(), tally).await;
-    let mut restored = Tally::default();
-    accounts::compare(&first.accounts_pre, &dolos_accounts(domain), &mut restored);
-    let lines = restored.disagree.iter().map(|d| format!("{id} {d}"));
-    tally.compared += restored.compared;
-    tally.disagree.extend(lines);
+    accounts::compare(id, &first.accounts_pre, &dolos_accounts(domain), tally);
 }
 
 /// The pre state a planted check seeds for a record in place of its own.
@@ -1783,10 +1876,12 @@ async fn judge_run(
     .await;
     let served = dolos_accounts(&seeded.domain);
     let checks = account_checks.entry(id).or_default();
-    accounts::compare(&first.accounts_pre, &served, checks);
+    accounts::compare(id, &first.accounts_pre, &served, checks);
     let served = read_params(&seeded.domain).await;
     let expected = (edits.expected_params)(run.pparams());
-    params::compare(id, &expected, &served, &mut judged.state.params);
+    params::compare(&expected, &served, &mut judged.state.params, |key, d| {
+        Finding::new(id, vec![CellKey::new("param", key)], d)
+    });
     let (blocks, run_accounts) =
         validate_run(&seeded.domain, kind, run, manifests, edits, ids, judged).await;
     for (id, tally) in run_accounts {
@@ -1909,77 +2004,61 @@ fn the_builtin_bar_names_the_record_of_each_covered_builtin_of_the_whole_type() 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn ledger_oracle() {
-    let mut pass = true;
     let manifests = Manifests::committed();
-    let mut candidates = Candidates::default();
-    let mut cost_pass = true;
-    let mut evaluations = EvalTally::default();
-    let mut contexts = ContextTally::default();
-    let mut coverage = Coverage::default();
-    let mut constructs = construct::Coverage::default();
-    let mut inventory = Inventory::default();
-    let mut rule_tally = RuleTally::default();
-    let mut revalidated = 0;
+    let mut verdicts = judgement::Tally::default();
+    let mut all = Judged::default();
     for kind in CorpusKind::ALL {
         let corpus = load(kind);
         println!("{corpus}");
-        let tallies = judge(&corpus, &manifests, &Edits::default()).await;
-        println!("{tallies}");
-        pass &= tallies.pass();
-        rule_tally.merge(tallies.rules);
-        revalidated += tallies.state.revalidate.compared;
-        candidates.declared.extend(tallies.candidates.declared);
-        let known = tallies.candidates.known.records;
-        candidates.known.records.extend(known);
-        cost_pass &= tallies.cost.pass();
-        evaluations.merge(tallies.eval);
-        contexts.merge(tallies.context);
-        coverage.extend(tallies.coverage);
-        constructs.extend(tallies.constructs);
-        inventory.extend(tallies.inventory);
+        let judged = judge(&corpus, &manifests, &Edits::default()).await;
+        println!("{judged}");
+        let mut part = judged.report();
+        part.require(&[(Judge::Cost, EntryPoint::MinFee)]);
+        verdicts.merge(part);
+        all.merge(judged);
     }
-    println!("COST all pass={cost_pass}");
-    pass &= cost_pass;
-    let (lines, rules_pass) = manifests.rules.bar(&rule_tally, true);
-    for line in lines {
-        println!("{line}");
+    print_views(&all, &manifests, true, &mut verdicts);
+    for verdict in all.eval.every_layer() {
+        verdicts.add(verdict);
     }
-    pass &= rules_pass;
-    println!("{evaluations}");
-    pass &= evaluations.every_layer_agrees()
-        && evaluations.tx.every_layer_judged()
-        && evaluations.draft.every_layer_agrees()
-        && evaluations.reward_output.every_layer_agrees();
-    println!("{contexts}");
-    println!(
-        "REVALIDATE all compared={revalidated} pass={}",
-        revalidated > 0
-    );
-    pass &= revalidated > 0;
-    for line in builtin_bar(&coverage) {
-        println!("{line}");
-    }
-    let (lines, construct_pass) = constructs.bar();
-    for line in lines.into_iter().chain(inventory.lines()) {
-        println!("{line}");
-    }
-    pass &= construct_pass;
-    for line in candidates
-        .lines()
-        .into_iter()
-        .chain(evaluations.candidates())
-    {
+    let revalidated = all.state.revalidate.compared;
+    println!("REVALIDATE all compared={revalidated}");
+    verdicts.require(&[(Judge::Revalidate, EntryPoint::Revalidate)]);
+    for line in all.constructs.bar(&mut verdicts) {
         println!("{line}");
     }
     let cases = endorser::load(&endorser::fixture_path());
     let endorsed = endorser::judge(&cases).await;
-    for line in endorsed.lines() {
+    println!("{}", endorsed.line());
+    endorsed.report(cases.len(), &mut verdicts);
+    conclude(&verdicts);
+}
+
+/// Prints the rule bar, the evaluation, script context and builtin views, the
+/// refusal inventory and the manifest candidates, adding the rule verdicts.
+fn print_views(all: &Judged, manifests: &Manifests, whole: bool, out: &mut judgement::Tally) {
+    for line in manifests.rules.bar(&all.rules, whole, out) {
         println!("{line}");
     }
-    pass &= endorsed.pass(cases.len());
-    let result = if pass { "PASS" } else { "FAIL" };
-    println!("RESULT {result}");
-    assert!(pass);
+    println!("{}", all.eval);
+    println!("{}", all.context);
+    for line in builtin_bar(&all.coverage)
+        .into_iter()
+        .chain(all.inventory.lines())
+        .chain(all.candidates.lines())
+        .chain(all.eval.candidates())
+    {
+        println!("{line}");
+    }
+}
+
+/// Prints the failing verdicts, the passing counts and the run's result, and
+/// fails the test unless the run passes.
+fn conclude(verdicts: &judgement::Tally) {
+    println!("{verdicts}");
+    let result = verdicts.verdict();
+    println!("{result}");
+    assert!(matches!(result, RunVerdict::Pass { .. }));
 }
 
 /// The records a comma separated list names.
@@ -2014,24 +2093,9 @@ async fn ledger_oracle_records() {
         println!("{tallies}");
         selection.merge(tallies);
     }
-    let (lines, rules_pass) = committed.rules.bar(&selection.rules, false);
-    for line in lines {
-        println!("{line}");
-    }
-    let pass = selection.pass() && rules_pass;
-    println!("{}", selection.eval);
-    println!("{}", selection.context);
-    for line in selection
-        .candidates
-        .lines()
-        .into_iter()
-        .chain(selection.eval.candidates())
-    {
-        println!("{line}");
-    }
-    let result = if pass { "PASS" } else { "FAIL" };
-    println!("RESULT {result}");
-    assert!(pass);
+    let mut verdicts = selection.report();
+    print_views(&selection, &committed, false, &mut verdicts);
+    conclude(&verdicts);
 }
 
 #[test]
@@ -2103,8 +2167,11 @@ async fn dropping_one_seed_pair_prints_utxo_disagree() {
         show_input(&pair.input),
         hex::encode(&pair.output.0)
     );
-    assert!(planted.state.utxo.disagree.contains(&line), "{planted}");
-    assert!(planted.to_string().contains("\nSTATE utxo disagree="));
+    assert!(
+        shown(&planted.state.utxo.disagree).contains(&line),
+        "{planted}"
+    );
+    assert!(!failing(&planted, Judge::Utxo).is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2128,17 +2195,24 @@ async fn one_changed_cost_model_entry_prints_params_disagree() {
         ..Edits::default()
     };
     let planted = judge(&corpus, &manifests, &edits).await;
-    let text = planted.to_string();
-    assert!(text.contains("STATE params disagree=1\n"), "{text}");
-    assert!(text.contains("costModels.PlutusV1[0] ledger="), "{text}");
+    let lines = failing(&planted, Judge::Params);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(
+        lines[0].contains("costModels.PlutusV1[0] ledger="),
+        "{lines:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn the_v2_record_is_known_and_its_maker_agrees() {
-    let text = judge_supp(|_| ()).await.validation.to_string();
+    let judged = judge_supp(|_| ()).await;
+    let text = judged.validation.to_string();
     assert!(!text.contains(" supp#1 "), "{text}");
-    assert!(!text.contains("\nDISAGREE supp#2 "), "{text}");
+    assert!(
+        !fails_with(&judged, Judge::Validation, "supp#2", ""),
+        "{text}"
+    );
     assert!(
         text.contains(
             "\nKNOWN row=V2 ids=supp#2 ledger=accepted dolos=refused[PostAlonzo(InputNotInUTxO)]"
@@ -2184,17 +2258,17 @@ async fn every_layer_accepts_the_sha2_256_and_mk_nil_data_records_in_the_ledger_
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn deleting_the_v2_known_entry_prints_its_disagreement() {
-    let text = judge_supp(|m| {
+    let judged = judge_supp(|m| {
         m.known.remove(&(Locus::Validation, supp(2))).unwrap();
     })
-    .await
-    .to_string();
+    .await;
+    let text = judged.to_string();
     assert!(!text.contains("\nKNOWN row=V2 "), "{text}");
+    let tail = " ledger=accepted dolos=refused[PostAlonzo(InputNotInUTxO)]";
     assert!(
-        text.contains(
-            "\nDISAGREE supp#2 ledger=accepted dolos=refused[PostAlonzo(InputNotInUTxO)]"
-        ),
-        "{text}"
+        fails_with(&judged, Judge::Validation, "supp#2", tail),
+        "{:?}",
+        failing(&judged, Judge::Validation)
     );
 }
 
@@ -2202,26 +2276,26 @@ async fn deleting_the_v2_known_entry_prints_its_disagreement() {
 #[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn deleting_one_declared_entry_prints_unsupported_unexpected() {
     let label = "stateful or scripted subtransaction";
-    let intact = judge_supp(|_| ()).await.to_string();
+    let unexpected = format!(" label={label}");
+    let intact = judge_supp(|_| ()).await;
     assert!(
-        !intact.contains("UNSUPPORTED_UNEXPECTED supp#14 "),
+        !fails_with(&intact, Judge::Validation, "supp#14", &unexpected),
         "{intact}"
     );
     let deleted = judge_supp(|m| {
         assert_eq!(m.declared.remove(&supp(14)), Some(Feature(label.into())));
         m.declared.insert(supp(999), Feature(label.into()));
     })
-    .await
-    .to_string();
+    .await;
+    let lines = failing(&deleted, Judge::Validation);
     assert!(
-        deleted.contains(&format!("\nUNSUPPORTED_UNEXPECTED supp#14 label={label}")),
-        "{deleted}"
+        fails_with(&deleted, Judge::Validation, "supp#14", &unexpected),
+        "{lines:?}"
     );
+    let stale = format!(" declared={label} dolos=not_judged");
     assert!(
-        deleted.contains(&format!(
-            "\nSTALE_MANIFEST supp#999 declared={label} dolos=not_judged"
-        )),
-        "{deleted}"
+        fails_with(&deleted, Judge::Validation, "supp#999", &stale),
+        "{lines:?}"
     );
 }
 
@@ -2234,10 +2308,12 @@ async fn a_known_entry_naming_an_agreeing_or_unjudged_record_prints_known_stale(
         m.known.insert((Locus::Validation, supp(0)), Row::V9);
         m.known.insert((Locus::Validation, supp(999)), Row::V9);
     })
-    .await
-    .to_string();
-    assert!(named.contains("\nKNOWN_STALE supp#0 row=V9"), "{named}");
-    assert!(named.contains("\nKNOWN_STALE supp#999 row=V9"), "{named}");
+    .await;
+    let lines = failing(&named, Judge::Validation);
+    for record in ["supp#0", "supp#999"] {
+        let stale = fails_with(&named, Judge::Validation, record, " row=V9");
+        assert!(stale, "{record} {lines:?}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2262,7 +2338,14 @@ async fn a_maker_that_fails_leaves_its_dependents_disagreeing() {
         .map(|(id, _)| *id)
         .collect();
     let disagrees = |judged: &Judged| -> BTreeSet<RecordId> {
-        let ids = judged.validation.disagree.iter().map(|(id, _)| *id);
+        let ids = judged
+            .validation
+            .failing
+            .iter()
+            .filter_map(|v| match v.subject {
+                judgement::Subject::Record(id) => Some(id),
+                judgement::Subject::Selection => None,
+            });
         ids.filter(|id| dependents.contains(id)).collect()
     };
     assert!(disagrees(&intact).is_empty(), "{intact}");
@@ -2298,20 +2381,22 @@ async fn dropping_the_seeded_input_under_a_metadata_refusal_prints_reason_mismat
         corpus: CorpusKind::Ic,
         n: first.n,
     };
-    let line = "\nREASON_MISMATCH ic#1311 ";
+    let tail = " outcome=disagree ledger=refused[SubMissingTxMetadata] ledger_class=metadata \
+                dolos=refused[PostAlonzo(InputNotInUTxO)] dolos_class=inputs";
     let intact = judge(&corpus, &manifests, &Edits::default()).await;
-    assert!(!intact.to_string().contains(line), "{intact}");
+    assert!(
+        !fails_with(&intact, Judge::Validation, "ic#1311", ""),
+        "{intact}"
+    );
     let edits = Edits {
         pre: Box::new(|id, pre| if id == first { vec![] } else { pre.to_vec() }),
         ..Edits::default()
     };
-    let planted = judge(&corpus, &manifests, &edits).await.to_string();
+    let planted = judge(&corpus, &manifests, &edits).await;
     assert!(
-        planted.contains(&format!(
-            "{line}ledger=refused[SubMissingTxMetadata] ledger_class=metadata \
-             dolos=refused[PostAlonzo(InputNotInUTxO)] dolos_class=inputs"
-        )),
-        "{planted}"
+        fails_with(&planted, Judge::Validation, "ic#1311", tail),
+        "{:?}",
+        failing(&planted, Judge::Validation)
     );
 }
 
@@ -2323,14 +2408,13 @@ async fn deleting_the_v1_known_entry_prints_its_reason_mismatch() {
     let deleted = judge_supp(|m| {
         m.known.remove(&(Locus::Validation, supp(5))).unwrap();
     })
-    .await
-    .to_string();
+    .await;
+    let tail = " outcome=disagree ledger=refused[BadInputsUTxO,BadInputsUTxO] ledger_class=inputs \
+                dolos=refused[PostAlonzo(PreservationOfValue)] dolos_class=value";
     assert!(
-        deleted.contains(
-            "\nREASON_MISMATCH supp#5 ledger=refused[BadInputsUTxO,BadInputsUTxO] \
-             ledger_class=inputs dolos=refused[PostAlonzo(PreservationOfValue)] dolos_class=value"
-        ),
-        "{deleted}"
+        fails_with(&deleted, Judge::Validation, "supp#5", tail),
+        "{:?}",
+        failing(&deleted, Judge::Validation)
     );
 }
 
@@ -2347,8 +2431,9 @@ async fn leaving_an_accepted_tx_out_of_its_block_prints_utxo_disagree() {
         .expect("a group ends in an accepted record");
     let missing = |judged: &Judged| {
         let prefix = format!("{left_out} input=");
-        let lines = judged.state.utxo.disagree.iter();
+        let lines = shown(&judged.state.utxo.disagree);
         lines
+            .iter()
             .filter(|d| d.starts_with(&prefix) && d.ends_with(" dolos=none"))
             .count()
     };
@@ -2360,7 +2445,7 @@ async fn leaving_an_accepted_tx_out_of_its_block_prints_utxo_disagree() {
     };
     let planted = judge(&corpus, &manifests, &edits).await;
     assert!(missing(&planted) > 0, "{left_out} {planted}");
-    assert!(planted.to_string().contains("\nSTATE utxo disagree="));
+    assert!(!failing(&planted, Judge::Utxo).is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2392,26 +2477,27 @@ async fn a_block_that_does_not_roll_prints_one_roll_fail_and_no_state_line_for_i
     };
     let planted = judge(&corpus, &manifests, &edits).await;
     let text = planted.to_string();
-    let lines: Vec<&str> = text
-        .lines()
-        .filter(|l| l.starts_with("ROLL_FAIL "))
-        .collect();
+    let lines = failing(&planted, Judge::ApplyBlock);
     let first = group[0];
     let last = group[group.len() - 1];
-    let head = format!("ROLL_FAIL group={first}..{last} records={} ", group.len());
-    assert_eq!(lines.len(), 1, "{text}");
-    assert!(lines[0].starts_with(&head), "{text}");
+    let head = format!(
+        "VERDICT judge=apply_block entry=apply_block record={first} cells=answer:refused \
+         outcome=disagree group={first}..{last} records={} ",
+        group.len()
+    );
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].starts_with(&head), "{lines:?}");
     assert!(
         text.contains(&format!(" rolled_failed={}\n", group.len())),
         "{text}"
     );
-    assert!(!planted.pass());
+    assert!(!passes(&planted));
     let state = &planted.state;
     let loci = [&state.utxo, &state.readtx, &state.script];
     let named = loci
         .iter()
         .flat_map(|t| &t.disagree)
-        .filter(|d| group.iter().any(|id| d.starts_with(&format!("{id} "))))
+        .filter(|d| group.contains(&d.id))
         .join("\n");
     assert!(named.is_empty(), "{named}");
 }
@@ -2428,9 +2514,13 @@ async fn supp8_written_as_phase2_valid_leaves_the_input_of_supp9_missing() {
     assert_eq!(supp8.flag(), Phase2::Invalid);
     assert!(matches!(supp8.outcome, LedgerOutcome::Accepted { .. }));
     let manifests = Manifests::committed();
-    let line = "\nDISAGREE supp#9 ";
+    let of_supp9 = |judged: &Judged| -> Vec<String> {
+        let prefix = "VERDICT judge=validation entry=submit_tx record=supp#9 ";
+        let lines = failing(judged, Judge::Validation).into_iter();
+        lines.filter(|l| l.starts_with(prefix)).collect()
+    };
     let intact = judge(&corpus, &manifests, &Edits::default()).await;
-    assert!(!intact.to_string().contains(line), "{intact}");
+    assert!(of_supp9(&intact).is_empty(), "{intact}");
     let edits = Edits {
         block_tx: Box::new(|id, phase2| match id == supp(8) {
             true => Some(Phase2::Valid),
@@ -2438,13 +2528,9 @@ async fn supp8_written_as_phase2_valid_leaves_the_input_of_supp9_missing() {
         }),
         ..Edits::default()
     };
-    let planted = judge(&corpus, &manifests, &edits).await.to_string();
-    assert!(
-        planted.contains(&format!(
-            "{line}ledger=accepted dolos=refused[PostAlonzo(InputNotInUTxO)]"
-        )),
-        "{planted}"
-    );
+    let planted = of_supp9(&judge(&corpus, &manifests, &edits).await);
+    let detail = " outcome=disagree ledger=accepted dolos=refused[PostAlonzo(InputNotInUTxO)]";
+    assert!(planted.iter().any(|l| l.ends_with(detail)), "{planted:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2454,11 +2540,11 @@ async fn an_output_dolos_holds_that_the_ledger_never_made_prints_utxo_disagree()
     let manifests = Manifests::committed();
     let intact = judge(&corpus, &manifests, &Edits::default()).await;
     let unmade = |judged: &Judged, tx: Option<[u8; 32]>| -> Vec<String> {
-        let lines = judged.state.utxo.disagree.iter();
+        let lines = shown(&judged.state.utxo.disagree).into_iter();
         let lines = lines.filter(|d| d.contains(" ledger=none dolos="));
         let named =
-            |d: &&String| tx.is_none_or(|tx| d.contains(&format!(" input={}#", hex::encode(tx))));
-        lines.filter(named).cloned().collect()
+            |d: &String| tx.is_none_or(|tx| d.contains(&format!(" input={}#", hex::encode(tx))));
+        lines.filter(named).collect()
     };
     assert!(unmade(&intact, None).is_empty(), "{intact}");
     let supp8 = corpus
@@ -2522,16 +2608,20 @@ async fn the_collateral_return_supp9_spends_is_served() {
     let intact = judge_supp(|_| ()).await;
     let text = intact.to_string();
     assert!(!text.contains("\nKNOWN row=S3 "), "{text}");
-    assert!(!text.contains("\nDIFF as_output supp#9 "), "{text}");
     assert!(intact.state.as_output.disagree.is_empty(), "{text}");
     let listed = judge_supp(|m| {
         m.known.insert((Locus::AsOutput, supp(9)), Row::S3);
     })
-    .await
-    .to_string();
+    .await;
     assert!(
-        listed.contains("\nKNOWN_STALE supp#9 row=S3 locus=as_output"),
-        "{listed}"
+        fails_with(
+            &listed,
+            Judge::AsOutput,
+            "supp#9",
+            " row=S3 locus=as_output"
+        ),
+        "{:?}",
+        failing(&listed, Judge::AsOutput)
     );
 }
 
@@ -2555,8 +2645,10 @@ async fn the_vote_delegation_ic551_keeps_is_known() {
     let deleted = judge(&corpus, &deleted, &Edits::default()).await;
     let text = deleted.state.to_string();
     assert!(!text.contains("\nKNOWN row=S18 "), "{text}");
-    assert!(text.contains("\nSTATE accounts disagree=1\n"), "{text}");
-    assert!(text.contains("\nDIFF accounts ic#551 account="), "{text}");
+    let lines = failing(&deleted, Judge::Accounts);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let named = " record=ic#551 cells= outcome=disagree account=";
+    assert!(lines[0].contains(named), "{lines:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2591,11 +2683,8 @@ async fn an_accepted_tx_left_out_of_its_block_is_not_found_by_read_tx() {
     };
     let planted = judge(&corpus, &manifests, &edits).await;
     let prefix = format!("{left_out} tx=");
-    let lines: Vec<&String> = planted
-        .state
-        .readtx
-        .disagree
-        .iter()
+    let lines: Vec<String> = shown(&planted.state.readtx.disagree)
+        .into_iter()
         .filter(|d| d.starts_with(&prefix))
         .collect();
     assert_eq!(lines.len(), 1, "{planted}");
@@ -2628,13 +2717,9 @@ async fn a_reference_script_on_a_sub_transaction_output_is_served() {
         .expect("a sub transaction output carries a reference script");
     let prefix = format!("{id} script={} ", hex::encode(hash));
     let lines = |judged: &Judged| -> Vec<String> {
-        judged
-            .state
-            .script
-            .disagree
-            .iter()
+        shown(&judged.state.script.disagree)
+            .into_iter()
             .filter(|d| d.starts_with(&prefix))
-            .cloned()
             .collect()
     };
 
@@ -2693,10 +2778,7 @@ async fn a_witnessed_datum_changed_in_its_last_byte_prints_datum_differ() {
     let named = format!(" input={} made_by={maker} ", show_input(&input));
     let text = intact.to_string();
     assert!(
-        intact
-            .state
-            .datum
-            .disagree
+        shown(&intact.state.datum.disagree)
             .iter()
             .all(|d| !d.contains(&named)),
         "{text}"
@@ -2713,11 +2795,8 @@ async fn a_witnessed_datum_changed_in_its_last_byte_prints_datum_differ() {
         ..Edits::default()
     };
     let planted = judge(&corpus, &manifests, &edits).await;
-    let lines: Vec<&String> = planted
-        .state
-        .datum
-        .disagree
-        .iter()
+    let lines: Vec<String> = shown(&planted.state.datum.disagree)
+        .into_iter()
         .filter(|d| d.contains(&named))
         .collect();
     println!(
@@ -2737,7 +2816,7 @@ async fn a_seeded_reward_changed_by_one_prints_accounts_disagree() {
     let manifests = Manifests::committed();
     let intact = judge(&corpus, &manifests, &Edits::default()).await;
     assert!(intact.state.accounts.compared > 0, "{intact}");
-    let before: BTreeSet<&String> = intact.state.accounts.disagree.iter().collect();
+    let before: BTreeSet<String> = shown(&intact.state.accounts.disagree).into_iter().collect();
     let bumped = std::sync::Mutex::new(None);
     let edits = Edits {
         accounts_pre: Box::new(|accounts| {
@@ -2760,11 +2839,8 @@ async fn a_seeded_reward_changed_by_one_prints_accounts_disagree() {
         .unwrap()
         .expect("a kept run seeds an account");
     let text = planted.to_string();
-    let lines: Vec<&String> = planted
-        .state
-        .accounts
-        .disagree
-        .iter()
+    let lines: Vec<String> = shown(&planted.state.accounts.disagree)
+        .into_iter()
         .filter(|d| !before.contains(d))
         .collect();
     println!(
@@ -2868,7 +2944,9 @@ async fn a_seed_output_compared_as_bytes_names_the_first_differing_byte() {
     compare_utxos(&seeded.domain, id, [], &flipped, &none, &mut differ).await;
     assert_eq!(differ.disagree.len(), 1);
     assert!(
-        differ.disagree[0].ends_with("differ at byte 3 fields=address"),
+        differ.disagree[0]
+            .detail
+            .ends_with("differ at byte 3 fields=address"),
         "{}",
         differ.disagree[0]
     );
@@ -2878,7 +2956,7 @@ async fn a_seed_output_compared_as_bytes_names_the_first_differing_byte() {
     compare_utxos(&seeded.domain, id, [], seed, &wrote_flipped, &mut differ).await;
     assert_eq!(differ.disagree.len(), 1);
     assert!(
-        differ.disagree[0].ends_with("differ at byte 3"),
+        differ.disagree[0].detail.ends_with("differ at byte 3"),
         "{}",
         differ.disagree[0]
     );
@@ -2903,7 +2981,7 @@ async fn a_seed_output_compared_as_bytes_names_the_first_differing_byte() {
     compare_utxos(&seeded.domain, id, [], &indefinite, &none, &mut differ).await;
     assert_eq!(differ.disagree.len(), 1);
     assert!(
-        differ.disagree[0].ends_with("differ at byte 0"),
+        differ.disagree[0].detail.ends_with("differ at byte 0"),
         "{}",
         differ.disagree[0]
     );

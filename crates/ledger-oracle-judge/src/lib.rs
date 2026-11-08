@@ -7,6 +7,7 @@ pub mod context;
 pub mod corpus;
 pub mod cost;
 pub mod eval;
+pub mod judgement;
 pub mod live;
 pub mod manifest;
 pub mod parallel;

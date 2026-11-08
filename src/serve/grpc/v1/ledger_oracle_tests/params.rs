@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt};
+use std::collections::BTreeMap;
 
 use dolos_cardano::model::PParamValue as P;
 use ledger_oracle_judge::{
@@ -489,18 +489,18 @@ pub(super) fn seed_values(pparams: &PParams) -> Result<Vec<P>, String> {
 }
 
 /// Counts each ledger parameter of a run against the value Dolos serves for it.
-pub(super) fn compare(
-    id: impl fmt::Display,
+pub(super) fn compare<F>(
     pparams: &PParams,
     served: &u5c::PParams,
-    tally: &mut Tally,
+    tally: &mut Tally<F>,
+    describe: impl Fn(&str, String) -> F,
 ) {
     for (key, value) in &pparams.0 {
         let param = param(key).unwrap_or_else(|| panic!("PARAMS unmapped key={key}"));
         let ledger = canon(key, value).unwrap_or_else(|e| panic!("{e}"));
         let difference = first_difference(key, &ledger, &(param.served)(served));
         tally.add(difference.is_none(), || {
-            format!("{id} {}", difference.unwrap_or_default())
+            describe(key, difference.unwrap_or_default())
         });
     }
 }
@@ -519,5 +519,97 @@ mod tests {
             seed_values(&PParams(map)).err().as_deref(),
             Some("PARAMS unmapped key=notAParameter")
         );
+    }
+
+    /// The thresholds named by `names`, each the ratio of its position in the
+    /// list.
+    fn numbered(names: &[&str]) -> Canon {
+        let at = |i: usize| Canon::Ratio(i as i128 + 1, 1009);
+        Canon::Map(
+            names
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (n.to_string(), at(i)))
+                .collect(),
+        )
+    }
+
+    /// The numerators of thresholds seeded from `numbered`, which give each
+    /// one's position.
+    fn positions(ratios: &[&RationalNumber]) -> Vec<u64> {
+        ratios.iter().map(|r| r.numerator).collect()
+    }
+
+    #[test]
+    fn the_drep_threshold_names_are_the_ledger_fields_in_order() {
+        let [P::DrepVotingThresholds(t)] = &drep_thresholds(&numbered(&DREP_THRESHOLDS))[..] else {
+            panic!("one DRep threshold update")
+        };
+        let DRepVotingThresholds {
+            motion_no_confidence,
+            committee_normal,
+            committee_no_confidence,
+            update_constitution,
+            hard_fork_initiation,
+            pp_network_group,
+            pp_economic_group,
+            pp_technical_group,
+            pp_governance_group,
+            treasury_withdrawal,
+        } = t;
+        let fields = [
+            motion_no_confidence,
+            committee_normal,
+            committee_no_confidence,
+            update_constitution,
+            hard_fork_initiation,
+            pp_network_group,
+            pp_economic_group,
+            pp_technical_group,
+            pp_governance_group,
+            treasury_withdrawal,
+        ];
+        assert_eq!(positions(&fields), (1..=10).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn the_pool_threshold_names_are_the_ledger_fields_in_order() {
+        let [P::PoolVotingThresholds(t)] = &pool_thresholds(&numbered(&POOL_THRESHOLDS))[..] else {
+            panic!("one pool threshold update")
+        };
+        let PoolVotingThresholds {
+            motion_no_confidence,
+            committee_normal,
+            committee_no_confidence,
+            hard_fork_initiation,
+            security_voting_threshold,
+        } = t;
+        let fields = [
+            motion_no_confidence,
+            committee_normal,
+            committee_no_confidence,
+            hard_fork_initiation,
+            security_voting_threshold,
+        ];
+        assert_eq!(positions(&fields), (1..=5).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn the_language_names_are_the_ledger_languages_by_index() {
+        use pallas::{codec::minicbor, ledger::primitives::dijkstra::Language};
+        let name = |language: &Language| match language {
+            Language::PlutusV1 => "PlutusV1",
+            Language::PlutusV2 => "PlutusV2",
+            Language::PlutusV3 => "PlutusV3",
+            Language::PlutusV4 => "PlutusV4",
+        };
+        let decoded: Vec<(usize, &str)> = (0u8..=255)
+            .filter_map(|n| {
+                let language = minicbor::decode::<Language>(&minicbor::to_vec(n).unwrap()).ok()?;
+                Some((usize::from(n), name(&language)))
+            })
+            .collect();
+        let listed: Vec<(usize, &str)> = LANGUAGES.iter().copied().enumerate().collect();
+        assert_eq!(decoded, listed);
     }
 }
