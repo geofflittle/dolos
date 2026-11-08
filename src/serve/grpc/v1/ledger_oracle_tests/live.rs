@@ -312,7 +312,7 @@ fn authenticated_outputs(native: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, tra
     let tx = MultiEraTx::decode_for_era(Era::Dijkstra, native)
         .or_else(|_| MultiEraTx::decode(native))?;
     let mut outputs = BTreeMap::new();
-    for tx in std::iter::once(tx.clone()).chain(tx.sub_transactions()) {
+    for (_, tx) in super::named_txs(tx) {
         let hash = hex::encode(tx.hash());
         for (index, output) in tx.outputs().iter().enumerate() {
             outputs.insert(format!("{hash}#{index}"), output.encode());

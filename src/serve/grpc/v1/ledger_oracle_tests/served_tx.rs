@@ -19,7 +19,9 @@ use pallas::{
 };
 use tonic::Request;
 
-use super::{eval::wire_fee, validate::panic_message, witness_scripts, GroupBlock, TxName};
+use super::{
+    eval::wire_fee, named_txs, validate::panic_message, witness_scripts, GroupBlock, TxName,
+};
 use crate::adapters::DomainAdapter;
 
 /// A witness script by its language, with its hash when the message carries its
@@ -499,43 +501,42 @@ pub(super) async fn compare(
         };
         let tx = MultiEraTx::decode_for_era(Era::Dijkstra, &record.tx.0)
             .unwrap_or_else(|e| panic!("TX {id} {e}"));
-        let top = (*tx.hash(), LedgerTx::of(&tx));
-        let subs = tx.sub_transactions();
-        let subs: Vec<([u8; 32], LedgerTx)> = subs
+        let top = *tx.hash();
+        let txs = named_txs(tx);
+        let named: Vec<(TxName, LedgerTx)> = txs
             .iter()
-            .map(|sub| (*sub.hash(), LedgerTx::of(sub)))
+            .map(|(name, t)| (*name, LedgerTx::of(t)))
             .collect();
-        let served = read_tx!(v1, domain, top.0);
+        let served = read_tx!(v1, domain, top);
         if let Answer::Panicked(_) = served {
             v1 = None;
         }
-        let common = served.then(|tx| {
-            let fee = wire_fee!(v1, tx.fee.clone());
-            match &tx.common {
-                Some(common) => {
-                    let keys = Some(v1_dijkstra_keys(common));
-                    Answer::Mapped(mapped!(v1, common, Some(fee), keys))
-                }
-                None => Answer::Absent,
-            }
-        });
-        add(tally, id, Layer::V1, TxName::Top(top.0), &top.1, common);
-        for (hash, ledger) in &subs {
-            let common = served.then(|tx| {
-                let sub = tx.sub_transactions.iter().find(|c| c.hash == hash[..]);
-                match sub {
-                    Some(common) => {
-                        let keys = Some(v1_dijkstra_keys(common));
-                        Answer::Mapped(mapped!(v1, common, None, keys))
+        for (name, ledger) in &named {
+            let common = served.then(|tx| match name {
+                TxName::Top(_) => {
+                    let fee = wire_fee!(v1, tx.fee.clone());
+                    match &tx.common {
+                        Some(common) => {
+                            let keys = Some(v1_dijkstra_keys(common));
+                            Answer::Mapped(mapped!(v1, common, Some(fee), keys))
+                        }
+                        None => Answer::Absent,
                     }
-                    None => Answer::Absent,
+                }
+                TxName::Sub(hash) => {
+                    let sub = tx.sub_transactions.iter().find(|c| c.hash == hash[..]);
+                    match sub {
+                        Some(common) => {
+                            let keys = Some(v1_dijkstra_keys(common));
+                            Answer::Mapped(mapped!(v1, common, None, keys))
+                        }
+                        None => Answer::Absent,
+                    }
                 }
             });
-            add(tally, id, Layer::V1, TxName::Sub(*hash), ledger, common);
+            add(tally, id, Layer::V1, *name, ledger, common);
         }
-        let names = std::iter::once((TxName::Top(top.0), &top.1));
-        let names = names.chain(subs.iter().map(|(hash, l)| (TxName::Sub(*hash), l)));
-        for (name, ledger) in names {
+        for &(name, ref ledger) in &named {
             let hash = match name {
                 TxName::Top(h) | TxName::Sub(h) => h,
             };

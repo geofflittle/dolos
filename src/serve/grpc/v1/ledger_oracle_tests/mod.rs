@@ -22,12 +22,13 @@ use std::{
 };
 
 use dolos_cardano::{
-    indexes::{AsyncCardanoQueryExt as _, ScriptLanguage},
+    indexes::{AsyncCardanoQueryExt as _, ScriptData, ScriptLanguage},
     model::{AccountState, DRepDelegation},
     FixedNamespace as _,
 };
 use dolos_core::{
-    AsyncQueryFacade, BlockHash, ChainPoint, Domain as _, EraCbor, MempoolStore as _, MempoolTx,
+    AsyncQueryFacade, BlockHash, ChainPoint, Domain as _, DomainError, EraCbor, MempoolStore as _,
+    MempoolTx,
     RawBlock, StateStore as _, SubmitExt as _, SyncExt as _, TxHash, TxoRef,
 };
 use itertools::Itertools as _;
@@ -608,9 +609,7 @@ fn named_inputs(id: RecordId, record: &Record) -> BTreeSet<TxIn> {
 fn producible(id: RecordId, record: &Record) -> Vec<TxIn> {
     let tx = MultiEraTx::decode_for_era(Era::Dijkstra, &record.tx.0)
         .unwrap_or_else(|e| panic!("TX {id} {e}"));
-    let subs = tx.sub_transactions();
-    let txs = std::iter::once(&tx).chain(&subs);
-    let refs = txs.flat_map(|t| {
+    let refs = named_txs(tx).into_iter().flat_map(|(_, t)| {
         let hash = *t.hash();
         (0..=t.outputs().len() as u64).map(move |ix| TxIn { tx: hash, ix })
     });
@@ -624,9 +623,8 @@ fn written(record: &Record) -> BTreeMap<TxIn, Vec<u8>> {
     let Ok(tx) = MultiEraTx::decode_for_era(Era::Dijkstra, &record.tx.0) else {
         return BTreeMap::new();
     };
-    let subs = tx.sub_transactions();
-    let txs = std::iter::once(&tx).chain(&subs);
-    let outputs = txs.flat_map(|t| {
+    let txs = named_txs(tx);
+    let outputs = txs.iter().flat_map(|(_, t)| {
         let hash = *t.hash();
         let outputs = t.outputs().into_iter().chain(t.collateral_return());
         let outputs = outputs.enumerate();
@@ -715,6 +713,18 @@ impl<'r> GroupBlock<'r> {
             GroupBlock::Unmade(_) | GroupBlock::Failed => None,
         }
     }
+}
+
+/// Each record of the groups whose block rolled or was never made, with the hash of its block when one rolled.
+fn judged_records<'a, 'r>(
+    blocks: &'a [GroupBlock<'r>],
+) -> impl Iterator<Item = (&'r Record, Option<[u8; 32]>)> + 'a {
+    let groups = blocks.iter().filter_map(|block| match block {
+        GroupBlock::Unmade(records) => Some((*records, None)),
+        GroupBlock::Rolled(rolled) => Some((rolled.group, rolled.point.hash().map(|h| *h))),
+        GroupBlock::Failed => None,
+    });
+    groups.flat_map(|(records, block)| records.iter().map(move |r| (r, block)))
 }
 
 /// Submits each slot group of a run in order to a fresh mempool at the group slot, once holding accepted records pending and once marking them inflight, then rolls the block of its accepted records, compares the outputs and returns what became of each group's block with the account comparisons of each group's last accepted record.
@@ -940,13 +950,11 @@ async fn compare_datums(
         };
         let tx = MultiEraTx::decode_for_era(Era::Dijkstra, &maker.tx.0)
             .unwrap_or_else(|e| panic!("TX {maker_id} {e}"));
-        let subs = tx.sub_transactions();
-        let making = std::iter::once(&tx)
-            .chain(&subs)
-            .find(|t| *t.hash() == entry.input.tx);
+        let txs = named_txs(tx);
+        let making = txs.iter().find(|(_, t)| *t.hash() == entry.input.tx);
         let datum = making
             .into_iter()
-            .flat_map(|t| t.plutus_data())
+            .flat_map(|(_, t)| t.plutus_data())
             .find(|d| d.original_hash() == hash);
         let ledger = match datum {
             Some(d) => {
@@ -1169,6 +1177,14 @@ impl TxName {
     }
 }
 
+/// A transaction and each of its sub transactions, by name.
+fn named_txs(tx: MultiEraTx<'_>) -> Vec<(TxName, MultiEraTx<'_>)> {
+    let subs = tx.sub_transactions();
+    let mut named = vec![(TxName::Top(*tx.hash()), tx)];
+    named.extend(subs.into_iter().map(|sub| (TxName::Sub(*sub.hash()), sub)));
+    named
+}
+
 /// Whether the ledger holds the item a lookup serves, as its cell shows it.
 fn held<T>(ledger: &Option<T>) -> &'static str {
     match ledger {
@@ -1195,25 +1211,13 @@ async fn compare_read_tx(
     _: &V1Maps,
 ) {
     let mut expected: BTreeMap<TxName, (RecordId, Option<ExpectedTx>)> = BTreeMap::new();
-    let groups = blocks.iter().filter_map(|block| match block {
-        GroupBlock::Unmade(records) => Some((*records, None)),
-        GroupBlock::Rolled(rolled) => Some((rolled.group, rolled.point.hash().map(|h| *h))),
-        GroupBlock::Failed => None,
-    });
-    let records = groups.flat_map(|(records, block)| records.iter().map(move |r| (r, block)));
-    for (record, block) in records {
+    for (record, block) in judged_records(blocks) {
         let id = RecordId {
             corpus: kind,
             n: record.n,
         };
         let tx = MultiEraTx::decode_for_era(Era::Dijkstra, &record.tx.0)
             .unwrap_or_else(|e| panic!("TX {id} {e}"));
-        let mut names = vec![TxName::Top(*tx.hash())];
-        names.extend(
-            tx.sub_transactions()
-                .iter()
-                .map(|sub| TxName::Sub(*sub.hash())),
-        );
         let ledger = match &record.outcome {
             LedgerOutcome::Accepted { .. } => Some(ExpectedTx {
                 slot: record.slot,
@@ -1223,7 +1227,7 @@ async fn compare_read_tx(
             }),
             LedgerOutcome::Refused { .. } => None,
         };
-        for name in names {
+        for (name, _) in named_txs(tx) {
             let entry = expected.entry(name).or_insert((id, None));
             if let Some(ledger) = ledger {
                 *entry = (id, Some(ledger));
@@ -1306,41 +1310,59 @@ fn output_script(output: &MultiEraOutput<'_>) -> Option<([u8; 28], ScriptLanguag
     Some((*script.hash(), script.language()))
 }
 
-/// The language and place of a script in an accepted record, none for a script the ledger does not hold.
-type LedgerScript = Option<(ScriptLanguage, CarriedAt)>;
+/// A kind of item a transaction witnesses or an output carries, named by its hash and served by a lookup.
+trait Carried {
+    /// The hash that names an item.
+    type Hash: Ord + Copy + AsRef<[u8]>;
+    /// What an accepted record holds of an item.
+    type Held;
+    /// What the lookup serves for an item.
+    type Served;
+    /// The key of an item's hash on a finding line.
+    const KEY: &'static str;
+    /// The hash and held part of each item the transaction witnesses.
+    fn witnessed(tx: &MultiEraTx<'_>) -> Vec<(Self::Hash, Self::Held)>;
+    /// The hash of the item the output names, whether or not the output holds it.
+    fn named(output: &MultiEraOutput<'_>) -> Option<Self::Hash>;
+    /// The hash and held part of the item the output holds.
+    fn held(output: &MultiEraOutput<'_>) -> Option<(Self::Hash, Self::Held)>;
+    /// What the lookup serves for the hash.
+    async fn served(
+        query: &AsyncQueryFacade<DomainAdapter>,
+        hash: Self::Hash,
+    ) -> Result<Option<Self::Served>, DomainError>;
+    /// The ledger side of a finding line for a held item at its place.
+    fn shown(held: &Self::Held, at: CarriedAt) -> String;
+    /// The Dolos side of a finding line for a served item the ledger does not hold.
+    fn unheld(served: &Self::Served) -> String;
+    /// Whether the served item is the held one, with the Dolos side of its finding line.
+    fn judged(id: RecordId, hash: Self::Hash, held: &Self::Held, served: Self::Served)
+        -> (bool, String);
+}
 
-/// Counts each script hash of the groups whose block rolled or was never made against what the script lookup serves for it, the language from the witnesses or produced outputs of an accepted record, or nothing otherwise.
-async fn compare_scripts(
+/// Counts each item hash of the groups whose block rolled or was never made against what the lookup serves for it, the item in the witnesses or on the produced outputs of an accepted record, or nothing otherwise.
+async fn compare_carried<C: Carried>(
     domain: &DomainAdapter,
     kind: CorpusKind,
     blocks: &[GroupBlock<'_>],
     tally: &mut Tally,
 ) {
-    let mut expected: BTreeMap<[u8; 28], (RecordId, LedgerScript)> = BTreeMap::new();
-    let groups = blocks.iter().filter_map(|block| match block {
-        GroupBlock::Unmade(records) => Some(*records),
-        GroupBlock::Rolled(rolled) => Some(rolled.group),
-        GroupBlock::Failed => None,
-    });
-    for record in groups.flatten() {
+    let mut expected: BTreeMap<C::Hash, (RecordId, Option<(C::Held, CarriedAt)>)> =
+        BTreeMap::new();
+    for (record, _) in judged_records(blocks) {
         let id = RecordId {
             corpus: kind,
             n: record.n,
         };
         let tx = MultiEraTx::decode_for_era(Era::Dijkstra, &record.tx.0)
             .unwrap_or_else(|e| panic!("TX {id} {e}"));
-        let subs = tx.sub_transactions();
-        let txs = std::iter::once((TxName::Top(*tx.hash()), &tx));
-        let txs = txs.chain(subs.iter().map(|sub| (TxName::Sub(*sub.hash()), sub)));
         let mut carried = Vec::new();
-        let mut written = Vec::new();
-        for (name, tx) in txs {
-            let witnessed = witness_scripts(tx).into_iter();
-            carried.extend(witnessed.map(|(h, l)| (h, l, CarriedAt::Witness(name))));
-            written.extend(tx.outputs().iter().filter_map(output_script));
-        }
-        for (hash, _) in &written {
-            expected.entry(*hash).or_insert((id, None));
+        for (name, tx) in named_txs(tx) {
+            let witnessed = C::witnessed(&tx).into_iter();
+            carried.extend(witnessed.map(|(h, held)| (h, held, CarriedAt::Witness(name))));
+            for hash in tx.outputs().iter().filter_map(C::named) {
+                expected.entry(hash).or_insert((id, None));
+            }
         }
         let LedgerOutcome::Accepted { produced, .. } = &record.outcome else {
             for (hash, _, _) in carried {
@@ -1351,41 +1373,85 @@ async fn compare_scripts(
         for entry in produced {
             let output = MultiEraOutput::decode(Era::Dijkstra, &entry.output.0)
                 .unwrap_or_else(|e| panic!("OUTPUT {id} {e}"));
-            if let Some((hash, language)) = output_script(&output) {
-                carried.push((hash, language, CarriedAt::Output(entry.input)));
+            if let Some((hash, held)) = C::held(&output) {
+                carried.push((hash, held, CarriedAt::Output(entry.input)));
             }
         }
-        for (hash, language, at) in carried {
+        for (hash, held, at) in carried {
             let entry = expected.entry(hash).or_insert((id, None));
             if entry.1.is_none() {
-                *entry = (id, Some((language, at)));
+                *entry = (id, Some((held, at)));
             }
         }
     }
     let query = AsyncQueryFacade::new(domain.clone());
     for (hash, (id, ledger)) in expected {
         let shown = match &ledger {
-            Some((language, at)) => format!("{language:?},{at}"),
+            Some((held, at)) => C::shown(held, *at),
             None => "none".to_string(),
         };
-        let (agrees, dolos) = match (&ledger, query.script_by_hash(&hash.into()).await) {
+        let (agrees, dolos) = match (&ledger, C::served(&query, hash).await) {
             (_, Err(e)) => (false, format!("error={e:?}")),
             (None, Ok(None)) => (true, "none".to_string()),
             (Some(_), Ok(None)) => (false, "none".to_string()),
-            (None, Ok(Some(served))) => (false, format!("{:?}", served.language)),
-            (Some((language, _)), Ok(Some(served))) => {
-                let rehashed = *Hasher::<224>::hash_tagged(&served.script, served.language.tag());
-                let dolos = match rehashed == hash {
-                    true => format!("{:?}", served.language),
-                    false => format!("{:?},hash={}", served.language, hex::encode(rehashed)),
-                };
-                (served.language == *language && rehashed == hash, dolos)
-            }
+            (None, Ok(Some(served))) => (false, C::unheld(&served)),
+            (Some((held, _)), Ok(Some(served))) => C::judged(id, hash, held, served),
         };
         tally.add(agrees, || {
-            let detail = format!("script={} ledger={shown} dolos={dolos}", hex::encode(hash));
+            let detail = format!("{}={} ledger={shown} dolos={dolos}", C::KEY, hex::encode(hash));
             Finding::new(id, vec![CellKey::new(Axis::Ledger, held(&ledger))], detail)
         });
+    }
+}
+
+/// Scripts, served by the script lookup and judged by language and hash.
+struct Script;
+
+impl Carried for Script {
+    type Hash = [u8; 28];
+    type Held = ScriptLanguage;
+    type Served = ScriptData;
+    const KEY: &'static str = "script";
+
+    fn witnessed(tx: &MultiEraTx<'_>) -> Vec<([u8; 28], ScriptLanguage)> {
+        witness_scripts(tx)
+    }
+
+    fn named(output: &MultiEraOutput<'_>) -> Option<[u8; 28]> {
+        output_script(output).map(|(hash, _)| hash)
+    }
+
+    fn held(output: &MultiEraOutput<'_>) -> Option<([u8; 28], ScriptLanguage)> {
+        output_script(output)
+    }
+
+    async fn served(
+        query: &AsyncQueryFacade<DomainAdapter>,
+        hash: [u8; 28],
+    ) -> Result<Option<ScriptData>, DomainError> {
+        query.script_by_hash(&hash.into()).await
+    }
+
+    fn shown(language: &ScriptLanguage, at: CarriedAt) -> String {
+        format!("{language:?},{at}")
+    }
+
+    fn unheld(served: &ScriptData) -> String {
+        format!("{:?}", served.language)
+    }
+
+    fn judged(
+        _: RecordId,
+        hash: [u8; 28],
+        language: &ScriptLanguage,
+        served: ScriptData,
+    ) -> (bool, String) {
+        let rehashed = *Hasher::<224>::hash_tagged(&served.script, served.language.tag());
+        let dolos = match rehashed == hash {
+            true => format!("{:?}", served.language),
+            false => format!("{:?},hash={}", served.language, hex::encode(rehashed)),
+        };
+        (served.language == *language && rehashed == hash, dolos)
     }
 }
 
@@ -1397,85 +1463,52 @@ fn output_datum_hash(output: &MultiEraOutput<'_>) -> Option<[u8; 32]> {
     }
 }
 
-/// The bytes and place of a datum in an accepted record, none for a datum the ledger does not hold.
-type LedgerDatum = Option<(Vec<u8>, CarriedAt)>;
+/// Datums, served by the datum lookup and judged by their decoded value.
+struct Datum;
 
-/// Counts each datum hash of the groups whose block rolled or was never made against the datum the datum lookup serves for it, the datum in the witnesses or on the produced outputs of an accepted record, or nothing otherwise.
-async fn compare_plutus_data(
-    domain: &DomainAdapter,
-    kind: CorpusKind,
-    blocks: &[GroupBlock<'_>],
-    tally: &mut Tally,
-) {
-    let mut expected: BTreeMap<[u8; 32], (RecordId, LedgerDatum)> = BTreeMap::new();
-    let groups = blocks.iter().filter_map(|block| match block {
-        GroupBlock::Unmade(records) => Some(*records),
-        GroupBlock::Rolled(rolled) => Some(rolled.group),
-        GroupBlock::Failed => None,
-    });
-    for record in groups.flatten() {
-        let id = RecordId {
-            corpus: kind,
-            n: record.n,
-        };
-        let tx = MultiEraTx::decode_for_era(Era::Dijkstra, &record.tx.0)
-            .unwrap_or_else(|e| panic!("TX {id} {e}"));
-        let subs = tx.sub_transactions();
-        let txs = std::iter::once((TxName::Top(*tx.hash()), &tx));
-        let txs = txs.chain(subs.iter().map(|sub| (TxName::Sub(*sub.hash()), sub)));
-        let mut carried = Vec::new();
-        for (name, tx) in txs {
-            for datum in tx.plutus_data() {
-                let bytes = datum.raw_cbor().to_vec();
-                carried.push((*datum.original_hash(), bytes, CarriedAt::Witness(name)));
-            }
-            for hash in tx.outputs().iter().filter_map(output_datum_hash) {
-                expected.entry(hash).or_insert((id, None));
-            }
-        }
-        let LedgerOutcome::Accepted { produced, .. } = &record.outcome else {
-            for (hash, _, _) in carried {
-                expected.entry(hash).or_insert((id, None));
-            }
-            continue;
-        };
-        for entry in produced {
-            let output = MultiEraOutput::decode(Era::Dijkstra, &entry.output.0)
-                .unwrap_or_else(|e| panic!("OUTPUT {id} {e}"));
-            if let Some(DatumOption::Data(data)) = output.datum() {
-                let bytes = data.raw_cbor().to_vec();
-                carried.push((*data.original_hash(), bytes, CarriedAt::Output(entry.input)));
-            }
-        }
-        for (hash, bytes, at) in carried {
-            let entry = expected.entry(hash).or_insert((id, None));
-            if entry.1.is_none() {
-                *entry = (id, Some((bytes, at)));
-            }
+impl Carried for Datum {
+    type Hash = [u8; 32];
+    type Held = Vec<u8>;
+    type Served = PlutusData;
+    const KEY: &'static str = "datum";
+
+    fn witnessed(tx: &MultiEraTx<'_>) -> Vec<([u8; 32], Vec<u8>)> {
+        let data = tx.plutus_data();
+        let data = data.iter().map(|d| (*d.original_hash(), d.raw_cbor().to_vec()));
+        data.collect()
+    }
+
+    fn named(output: &MultiEraOutput<'_>) -> Option<[u8; 32]> {
+        output_datum_hash(output)
+    }
+
+    fn held(output: &MultiEraOutput<'_>) -> Option<([u8; 32], Vec<u8>)> {
+        match output.datum()? {
+            DatumOption::Data(data) => Some((*data.original_hash(), data.raw_cbor().to_vec())),
+            DatumOption::Hash(_) => None,
         }
     }
-    let query = AsyncQueryFacade::new(domain.clone());
-    for (hash, (id, ledger)) in expected {
-        let shown = match &ledger {
-            Some((_, at)) => at.to_string(),
-            None => "none".to_string(),
-        };
-        let (agrees, dolos) = match (&ledger, query.plutus_data(&hash.into()).await) {
-            (_, Err(e)) => (false, format!("error={e:?}")),
-            (None, Ok(None)) => (true, "none".to_string()),
-            (Some(_), Ok(None)) => (false, "none".to_string()),
-            (None, Ok(Some(_))) => (false, "datum".to_string()),
-            (Some((bytes, _)), Ok(Some(served))) => {
-                let datum: PlutusData =
-                    minicbor::decode(bytes).unwrap_or_else(|e| panic!("DATUM {id} {e}"));
-                let same = datum == served;
-                (same, if same { "same" } else { "different" }.to_string())
-            }
-        };
-        tally.add(agrees, || {
-            let detail = format!("datum={} ledger={shown} dolos={dolos}", hex::encode(hash));
-            Finding::new(id, vec![CellKey::new(Axis::Ledger, held(&ledger))], detail)
-        });
+
+    async fn served(
+        query: &AsyncQueryFacade<DomainAdapter>,
+        hash: [u8; 32],
+    ) -> Result<Option<PlutusData>, DomainError> {
+        query.plutus_data(&hash.into()).await
+    }
+
+    fn shown(_: &Vec<u8>, at: CarriedAt) -> String {
+        at.to_string()
+    }
+
+    fn unheld(_: &PlutusData) -> String {
+        "datum".to_string()
+    }
+
+    fn judged(id: RecordId, _: [u8; 32], bytes: &Vec<u8>, served: PlutusData) -> (bool, String) {
+        let datum: PlutusData =
+            minicbor::decode(bytes).unwrap_or_else(|e| panic!("DATUM {id} {e}"));
+        let same = datum == served;
+        (same, if same { "same" } else { "different" }.to_string())
     }
 }
 
@@ -1890,9 +1923,9 @@ async fn judge_run(
         account_checks.entry(id).or_default().merge(tally);
     }
     let script = &mut judged.state.script;
-    compare_scripts(&seeded.domain, kind, &blocks, script).await;
+    compare_carried::<Script>(&seeded.domain, kind, &blocks, script).await;
     let plutus_data = &mut judged.state.plutus_data;
-    compare_plutus_data(&seeded.domain, kind, &blocks, plutus_data).await;
+    compare_carried::<Datum>(&seeded.domain, kind, &blocks, plutus_data).await;
     let served = &mut judged.state.served_tx;
     let Some(v1) = served_tx::compare(&seeded.domain, kind, &blocks, served).await else {
         return part;
