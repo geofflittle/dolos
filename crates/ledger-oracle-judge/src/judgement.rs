@@ -81,9 +81,7 @@ named! {
         ServedTx = "served-tx",
         ApplyBlock = "apply-block",
         Cost = "cost",
-        Construct = "construct",
-        Builtin = "builtin",
-        Inventory = "inventory",
+        Coverage = "coverage",
         Endorser = "endorser",
     }
 }
@@ -92,32 +90,56 @@ named! {
     /// An axis of the cells a judgement touches, by the name its cells print.
     "axis" Axis {
         Answer = "answer",
+        Body = "body",
+        Builtin = "builtin",
         Bytes = "bytes",
-        Construct = "construct",
+        Certificate = "certificate",
         Datum = "datum",
         Demand = "demand",
         Dolos = "dolos",
         Draft = "draft",
+        Entry = "entry",
         Failure = "failure",
         Field = "field",
+        GovAction = "gov_action",
+        Guard = "guard",
         Index = "index",
         Input = "input",
         Label = "label",
         Language = "language",
         Layer = "layer",
+        Leaf = "leaf",
         Ledger = "ledger",
         Level = "level",
         List = "list",
         Listed = "listed",
         Param = "param",
+        ParamKey = "param_key",
         Purpose = "purpose",
+        Redeemer = "redeemer",
         Refusal = "refusal",
+        RequestShape = "request_shape",
         Rollback = "rollback",
         Row = "row",
+        Rule = "rule",
         Service = "service",
         Tx = "tx",
         Units = "units",
         Unsupported = "unsupported",
+        Witness = "witness",
+    }
+}
+
+named! {
+    /// A shape of the transaction an evaluation request carries.
+    "request shape" RequestShape {
+        Signed = "signed",
+        Draft = "draft",
+        RewardOutputDraft = "reward_output_draft",
+        Unsigned = "unsigned",
+        ZeroBudget = "zero_budget",
+        GuardWithoutRedeemer = "guard_without_redeemer",
+        ReferenceScriptOnly = "reference_script_only",
     }
 }
 
@@ -156,6 +178,43 @@ impl fmt::Display for EntryPoint {
             EntryPoint::ReadTx(layer) => write!(f, "read_tx:{layer}"),
             EntryPoint::FetchBlock => f.write_str("fetch_block"),
         }
+    }
+}
+
+impl EntryPoint {
+    /// Every entry point, each that takes a layer at every layer.
+    pub fn every() -> Vec<EntryPoint> {
+        use EntryPoint as E;
+        let mut every = vec![
+            E::SubmitTx,
+            E::EstimateTxCalls,
+            E::RedeemerArguments,
+            E::MinFee,
+            E::ApplyBlock,
+            E::Revalidate,
+            E::ReadUtxos,
+            E::ReadAccounts,
+            E::ReadParams,
+            E::ReadData,
+            E::FetchBlock,
+        ];
+        every.extend(Layer::ALL.map(E::EstimateTx));
+        every.extend(Layer::ALL.map(E::ReadTx));
+        every
+    }
+}
+
+impl std::str::FromStr for EntryPoint {
+    type Err = UnknownName;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        EntryPoint::every()
+            .into_iter()
+            .find(|entry| entry.to_string() == s)
+            .ok_or_else(|| UnknownName {
+                kind: "entry point",
+                name: s.to_string(),
+            })
     }
 }
 
@@ -370,8 +429,6 @@ impl fmt::Display for Verdict {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Tally {
     pub passing: BTreeMap<Passed, usize>,
-    /// The passing verdicts, by judge, of the judges whose own counter holds them.
-    pub counted: BTreeMap<Judge, usize>,
     pub failing: Vec<Verdict>,
 }
 
@@ -402,26 +459,22 @@ impl Tally {
             cells,
             pass,
         };
-        *self.passing.entry(passed).or_default() += 1;
+        self.pass(passed, 1);
     }
 
-    /// Counts `n` passing verdicts of `judge` that its own counter holds.
-    pub fn count(&mut self, judge: Judge, n: usize) {
-        *self.counted.entry(judge).or_default() += n;
+    /// Counts `n` passing verdicts of one key, those of a judge that compares
+    /// items rather than whole records.
+    pub fn pass(&mut self, passed: Passed, n: usize) {
+        if n > 0 {
+            *self.passing.entry(passed).or_default() += n;
+        }
     }
 
     /// Adds the verdicts of another tally after this one's.
     pub fn merge(&mut self, other: Tally) {
-        let Tally {
-            passing,
-            counted,
-            failing,
-        } = other;
+        let Tally { passing, failing } = other;
         for (passed, n) in passing {
-            *self.passing.entry(passed).or_default() += n;
-        }
-        for (judge, n) in counted {
-            self.count(judge, n);
+            self.pass(passed, n);
         }
         self.failing.extend(failing);
     }
@@ -439,7 +492,7 @@ impl Tally {
 
     /// The number of passing verdicts of each judge.
     pub fn by_judge(&self) -> BTreeMap<Judge, usize> {
-        let mut by_judge = self.counted.clone();
+        let mut by_judge = BTreeMap::new();
         for (passed, n) in &self.passing {
             *by_judge.entry(passed.judge).or_default() += n;
         }
@@ -555,7 +608,14 @@ mod tests {
             Outcome::Excluded("no carrier".into()),
         ));
         tally.add(spend(Judge::EvalDraft, Outcome::Agree));
-        tally.count(Judge::Cost, 3);
+        let compared = Passed {
+            judge: Judge::Cost,
+            entry: EntryPoint::MinFee,
+            cells: Vec::new(),
+            pass: Pass::Agree,
+        };
+        tally.pass(compared.clone(), 3);
+        tally.pass(compared.clone(), 0);
         let passed = |pass| Passed {
             judge: Judge::EvalOracle,
             entry: EntryPoint::MinFee,
@@ -575,7 +635,8 @@ mod tests {
                 (Judge::Cost, 3)
             ])
         );
-        assert_eq!(tally.passed(Judge::Cost).count(), 0);
+        let cost: Vec<(&Passed, usize)> = tally.passed(Judge::Cost).collect();
+        assert_eq!(cost, [(&compared, 3)]);
     }
 
     #[test]
@@ -663,5 +724,21 @@ mod tests {
         };
         assert_eq!("nothing".parse::<Judge>(), Err(unknown("judge")));
         assert_eq!("nothing".parse::<Axis>(), Err(unknown("axis")));
+    }
+
+    #[test]
+    fn every_entry_point_is_listed_once_and_reads_back_from_its_name() {
+        let every = EntryPoint::every();
+        let names: std::collections::BTreeSet<String> =
+            every.iter().map(EntryPoint::to_string).collect();
+        assert_eq!(names.len(), every.len());
+        for entry in every {
+            assert_eq!(entry.to_string().parse(), Ok(entry));
+        }
+        let unknown = UnknownName {
+            kind: "entry point",
+            name: "submit".into(),
+        };
+        assert_eq!("submit".parse::<EntryPoint>(), Err(unknown));
     }
 }

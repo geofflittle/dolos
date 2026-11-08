@@ -168,7 +168,7 @@ pub struct Known {
     pub live: KnownLive,
 }
 
-fn lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
+pub(crate) fn lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
     text.lines()
         .enumerate()
         .map(|(i, l)| (i + 1, l.trim()))
@@ -306,7 +306,7 @@ pub enum CatchTerm {
     /// A panic of the named crate test, in place of a verdict line.
     Test(String),
     Judge(Vec<Judge>),
-    Entry(Vec<String>),
+    Entry(Vec<EntryPoint>),
     /// No cell of the line matches the pattern.
     Without(CellPattern),
     /// A cell of the line matches one of the patterns.
@@ -333,8 +333,9 @@ fn catch_term(text: &str) -> Result<CatchTerm, String> {
         return judges.map(CatchTerm::Judge).map_err(|e| e.to_string());
     }
     if let Some(entries) = text.strip_prefix("entry=") {
-        let entries = entries.split('|').map(str::to_string).collect();
-        return Ok(CatchTerm::Entry(entries));
+        let entries = entries.split('|').map(str::parse);
+        let entries = entries.collect::<Result<_, UnknownName>>();
+        return entries.map(CatchTerm::Entry).map_err(|e| e.to_string());
     }
     if let Some(cell) = text.strip_prefix('!') {
         return cell_pattern(cell).map(CatchTerm::Without);
@@ -425,6 +426,22 @@ mod tests {
         assert_eq!(
             reason("judge=utxo coin"),
             "MANIFEST arms line=5 no axis in coin"
+        );
+    }
+
+    #[test]
+    fn a_catch_entry_is_an_entry_point_or_fails_the_load() {
+        let text = |catch: &str| format!("[catches]\nb = [\"{catch}\"]\n");
+        let parsed = |catch| parse_catches("arms", &text(catch));
+        let caught = parsed("entry=estimate_tx:pallas|submit_tx").unwrap();
+        let pallas = EntryPoint::EstimateTx(crate::eval::Layer::Pallas);
+        let entries = vec![pallas, EntryPoint::SubmitTx];
+        assert_eq!(caught["b"][0], [CatchTerm::Entry(entries)]);
+        assert_eq!(
+            parsed("entry=submit_tx|estimate_tx:v9")
+                .unwrap_err()
+                .to_string(),
+            "MANIFEST arms line=2 no entry point is named estimate_tx:v9"
         );
     }
 

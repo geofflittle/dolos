@@ -1,6 +1,6 @@
 //! Judges what Dolos validates and serves against ledger corpora.
 
-mod construct;
+mod coverage;
 mod endorser;
 mod eval;
 mod guarding;
@@ -226,8 +226,8 @@ async fn read_params(domain: &DomainAdapter) -> cardano::PParams {
 }
 
 /// The validation outcomes, phase one rules, state comparisons, fee, redeemer
-/// evaluation and script context comparisons, builtin and construct coverage,
-/// refusal inventory and manifest candidates of one corpus.
+/// evaluation and script context comparisons and manifest candidates of one
+/// corpus.
 #[derive(Debug, Default)]
 struct Judged {
     validation: ValidationTally,
@@ -236,92 +236,7 @@ struct Judged {
     cost: CostTallies,
     eval: EvalTally,
     context: ContextTally,
-    coverage: Coverage,
-    constructs: construct::Coverage,
-    inventory: Inventory,
     candidates: Candidates,
-}
-
-/// The number of records each ledger failure leaf refuses that Dolos refused
-/// for the same class.
-#[derive(Debug, Default)]
-struct Inventory(BTreeMap<String, usize>);
-
-impl Inventory {
-    fn add(&mut self, record: &Record) {
-        if let LedgerOutcome::Refused { failure_names, .. } = &record.outcome {
-            let leaves: BTreeSet<&str> = failure_names.iter().map(|f| f.leaf.name()).collect();
-            for leaf in leaves {
-                *self.0.entry(leaf.to_string()).or_default() += 1;
-            }
-        }
-    }
-
-    fn extend(&mut self, other: Inventory) {
-        for (leaf, n) in other.0 {
-            *self.0.entry(leaf).or_default() += n;
-        }
-    }
-
-    /// The line of each leaf and a count line.
-    fn lines(&self) -> Vec<String> {
-        let records: usize = self.0.values().sum();
-        let mut lines: Vec<String> = self
-            .0
-            .iter()
-            .map(|(leaf, n)| format!("INVENTORY {leaf} records={n}"))
-            .collect();
-        lines.push(format!(
-            "INVENTORY leaves={} records={records}",
-            self.0.len()
-        ));
-        lines
-    }
-}
-
-/// The first record whose accepted, phase two valid evaluation called each builtin in the ledger's units.
-#[derive(Debug, Default)]
-struct Coverage(Vec<(Builtin, RecordId)>);
-
-impl Coverage {
-    fn add(&mut self, id: RecordId, calls: &[Builtin]) {
-        for call in calls {
-            if self.record(*call).is_none() {
-                self.0.push((*call, id));
-            }
-        }
-    }
-
-    fn record(&self, builtin: Builtin) -> Option<RecordId> {
-        self.0
-            .iter()
-            .find(|(b, _)| *b == builtin)
-            .map(|(_, id)| *id)
-    }
-
-    fn extend(&mut self, other: Coverage) {
-        for (builtin, id) in other.0 {
-            self.add(id, &[builtin]);
-        }
-    }
-}
-
-/// The coverage line of each builtin in tag order and a count line.
-fn builtin_bar(coverage: &Coverage) -> Vec<String> {
-    let builtins = (0..=u8::MAX).filter_map(|tag| Builtin::try_from(tag).ok());
-    let mut lines = Vec::new();
-    let mut covered = 0;
-    for builtin in builtins {
-        lines.push(match coverage.record(builtin) {
-            Some(id) => {
-                covered += 1;
-                format!("BUILTIN {builtin:?} record={id}")
-            }
-            None => format!("BUILTIN {builtin:?} uncovered"),
-        });
-    }
-    lines.push(format!("BUILTIN covered={covered}/{}", lines.len()));
-    lines
 }
 
 impl Judged {
@@ -347,9 +262,6 @@ impl Judged {
             cost,
             eval,
             context,
-            coverage,
-            constructs,
-            inventory,
             candidates: Candidates { declared, known },
         } = other;
         let Known { records, live } = known;
@@ -359,9 +271,6 @@ impl Judged {
         self.cost.merge(cost);
         self.eval.merge(eval);
         self.context.merge(context);
-        self.coverage.extend(coverage);
-        self.constructs.extend(constructs);
-        self.inventory.extend(inventory);
         self.candidates.declared.extend(declared);
         self.candidates.known.records.extend(records);
         self.candidates.known.live.extend(live);
@@ -378,7 +287,7 @@ impl fmt::Display for Judged {
 #[cfg(test)]
 fn judged_part(uncompared: &[&str]) -> Judged {
     let mut judged = Judged::default();
-    judged.validation.agree.insert(supp(1));
+    judged.validation.agree.insert(supp(1), Vec::new());
     let state = &mut judged.state;
     let tallies = [
         ("utxo", &mut state.utxo),
@@ -576,13 +485,13 @@ impl Manifests {
                 declared: feature.to_string(),
                 dolos: "not_judged".to_string(),
             };
-            tally.add(*id, Outcome::Fail(fail));
+            tally.add(*id, Outcome::Fail(fail), Vec::new());
         }
         let validation = |locus: &Locus| *locus == Locus::Validation;
         let entries = self.known.iter();
         for ((_, id), row) in entries.filter(|((locus, id), _)| validation(locus) && missed(id)) {
             let fail = Fail::KnownStale { row: *row };
-            tally.add(*id, Outcome::Fail(fail));
+            tally.add(*id, Outcome::Fail(fail), Vec::new());
         }
     }
 }
@@ -602,6 +511,27 @@ fn named_inputs(id: RecordId, record: &Record) -> BTreeSet<TxIn> {
         .chain(subs)
         .copied()
         .collect()
+}
+
+/// The coverage cells of a record Dolos agreed on, the transaction cells and the builtins
+/// `builtins` its evaluation called when the ledger accepted it, its leaves when the ledger
+/// refused it.
+fn agreeing_cells(id: RecordId, record: &Record, builtins: &[Builtin]) -> Vec<CellKey> {
+    match &record.outcome {
+        LedgerOutcome::Accepted { .. } => {
+            let cells = coverage::cells_of_tx(&record.tx.0);
+            let mut cells = cells.unwrap_or_else(|e| panic!("TX {id} {e}"));
+            let builtins = builtins.iter().map(|b| format!("{b:?}"));
+            cells.extend(builtins.map(|b| CellKey::new(Axis::Builtin, b)));
+            cells.into_iter().collect()
+        }
+        LedgerOutcome::Refused { failure_names, .. } => {
+            let leaves = failure_names
+                .iter()
+                .map(|f| CellKey::new(Axis::Leaf, f.leaf));
+            leaves.collect::<BTreeSet<_>>().into_iter().collect()
+        }
+    }
 }
 
 /// Every output reference a record's transaction and sub transactions could produce, each output index and the index after them that a collateral return takes.
@@ -743,9 +673,6 @@ async fn validate_run<'r>(
         cost,
         eval: evaluations,
         context,
-        coverage,
-        constructs,
-        inventory,
         candidates,
     } = tallies;
     let unlisted = BTreeMap::new();
@@ -774,6 +701,7 @@ async fn validate_run<'r>(
                 tally.dependent.push((id, missing.seeded_by));
             }
             let declared = manifests.declared.get(&id);
+            let mut builtins = Vec::new();
             if missing.failed_by.is_empty() {
                 compare_fee(&group, id, record, cost);
                 let listed = manifests.eval.get(&id).unwrap_or(&unlisted);
@@ -784,7 +712,7 @@ async fn validate_run<'r>(
                 eval::judge_context(&group, id, record, listed, context);
                 let covering = (record.submitted(), record.flag(), declared);
                 if let (LedgerOutcome::Accepted { .. }, Phase2::Valid, None) = covering {
-                    coverage.add(id, &calls);
+                    builtins = calls;
                 }
             } else {
                 cost.skipped_cascade += 1;
@@ -819,31 +747,16 @@ async fn validate_run<'r>(
             let judgement = with_failing_makers(judgement, &dolos, missing.failed_by);
             let known = manifests.known.get(&(Locus::Validation, id));
             let judgement = with_known(judgement, known);
-            let answer = match &judgement {
-                Outcome::Pass(Pass::Agree) => Some(construct::Answer::Agree),
-                Outcome::Pass(Pass::UnsupportedExpected { label }) => {
-                    let label = label.clone();
-                    Some(construct::Answer::Declared { label })
-                }
-                _ => None,
+            let cells = match &judgement {
+                Outcome::Pass(Pass::Agree) => agreeing_cells(id, record, &builtins),
+                _ => Vec::new(),
             };
-            match (&record.outcome, answer) {
-                (LedgerOutcome::Accepted { .. }, Some(answer)) => {
-                    let held =
-                        construct::of_tx(&record.tx.0).unwrap_or_else(|e| panic!("TX {id} {e}"));
-                    constructs.add(id, answer, held);
-                }
-                (LedgerOutcome::Refused { .. }, Some(construct::Answer::Agree)) => {
-                    inventory.add(record)
-                }
-                _ => {}
-            }
             if let Outcome::Pass(Pass::Known { row, .. }) = &judgement {
                 let entry = (Locus::Validation, id);
                 candidates.known.records.insert(entry, *row);
             }
             given.insert(id, maker(id, &dolos, &judgement));
-            tally.add(id, judgement);
+            tally.add(id, judgement, cells);
             judged.insert(id);
         }
         let accepted = records.iter().filter_map(|r| match &r.outcome {
@@ -2016,38 +1929,6 @@ fn supp(n: u32) -> RecordId {
     }
 }
 
-#[test]
-fn the_builtin_bar_names_the_record_of_each_covered_builtin_of_the_whole_type() {
-    let mut coverage = Coverage::default();
-    coverage.add(supp(211), &[Builtin::Sha2_256]);
-    coverage.add(supp(214), &[Builtin::MkNilData, Builtin::Sha2_256]);
-    let lines = builtin_bar(&coverage);
-    let line = |builtin: Builtin| {
-        let prefix = format!("BUILTIN {builtin:?} ");
-        lines.iter().find(|l| l.starts_with(&prefix)).cloned()
-    };
-    assert_eq!(
-        line(Builtin::AddInteger).as_deref(),
-        Some("BUILTIN AddInteger uncovered")
-    );
-    assert_eq!(
-        line(Builtin::Bls12_381_G1_Add).as_deref(),
-        Some("BUILTIN Bls12_381_G1_Add uncovered")
-    );
-    assert_eq!(
-        line(Builtin::Sha2_256).as_deref(),
-        Some("BUILTIN Sha2_256 record=supp#211")
-    );
-    assert_eq!(
-        line(Builtin::MkNilData).as_deref(),
-        Some("BUILTIN MkNilData record=supp#214")
-    );
-    assert_eq!(
-        lines.last().map(String::as_str),
-        Some("BUILTIN covered=2/101")
-    );
-}
-
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn ledger_oracle() {
@@ -2074,28 +1955,31 @@ async fn ledger_oracle() {
     let revalidated = all.state.revalidate.compared;
     println!("REVALIDATE all compared={revalidated}");
     verdicts.require(&[(Judge::Revalidate, EntryPoint::Revalidate)]);
-    for line in all.constructs.bar(&mut verdicts) {
-        println!("{line}");
-    }
     let cases = endorser::load(&endorser::fixture_path());
     let endorsed = endorser::judge(&cases).await;
     println!("{}", endorsed.line());
     endorsed.report(cases.len(), &mut verdicts);
+    let members = coverage::members(&manifests.rules);
+    let committed = ledger_oracle_judge::coverage::committed();
+    let committed = committed.unwrap_or_else(|e| panic!("{e}"));
+    for line in ledger_oracle_judge::coverage::table(&members, &committed, &mut verdicts) {
+        println!("{line}");
+    }
     conclude(&verdicts);
 }
 
-/// Prints the rule bar, the evaluation, script context and builtin views, the
-/// refusal inventory and the manifest candidates, adding the rule verdicts.
+/// Prints the rule lines, the evaluation and script context views and the
+/// manifest candidates, adding the rule verdicts.
 fn print_views(all: &Judged, manifests: &Manifests, whole: bool, out: &mut judgement::Tally) {
-    for line in manifests.rules.bar(&all.rules, whole, out) {
+    for line in manifests.rules.report(&all.rules, whole, out) {
         println!("{line}");
     }
     println!("{}", all.eval);
     println!("{}", all.context);
-    for line in builtin_bar(&all.coverage)
+    for line in all
+        .candidates
+        .lines()
         .into_iter()
-        .chain(all.inventory.lines())
-        .chain(all.candidates.lines())
         .chain(all.eval.candidates())
     {
         println!("{line}");
@@ -2302,7 +2186,7 @@ async fn every_layer_accepts_the_sha2_256_and_mk_nil_data_records_in_the_ledger_
         assert_eq!((ran.mem, ran.steps), units, "supp#{n}");
         assert!(matches!(record.outcome, LedgerOutcome::Accepted { .. }));
         assert!(
-            judged.validation.agree.contains(&supp(n)),
+            judged.validation.agree.contains_key(&supp(n)),
             "supp#{n} {}",
             judged.validation
         );
@@ -2313,7 +2197,7 @@ async fn every_layer_accepts_the_sha2_256_and_mk_nil_data_records_in_the_ledger_
             "supp#{n}"
         );
     }
-    assert!(!judged.validation.agree.contains(&supp(217)));
+    assert!(!judged.validation.agree.contains_key(&supp(217)));
     assert_eq!(judged.eval.ran.get(&supp(217)), None);
 }
 

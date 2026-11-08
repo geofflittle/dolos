@@ -517,7 +517,13 @@ impl EndorserTally {
     /// did not judge two served blocks each or lack a block of either kind.
     pub(super) fn report(&self, cases: usize, out: &mut judgement::Tally) {
         let Tally { compared, disagree } = &self.tally;
-        out.count(Judge::Endorser, compared - disagree.len());
+        let passed = judgement::Passed {
+            judge: Judge::Endorser,
+            entry: EntryPoint::FetchBlock,
+            cells: Vec::new(),
+            pass: judgement::Pass::Agree,
+        };
+        out.pass(passed, compared - disagree.len());
         disagree.iter().cloned().for_each(|v| out.add(v));
         if *compared != 2 * cases {
             let detail = format!("served={compared} cases={cases}");

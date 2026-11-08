@@ -8,7 +8,10 @@ use std::{
 
 use crate::{
     cbor::Purpose,
-    judgement::{self, member, Axis, CellKey, EntryPoint, Judge, Outcome, Pass, Subject, Verdict},
+    judgement::{
+        self, member, Axis, CellKey, EntryPoint, Judge, Outcome, Pass, RequestShape, Subject,
+        Verdict,
+    },
     manifest::ManifestError,
     record::{Evaluation, LedgerOutcome, LedgerRedeemers, Record, RecordId, Units},
     refusal::LedgerLeaf,
@@ -546,7 +549,7 @@ impl Malformed {
             Malformed::Twice(key) => (key, "twice"),
             Malformed::NoUnits(key) => (key, "no_units"),
         };
-        let mut cells = key.cells();
+        let mut cells = row_cells(key);
         cells.push(CellKey::new(Axis::Dolos, kind));
         cells
     }
@@ -790,10 +793,20 @@ impl EvalJudge {
             EvalJudge::RewardOutput => Judge::EvalRewardOutput,
         }
     }
+
+    /// The shape of the transaction the judge's requests carry.
+    pub fn shape(self) -> RequestShape {
+        match self {
+            EvalJudge::Oracle | EvalJudge::Tx => RequestShape::Signed,
+            EvalJudge::Draft => RequestShape::Draft,
+            EvalJudge::RewardOutput => RequestShape::RewardOutputDraft,
+        }
+    }
 }
 
-/// The members of the answer axis that name the evaluation judges' verdicts on one part of a whole answer, or on a record or row the judge did not reach.
+/// The members of the answer axis that name the evaluation judges' verdicts on one row, on one part of a whole answer, or on a record or row the judge did not reach.
 mod part {
+    pub const ROW: &str = "row";
     pub const TOTAL: &str = "total";
     pub const FEE: &str = "fee";
     pub const UNNAMED: &str = "unnamed_error";
@@ -806,16 +819,17 @@ mod part {
 /// The member of the draft axis on the verdict of a record whose bytes derive no draft.
 const UNDERIVED: &str = "underived";
 
-/// The verdict of `judge` at layer `layer` on record `id`.
+/// The verdict of `judge` at layer `layer` on record `id`, which touches the shape of the judge's requests.
 fn estimate(
-    judge: Judge,
+    judge: EvalJudge,
     layer: Layer,
     id: RecordId,
-    cells: Vec<CellKey>,
+    mut cells: Vec<CellKey>,
     outcome: Outcome,
 ) -> Verdict {
+    cells.push(CellKey::new(Axis::RequestShape, judge.shape()));
     Verdict {
-        judge,
+        judge: judge.judge(),
         entry: EntryPoint::EstimateTx(layer),
         subject: Subject::Record(id),
         cells,
@@ -823,15 +837,16 @@ fn estimate(
     }
 }
 
-/// The verdict of `judge` on row `key` that layer `layer` answered for record `id`.
-fn row_judgement(
-    judge: Judge,
-    layer: Layer,
-    id: RecordId,
-    key: &RowKey,
-    verdict: &RowVerdict,
-) -> Verdict {
+/// The cells of a verdict on row `key`.
+fn row_cells(key: &RowKey) -> Vec<CellKey> {
     let mut cells = key.cells();
+    cells.push(CellKey::new(Axis::Answer, part::ROW));
+    cells
+}
+
+/// The cells and outcome of a verdict on row `key`.
+fn row_judgement(key: &RowKey, verdict: &RowVerdict) -> (Vec<CellKey>, Outcome) {
+    let mut cells = row_cells(key);
     let outcome = match verdict {
         RowVerdict::Agree(answer) => {
             cells.push(CellKey::new(Axis::Ledger, answer.kind()));
@@ -850,39 +865,28 @@ fn row_judgement(
             Outcome::Disagree(format!("{key} {d}"))
         }
     };
-    estimate(judge, layer, id, cells, outcome)
+    (cells, outcome)
 }
 
-/// Whether a verdict of an evaluation judge is on one row: its cells name the row's purpose and no part of the answer axis.
+/// Whether a verdict of an evaluation judge is on one row.
 fn on_a_row(cells: &[CellKey]) -> bool {
-    member(cells, Axis::Purpose).is_some() && member(cells, Axis::Answer).is_none()
+    member(cells, Axis::Answer) == Some(part::ROW)
 }
 
-/// The layer an evaluation verdict's entry point drove.
-fn layer_of(entry: EntryPoint) -> Option<Layer> {
-    match entry {
-        EntryPoint::EstimateTx(layer) => Some(layer),
-        _ => None,
-    }
-}
-
-/// The counts of the row verdicts of `judge` in `tally` under the key `group` gives each verdict's entry point and cells.
+/// The counts of the row verdicts of `judge` in `tally` under the key `group` gives each verdict's cells.
 fn row_counts<K: Ord>(
     tally: &judgement::Tally,
     judge: Judge,
-    group: impl Fn(EntryPoint, &[CellKey]) -> Option<K>,
+    group: impl Fn(&[CellKey]) -> Option<K>,
 ) -> BTreeMap<K, Counts> {
     let mut counts: BTreeMap<K, Counts> = BTreeMap::new();
     for (passed, n) in tally.passed(judge) {
-        if let (true, Some(key)) = (on_a_row(&passed.cells), group(passed.entry, &passed.cells)) {
+        if let (true, Some(key)) = (on_a_row(&passed.cells), group(&passed.cells)) {
             counts.entry(key).or_default().add(passed.pass, n);
         }
     }
     for verdict in tally.failed(judge) {
-        if let (true, Some(key)) = (
-            on_a_row(&verdict.cells),
-            group(verdict.entry, &verdict.cells),
-        ) {
+        if let (true, Some(key)) = (on_a_row(&verdict.cells), group(&verdict.cells)) {
             counts.entry(key).or_default().disagree += 1;
         }
     }
@@ -900,7 +904,8 @@ fn part_counts(tally: &judgement::Tally, judge: Judge, part: &str) -> (usize, us
 /// The verdicts of the evaluation judges of one or more corpora, with the units, refusals and counts no verdict holds.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct EvalTally {
-    pub verdicts: judgement::Tally,
+    /// The verdicts of each layer.
+    pub verdicts: BTreeMap<Layer, judgement::Tally>,
     /// The units each layer ran each agreeing row of a record in.
     pub ran: BTreeMap<RecordId, BTreeMap<(Layer, RowKey), Units>>,
     pub fee_unset: usize,
@@ -943,19 +948,38 @@ impl EvalTally {
         }
     }
 
+    /// Keeps the verdict of `judge` at `layer` on record `id`.
+    fn add(
+        &mut self,
+        judge: EvalJudge,
+        layer: Layer,
+        id: RecordId,
+        cells: Vec<CellKey>,
+        outcome: Outcome,
+    ) {
+        let verdict = estimate(judge, layer, id, cells, outcome);
+        self.verdicts.entry(layer).or_default().add(verdict);
+    }
+
+    /// The verdicts of every layer.
+    fn every_verdict(&self) -> judgement::Tally {
+        let mut all = judgement::Tally::default();
+        self.verdicts.values().for_each(|t| all.merge(t.clone()));
+        all
+    }
+
     /// Keeps a failing verdict of the evaluation of record `id` at `layer`.
     fn fail(&mut self, layer: Layer, id: RecordId, cells: Vec<CellKey>, detail: String) {
         let outcome = Outcome::Disagree(detail);
-        let verdict = estimate(Judge::EvalOracle, layer, id, cells, outcome);
-        self.verdicts.add(verdict);
+        self.add(EvalJudge::Oracle, layer, id, cells, outcome);
     }
 
     /// Adds the verdict of each row of one layer for one record.
     pub fn add_rows(&mut self, layer: Layer, id: RecordId, verdicts: &[(RowKey, RowVerdict)]) {
         self.judged.insert(id);
         for (key, verdict) in verdicts {
-            let judgement = row_judgement(Judge::EvalOracle, layer, id, key, verdict);
-            self.verdicts.add(judgement);
+            let (cells, outcome) = row_judgement(key, verdict);
+            self.add(EvalJudge::Oracle, layer, id, cells, outcome);
             let refused = match verdict {
                 RowVerdict::Known(refusal) => Some(refusal),
                 RowVerdict::Disagree(Disagreement {
@@ -982,10 +1006,7 @@ impl EvalTally {
     pub fn add_total(&mut self, layer: Layer, id: RecordId, wire: &WireEval) {
         let cells = || vec![CellKey::new(Axis::Answer, part::TOTAL)];
         match wire.total_agrees() {
-            Some(true) => {
-                let agree = estimate(Judge::EvalOracle, layer, id, cells(), Outcome::Agree);
-                self.verdicts.add(agree);
-            }
+            Some(true) => self.add(EvalJudge::Oracle, layer, id, cells(), Outcome::Agree),
             Some(false) => {
                 let total = wire.total.map_or("none".to_string(), |t| t.to_string());
                 let detail = format!("total=({total}) redeemers={}", wire.redeemers.len());
@@ -1007,8 +1028,7 @@ impl EvalTally {
             (_, WireFee::Unset) => self.fee_unset += 1,
             (None, _) => self.fee_undecoded += 1,
             (Some(l), WireFee::Int(n)) if i64::try_from(l) == Ok(*n) => {
-                let agree = estimate(Judge::EvalOracle, layer, id, cells(), Outcome::Agree);
-                self.verdicts.add(agree);
+                self.add(EvalJudge::Oracle, layer, id, cells(), Outcome::Agree)
             }
             (Some(l), other) => {
                 self.fail(
@@ -1051,20 +1071,19 @@ impl EvalTally {
                 (cells, Outcome::Disagree(detail))
             }
         };
-        let judgement = estimate(Judge::EvalTx, layer, id, cells, outcome);
-        self.verdicts.add(judgement);
+        self.add(EvalJudge::Tx, layer, id, cells, outcome);
     }
 
     /// Fails each record of the corpus the transaction known list gives that the transaction judge did not judge.
     pub fn tx_unjudged(&mut self, known: &TxKnown, corpus: crate::record::CorpusKind) {
-        let missed = known
+        let missed: Vec<_> = known
             .iter()
-            .filter(|(id, _)| id.corpus == corpus && !self.tx_judged.contains(id));
+            .filter(|(id, _)| id.corpus == corpus && !self.tx_judged.contains(id))
+            .collect();
         for (id, answer) in missed {
             let cells = vec![CellKey::new(Axis::Answer, part::UNJUDGED)];
             let outcome = Outcome::Disagree(format!("not judged listed=({answer})"));
-            let verdict = estimate(Judge::EvalTx, Layer::Pallas, *id, cells, outcome);
-            self.verdicts.add(verdict);
+            self.add(EvalJudge::Tx, Layer::Pallas, *id, cells, outcome);
         }
     }
 
@@ -1080,15 +1099,13 @@ impl EvalTally {
         match answer {
             Ok(answer) => {
                 for (key, verdict) in judge_tx(ledger, &answer, listed) {
-                    let judgement = row_judgement(Judge::EvalDraft, layer, signed, &key, &verdict);
-                    self.verdicts.add(judgement);
+                    let (cells, outcome) = row_judgement(&key, &verdict);
+                    self.add(EvalJudge::Draft, layer, signed, cells, outcome);
                 }
             }
             Err(malformed) => {
                 let outcome = Outcome::Disagree(malformed.to_string());
-                let judgement =
-                    estimate(Judge::EvalDraft, layer, signed, malformed.cells(), outcome);
-                self.verdicts.add(judgement);
+                self.add(EvalJudge::Draft, layer, signed, malformed.cells(), outcome);
             }
         }
     }
@@ -1097,8 +1114,7 @@ impl EvalTally {
     pub fn draft_underived(&mut self, signed: RecordId, why: impl fmt::Display) {
         let cells = vec![CellKey::new(Axis::Draft, UNDERIVED)];
         let outcome = Outcome::Disagree(format!("underived {why}"));
-        let verdict = estimate(Judge::EvalDraft, Layer::Pallas, signed, cells, outcome);
-        self.verdicts.add(verdict);
+        self.add(EvalJudge::Draft, Layer::Pallas, signed, cells, outcome);
     }
 
     /// Judges one layer's answer for a draft that pays a reward account against the refusal `expected`.
@@ -1122,8 +1138,7 @@ impl EvalTally {
                 ))
             }
         };
-        let verdict = estimate(Judge::EvalRewardOutput, layer, signed, cells, outcome);
-        self.verdicts.add(verdict);
+        self.add(EvalJudge::RewardOutput, layer, signed, cells, outcome);
     }
 
     /// Fails each listed row of a record of the corpus the judgement did not reach.
@@ -1135,7 +1150,7 @@ impl EvalTally {
         for (id, rows) in missed {
             for (key, refusal) in rows {
                 let mut cells = key.cells();
-                cells.push(CellKey::new(Axis::Answer, "unjudged"));
+                cells.push(CellKey::new(Axis::Answer, part::UNJUDGED));
                 let detail = format!("{key} not judged listed=({refusal})");
                 self.fail(Layer::Pallas, *id, cells, detail);
             }
@@ -1157,7 +1172,9 @@ impl EvalTally {
             undecided,
             tx_judged,
         } = other;
-        self.verdicts.merge(verdicts);
+        for (layer, tally) in verdicts {
+            self.verdicts.entry(layer).or_default().merge(tally);
+        }
         for (id, rows) in ran {
             self.ran.entry(id).or_default().extend(rows);
         }
@@ -1178,37 +1195,40 @@ impl EvalTally {
 
     /// Adds the verdicts of every evaluation judge to `out`.
     pub fn report(&self, out: &mut judgement::Tally) {
-        out.merge(self.verdicts.clone());
+        out.merge(self.every_verdict());
     }
 
     /// The row counts of `judge` by layer.
     fn rows_by_layer(&self, judge: Judge) -> BTreeMap<Layer, Counts> {
-        row_counts(&self.verdicts, judge, |entry, _| layer_of(entry))
+        let mut layers = BTreeMap::new();
+        for (layer, tally) in &self.verdicts {
+            if let Some(counts) = row_counts(tally, judge, |_| Some(())).remove(&()) {
+                layers.insert(*layer, counts);
+            }
+        }
+        layers
     }
 
     /// The transaction verdict counts by layer.
     fn tx_by_layer(&self) -> BTreeMap<Layer, TxCounts> {
         let mut layers: BTreeMap<Layer, TxCounts> = BTreeMap::new();
-        for (passed, n) in self.verdicts.passed(Judge::EvalTx) {
-            let (Some(layer), Some(part)) =
-                (layer_of(passed.entry), member(&passed.cells, Axis::Answer))
-            else {
-                continue;
-            };
-            let counts = layers.entry(layer).or_default();
-            match part {
-                part::REFUSED => counts.refused += n,
-                part::EVALUATED_NONE => counts.evaluated_none += n,
-                part::KNOWN => counts.known += n,
-                _ => {}
+        for (layer, tally) in &self.verdicts {
+            for (passed, n) in tally.passed(Judge::EvalTx) {
+                let Some(part) = member(&passed.cells, Axis::Answer) else {
+                    continue;
+                };
+                let counts = layers.entry(*layer).or_default();
+                match part {
+                    part::REFUSED => counts.refused += n,
+                    part::EVALUATED_NONE => counts.evaluated_none += n,
+                    part::KNOWN => counts.known += n,
+                    _ => {}
+                }
             }
-        }
-        for verdict in self.verdicts.failed(Judge::EvalTx) {
-            if let (Some(layer), Some(_)) = (
-                layer_of(verdict.entry),
-                member(&verdict.cells, Axis::Demand),
-            ) {
-                layers.entry(layer).or_default().disagree += 1;
+            for verdict in tally.failed(Judge::EvalTx) {
+                if member(&verdict.cells, Axis::Demand).is_some() {
+                    layers.entry(*layer).or_default().disagree += 1;
+                }
             }
         }
         for (layer, n) in &self.undecided {
@@ -1220,9 +1240,9 @@ impl EvalTally {
     /// The number of passing verdicts of the reward output judge by layer.
     fn reward_output_by_layer(&self) -> BTreeMap<Layer, usize> {
         let mut layers: BTreeMap<Layer, usize> = BTreeMap::new();
-        for (passed, n) in self.verdicts.passed(Judge::EvalRewardOutput) {
-            if let Some(layer) = layer_of(passed.entry) {
-                *layers.entry(layer).or_default() += n;
+        for (layer, tally) in &self.verdicts {
+            for (_, n) in tally.passed(Judge::EvalRewardOutput) {
+                *layers.entry(*layer).or_default() += n;
             }
         }
         layers
@@ -1289,11 +1309,12 @@ impl EvalTally {
             all.merge(*c);
             all
         });
-        let purposes = row_counts(&self.verdicts, judge, |_, cells| {
+        let every = self.every_verdict();
+        let purposes = row_counts(&every, judge, |cells| {
             let name = member(cells, Axis::Purpose)?;
             Some((tag_number(name), name.to_string()))
         });
-        let levels = row_counts(&self.verdicts, judge, |_, cells| {
+        let levels = row_counts(&every, judge, |cells| {
             member(cells, Axis::Level).map(str::to_string)
         });
         let layers: Vec<String> = layers.iter().map(|(l, c)| format!("{l}:{c}")).collect();
@@ -1302,9 +1323,9 @@ impl EvalTally {
             .map(|((_, p), c)| format!("{p}:{c}"))
             .collect();
         let levels: Vec<String> = levels.iter().map(|(l, c)| format!("{l}:{c}")).collect();
-        let (totals_agree, totals_disagree) = part_counts(&self.verdicts, judge, part::TOTAL);
-        let (_, unnamed) = part_counts(&self.verdicts, judge, part::UNNAMED);
-        let (fee_equal, fee_differ) = part_counts(&self.verdicts, judge, part::FEE);
+        let (totals_agree, totals_disagree) = part_counts(&every, judge, part::TOTAL);
+        let (_, unnamed) = part_counts(&every, judge, part::UNNAMED);
+        let (fee_equal, fee_differ) = part_counts(&every, judge, part::FEE);
         format!(
             "EVAL-ORACLE compared={} agree={} known={} unrepresentable={} disagree={} by_layer={} by_purpose={} by_level={} totals={} totals_disagree={totals_disagree} unnamed={unnamed} fee_unset={} fee_equal={fee_equal} fee_differ={fee_differ} fee_undecoded={} collisions={} skipped_cascade={} undecoded={} every_layer_agrees={}",
             all.compared(),
@@ -1348,7 +1369,7 @@ impl EvalTally {
             all.refused + all.evaluated_none + all.known + all.disagree,
             all.refused + all.evaluated_none,
             all.known,
-            self.verdicts.failed(Judge::EvalTx).count(),
+            self.every_verdict().failed(Judge::EvalTx).count(),
             all.refused,
             all.evaluated_none,
             all.undecided,
@@ -1364,7 +1385,8 @@ impl EvalTally {
         for counts in layers.values() {
             all.merge(*counts);
         }
-        let underived = self.verdicts.failed(Judge::EvalDraft);
+        let every = self.every_verdict();
+        let underived = every.failed(Judge::EvalDraft);
         let underived = underived.filter(|v| member(&v.cells, Axis::Draft) == Some(UNDERIVED));
         let layers: Vec<String> = layers.iter().map(|(l, c)| format!("{l}:{c}")).collect();
         format!(
@@ -1384,7 +1406,7 @@ impl EvalTally {
     fn reward_output_line(&self) -> String {
         let layers = self.reward_output_by_layer();
         let agree: usize = layers.values().sum();
-        let disagree = self.verdicts.failed(Judge::EvalRewardOutput).count();
+        let disagree = self.every_verdict().failed(Judge::EvalRewardOutput).count();
         let layers: Vec<String> = layers.iter().map(|(l, n)| format!("{l}:{n}")).collect();
         format!(
             "EVAL-REWARD-OUTPUT compared={} agree={agree} disagree={disagree} by_layer={} every_layer_agrees={}",
@@ -1445,7 +1467,7 @@ mod tests {
     }
 
     fn failed(t: &EvalTally, judge: Judge) -> Vec<Verdict> {
-        t.verdicts.failed(judge).cloned().collect()
+        t.every_verdict().failed(judge).cloned().collect()
     }
 
     #[test]
@@ -1803,7 +1825,7 @@ mod tests {
         assert!(verdicts.is_empty());
         assert_eq!(
             lines(&failed(&twice, Judge::EvalOracle)),
-            ["VERDICT judge=eval-oracle entry=estimate_tx:v1 record=ic#4 cells=purpose:Spend,index:0,level:top,dolos:twice outcome=disagree top Spend#0 answered twice"]
+            ["VERDICT judge=eval-oracle entry=estimate_tx:v1 record=ic#4 cells=purpose:Spend,index:0,level:top,answer:row,dolos:twice,request_shape:signed outcome=disagree top Spend#0 answered twice"]
         );
         assert!(!passes(&twice));
         let mut differing_fee = t.clone();
@@ -1815,16 +1837,13 @@ mod tests {
         assert!(!passes(&refused));
         assert_eq!(
             lines(&failed(&refused, Judge::EvalOracle)),
-            ["VERDICT judge=eval-oracle entry=estimate_tx:pallas record=ic#2 cells=purpose:Spend,index:0,level:sub,ledger:failed,dolos:refused,refusal:r outcome=disagree sub0 Spend#0 ledger=(failed) dolos=(refused r)"]
+            ["VERDICT judge=eval-oracle entry=estimate_tx:pallas record=ic#2 cells=purpose:Spend,index:0,level:sub,answer:row,ledger:failed,dolos:refused,refusal:r,request_shape:signed outcome=disagree sub0 Spend#0 ledger=(failed) dolos=(refused r)"]
         );
         let mut slow = t.clone();
         let row = row_verdict(Some(ran(1, 2)), DolosRow::Answered(ran(3, 2)), None);
         slow.add_rows(Layer::V1, ic(5), &[(key(Level::Top, 0, 0), row)]);
         let cells = &failed(&slow, Judge::EvalOracle)[0].cells;
-        assert_eq!(
-            cells.last().map(ToString::to_string).as_deref(),
-            Some("units:mem")
-        );
+        assert!(cells.iter().any(|c| c.to_string() == "units:mem"));
         assert!(!cells.iter().any(|c| c.to_string() == "units:steps"));
         assert_eq!(
             refused.candidates(),
@@ -2026,7 +2045,7 @@ mod tests {
         );
         assert_eq!(
             lines(&failed(&t, Judge::EvalTx)),
-            ["VERDICT judge=eval-tx entry=estimate_tx:v1beta record=ic#4 cells=demand:refuse outcome=disagree demand=refuse[MissingRedeemers] dolos=evaluated[0 rows]"]
+            ["VERDICT judge=eval-tx entry=estimate_tx:v1beta record=ic#4 cells=demand:refuse,request_shape:signed outcome=disagree demand=refuse[MissingRedeemers] dolos=evaluated[0 rows]"]
         );
         let mut one_layer = EvalTally::default();
         one_layer.add_tx(Layer::Pallas, ic(1), &TxVerdict::EvaluatedNone);
@@ -2073,7 +2092,7 @@ mod tests {
         t.tx_unjudged(&list, CorpusKind::Ic);
         assert_eq!(
             lines(&failed(&t, Judge::EvalTx)),
-            ["VERDICT judge=eval-tx entry=estimate_tx:pallas record=ic#2 cells=answer:unjudged outcome=disagree not judged listed=(evaluated[0 rows])"]
+            ["VERDICT judge=eval-tx entry=estimate_tx:pallas record=ic#2 cells=answer:unjudged,request_shape:signed outcome=disagree not judged listed=(evaluated[0 rows])"]
         );
         let line = t.tx_line();
         let head = "EVAL-TX compared=4 agree=0 known=4 disagree=1 ";
@@ -2119,8 +2138,8 @@ mod tests {
         assert_eq!(
             lines(&failed(&t, Judge::EvalDraft)),
             [
-                "VERDICT judge=eval-draft entry=estimate_tx:v1 record=ic#2 cells=purpose:Spend,index:0,level:top,ledger:ran,dolos:failed outcome=disagree top Spend#0 ledger=(ran mem=5 steps=7) dolos=(failed)",
-                "VERDICT judge=eval-draft entry=estimate_tx:pallas record=ic#2 cells=purpose:Spend,index:0,level:top,ledger:ran,dolos:refused,refusal:missing_key_witnesses outcome=disagree top Spend#0 ledger=(ran mem=5 steps=7) dolos=(refused missing key witnesses)"
+                "VERDICT judge=eval-draft entry=estimate_tx:pallas record=ic#2 cells=purpose:Spend,index:0,level:top,answer:row,ledger:ran,dolos:refused,refusal:missing_key_witnesses,request_shape:draft outcome=disagree top Spend#0 ledger=(ran mem=5 steps=7) dolos=(refused missing key witnesses)",
+                "VERDICT judge=eval-draft entry=estimate_tx:v1 record=ic#2 cells=purpose:Spend,index:0,level:top,answer:row,ledger:ran,dolos:failed,request_shape:draft outcome=disagree top Spend#0 ledger=(ran mem=5 steps=7) dolos=(failed)"
             ]
         );
         let mut underived = EvalTally::default();
@@ -2154,8 +2173,8 @@ mod tests {
         assert_eq!(
             lines(&failed(&t, Judge::EvalRewardOutput)),
             [
-                "VERDICT judge=eval-reward-output entry=estimate_tx:pallas record=ic#2 cells=answer:refused,refusal:output_address_(requires_Shelley) outcome=disagree expected=(reward account address) dolos=refused[output address (requires Shelley)]",
-                "VERDICT judge=eval-reward-output entry=estimate_tx:v1 record=ic#2 cells=answer:evaluated outcome=disagree expected=(reward account address) dolos=evaluated[0 rows]"
+                "VERDICT judge=eval-reward-output entry=estimate_tx:pallas record=ic#2 cells=answer:refused,refusal:output_address_(requires_Shelley),request_shape:reward_output_draft outcome=disagree expected=(reward account address) dolos=refused[output address (requires Shelley)]",
+                "VERDICT judge=eval-reward-output entry=estimate_tx:v1 record=ic#2 cells=answer:evaluated,request_shape:reward_output_draft outcome=disagree expected=(reward account address) dolos=evaluated[0 rows]"
             ]
         );
         let mut one = EvalTally::default();

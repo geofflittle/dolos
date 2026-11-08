@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds and runs one corpus writer, then prints its line count and sha256.
-# Usage: gen.sh <Extract|Pwc|Supplement|Phase1|Uplc> <store dir> <work dir>
+# Usage: gen.sh <Extract|Pwc|Supplement|Phase1|Uplc|Leaves> <store dir> <work dir>
 set -eu
 STORE=$2
 WORK=$3
@@ -11,6 +11,7 @@ case $1 in
   Supplement) M=Supplement OUT=supp.jsonl ;;
   Phase1) M=Phase1 OUT=p1.jsonl ;;
   Uplc) M=Uplc OUT=uplc.jsonl ;;
+  Leaves) M=Leaves OUT=leaves.txt ;;
   *) echo "unknown writer $1" >&2; exit 2 ;;
 esac
 sh "$(dirname "$0")/build.sh" "$M" "$STORE" "$WORK"

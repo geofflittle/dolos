@@ -6,6 +6,7 @@ pub mod compare;
 pub mod context;
 pub mod corpus;
 pub mod cost;
+pub mod coverage;
 pub mod eval;
 pub mod judgement;
 pub mod live;

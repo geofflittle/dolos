@@ -410,7 +410,7 @@ pub fn with_failing_makers(
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ValidationTally {
     pub dependent: Vec<(RecordId, BTreeSet<RecordId>)>,
-    pub agree: BTreeSet<RecordId>,
+    pub agree: BTreeMap<RecordId, Vec<CellKey>>,
     pub unsupported_expected: BTreeMap<String, usize>,
     pub refuse_unsupported: Vec<(RecordId, String)>,
     pub known: Vec<(RecordId, Row, String)>,
@@ -438,15 +438,30 @@ impl ValidationTally {
 
     /// Adds the arm's verdicts to `out`.
     pub fn report(&self, out: &mut judgement::Tally) {
-        out.count(Judge::Validation, self.passing());
+        let passed = |cells, pass| judgement::Passed {
+            judge: Judge::Validation,
+            entry: EntryPoint::SubmitTx,
+            cells,
+            pass,
+        };
+        for cells in self.agree.values() {
+            out.pass(passed(cells.clone(), judgement::Pass::Agree), 1);
+        }
+        for (label, n) in &self.unsupported_expected {
+            let cells = vec![CellKey::new(Axis::Unsupported, label)];
+            out.pass(passed(cells, judgement::Pass::Excluded), *n);
+        }
+        let excluded = self.refuse_unsupported.len();
+        out.pass(passed(Vec::new(), judgement::Pass::Excluded), excluded);
+        out.pass(passed(Vec::new(), judgement::Pass::Known), self.known.len());
         self.failing.iter().for_each(|v| out.add(v.clone()));
     }
 
-    /// Counts the outcome of one record.
-    pub fn add(&mut self, id: RecordId, outcome: Outcome) {
+    /// Counts the outcome of one record, which touches `cells` when it agrees.
+    pub fn add(&mut self, id: RecordId, outcome: Outcome, cells: Vec<CellKey>) {
         match outcome {
             Outcome::Pass(Pass::Agree) => {
-                self.agree.insert(id);
+                self.agree.insert(id, cells);
             }
             Outcome::Pass(Pass::UnsupportedExpected { label }) => {
                 *self.unsupported_expected.entry(label).or_default() += 1
@@ -553,13 +568,17 @@ mod tests {
         let line = || vec![(supp(n), format!("line{n}"))];
         ValidationTally {
             dependent: vec![(supp(n), BTreeSet::from([supp(n + 10)]))],
-            agree: BTreeSet::from([supp(n + 20)]),
+            agree: BTreeMap::from([(supp(n + 20), vec![leaf_cell(n)])]),
             unsupported_expected: BTreeMap::from([(label.to_string(), 1), ("both".to_string(), 2)]),
             refuse_unsupported: line(),
             known: vec![(supp(n), Row::S1, format!("line{n}"))],
             cascade: line(),
             failing: vec![disagreeing(n)],
         }
+    }
+
+    fn leaf_cell(n: u32) -> CellKey {
+        CellKey::new(Axis::Leaf, format!("Leaf{n}"))
     }
 
     fn disagreeing(n: u32) -> Verdict {
@@ -583,7 +602,7 @@ mod tests {
             ledger: "refused[PtrPresentInCollateralReturn]".into(),
             dolos: "refused[DijkstraInvalidAccount(Credential)]".into(),
         };
-        t.add(supp(3), Outcome::Fail(fail));
+        t.add(supp(3), Outcome::Fail(fail), vec![leaf_cell(3)]);
         assert_eq!(
             t.failing[0].to_string(),
             "VERDICT judge=validation entry=submit_tx record=supp#3 \
@@ -591,12 +610,12 @@ mod tests {
              outcome=disagree ledger=refused[PtrPresentInCollateralReturn] \
              dolos=refused[DijkstraInvalidAccount(Credential)]"
         );
-        t.add(supp(4), Outcome::Pass(Pass::Agree));
+        t.add(supp(4), Outcome::Pass(Pass::Agree), vec![leaf_cell(4)]);
         assert_eq!((t.passing(), t.failing.len()), (1, 1));
     }
 
     #[test]
-    fn an_agreeing_outcome_names_its_record_and_a_known_one_does_not() {
+    fn an_agreeing_outcome_reports_its_cells_and_a_known_one_does_not() {
         let mut t = ValidationTally::default();
         let shown = String::new();
         t.add(
@@ -605,9 +624,23 @@ mod tests {
                 row: Row::S1,
                 shown,
             }),
+            vec![leaf_cell(2)],
         );
-        t.add(supp(1), Outcome::Pass(Pass::Agree));
-        assert_eq!(t.agree, BTreeSet::from([supp(1)]));
+        t.add(supp(1), Outcome::Pass(Pass::Agree), vec![leaf_cell(1)]);
+        assert_eq!(t.agree, BTreeMap::from([(supp(1), vec![leaf_cell(1)])]));
+        let mut out = judgement::Tally::default();
+        t.report(&mut out);
+        let passed: Vec<(Vec<CellKey>, judgement::Pass, usize)> = out
+            .passed(Judge::Validation)
+            .map(|(p, n)| (p.cells.clone(), p.pass, n))
+            .collect();
+        assert_eq!(
+            passed,
+            [
+                (vec![], judgement::Pass::Known, 1),
+                (vec![leaf_cell(1)], judgement::Pass::Agree, 1),
+            ]
+        );
     }
 
     #[test]
@@ -625,7 +658,10 @@ mod tests {
                 (supp(0), BTreeSet::from([supp(10)])),
                 (supp(1), BTreeSet::from([supp(11)])),
             ],
-            agree: BTreeSet::from([supp(20), supp(21)]),
+            agree: BTreeMap::from([
+                (supp(20), vec![leaf_cell(0)]),
+                (supp(21), vec![leaf_cell(1)]),
+            ]),
             unsupported_expected: BTreeMap::from([
                 ("both".to_string(), 4),
                 ("first".to_string(), 1),
@@ -697,7 +733,7 @@ mod tests {
         let refused = dolos_refused("WithdrawalNotRegistered", DolosClass::NoRule);
         let fail = one_answer(&DolosVerdict::Accepted, &refused).unwrap_err();
         let mut tally = ValidationTally::default();
-        tally.add(supp(3), Outcome::Fail(fail));
+        tally.add(supp(3), Outcome::Fail(fail), Vec::new());
         assert_eq!(
             tally.failing.iter().map(Verdict::to_string).collect::<Vec<_>>(),
             vec![
@@ -735,7 +771,7 @@ mod tests {
             (6, "DijkstraMissingParameters", DolosClass::NoRule),
         ] {
             let dolos = dolos_refused(kind, class);
-            tally.add(supp(n), outcome(&ledger, &dolos, None));
+            tally.add(supp(n), outcome(&ledger, &dolos, None), Vec::new());
         }
         assert_eq!(
             tally.failing.iter().map(Verdict::to_string).collect::<Vec<_>>(),
@@ -782,7 +818,7 @@ mod tests {
             assert_eq!(with_known(judged, Some(&Row::V2)), expected);
         }
         let mut tally = ValidationTally::default();
-        tally.add(supp(4), expected);
+        tally.add(supp(4), expected, Vec::new());
         assert_eq!(
             tally
                 .failing
@@ -853,7 +889,7 @@ mod tests {
     fn opposite_answers_disagree_and_name_both_sides() {
         let o = outcome(&refused("BadInputsUTxO"), &DolosVerdict::Accepted, None);
         let mut tally = ValidationTally::default();
-        tally.add(supp(5), o);
+        tally.add(supp(5), o, Vec::new());
         assert_eq!(
             tally.to_string(),
             "VALIDATION agree=0 disagree=1 reason_mismatch=0 cascade=0 unsupported_expected=0 \
@@ -1065,11 +1101,12 @@ mod tests {
             &DolosVerdict::Unsupported("plutus v4".into()),
             None,
         );
-        tally.add(supp(1), maker_outcome);
+        tally.add(supp(1), maker_outcome, Vec::new());
         let disagree = outcome(&accepted(), &input_refusal(), None);
         tally.add(
             supp(2),
             with_failing_makers(disagree, &input_refusal(), failing(&[1])),
+            Vec::new(),
         );
         let mismatch = outcome(
             &refused_by(&["ExtraRedeemers", "CollectErrors"]),
@@ -1079,6 +1116,7 @@ mod tests {
         tally.add(
             supp(3),
             with_failing_makers(mismatch, &input_refusal(), failing(&[1, 2])),
+            Vec::new(),
         );
         assert!(
             !tally.failing.is_empty(),

@@ -1,12 +1,10 @@
 //! The phase one rule table: the ledger failures each rule Dolos refuses by may answer, and which of its sides the corpora judge.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     cbor::{tx_fields, CborError, Field},
+    coverage::{Member, Reach},
     judgement::{self, Axis, CellKey, EntryPoint, Judge, Verdict},
     manifest::ManifestError,
     record::{LedgerOutcome, RecordId},
@@ -14,34 +12,26 @@ use crate::{
     verdict::DolosVerdict,
 };
 
+const FILE: &str = "phase1-rules.txt";
 const TABLE: &str = include_str!("../../../test_data/ledger-oracle/phase1-rules.txt");
 
-/// The sides of a rule the judged records hold, a ledger refusal Dolos refused by it and a ledger acceptance Dolos accepted that holds a field it reads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Side {
-    Both,
-    RefusedOnly,
-    AcceptedOnly,
-    Neither,
+/// A side of a rule a judged record holds: a ledger refusal Dolos refused by it, a ledger acceptance Dolos accepted that holds a field it reads, or a refusal by a rule with no ledger counterpart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Refused,
+    Accepted,
+    Unrepresentable,
 }
 
 impl Side {
-    fn of(refused: usize, accepted: usize) -> Self {
-        match (refused > 0, accepted > 0) {
-            (true, true) => Side::Both,
-            (true, false) => Side::RefusedOnly,
-            (false, true) => Side::AcceptedOnly,
-            (false, false) => Side::Neither,
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Side::Both => "both",
-            Side::RefusedOnly => "refused_only",
-            Side::AcceptedOnly => "accepted_only",
-            Side::Neither => "neither",
-        }
+    /// The coverage cell of the side of the rule Dolos answers with as `answer`.
+    fn cell(self, answer: &str) -> CellKey {
+        let side = match self {
+            Side::Refused => "refused",
+            Side::Accepted => "accepted",
+            Side::Unrepresentable => "unrepresentable",
+        };
+        CellKey::new(Axis::Rule, format!("{answer}.{side}"))
     }
 }
 
@@ -58,19 +48,6 @@ pub enum Gap {
 pub enum Declared {
     Both,
     Lacks { gap: Gap, why: String },
-}
-
-impl Declared {
-    fn side(&self) -> Side {
-        match self {
-            Declared::Both => Side::Both,
-            Declared::Lacks { gap, .. } => match gap {
-                Gap::RefusedOnly => Side::RefusedOnly,
-                Gap::AcceptedOnly => Side::AcceptedOnly,
-                Gap::Neither => Side::Neither,
-            },
-        }
-    }
 }
 
 /// The ledger accepted transactions whose acceptance a rule's check passes.
@@ -214,18 +191,15 @@ pub fn parse(file: &'static str, text: &str) -> Result<Rules, ManifestError> {
 
 /// The committed rule table.
 pub fn committed() -> Result<Rules, ManifestError> {
-    parse("phase1-rules.txt", TABLE)
+    parse(FILE, TABLE)
 }
 
-/// The number of judged records on each side of each rule, and the records that fail the table.
+/// The rule sides each judged record holds, the records that fail the table and the known records with their lines.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RuleTally {
-    refused: BTreeMap<String, usize>,
-    accepted: BTreeMap<String, usize>,
-    unrepresentable: BTreeMap<String, usize>,
-    judged: BTreeSet<RecordId>,
-    failures: Vec<(RuleFail, Verdict)>,
-    known: Vec<String>,
+    judged: BTreeMap<RecordId, Vec<CellKey>>,
+    failures: BTreeMap<RecordId, Verdict>,
+    known: BTreeMap<RecordId, String>,
 }
 
 /// How a record fails the table.
@@ -251,23 +225,10 @@ impl RuleTally {
     /// Adds the tally of another part of the corpora after this one's.
     pub fn merge(&mut self, other: RuleTally) {
         let RuleTally {
-            refused,
-            accepted,
-            unrepresentable,
             judged,
             failures,
             known,
         } = other;
-        let counts = [
-            (&mut self.refused, refused),
-            (&mut self.accepted, accepted),
-            (&mut self.unrepresentable, unrepresentable),
-        ];
-        for (mine, theirs) in counts {
-            for (answer, n) in theirs {
-                *mine.entry(answer).or_default() += n;
-            }
-        }
         self.judged.extend(judged);
         self.failures.extend(failures);
         self.known.extend(known);
@@ -305,8 +266,8 @@ impl Rules {
         tx: &[u8],
         tally: &mut RuleTally,
     ) -> Result<(), CborError> {
-        tally.judged.insert(id);
         let answer = dolos.to_string();
+        let mut sides = Vec::new();
         let shown = match (ledger, dolos) {
             (LedgerOutcome::Accepted { .. }, DolosVerdict::Accepted) => {
                 let fields = tx_fields(tx)?;
@@ -323,7 +284,7 @@ impl Rules {
                         Entry::Unrepresentable { .. } => false,
                     };
                     if held {
-                        *tally.accepted.entry(answer.clone()).or_default() += 1;
+                        sides.push(Side::Accepted.cell(answer));
                     }
                 }
                 Shown::Agrees
@@ -332,14 +293,14 @@ impl Rules {
                 match self.entries.get(&answer) {
                     None => Shown::Unmapped,
                     Some(Entry::Unrepresentable { .. }) => {
-                        *tally.unrepresentable.entry(answer.clone()).or_default() += 1;
+                        sides.push(Side::Unrepresentable.cell(&answer));
                         Shown::Unrepresentable
                     }
                     Some(Entry::Ruled { leaves, .. }) => match ledger {
                         LedgerOutcome::Refused { failure_names, .. }
                             if failure_names.iter().any(|p| leaves.contains(p.leaf.name())) =>
                         {
-                            *tally.refused.entry(answer.clone()).or_default() += 1;
+                            sides.push(Side::Refused.cell(&answer));
                             Shown::Agrees
                         }
                         LedgerOutcome::Refused { .. } | LedgerOutcome::Accepted { .. } => {
@@ -355,11 +316,12 @@ impl Rules {
                 | DolosVerdict::Phase2Unsupported(_),
             ) => Shown::Unjudged,
         };
+        tally.judged.insert(id, sides);
         let ledger = ledger_answer(ledger);
         let both = format!("dolos={answer} ledger={ledger}");
         let (kind, detail) = match (shown, self.known.get(&id)) {
             (Shown::Mismatch, Some(k)) if k.dolos == answer && k.ledger == ledger => {
-                tally.known.push(format!("RULE_KNOWN {id} {both}"));
+                tally.known.insert(id, format!("RULE_KNOWN {id} {both}"));
                 return Ok(());
             }
             (_, Some(k)) => (
@@ -372,62 +334,76 @@ impl Rules {
         };
         let cells = vec![CellKey::new(Axis::Failure, kind.name())];
         let verdict = Verdict::disagree(Judge::Rules, EntryPoint::SubmitTx, id, cells, detail);
-        tally.failures.push((kind, verdict));
+        tally.failures.insert(id, verdict);
         Ok(())
     }
 
-    /// The line of each rule and the count line, adding the table's verdicts to `out`, comparing each rule's sides with the table only when `whole` says the tally covers every corpus.
-    pub fn bar(&self, tally: &RuleTally, whole: bool, out: &mut judgement::Tally) -> Vec<String> {
-        let mut lines = Vec::new();
-        let mut sides: BTreeMap<Side, usize> = BTreeMap::new();
-        let (mut rules, mut unrepresentable) = (0, 0);
-        let count = |counts: &BTreeMap<String, usize>, answer: &String| {
-            counts.get(answer).copied().unwrap_or_default()
-        };
+    /// The coverage members of the table, each side of each rule, a side its row lacks excluded for the row's reason.
+    pub fn members(&self) -> Vec<Member> {
+        let mut members = Vec::new();
         for (answer, entry) in &self.entries {
-            match entry {
-                Entry::Ruled { declared, .. } => {
-                    rules += 1;
-                    let refused = count(&tally.refused, answer);
-                    let accepted = count(&tally.accepted, answer);
-                    let found = Side::of(refused, accepted);
-                    *sides.entry(found).or_default() += 1;
-                    lines.push(format!(
-                        "RULE {answer} refused={refused} accepted={accepted} side={found}"
-                    ));
-                    if whole && found != declared.side() {
-                        let detail =
-                            format!("rule={answer} declared={} found={found}", declared.side());
-                        out.add(Verdict::selection_fails(
-                            Judge::Rules,
-                            EntryPoint::SubmitTx,
-                            detail,
-                        ));
-                    }
-                }
+            let member = |side: Side, lacks: Option<&String>| Member {
+                cell: side.cell(answer),
+                reach: match lacks {
+                    None => Reach::Counted,
+                    Some(why) => Reach::Excluded {
+                        reason: why.clone(),
+                        command: format!("grep -nF '{answer} |' test_data/ledger-oracle/{FILE}"),
+                    },
+                },
+            };
+            let (refused, accepted) = match entry {
                 Entry::Unrepresentable { .. } => {
-                    unrepresentable += 1;
-                    let records = count(&tally.unrepresentable, answer);
-                    lines.push(format!(
-                        "RULE {answer} records={records} side=unrepresentable"
-                    ));
+                    members.push(member(Side::Unrepresentable, None));
+                    continue;
                 }
-            }
+                Entry::Ruled { declared, .. } => match declared {
+                    Declared::Both => (None, None),
+                    Declared::Lacks { gap, why } => match gap {
+                        Gap::RefusedOnly => (None, Some(why)),
+                        Gap::AcceptedOnly => (Some(why), None),
+                        Gap::Neither => (Some(why), Some(why)),
+                    },
+                },
+            };
+            members.push(member(Side::Refused, refused));
+            members.push(member(Side::Accepted, accepted));
         }
-        lines.extend(tally.known.iter().cloned());
-        let failed = |kind: RuleFail| tally.failures.iter().filter(|(k, _)| *k == kind).count();
-        let (mismatch, unmapped) = (failed(RuleFail::Mismatch), failed(RuleFail::Unmapped));
+        members
+    }
+
+    /// The line of each known record, adding a verdict for each judged record to `out`, and a failing one for each known record the tally did not judge when `whole` says it covers every corpus.
+    pub fn report(
+        &self,
+        tally: &RuleTally,
+        whole: bool,
+        out: &mut judgement::Tally,
+    ) -> Vec<String> {
         let unjudged: Vec<&RecordId> = match whole {
             true => self
                 .known
                 .keys()
-                .filter(|id| !tally.judged.contains(id))
+                .filter(|id| !tally.judged.contains_key(id))
                 .collect(),
             false => Vec::new(),
         };
-        let passing = tally.judged.len().saturating_sub(tally.failures.len());
-        out.count(Judge::Rules, passing);
-        tally.failures.iter().for_each(|(_, v)| out.add(v.clone()));
+        for (id, sides) in &tally.judged {
+            let pass = match (tally.failures.get(id), tally.known.contains_key(id)) {
+                (Some(failure), _) => {
+                    out.add(failure.clone());
+                    continue;
+                }
+                (None, true) => judgement::Pass::Known,
+                (None, false) => judgement::Pass::Agree,
+            };
+            let passed = judgement::Passed {
+                judge: Judge::Rules,
+                entry: EntryPoint::SubmitTx,
+                cells: sides.clone(),
+                pass,
+            };
+            out.pass(passed, 1);
+        }
         for id in unjudged {
             let cells = vec![CellKey::new(Axis::Answer, "unjudged")];
             let entry = EntryPoint::SubmitTx;
@@ -439,22 +415,7 @@ impl Rules {
                 "known not judged",
             ));
         }
-        let side = |s: Side| sides.get(&s).copied().unwrap_or_default();
-        lines.push(format!(
-            "PHASE1-RULES rules={rules} both={} refused_only={} accepted_only={} neither={} \
-             mismatch={mismatch} unmapped={unmapped} unrepresentable={unrepresentable}",
-            side(Side::Both),
-            side(Side::RefusedOnly),
-            side(Side::AcceptedOnly),
-            side(Side::Neither),
-        ));
-        lines
-    }
-}
-
-impl fmt::Display for Side {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
+        tally.known.values().cloned().collect()
     }
 }
 
@@ -463,6 +424,7 @@ mod tests {
     use super::*;
     use crate::{
         accounts::LedgerAccounts,
+        coverage,
         record::{CorpusKind, FailurePath, NonEmpty},
         refusal::{DolosClass, RefusalClass},
     };
@@ -556,28 +518,73 @@ unsupported[witness fields] | unrepresentable because the native validator does 
     /// The table's lines over `tally` and the failing verdicts as their lines.
     fn bar(rules: &Rules, tally: &RuleTally, whole: bool) -> (Vec<String>, Vec<String>) {
         let mut out = judgement::Tally::default();
-        let lines = rules.bar(tally, whole, &mut out);
+        let lines = rules.report(tally, whole, &mut out);
         (lines, out.failing.iter().map(Verdict::to_string).collect())
     }
 
+    /// The coverage lines of the table's members over `tally`, each counted side committed at one.
+    fn covered(rules: &Rules, tally: &RuleTally) -> Vec<String> {
+        let mut out = judgement::Tally::default();
+        rules.report(tally, true, &mut out);
+        let counted = rules
+            .members()
+            .into_iter()
+            .filter(|m| m.reach == Reach::Counted);
+        let committed = counted.map(|m| (m.cell.to_string(), 1)).collect();
+        coverage::table(&rules.members(), &committed, &mut out)
+    }
+
     #[test]
-    fn rules_on_their_declared_sides_pass_and_count_each_side() {
+    fn each_judged_record_counts_once_on_every_side_it_holds() {
         let rules = rules(TABLE);
-        let (lines, failing) = bar(&rules, &every_side(&rules), true);
-        assert_eq!(failing, Vec::<String>::new(), "{lines:?}");
+        let mut out = judgement::Tally::default();
+        let (_, failing) = bar(&rules, &every_side(&rules), true);
+        assert_eq!(failing, Vec::<String>::new());
+        rules.report(&every_side(&rules), true, &mut out);
+        let side = |answer: &str, side: &str| CellKey::new(Axis::Rule, format!("{answer}.{side}"));
+        let fee = "refused[PostAlonzo(FeeBelowMin)]";
+        let deposit = format!("refused[{DEPOSIT}]");
+        let entry = CellKey::new(Axis::Entry, EntryPoint::SubmitTx);
         assert_eq!(
-            lines.last().map(String::as_str),
-            Some(
-                "PHASE1-RULES rules=4 both=2 refused_only=1 accepted_only=0 neither=1 \
-                 mismatch=0 unmapped=0 unrepresentable=1"
-            )
+            coverage::counts(&out),
+            BTreeMap::from([
+                (side(fee, "refused"), 1),
+                (side(fee, "accepted"), 1),
+                (side(&format!("refused[{REFUND}]"), "refused"), 1),
+                (side(&deposit, "refused"), 1),
+                (side(&deposit, "accepted"), 1),
+                (side("unsupported[witness fields]", "unrepresentable"), 1),
+                (entry, 5),
+            ])
         );
+        assert_eq!(out.by_judge(), BTreeMap::from([(Judge::Rules, 5)]));
+    }
+
+    #[test]
+    fn rules_on_their_declared_sides_cover_the_table_and_a_side_a_row_lacks_is_excluded() {
+        let rules = rules(TABLE);
+        let lines = covered(&rules, &every_side(&rules));
+        assert_eq!(lines.last().unwrap(), "coverage=PASS", "{lines:#?}");
         assert!(lines.contains(&format!(
-            "RULE refused[{DEPOSIT}] refused=1 accepted=1 side=both"
+            "COVERAGE rule:refused[{}].accepted records=0 committed=none excluded \
+             no accepted record deregisters command: grep -nF 'refused[{REFUND}] |' \
+             test_data/ledger-oracle/phase1-rules.txt",
+            REFUND.replace(' ', "_")
         )));
-        assert!(lines.contains(
-            &"RULE unsupported[witness fields] records=1 side=unrepresentable".to_string()
-        ));
+    }
+
+    #[test]
+    fn a_record_on_a_side_its_row_lacks_fails_the_coverage_table() {
+        let rules = rules(TABLE);
+        let mut tally = every_side(&rules);
+        let metadata = dolos("DijkstraInvalidMetadata");
+        let ledger = refused(&["DecoderErrorDeserialiseFailure"]);
+        judge(&rules, 6, &ledger, &metadata, &mut tally);
+        let lines = covered(&rules, &tally);
+        assert_eq!(
+            lines.last().unwrap(),
+            "coverage=FAIL rule:refused[DijkstraInvalidMetadata].refused"
+        );
     }
 
     #[test]
@@ -587,7 +594,7 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         let swapped = dolos(REFUND);
         let ledger = refused(&["DepositIncorrectDELEG"]);
         judge(&rules, 6, &ledger, &swapped, &mut tally);
-        let (lines, failing) = bar(&rules, &tally, false);
+        let (_, failing) = bar(&rules, &tally, false);
         assert_eq!(
             failing,
             [format!(
@@ -595,7 +602,6 @@ unsupported[witness fields] | unrepresentable because the native validator does 
                  outcome=disagree dolos=refused[{REFUND}] ledger=refused[DepositIncorrectDELEG]"
             )]
         );
-        assert!(lines.last().unwrap().contains(" mismatch=1 unmapped=0 "));
     }
 
     #[test]
@@ -605,7 +611,7 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         let ledger = refused(&["FeeTooSmallUTxO"]);
         let unlisted = dolos("PostAlonzo(MaxTxSizeExceeded)");
         judge(&rules, 7, &ledger, &unlisted, &mut tally);
-        let (lines, failing) = bar(&rules, &tally, false);
+        let (_, failing) = bar(&rules, &tally, false);
         assert_eq!(
             failing,
             [
@@ -614,7 +620,6 @@ unsupported[witness fields] | unrepresentable because the native validator does 
               ledger=refused[FeeTooSmallUTxO]"
             ]
         );
-        assert!(lines.last().unwrap().contains(" mismatch=0 unmapped=1 "));
     }
 
     const INTEGER: &str = "integer operand outside audited registration range";
@@ -627,7 +632,6 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         judge(&rules, 8, &accepted(), &evaluation, &mut tally);
         let (lines, failing) = bar(&rules, &tally, false);
         assert_eq!(failing, Vec::<String>::new(), "{lines:?}");
-        assert!(lines.last().unwrap().contains(" mismatch=0 unmapped=0 "));
     }
 
     #[test]
@@ -647,22 +651,19 @@ unsupported[witness fields] | unrepresentable because the native validator does 
     }
 
     #[test]
-    fn a_rule_found_on_other_sides_than_declared_fails_only_a_whole_run() {
+    fn a_declared_side_no_record_holds_fails_the_coverage_table_below_its_committed_count() {
         let rules = rules(TABLE);
         let mut tally = RuleTally::default();
         let fee = dolos("PostAlonzo(FeeBelowMin)");
         judge(&rules, 1, &refused(&["FeeTooSmallUTxO"]), &fee, &mut tally);
-        let (_, failing) = bar(&rules, &tally, false);
-        assert_eq!(failing, Vec::<String>::new());
-        let (_, failing) = bar(&rules, &tally, true);
-        assert!(
-            failing.contains(
-                &"VERDICT judge=rules entry=submit_tx record=selection cells= outcome=disagree \
-                  rule=refused[PostAlonzo(FeeBelowMin)] declared=both found=refused_only"
-                    .to_string()
-            ),
-            "{failing:?}"
-        );
+        let lines = covered(&rules, &tally);
+        let last = lines.last().unwrap();
+        let failed: Vec<&str> = last
+            .trim_start_matches("coverage=FAIL ")
+            .split(',')
+            .collect();
+        assert!(failed.contains(&"rule:refused[PostAlonzo(FeeBelowMin)].accepted"));
+        assert!(!failed.contains(&"rule:refused[PostAlonzo(FeeBelowMin)].refused"));
     }
 
     #[test]

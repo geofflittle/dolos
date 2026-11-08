@@ -117,7 +117,13 @@ impl<F> Tally<F> {
 impl Tally {
     /// Adds the verdicts of the tally as the judgement of `judge` at `entry`.
     pub fn report(&self, judge: Judge, entry: EntryPoint, out: &mut judgement::Tally) {
-        out.count(judge, self.compared - self.disagree.len());
+        let passed = judgement::Passed {
+            judge,
+            entry,
+            cells: Vec::new(),
+            pass: judgement::Pass::Agree,
+        };
+        out.pass(passed, self.compared - self.disagree.len());
         for finding in &self.disagree {
             out.add(finding.clone().verdict(judge, entry));
         }

@@ -7,6 +7,7 @@ use std::{
 
 use crate::{
     cbor::{self, Data},
+    coverage::{Member, Reach},
     eval::{parse_purpose, Level, Refusal, RowKey},
     judgement::{self, Axis, CellKey, EntryPoint, Judge, Verdict},
     manifest::ManifestError,
@@ -106,13 +107,14 @@ const V4_TX_INFO: &[&str] = &[
     "txInfoTreasuryDonation",
 ];
 
-/// The Plutus language of a script, which fixes the fields of its context.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Language {
-    V1,
-    V2,
-    V3,
-    V4,
+judgement::named! {
+    /// The Plutus language of a script, which fixes the fields of its context.
+    "language" Language {
+        V1 = "V1",
+        V2 = "V2",
+        V3 = "V3",
+        V4 = "V4",
+    }
 }
 
 impl Language {
@@ -131,17 +133,6 @@ impl Language {
             Language::V3 => V3_TX_INFO,
             Language::V4 => V4_TX_INFO,
         }
-    }
-}
-
-impl fmt::Display for Language {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Language::V1 => "V1",
-            Language::V2 => "V2",
-            Language::V3 => "V3",
-            Language::V4 => "V4",
-        })
     }
 }
 
@@ -779,11 +770,33 @@ impl ContextTally {
         self.judged.extend(judged);
     }
 
-    /// Adds the passing count and the failing verdicts to `out`.
+    /// Adds the passing counts, the agreeing ones by language, and the failing verdicts to `out`.
     pub fn report(&self, out: &mut judgement::Tally) {
-        out.count(Judge::Context, self.agree + self.known);
+        let passed = |pass, cells| judgement::Passed {
+            judge: Judge::Context,
+            entry: EntryPoint::RedeemerArguments,
+            cells,
+            pass,
+        };
+        let mut unlanguaged = self.agree;
+        for (language, counts) in &self.languages {
+            let cells = vec![CellKey::new(Axis::Language, language)];
+            out.pass(passed(judgement::Pass::Agree, cells), counts.agree);
+            unlanguaged -= counts.agree;
+        }
+        out.pass(passed(judgement::Pass::Agree, Vec::new()), unlanguaged);
+        out.pass(passed(judgement::Pass::Known, Vec::new()), self.known);
         self.failing.iter().cloned().for_each(|v| out.add(v));
     }
+}
+
+/// The members of the coverage table on the language axis, one for each Plutus language.
+pub fn language_members() -> Vec<Member> {
+    let member = |language: &Language| Member {
+        cell: CellKey::new(Axis::Language, language),
+        reach: Reach::Counted,
+    };
+    Language::ALL.iter().map(member).collect()
 }
 
 impl fmt::Display for ContextTally {
@@ -1243,6 +1256,51 @@ mod tests {
             assert!(!passes(&lineless), "{verdict:?}");
             assert_eq!(lineless.failing.len(), 1, "{verdict:?}");
         }
+    }
+
+    #[test]
+    fn the_report_counts_each_agreeing_row_once_under_its_language_or_none() {
+        let mut tally = ContextTally::default();
+        let agree = ContextVerdict::Agree { bytes_equal: true };
+        tally.add(
+            ic(1),
+            &[
+                (key(Level::Top, 0, 0), Some(Language::V3), agree.clone()),
+                (key(Level::Top, 0, 1), Some(Language::V3), agree.clone()),
+                (key(Level::Sub(0), 1, 2), None, agree),
+                (
+                    key(Level::Top, 0, 2),
+                    Some(Language::V1),
+                    ContextVerdict::Known,
+                ),
+            ],
+        );
+        let mut out = judgement::Tally::default();
+        tally.report(&mut out);
+        let passed = out.passed(Judge::Context);
+        let passed: Vec<String> = passed
+            .map(|(p, n)| {
+                let cells: Vec<String> = p.cells.iter().map(CellKey::to_string).collect();
+                format!("{:?} [{}] {n}", p.pass, cells.join(","))
+            })
+            .collect();
+        assert_eq!(
+            passed,
+            ["Agree [] 1", "Known [] 1", "Agree [language:V3] 2"]
+        );
+        assert_eq!(out.by_judge()[&Judge::Context], 4);
+    }
+
+    #[test]
+    fn each_language_is_a_member_once() {
+        let members: Vec<String> = language_members()
+            .iter()
+            .map(|m| m.cell.to_string())
+            .collect();
+        assert_eq!(
+            members,
+            ["language:V1", "language:V2", "language:V3", "language:V4"]
+        );
     }
 
     #[test]
