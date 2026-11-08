@@ -184,6 +184,32 @@ impl Corpus {
             runs: kept.into_iter().cloned().collect(),
         })
     }
+
+    /// The corpus without the records of this corpus the set names, each
+    /// run keeping its seed.
+    pub fn without(&self, named: &BTreeSet<RecordId>) -> Result<Corpus, NotKept> {
+        let mine: BTreeSet<u32> = named
+            .iter()
+            .filter(|id| id.corpus == self.kind)
+            .map(|id| id.n)
+            .collect();
+        let held: BTreeSet<u32> = self
+            .kept()
+            .flat_map(|run| run.records().iter().map(|r| r.n))
+            .collect();
+        if let Some(n) = mine.difference(&held).next() {
+            return Err(NotKept(RecordId {
+                corpus: self.kind,
+                n: *n,
+            }));
+        }
+        Ok(Corpus {
+            kind: self.kind,
+            sha256: self.sha256.clone(),
+            records: self.records - mine.len(),
+            runs: self.kept().filter_map(|run| run.without(&mine)).collect(),
+        })
+    }
 }
 
 /// A named record that no kept run of its corpus holds.
@@ -490,6 +516,46 @@ mod tests {
         assert_eq!(numbers(&selected), whole);
         assert_eq!(selected.records, whole.len());
         assert_eq!(selected.sha256, corpus.sha256);
+    }
+
+    #[test]
+    fn leaving_out_no_record_keeps_every_run_whole() {
+        let corpus = load(CorpusKind::Supp).unwrap();
+        let named = BTreeSet::from([RecordId {
+            corpus: CorpusKind::Ic,
+            n: 9,
+        }]);
+        let kept = corpus.without(&named).unwrap();
+        assert_eq!(numbers(&kept), numbers(&corpus));
+        assert_eq!(kept.runs.len(), corpus.runs.len());
+        assert_eq!(kept.records, corpus.records);
+    }
+
+    #[test]
+    fn leaving_out_one_record_drops_it_and_no_other() {
+        let corpus = load(CorpusKind::Supp).unwrap();
+        let named = BTreeSet::from([RecordId {
+            corpus: CorpusKind::Supp,
+            n: 9,
+        }]);
+        let kept = corpus.without(&named).unwrap();
+        let expected: Vec<u32> = numbers(&corpus).into_iter().filter(|n| *n != 9).collect();
+        assert_eq!(numbers(&kept), expected);
+        assert_eq!(kept.records, corpus.records - 1);
+        assert_eq!(kept.sha256, corpus.sha256);
+    }
+
+    #[test]
+    fn leaving_out_a_record_in_no_kept_run_is_refused() {
+        let corpus = load(CorpusKind::Ic).unwrap();
+        let named = BTreeSet::from([RecordId {
+            corpus: CorpusKind::Ic,
+            n: 9853,
+        }]);
+        assert_eq!(
+            corpus.without(&named).unwrap_err().to_string(),
+            "SELECTION ic#9853 is in no kept run"
+        );
     }
 
     fn input_totals(kind: CorpusKind) -> [usize; 7] {

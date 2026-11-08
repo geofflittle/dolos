@@ -2052,10 +2052,13 @@ fn the_builtin_bar_names_the_record_of_each_covered_builtin_of_the_whole_type() 
 #[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn ledger_oracle() {
     let manifests = Manifests::committed();
+    let left_out = left_out();
     let mut verdicts = judgement::Tally::default();
     let mut all = Judged::default();
     for kind in CorpusKind::ALL {
-        let corpus = load(kind);
+        let corpus = load(kind)
+            .without(&left_out)
+            .unwrap_or_else(|e| panic!("{e}"));
         println!("{corpus}");
         let judged = judge(&corpus, &manifests, &Edits::default()).await;
         println!("{judged}");
@@ -2106,6 +2109,18 @@ fn conclude(verdicts: &judgement::Tally) {
     let result = verdicts.verdict();
     println!("{result}");
     assert!(matches!(result, RunVerdict::Pass { .. }));
+}
+
+/// The records ORACLE_DESELECT names, which the whole run leaves out, none
+/// when it is unset.
+fn left_out() -> BTreeSet<RecordId> {
+    let Ok(list) = std::env::var("ORACLE_DESELECT") else {
+        return BTreeSet::new();
+    };
+    let named = named_records(&list);
+    let names: Vec<String> = named.iter().map(RecordId::to_string).collect();
+    println!("DESELECT {}", names.join(","));
+    named
 }
 
 /// The records a comma separated list names.

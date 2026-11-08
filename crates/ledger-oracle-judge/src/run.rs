@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     accounts::LedgerAccounts,
@@ -137,6 +137,27 @@ impl KeptRun {
     /// The records in ledger order, at least one.
     pub fn records(&self) -> &[Record] {
         &self.records
+    }
+
+    /// The run from the same seed without the records whose numbers `left_out` holds, none when it holds them all.
+    pub fn without(&self, left_out: &BTreeSet<u32>) -> Option<KeptRun> {
+        let records: Vec<Record> = self
+            .records
+            .iter()
+            .filter(|r| !left_out.contains(&r.n))
+            .cloned()
+            .collect();
+        if records.is_empty() {
+            return None;
+        }
+        Some(KeptRun {
+            epoch: self.epoch,
+            pparams: self.pparams.clone(),
+            era: self.era.clone(),
+            lives: lives(&self.seed, &records),
+            seed: self.seed.clone(),
+            records,
+        })
     }
 
     /// The records split into maximal sequences that share one slot.
