@@ -275,6 +275,8 @@ pub enum Outcome {
     Known(String),
     /// The judge cannot compare the answer and says why.
     Excluded(String),
+    /// The entry point's message cannot hold the answer the judge compares.
+    Unrepresentable(String),
     Disagree(String),
 }
 
@@ -285,6 +287,7 @@ impl Outcome {
             Outcome::Agree => "agree",
             Outcome::Known(_) => "known",
             Outcome::Excluded(_) => "excluded",
+            Outcome::Unrepresentable(_) => "unrepresentable",
             Outcome::Disagree(_) => "disagree",
         }
     }
@@ -295,6 +298,7 @@ impl Outcome {
             Outcome::Agree => Some(Pass::Agree),
             Outcome::Known(_) => Some(Pass::Known),
             Outcome::Excluded(_) => Some(Pass::Excluded),
+            Outcome::Unrepresentable(_) => Some(Pass::Unrepresentable),
             Outcome::Disagree(_) => None,
         }
     }
@@ -306,6 +310,7 @@ pub enum Pass {
     Agree,
     Known,
     Excluded,
+    Unrepresentable,
 }
 
 /// A passing verdict without its record and text, the key a tally counts
@@ -420,9 +425,10 @@ impl fmt::Display for Verdict {
         )?;
         match outcome {
             Outcome::Agree => Ok(()),
-            Outcome::Known(text) | Outcome::Excluded(text) | Outcome::Disagree(text) => {
-                write!(f, " {text}")
-            }
+            Outcome::Known(text)
+            | Outcome::Excluded(text)
+            | Outcome::Unrepresentable(text)
+            | Outcome::Disagree(text) => write!(f, " {text}"),
         }
     }
 }
@@ -608,7 +614,7 @@ mod tests {
         tally.add(spend(Judge::EvalOracle, Outcome::Agree));
         tally.add(spend(
             Judge::EvalOracle,
-            Outcome::Excluded("no carrier".into()),
+            Outcome::Unrepresentable("no carrier".into()),
         ));
         tally.add(spend(Judge::EvalDraft, Outcome::Agree));
         let compared = Passed {
@@ -628,7 +634,10 @@ mod tests {
         let oracle: Vec<(&Passed, usize)> = tally.passed(Judge::EvalOracle).collect();
         assert_eq!(
             oracle,
-            [(&passed(Pass::Agree), 2), (&passed(Pass::Excluded), 1)]
+            [
+                (&passed(Pass::Agree), 2),
+                (&passed(Pass::Unrepresentable), 1)
+            ]
         );
         assert_eq!(
             tally.by_judge(),

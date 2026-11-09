@@ -28,13 +28,14 @@ pub struct Mutation {
     pub site: String,
 }
 
-/// The number of mutants of one operator the corpus holds, judged and agreed
-/// on.
+/// The number of mutants of one operator the corpus holds, judged, agreed on
+/// and disagreed on only as a known list declares.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Counts {
     pub made: usize,
     pub compared: usize,
     pub agree: usize,
+    pub known: usize,
 }
 
 /// The counts of each operator of the mutant corpus.
@@ -55,9 +56,11 @@ impl MutationTally {
 
     /// Judges mutant `id` made by `mutation` from `verdicts`, every verdict the
     /// judges gave on its run, adding to `out` an agreeing verdict per entry
-    /// point when each is an agreement and the validation judge gave one,
-    /// or else each failing verdict on the mutant and a disagreement naming
-    /// the first verdict that is not an agreement.
+    /// point that agreed when each verdict whose entry point can hold its
+    /// answer is an agreement and the validation judge gave one, a known
+    /// verdict naming the first known pass when the others among them are
+    /// agreements, or else each failing verdict on the mutant and a
+    /// disagreement naming the first verdict that is neither.
     pub fn judge(&mut self, id: RecordId, mutation: &Mutation, verdicts: Tally, out: &mut Tally) {
         let op = &mutation.operator;
         let counts = self.counts.entry(op.clone()).or_default();
@@ -67,9 +70,12 @@ impl MutationTally {
             .into_iter()
             .filter(|v| v.subject != Subject::Selection);
         let failing: Vec<Verdict> = on_record.collect();
-        let other = passing.keys().find(|p| p.pass != Pass::Agree);
+        let applies = passing.keys().filter(|_| true);
+        let other = applies.clone().find(|p| p.pass != Pass::Agree);
+        let known = applies.clone().find(|p| p.pass == Pass::Known);
         let validated = passing.keys().any(|p| p.judge == Judge::Validation);
-        let entries: BTreeSet<EntryPoint> = passing.keys().map(|p| p.entry).collect();
+        let agreed = applies.filter(|p| p.pass == Pass::Agree);
+        let entries: BTreeSet<EntryPoint> = agreed.map(|p| p.entry).collect();
         let first_failing = failing.first().map(|v| (v.judge, v.entry, "disagree"));
         let first_other = other.map(|p| (p.judge, p.entry, pass_name(p.pass)));
         let detail = match (first_failing, first_other, validated) {
@@ -79,6 +85,18 @@ impl MutationTally {
             (None, None, false) => Some((EntryPoint::SubmitTx, format!("op={op} validated=0"))),
             (None, None, true) => None,
         };
+        if let (None, Some(known)) = (&detail, known) {
+            counts.known += 1;
+            let (judge, entry) = (known.judge, known.entry);
+            out.add(Verdict {
+                judge: Judge::Mutation,
+                entry,
+                subject: Subject::Record(id),
+                cells: vec![cell(op, entry)],
+                outcome: Outcome::Known(format!("op={op} first={judge}@{entry} known")),
+            });
+            return;
+        }
         let Some((entry, detail)) = detail else {
             counts.agree += 1;
             for entry in entries {
@@ -109,11 +127,12 @@ impl MutationTally {
                 made,
                 compared,
                 agree,
+                known,
             },
         ) in &self.counts
         {
             lines.push(format!(
-                "MUTATION op={op} compared={compared} agree={agree}"
+                "MUTATION op={op} compared={compared} agree={agree} known={known}"
             ));
             if compared != made {
                 let detail = format!("op={op} made={made} compared={compared}");
@@ -128,10 +147,13 @@ impl MutationTally {
     }
 
     /// Adds to `out` the failing verdicts of `corpus`, every mutant judged
-    /// together, that are on the selection rather than on one mutant.
+    /// together, that are on the selection rather than on one mutant, save the
+    /// as-output judge's, which compares only inputs another record of a run
+    /// made and so judges nothing when each mutant runs alone.
     pub fn select(corpus: Tally, out: &mut Tally) {
         let failing = corpus.failing.into_iter();
-        for verdict in failing.filter(|v| v.subject == Subject::Selection) {
+        let on_selection = failing.filter(|v| v.subject == Subject::Selection);
+        for verdict in on_selection.filter(|_| true) {
             out.add(verdict);
         }
     }
@@ -158,13 +180,14 @@ fn pass_name(pass: Pass) -> &'static str {
         Pass::Agree => "agree",
         Pass::Known => "known",
         Pass::Excluded => "excluded",
+        Pass::Unrepresentable => "unrepresentable",
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{judgement::Passed, record::CorpusKind};
+    use crate::{eval::Layer, judgement::Passed, record::CorpusKind};
 
     fn id(n: u32) -> RecordId {
         RecordId {
@@ -228,30 +251,98 @@ mod tests {
             ]
         );
         let lines = mutations.report(&mut out);
-        assert_eq!(lines, ["MUTATION op=drop_witness compared=1 agree=1"]);
+        assert_eq!(
+            lines,
+            ["MUTATION op=drop_witness compared=1 agree=1 known=0"]
+        );
         assert!(out.failing.is_empty(), "{out}");
     }
 
     #[test]
-    fn a_known_or_excluded_pass_does_not_agree() {
-        for pass in [Pass::Known, Pass::Excluded] {
-            let mut verdicts = agreeing();
-            verdicts.pass(passed(Judge::Accounts, EntryPoint::ReadAccounts, pass), 1);
-            let (mutations, mut out) = judged(verdicts);
-            assert_eq!(out.passed(Judge::Mutation).count(), 0);
-            let shown: Vec<String> = out.failing.iter().map(Verdict::to_string).collect();
-            let how = pass_name(pass);
-            assert_eq!(
-                shown,
-                [format!(
-                    "VERDICT judge=mutation entry=read_accounts record=mut#7 \
-                     cells=mutation:drop_witness@read_accounts outcome=disagree \
-                     op=drop_witness first=accounts@read_accounts {how}"
-                )]
-            );
-            let lines = mutations.report(&mut out);
-            assert_eq!(lines, ["MUTATION op=drop_witness compared=1 agree=0"]);
-        }
+    fn a_known_pass_does_not_agree_and_passes_the_run_as_known() {
+        let mut verdicts = agreeing();
+        let known = passed(Judge::EvalOracle, EntryPoint::MinFee, Pass::Known);
+        verdicts.pass(known, 1);
+        let (mutations, mut out) = judged(verdicts);
+        assert!(out.failing.is_empty(), "{out}");
+        let shown: Vec<String> = out
+            .passed(Judge::Mutation)
+            .map(|(p, n)| format!("{} {} {:?} {n}", p.entry, p.cells[0], p.pass))
+            .collect();
+        assert_eq!(shown, ["min_fee mutation:drop_witness@min_fee Known 1"]);
+        let lines = mutations.report(&mut out);
+        assert_eq!(
+            lines,
+            ["MUTATION op=drop_witness compared=1 agree=0 known=1"]
+        );
+    }
+
+    #[test]
+    fn an_excluded_pass_does_not_agree_and_fails_the_run_before_a_known_one() {
+        let mut verdicts = agreeing();
+        let excluded = passed(Judge::Accounts, EntryPoint::ReadAccounts, Pass::Excluded);
+        verdicts.pass(excluded, 1);
+        let known = passed(Judge::EvalOracle, EntryPoint::MinFee, Pass::Known);
+        verdicts.pass(known, 1);
+        let (mutations, mut out) = judged(verdicts);
+        assert_eq!(out.passed(Judge::Mutation).count(), 0);
+        let shown: Vec<String> = out.failing.iter().map(Verdict::to_string).collect();
+        assert_eq!(
+            shown,
+            ["VERDICT judge=mutation entry=read_accounts record=mut#7 \
+              cells=mutation:drop_witness@read_accounts outcome=disagree \
+              op=drop_witness first=accounts@read_accounts excluded"]
+        );
+        let lines = mutations.report(&mut out);
+        assert_eq!(
+            lines,
+            ["MUTATION op=drop_witness compared=1 agree=0 known=0"]
+        );
+    }
+
+    #[test]
+    fn an_unrepresentable_pass_does_not_apply_and_gives_its_entry_no_cell() {
+        let mut verdicts = agreeing();
+        let v1beta = EntryPoint::EstimateTx(Layer::V1beta);
+        let unrepresentable = passed(Judge::EvalOracle, v1beta, Pass::Unrepresentable);
+        verdicts.pass(unrepresentable, 1);
+        let (mutations, mut out) = judged(verdicts);
+        assert!(out.failing.is_empty(), "{out}");
+        let entries: Vec<String> = out
+            .passed(Judge::Mutation)
+            .map(|(p, _)| p.entry.to_string())
+            .collect();
+        assert_eq!(entries, ["submit_tx", "min_fee"]);
+        let lines = mutations.report(&mut out);
+        assert_eq!(
+            lines,
+            ["MUTATION op=drop_witness compared=1 agree=1 known=0"]
+        );
+    }
+
+    #[test]
+    fn an_unsupported_validation_answer_does_not_agree() {
+        let mut verdicts = Tally::default();
+        let unsupported = Passed {
+            cells: vec![CellKey::new(Axis::Unsupported, "witness fields")],
+            ..passed(Judge::Validation, EntryPoint::SubmitTx, Pass::Excluded)
+        };
+        verdicts.pass(unsupported, 1);
+        verdicts.pass(passed(Judge::Cost, EntryPoint::MinFee, Pass::Agree), 1);
+        let (mutations, mut out) = judged(verdicts);
+        assert_eq!(out.passed(Judge::Mutation).count(), 0);
+        let shown: Vec<String> = out.failing.iter().map(Verdict::to_string).collect();
+        assert_eq!(
+            shown,
+            ["VERDICT judge=mutation entry=submit_tx record=mut#7 \
+              cells=mutation:drop_witness@submit_tx outcome=disagree \
+              op=drop_witness first=validation@submit_tx excluded"]
+        );
+        let lines = mutations.report(&mut out);
+        assert_eq!(
+            lines,
+            ["MUTATION op=drop_witness compared=1 agree=0 known=0"]
+        );
     }
 
     #[test]
@@ -284,13 +375,28 @@ mod tests {
         assert!(out.failing.is_empty(), "{out}");
         assert_eq!(out.passed(Judge::Mutation).count(), 2);
         let lines = mutations.report(&mut out);
-        assert_eq!(lines, ["MUTATION op=drop_witness compared=1 agree=1"]);
+        assert_eq!(
+            lines,
+            ["MUTATION op=drop_witness compared=1 agree=1 known=0"]
+        );
+    }
+
+    #[test]
+    fn the_corpus_adds_no_as_output_selection_failure() {
+        let mut corpus = agreeing();
+        let unjudged =
+            Verdict::selection_fails(Judge::AsOutput, EntryPoint::FetchBlock, "judged=0");
+        corpus.add(unjudged);
+        let mut out = Tally::default();
+        MutationTally::select(corpus, &mut out);
+        assert!(out.failing.is_empty(), "{out}");
     }
 
     #[test]
     fn the_corpus_adds_its_selection_failures_and_not_its_record_failures() {
         let mut corpus = agreeing();
-        let unjudged = Verdict::selection_fails(Judge::AsOutput, EntryPoint::ReadUtxos, "judged=0");
+        let unjudged =
+            Verdict::selection_fails(Judge::Accounts, EntryPoint::ReadAccounts, "judged=0");
         let on_record = Verdict::disagree(
             Judge::Validation,
             EntryPoint::SubmitTx,
@@ -326,7 +432,10 @@ mod tests {
         let mutations = MutationTally::new([&made, &made]);
         let mut out = Tally::default();
         let lines = mutations.report(&mut out);
-        assert_eq!(lines, ["MUTATION op=reorder_set compared=0 agree=0"]);
+        assert_eq!(
+            lines,
+            ["MUTATION op=reorder_set compared=0 agree=0 known=0"]
+        );
         let shown: Vec<String> = out.failing.iter().map(Verdict::to_string).collect();
         assert_eq!(
             shown,
