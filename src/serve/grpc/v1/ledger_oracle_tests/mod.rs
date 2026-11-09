@@ -2036,8 +2036,7 @@ fn settle_mutants(
     let mut runs = Vec::new();
     for part in parts {
         let ids: Vec<RecordId> = part.ids.iter().copied().collect();
-        let own = manifests.within(|id| ids.contains(id));
-        let judged = settle(kind, vec![part], &own);
+        let judged = settle(kind, vec![part], manifests);
         let mut verdicts = judged.report();
         manifests.rules.report(&judged.rules, false, &mut verdicts);
         let [id] = ids[..] else {
