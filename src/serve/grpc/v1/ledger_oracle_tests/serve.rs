@@ -23,6 +23,14 @@ pub(super) struct RouteServed {
     pub(super) served: Served,
 }
 
+/// What ReadTx at one version serves for a transaction hash, nothing when it answers not found, or the status it answers with otherwise.
+pub(super) struct TxFound {
+    pub(super) entry: EntryPoint,
+    /// Whether the version states sub transactions, so answers the hash of one with the transaction that lists it.
+    pub(super) subs: bool,
+    pub(super) answer: Result<Option<super::ServedTx>, tonic::Status>,
+}
+
 /// The bytes of one output a route serves, with the fields it parses from them.
 #[derive(Debug)]
 pub(super) struct Utxo {
@@ -196,6 +204,37 @@ macro_rules! served_routes {
                     }
                 }
                 route(Route::ReadTx, served)
+            }
+
+            /// What ReadTx serves for a transaction hash.
+            pub(in super::super) async fn read_tx_found(
+                domain: &DomainAdapter,
+                hash: &[u8; 32],
+            ) -> super::TxFound {
+                let found = |answer| super::TxFound {
+                    entry: EntryPoint::Route(Route::ReadTx, VERSION),
+                    subs: $subs,
+                    answer,
+                };
+                let request = q::ReadTxRequest {
+                    hash: hash.to_vec().into(),
+                    ..Default::default()
+                };
+                let service = QueryServiceImpl::new(domain.clone());
+                let tx = match service.read_tx(Request::new(request)).await {
+                    Ok(answer) => answer.into_inner().tx.expect("ReadTx answers with a transaction"),
+                    Err(status) if status.code() == tonic::Code::NotFound => return found(Ok(None)),
+                    Err(status) => return found(Err(status)),
+                };
+                let block = tx.block_ref.expect("ReadTx names the block");
+                let served = super::super::ServedTx {
+                    block: super::super::BlockAt {
+                        slot: block.slot,
+                        hash: hash32(&block.hash),
+                    },
+                    bytes: tx.native_bytes.to_vec(),
+                };
+                found(Ok(Some(served)))
             }
 
             /// The output ReadUtxos serves for each input it holds.
@@ -510,6 +549,18 @@ pub(super) async fn search_utxos(
         v1::search_utxos(domain, addresses).await,
         v1beta::search_utxos(domain, addresses).await,
         v1alpha::search_utxos(domain, addresses).await,
+    ]
+}
+
+/// What ReadTx serves at every version for a transaction hash.
+pub(super) async fn read_tx_found(
+    domain: &crate::adapters::DomainAdapter,
+    hash: &[u8; 32],
+) -> [TxFound; 3] {
+    [
+        v1::read_tx_found(domain, hash).await,
+        v1beta::read_tx_found(domain, hash).await,
+        v1alpha::read_tx_found(domain, hash).await,
     ]
 }
 

@@ -279,7 +279,7 @@ pub struct StateTallies {
     pub revalidate: Tally,
     pub dependents: usize,
     pub params: ByEntry,
-    pub readtx: Tally,
+    pub readtx: ByEntry,
     pub script: Tally,
     pub datum: ByEntry,
     pub plutus_data: Tally,
@@ -293,7 +293,7 @@ pub struct StateTallies {
 impl StateTallies {
     /// Each tally a passing corpus compares at least once, by its judge and the
     /// entry point it drives.
-    fn named(&self) -> [(Judge, EntryPoint, &Tally); 5] {
+    fn named(&self) -> [(Judge, EntryPoint, &Tally); 4] {
         let StateTallies {
             roll_fail: _,
             utxo: _,
@@ -306,7 +306,7 @@ impl StateTallies {
             revalidate: _,
             dependents: _,
             params: _,
-            readtx,
+            readtx: _,
             script,
             datum: _,
             plutus_data,
@@ -319,11 +319,6 @@ impl StateTallies {
         [
             (Judge::Accounts, Instrument::ReadAccounts.into(), accounts),
             (Judge::Undo, Instrument::ApplyBlock.into(), undo),
-            (
-                Judge::ReadTx,
-                EntryPoint::Route(Route::ReadTx, Version::V1),
-                readtx,
-            ),
             (Judge::Script, Instrument::ScriptByHash.into(), script),
             (
                 Judge::PlutusData,
@@ -334,8 +329,9 @@ impl StateTallies {
     }
 
     /// Each tally kept by entry point, by its judge and the routes it judges at every version.
-    fn by_entry(&self) -> [(Judge, &'static [Route], &ByEntry); 6] {
+    fn by_entry(&self) -> [(Judge, &'static [Route], &ByEntry); 7] {
         [
+            (Judge::ReadTx, SERVED_TXS, &self.readtx),
             (Judge::Utxo, SERVED_UTXOS, &self.utxo),
             (Judge::Datum, SERVED_UTXOS, &self.datum),
             (Judge::Params, SERVED_PARAMS, &self.params),
@@ -544,7 +540,7 @@ impl fmt::Display for StateTallies {
             undo.compared,
             revalidate.compared,
             params.compared(),
-            readtx.compared,
+            readtx.compared(),
             script.compared,
             datum.compared(),
             plutus_data.compared,
@@ -608,13 +604,13 @@ mod tests {
             datum: agreed_at(SERVED_UTXOS),
             as_output: agreed_at(SERVED_OUTPUTS),
             served_tx: agreed_at(SERVED_TXS),
+            readtx: agreed_at(SERVED_TXS),
             submit: agreed_at(SERVED_SUBMIT),
             ..Default::default()
         };
         state.accounts.agree();
         state.undo.agree();
         state.revalidate.agree();
-        state.readtx.agree();
         state.script.agree();
         state.plutus_data.agree();
         state
@@ -709,7 +705,7 @@ mod tests {
             revalidate: tally(&lines),
             dependents: 3,
             params: by_entry(&lines),
-            readtx: tally(&lines),
+            readtx: by_entry(&lines),
             script: tally(&lines),
             datum: by_entry(&lines),
             plutus_data: tally(&lines),
@@ -738,7 +734,7 @@ mod tests {
             revalidate: tally(&lines),
             dependents: 6,
             params: by_entry(&lines),
-            readtx: tally(&lines),
+            readtx: by_entry(&lines),
             script: tally(&lines),
             datum: by_entry(&lines),
             plutus_data: tally(&lines),
@@ -777,7 +773,7 @@ mod tests {
             (|s| s.accounts = Tally::default(), 1),
             (|s| s.undo = Tally::default(), 1),
             (|s| s.params = ByEntry::default(), entries(SERVED_PARAMS)),
-            (|s| s.readtx = Tally::default(), 1),
+            (|s| s.readtx = ByEntry::default(), entries(SERVED_TXS)),
             (|s| s.script = Tally::default(), 1),
             (|s| s.datum = ByEntry::default(), entries(SERVED_UTXOS)),
             (|s| s.plutus_data = Tally::default(), 1),
@@ -794,9 +790,11 @@ mod tests {
         }
         let expected = format!(
             " seeded_unjudged=0 accounts=1 undo=1 revalidate=1 of dependents=0 params={} \
-             readtx=1 script=1 datum={} plutus_data=1 served_tx=3",
+             readtx={} script=1 datum={} plutus_data=1 served_tx={}",
             entries(SERVED_PARAMS),
-            entries(SERVED_UTXOS)
+            entries(SERVED_TXS),
+            entries(SERVED_UTXOS),
+            entries(SERVED_TXS)
         );
         assert!(state.to_string().contains(&expected), "{state}");
     }
