@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 
 use ledger_oracle_judge::{
-    context::language_members,
+    context::{language_members, Language},
     coverage::{Member, Reach},
     judgement::{Axis, CellKey, EntryPoint, RequestShape},
     refusal::leaf_members,
@@ -429,6 +429,11 @@ fn levels<'a>(tx: &'a MultiEraTx) -> Result<Vec<Level<'a>>, minicbor::decode::Er
     Ok(levels)
 }
 
+/// The builtin axis member for `builtin` in a script of `language`.
+pub(super) fn builtin_member(language: Language, builtin: Builtin) -> String {
+    format!("{language}.{builtin:?}")
+}
+
 /// Every member of the coverage table, with the rule members `rules` gives.
 pub(super) fn members(rules: &Rules) -> Vec<Member> {
     let mut members = Vec::new();
@@ -457,8 +462,11 @@ pub(super) fn members(rules: &Rules) -> Vec<Member> {
             .iter()
             .map(|k| Member::counted(Axis::ParamKey, k)),
     );
-    let builtins = (0..=u8::MAX).filter_map(|tag| Builtin::try_from(tag).ok());
-    members.extend(builtins.map(|b| Member::counted(Axis::Builtin, format!("{b:?}"))));
+    for language in Language::ALL {
+        let builtins = (0..=u8::MAX).filter_map(|tag| Builtin::try_from(tag).ok());
+        let member = |builtin| Member::counted(Axis::Builtin, builtin_member(language, builtin));
+        members.extend(builtins.map(member));
+    }
     members.extend(leaf_members());
     members.extend(rules.members());
     let entries = EntryPoint::every().into_iter();
@@ -765,8 +773,15 @@ mod tests {
                 "witness:sub.plutus_v3_script",
             ]
         );
-        let builtins = members.iter().filter(|m| m.cell.axis == Axis::Builtin);
-        assert_eq!(builtins.count(), 101);
+        for language in Language::ALL {
+            let prefix = format!("{language}.");
+            let builtins: Vec<&Member> = members
+                .iter()
+                .filter(|m| m.cell.axis == Axis::Builtin && m.cell.member.starts_with(&prefix))
+                .collect();
+            let counted = builtins.iter().filter(|m| m.reach == Reach::Counted);
+            assert_eq!((builtins.len(), counted.count()), (101, 101));
+        }
     }
 
     /// The cells of each kept record of a corpus that pallas decodes.
