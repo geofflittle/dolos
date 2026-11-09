@@ -479,22 +479,23 @@ fn add(
     });
 }
 
-/// Evidence that ReadTx v1 mapped each accepted transaction of a run without a
-/// panic, which the passes that serve the run through v1 take.
-pub(super) struct V1Maps(());
+/// Evidence that ReadTx at every version mapped each accepted transaction of a
+/// run without a panic, which the passes that serve the run through every
+/// version take.
+pub(super) struct EveryVersionMaps(());
 
 /// Counts what each ReadTx version maps for the accepted records of the blocks
 /// a run rolled against the ledger's transactions, v1 by each top level hash
 /// with its sub transactions and v1beta and v1alpha by each top level and sub
-/// transaction hash, with the evidence that v1 mapped them when no v1 mapping
-/// panicked.
+/// transaction hash, with the evidence that every version mapped them when no
+/// mapping panicked.
 pub(super) async fn compare(
     domain: &DomainAdapter,
     kind: CorpusKind,
     blocks: &[GroupBlock<'_>],
     tally: &mut ByEntry,
-) -> Option<V1Maps> {
-    let mut v1 = Some(V1Maps(()));
+) -> Option<EveryVersionMaps> {
+    let mut maps = Some(EveryVersionMaps(()));
     let groups = blocks.iter().filter_map(GroupBlock::rolled);
     let accepted = groups
         .flat_map(|rolled| rolled.group)
@@ -514,7 +515,7 @@ pub(super) async fn compare(
             .collect();
         let served = read_tx!(v1, domain, top);
         if let Answer::Panicked(_) = served {
-            v1 = None;
+            maps = None;
         }
         for (name, ledger) in &named {
             let common = served.then(|tx| match name {
@@ -545,19 +546,27 @@ pub(super) async fn compare(
             let hash = match name {
                 TxName::Top(h) | TxName::Sub(h) => h,
             };
-            let answer = read_tx!(v1beta, domain, hash).then(|tx| {
+            let served = read_tx!(v1beta, domain, hash);
+            if let Answer::Panicked(_) = served {
+                maps = None;
+            }
+            let answer = served.then(|tx| {
                 let fee = wire_fee!(v1beta, tx.fee.clone());
                 Answer::Mapped(mapped!(v1beta, tx, Some(fee), None))
             });
             add(tally, id, Version::V1beta, name, ledger, answer);
-            let answer = read_tx!(v1alpha, domain, hash).then(|tx| {
+            let served = read_tx!(v1alpha, domain, hash);
+            if let Answer::Panicked(_) = served {
+                maps = None;
+            }
+            let answer = served.then(|tx| {
                 let fee = wire_fee!(v1alpha, tx.fee.clone());
                 Answer::Mapped(mapped!(v1alpha, tx, Some(fee), None))
             });
             add(tally, id, Version::V1alpha, name, ledger, answer);
         }
     }
-    v1
+    maps
 }
 
 #[test]
