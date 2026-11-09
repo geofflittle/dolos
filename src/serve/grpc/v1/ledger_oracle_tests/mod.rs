@@ -1123,7 +1123,7 @@ impl fmt::Display for TxName {
     }
 }
 
-/// Counts each transaction hash of the groups whose block rolled or was never made against what ReadTx serves for it at every version, the block of the accepted record that names it with that record's transaction, or with the sub transaction itself at a version that states no sub transactions, or nothing when only refused records do.
+/// Counts what ReadTx serves at every version for each transaction hash of the groups whose block rolled or was never made, against the block and transaction of the accepted record that names it, the sub transaction itself at a version that states no sub transactions, or nothing when only refused records do.
 async fn compare_read_tx(
     domain: &DomainAdapter,
     kind: CorpusKind,
