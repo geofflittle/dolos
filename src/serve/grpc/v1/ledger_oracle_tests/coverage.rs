@@ -466,6 +466,65 @@ mod tests {
 
     use super::*;
 
+    /// The method names, in snake case, of every service the descriptor sets of one version declare.
+    fn spec_methods(sets: [&[u8]; 4]) -> BTreeSet<String> {
+        use prost::Message as _;
+        let decoded = sets.into_iter().map(prost_types::FileDescriptorSet::decode);
+        let files = decoded.flat_map(|set| set.expect("a spec descriptor set decodes").file);
+        let methods = files.flat_map(|f| f.service).flat_map(|s| s.method);
+        let snake = |name: &str| {
+            let mut snake = String::new();
+            for c in name.chars() {
+                if c.is_uppercase() && !snake.is_empty() {
+                    snake.push('_');
+                }
+                snake.push(c.to_ascii_lowercase());
+            }
+            snake
+        };
+        methods.map(|m| snake(m.name())).collect()
+    }
+
+    #[test]
+    fn every_method_the_spec_declares_is_a_route_at_its_version() {
+        use ledger_oracle_judge::judgement::Version;
+        use pallas::interop::utxorpc::{v1, v1alpha, v1beta};
+        let sets = [
+            (
+                Version::V1,
+                [
+                    v1::spec::query::FILE_DESCRIPTOR_SET,
+                    v1::spec::submit::FILE_DESCRIPTOR_SET,
+                    v1::spec::sync::FILE_DESCRIPTOR_SET,
+                    v1::spec::watch::FILE_DESCRIPTOR_SET,
+                ],
+            ),
+            (
+                Version::V1beta,
+                [
+                    v1beta::spec::query::FILE_DESCRIPTOR_SET,
+                    v1beta::spec::submit::FILE_DESCRIPTOR_SET,
+                    v1beta::spec::sync::FILE_DESCRIPTOR_SET,
+                    v1beta::spec::watch::FILE_DESCRIPTOR_SET,
+                ],
+            ),
+            (
+                Version::V1alpha,
+                [
+                    v1alpha::spec::query::FILE_DESCRIPTOR_SET,
+                    v1alpha::spec::submit::FILE_DESCRIPTOR_SET,
+                    v1alpha::spec::sync::FILE_DESCRIPTOR_SET,
+                    v1alpha::spec::watch::FILE_DESCRIPTOR_SET,
+                ],
+            ),
+        ];
+        for (version, sets) in sets {
+            let routes = Route::ALL.into_iter().filter(|r| r.at(version));
+            let routes: BTreeSet<String> = routes.map(|r| r.name().to_string()).collect();
+            assert_eq!(routes, spec_methods(sets), "{version}");
+        }
+    }
+
     fn witnesses(vkeys: &[&[u8]], attributes: &[u8]) -> WitnessSet<'static> {
         let vkeys = vkeys.iter().map(|k| VKeyWitness {
             vkey: k.to_vec().into(),

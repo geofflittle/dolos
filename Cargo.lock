@@ -1808,6 +1808,7 @@ dependencies = [
  "pallas",
  "paste",
  "prost 0.13.5",
+ "prost-types 0.13.5",
  "protoc-wkt",
  "rayon",
  "redb-extras",
