@@ -63,7 +63,7 @@ run_crate_test() {
     echo "BUILD_REFUSED $built" >"$2"
     return
   fi
-  RUST_BACKTRACE=0 sh "$IN_IMAGE" "$SCRATCH" "$(executable "$2.build")" $(crate_test_filter "$1") --nocapture >"$2" 2>&1 || true
+  RUST_BACKTRACE=0 sh "$IN_IMAGE" "$SCRATCH" "$(executable "$2.build")" $(crate_test_args "$1") >"$2" 2>&1 || true
 }
 
 # Applies the named pallas plant over the pinned pallas commit.
@@ -116,7 +116,7 @@ build_overlay() {
 run_overlay() {
   bin="/w/${OUT#"$ROOT"/}/bin"
   if crate_test "$1" >/dev/null; then
-    ORACLE_PLANT=$2 RUST_BACKTRACE=0 sh "$IN_IMAGE" "$SCRATCH" "$bin/overlay-$1" $(crate_test_filter "$1") --nocapture >"$3" 2>&1 || true
+    ORACLE_PLANT=$2 RUST_BACKTRACE=0 sh "$IN_IMAGE" "$SCRATCH" "$bin/overlay-$1" $(crate_test_args "$1") >"$3" 2>&1 || true
   else
     ORACLE_PLANT=$2 ORACLE_RECORDS=$4 RUST_BACKTRACE=0 sh "$IN_IMAGE" "$SCRATCH" "$bin/overlay-judge" "${TEST}_records" \
       --exact --ignored --nocapture >"$3" 2>&1 || true

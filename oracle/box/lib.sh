@@ -73,6 +73,11 @@ crate_test_filter() {
   esac
 }
 
+# The arguments an arm's crate test binary runs with, its tests one at a time so every run prints their lines in one order.
+crate_test_args() {
+  echo "$(crate_test_filter "$1") --nocapture --test-threads=1"
+}
+
 # Whether the crate test log $2 of arm $1 shows a passing result and each test its filter names passing.
 crate_test_passed() {
   grep -q '^test result: ok\. [1-9][0-9]* passed' "$2" || return 1
