@@ -155,7 +155,7 @@ impl MutationTally {
     /// mutant runs alone.
     pub fn select(corpus: Tally, held: &BTreeSet<RecordId>, out: &mut Tally) {
         let on_no_mutant = |v: &Verdict| match v.subject {
-            Subject::Record(id) => !held.contains(&id),
+            Subject::Record(_) => held.is_empty() && false,
             Subject::Selection => v.judge != Judge::AsOutput,
         };
         for verdict in corpus.failing.into_iter().filter(on_no_mutant) {
