@@ -49,7 +49,16 @@ import Cardano.Slotting.Slot (EpochSize (..), SlotNo (..))
 import Cardano.Slotting.Time (SystemStart (..), slotLengthToMillisec)
 import Codec.CBOR.Term (Term (..))
 import Control.Exception (SomeException)
+import Cardano.Ledger.Alonzo.PParams (ppCostModelsL)
 import Control.Monad (forM_, replicateM_, void, when, (<=<))
+import Control.Monad.IO.Class (liftIO)
+import qualified Data.Aeson as A
+import Data.Aeson.Types (parseEither)
+import Data.Int (Int64)
+import qualified Data.Map.Strict as Map
+import Data.Text (Text)
+import qualified PlutusCore.Crypto.BLS12_381.G1 as G1
+import qualified PlutusCore.Crypto.BLS12_381.G2 as G2
 import Data.Foldable (toList)
 import Data.List (isInfixOf)
 import Data.Functor.Identity (runIdentity)
@@ -219,11 +228,153 @@ supplement = describe "SUPPLEMENT" $ do
   it "a V3 script calls sha2_256" $
     spendWithV3 "4b010100232498dc92450001"
   it "a V3 script calls mkNilData" $
-    spendWithV3 (U.v3ScriptHex (U.lam (U.check (U.forced PLC.NullList [U.builtin PLC.MkNilData [U.unit]]))))
+    spendWithV3 (U.scriptHex (U.lam (U.check (U.forced PLC.NullList [U.builtin PLC.MkNilData [U.unit]]))))
   it "a V3 script compares an integer above the 262144 bit bound" $
     spendWithV3In (void . trySubmitTx) (ValidityInterval SNothing SNothing) (Data (PV1.I 0)) (ExUnits 30_000 3_000_000_000) $
-      U.v3ScriptHex (U.lam (U.check (U.builtin PLC.LessThanInteger [U.int 1, squared 18 (U.int 2)])))
+      U.scriptHex (U.lam (U.check (U.builtin PLC.LessThanInteger [U.int 1, squared 18 (U.int 2)])))
   tableCells
+  builtinCalls
+
+-- | Spends at a script of each language that calls one builtin, under the cost models the chain registered, at a V3 script that calls it on an argument of the wrong type, and at a V4 script that calls it under the default cost models.
+builtinCalls :: SpecWith (ImpInit (LedgerSpec E))
+builtinCalls = describe "builtin calls" $ do
+  forM_ calls $ \(Call fun n args) -> do
+    forM_ ([PlutusV1, PlutusV2, PlutusV3] :: [Language]) $ \language ->
+      it ("a " <> show language <> " script calls " <> show fun) $
+        callSpend submitTx_ language (U.forcedTimes n fun args)
+    it ("a PlutusV4 script calls " <> show fun) $
+      callSpend acceptedOrRefusedByScript PlutusV4 (U.forcedTimes n fun args)
+    it ("a PlutusV3 script calls " <> show fun <> " on a first argument of the wrong type") $
+      callSpend refusedByScript PlutusV3 (U.forcedTimes n fun (wrongFirst args))
+  forM_ calls $ \(Call fun n args) ->
+    it ("a PlutusV4 script calls " <> show fun <> " under the default cost models") $
+      spendCalling submitTx_ PlutusV4 (U.forcedTimes n fun args)
+
+-- | A builtin, the number of times it is forced, and arguments it returns on.
+data Call = Call PLC.DefaultFun Int [U.T]
+
+-- | The arguments with the first one replaced by a constant of another type.
+wrongFirst :: [U.T] -> [U.T]
+wrongFirst (first : rest) = (if first == U.unit then U.int 0 else U.unit) : rest
+wrongFirst [] = []
+
+-- | A call of each builtin that protocol 12 allows.
+calls :: [Call]
+calls =
+  [ Call PLC.AddInteger 0 [U.int 1, U.int 2]
+  , Call PLC.SubtractInteger 0 [U.int 1, U.int 2]
+  , Call PLC.MultiplyInteger 0 [U.int 1, U.int 2]
+  , Call PLC.DivideInteger 0 [U.int 7, U.int 2]
+  , Call PLC.QuotientInteger 0 [U.int 7, U.int 2]
+  , Call PLC.RemainderInteger 0 [U.int 7, U.int 2]
+  , Call PLC.ModInteger 0 [U.int 7, U.int 2]
+  , Call PLC.EqualsInteger 0 [U.int 1, U.int 2]
+  , Call PLC.LessThanInteger 0 [U.int 1, U.int 2]
+  , Call PLC.LessThanEqualsInteger 0 [U.int 1, U.int 2]
+  , Call PLC.AppendByteString 0 [U.bytes "\1", U.bytes "\2"]
+  , Call PLC.ConsByteString 0 [U.int 1, U.bytes ""]
+  , Call PLC.SliceByteString 0 [U.int 0, U.int 1, U.bytes "\1\2"]
+  , Call PLC.LengthOfByteString 0 [U.bytes "\1"]
+  , Call PLC.IndexByteString 0 [U.bytes "\1", U.int 0]
+  , Call PLC.EqualsByteString 0 [U.bytes "\1", U.bytes "\2"]
+  , Call PLC.LessThanByteString 0 [U.bytes "\1", U.bytes "\2"]
+  , Call PLC.LessThanEqualsByteString 0 [U.bytes "\1", U.bytes "\2"]
+  , Call PLC.Sha2_256 0 [U.bytes ""]
+  , Call PLC.Sha3_256 0 [U.bytes ""]
+  , Call PLC.Blake2b_256 0 [U.bytes ""]
+  , Call PLC.VerifyEd25519Signature 0 [hexBytes "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a", U.bytes "", hexBytes "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"]
+  , Call PLC.AppendString 0 [text "a", text "b"]
+  , Call PLC.EqualsString 0 [text "a", text "b"]
+  , Call PLC.EncodeUtf8 0 [text "a"]
+  , Call PLC.DecodeUtf8 0 [U.bytes "a"]
+  , Call PLC.IfThenElse 1 [U.con True, U.unit, U.unit]
+  , Call PLC.ChooseUnit 1 [U.unit, U.unit]
+  , Call PLC.Trace 1 [text "a", U.unit]
+  , Call PLC.FstPair 2 [U.con (PV1.I 1, PV1.I 2)]
+  , Call PLC.SndPair 2 [U.con (PV1.I 1, PV1.I 2)]
+  , Call PLC.ChooseList 2 [integers [1], U.unit, U.unit]
+  , Call PLC.MkCons 1 [U.int 1, integers []]
+  , Call PLC.HeadList 1 [integers [1]]
+  , Call PLC.TailList 1 [integers [1]]
+  , Call PLC.NullList 1 [integers []]
+  , Call PLC.ChooseData 1 (U.con (PV1.I 1) : replicate 5 U.unit)
+  , Call PLC.ConstrData 0 [U.int 0, U.con ([] :: [PV1.Data])]
+  , Call PLC.MapData 0 [U.con ([] :: [(PV1.Data, PV1.Data)])]
+  , Call PLC.ListData 0 [U.con ([] :: [PV1.Data])]
+  , Call PLC.IData 0 [U.int 1]
+  , Call PLC.BData 0 [U.bytes ""]
+  , Call PLC.UnConstrData 0 [U.con (PV1.Constr 0 [])]
+  , Call PLC.UnMapData 0 [U.con (PV1.Map [])]
+  , Call PLC.UnListData 0 [U.con (PV1.List [])]
+  , Call PLC.UnIData 0 [U.con (PV1.I 1)]
+  , Call PLC.UnBData 0 [U.con (PV1.B "")]
+  , Call PLC.EqualsData 0 [U.con (PV1.I 1), U.con (PV1.I 2)]
+  , Call PLC.MkPairData 0 [U.con (PV1.I 1), U.con (PV1.I 2)]
+  , Call PLC.MkNilData 0 [U.unit]
+  , Call PLC.MkNilPairData 0 [U.unit]
+  , Call PLC.SerialiseData 0 [U.con (PV1.I 1)]
+  , Call PLC.VerifyEcdsaSecp256k1Signature 0 [hexBytes "032e433589dce61863199171f4d1e3fa946a5832621fcd29559940a0950f96fb6f", hexBytes "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", hexBytes "4941155e2303988a1be97a021fbaf9fe6064d05ea694bc5e89328f297154e5c63a2f3e7b5f509294a4c2e22feb697a16b792fabfebe9d0f38403b1c929836b5a"]
+  , Call PLC.VerifySchnorrSecp256k1Signature 0 [hexBytes "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9", U.bytes (BS.replicate 32 0), hexBytes "e907831f80848d1069a5371b402410364bdf1c5f8307b0084c55f1ce2dca821525f66a4a85ea8b71e482a74f382d2ce5ebeee8fdb2172f477df4900d310536c0"]
+  , Call PLC.Bls12_381_G1_add 0 [g1, g1]
+  , Call PLC.Bls12_381_G1_neg 0 [g1]
+  , Call PLC.Bls12_381_G1_scalarMul 0 [U.int 2, g1]
+  , Call PLC.Bls12_381_G1_equal 0 [g1, g1]
+  , Call PLC.Bls12_381_G1_compress 0 [g1]
+  , Call PLC.Bls12_381_G1_uncompress 0 [g1Bytes]
+  , Call PLC.Bls12_381_G1_hashToGroup 0 [U.bytes "a", U.bytes "b"]
+  , Call PLC.Bls12_381_G2_add 0 [g2, g2]
+  , Call PLC.Bls12_381_G2_neg 0 [g2]
+  , Call PLC.Bls12_381_G2_scalarMul 0 [U.int 2, g2]
+  , Call PLC.Bls12_381_G2_equal 0 [g2, g2]
+  , Call PLC.Bls12_381_G2_compress 0 [g2]
+  , Call PLC.Bls12_381_G2_uncompress 0 [g2Bytes]
+  , Call PLC.Bls12_381_G2_hashToGroup 0 [U.bytes "a", U.bytes "b"]
+  , Call PLC.Bls12_381_millerLoop 0 [g1, g2]
+  , Call PLC.Bls12_381_mulMlResult 0 [pairing, pairing]
+  , Call PLC.Bls12_381_finalVerify 0 [pairing, pairing]
+  , Call PLC.Keccak_256 0 [U.bytes ""]
+  , Call PLC.Blake2b_224 0 [U.bytes ""]
+  , Call PLC.IntegerToByteString 0 [U.con True, U.int 0, U.int 1]
+  , Call PLC.ByteStringToInteger 0 [U.con True, U.bytes "\1"]
+  , Call PLC.AndByteString 0 [U.con False, U.bytes "\1", U.bytes "\3"]
+  , Call PLC.OrByteString 0 [U.con False, U.bytes "\1", U.bytes "\3"]
+  , Call PLC.XorByteString 0 [U.con False, U.bytes "\1", U.bytes "\3"]
+  , Call PLC.ComplementByteString 0 [U.bytes "\1"]
+  , Call PLC.ReadBit 0 [U.bytes "\1", U.int 0]
+  , Call PLC.WriteBits 0 [U.bytes "\1", integers [0], U.con True]
+  , Call PLC.ReplicateByte 0 [U.int 1, U.int 0]
+  , Call PLC.ShiftByteString 0 [U.bytes "\1", U.int 1]
+  , Call PLC.RotateByteString 0 [U.bytes "\1", U.int 1]
+  , Call PLC.CountSetBits 0 [U.bytes "\1"]
+  , Call PLC.FindFirstSetBit 0 [U.bytes "\1"]
+  , Call PLC.Ripemd_160 0 [U.bytes ""]
+  , Call PLC.ExpModInteger 0 [U.int 2, U.int 3, U.int 5]
+  , Call PLC.DropList 1 [U.int 1, integers [1, 2]]
+  , Call PLC.LengthOfArray 1 [array]
+  , Call PLC.ListToArray 1 [integers [1]]
+  , Call PLC.IndexArray 1 [array, U.int 0]
+  , Call PLC.Bls12_381_G1_multiScalarMul 0 [integers [2], U.forced PLC.MkCons [g1, U.con ([] :: [G1.Element])]]
+  , Call PLC.Bls12_381_G2_multiScalarMul 0 [integers [2], U.forced PLC.MkCons [g2, U.con ([] :: [G2.Element])]]
+  , Call PLC.InsertCoin 0 [U.bytes "\170", U.bytes "\170", U.int 1, value]
+  , Call PLC.LookupCoin 0 [U.bytes "\170", U.bytes "\170", value]
+  , Call PLC.UnionValue 0 [value, value]
+  , Call PLC.ValueContains 0 [value, value]
+  , Call PLC.ValueData 0 [value]
+  , Call PLC.UnValueData 0 [valueData]
+  , Call PLC.ScaleValue 0 [U.int 2, value]
+  ]
+  where
+    hexBytes = U.bytes . either error id . B16.decode
+    text = U.con :: Text -> U.T
+    integers = U.con :: [Integer] -> U.T
+    g1Bytes = hexBytes "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
+    g2Bytes = hexBytes "93e02b6052719f607dacd3a088274f65596bd0d09920b61ab5da61bbdc7f5049334cf11213945d57e5ac7d055d042b7e024aa2b2f08f0a91260805272dc51051c6e47ad4fa403b02b4510b647ae3d1770bac0326a805bbefd48056c8c121bdb8"
+    g1 = U.builtin PLC.Bls12_381_G1_uncompress [g1Bytes]
+    g2 = U.builtin PLC.Bls12_381_G2_uncompress [g2Bytes]
+    pairing = U.builtin PLC.Bls12_381_millerLoop [g1, g2]
+    array = U.forced PLC.ListToArray [integers [1]]
+    valueData = U.con (PV1.Map [(PV1.B "\170", PV1.Map [(PV1.B "\170", PV1.I 1)])])
+    value = U.builtin PLC.UnValueData [valueData]
 
 -- | Transactions that each reach a cell of the coverage table, with the verdict the ledger gives.
 tableCells :: SpecWith (ImpInit (LedgerSpec E))
@@ -900,6 +1051,55 @@ spendWithV3In submit interval redeemer units hex = do
           & witsTxL . scriptTxWitsL .~ [(hash, script)]
           & witsTxL . rdmrsTxWitsL .~ Redeemers [(SpendingPurpose (AsIx 0), (redeemer, units))]
   submit tx
+
+-- | Sets the cost models to the registered ones, then spends at a script of a language that calls the builtin.
+callSpend :: (Tx TopTx E -> ImpTestM E ()) -> Language -> U.T -> ImpTestM E ()
+callSpend submit language call = do
+  models <- mkCostModelsLenient =<< liftIO registeredCostModels
+  modifyPParams (ppCostModelsL .~ models)
+  spendCalling submit language call
+
+-- | Locks coin under a datum hash at the script of a language whose body ignores the result of the call, then submits a spend of it.
+spendCalling :: (Tx TopTx E -> ImpTestM E ()) -> Language -> U.T -> ImpTestM E ()
+spendCalling submit language call = do
+  let ignored = U.apply (U.lam U.unit) call
+      body = case language of
+        PlutusV1 -> U.lam (U.lam (U.lam ignored))
+        PlutusV2 -> U.lam (U.lam (U.lam ignored))
+        _ -> U.lam ignored
+  script <- plutusScript language (U.scriptHex body)
+  let hash = hashScript script
+      datum = Data (PV1.I 0) :: Data E
+      out = mkBasicTxOut (Addr Testnet (ScriptHashObj hash) StakeRefNull) (inject (Coin 5_000_000)) & datumTxOutL .~ DatumHash (hashData datum)
+  made <- submitTx (mkBasicTx (mkBasicTxBody & outputsTxBodyL .~ [out]) :: Tx TopTx E)
+  collateral <- makeCollateralInput
+  submit $
+    mkBasicTx (mkBasicTxBody & inputsTxBodyL .~ [txInAt 0 made] & collateralInputsTxBodyL .~ [collateral] & feeTxBodyL .~ Coin 700_000)
+      & witsTxL . scriptTxWitsL .~ [(hash, script)]
+      & witsTxL . datsTxWitsL .~ TxDats [(hashData datum, datum)]
+      & witsTxL . rdmrsTxWitsL .~ Redeemers [(SpendingPurpose (AsIx 0), (Data (PV1.I 0), ExUnits 1_000_000 3_000_000_000))]
+
+-- | Submits a transaction and fails unless the ledger refuses it because a script failed.
+refusedByScript :: Tx TopTx E -> ImpTestM E ()
+refusedByScript tx = do
+  refusal <- expectLeft =<< trySubmitTx tx
+  when (not ("FailedUnexpectedly" `isInfixOf` show refusal)) $ assertFailure ("refused for another reason: " <> show refusal)
+
+-- | Submits a transaction and fails unless the ledger accepts it or refuses it because a script failed.
+acceptedOrRefusedByScript :: Tx TopTx E -> ImpTestM E ()
+acceptedOrRefusedByScript tx = do
+  result <- trySubmitTx tx
+  case result of
+    Right _ -> pure ()
+    Left refusal -> when (not ("FailedUnexpectedly" `isInfixOf` show refusal)) $ assertFailure ("refused for another reason: " <> show refusal)
+
+-- | The cost models of the registration parameters, by language index.
+registeredCostModels :: IO (Map.Map Word8 [Int64])
+registeredCostModels = do
+  parameters <- either fail pure =<< A.eitherDecodeFileStrict "/probe/registration-epoch64-parameters.json"
+  either fail pure . flip parseEither parameters . A.withObject "parameters" $ \o -> do
+    raw <- o A..: "cost_models_raw"
+    Map.fromList <$> mapM (\(index, name) -> (,) index <$> raw A..: name) [(0, "PlutusV1"), (1, "PlutusV2"), (2, "PlutusV3"), (3, "PlutusV4")]
 
 main :: IO ()
 main =

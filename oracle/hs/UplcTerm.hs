@@ -1,5 +1,7 @@
+{-# LANGUAGE FlexibleContexts #-}
+
 -- | Builds UPLC terms and the script bytes of a program made of one.
-module UplcTerm (T, int, bytes, unit, builtin, forced, lam, var, apply, check, equal, v3ScriptHex) where
+module UplcTerm (T, int, bytes, unit, con, builtin, forced, forcedTimes, lam, var, apply, check, equal, scriptHex) where
 
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Base16 as B16
@@ -26,13 +28,21 @@ bytes = UPLC.Constant () . PLC.someValue
 unit :: T
 unit = UPLC.Constant () (PLC.someValue ())
 
+-- | A constant of any type the default universe holds.
+con :: PLC.HasTermLevel DefaultUni a => a -> T
+con = UPLC.Constant () . PLC.someValue
+
 -- | A builtin applied to its arguments.
 builtin :: DefaultFun -> [T] -> T
-builtin f = foldl (UPLC.Apply ()) (UPLC.Builtin () f)
+builtin = forcedTimes 0
 
 -- | A builtin of one type variable, forced once and applied to its arguments.
 forced :: DefaultFun -> [T] -> T
-forced f = foldl (UPLC.Apply ()) (UPLC.Force () (UPLC.Builtin () f))
+forced = forcedTimes 1
+
+-- | A builtin forced once for each of its type variables and applied to its arguments.
+forcedTimes :: Int -> DefaultFun -> [T] -> T
+forcedTimes n f = foldl (UPLC.Apply ()) (iterate (UPLC.Force ()) (UPLC.Builtin () f) !! n)
 
 -- | A function of one argument.
 lam :: T -> T
@@ -57,5 +67,5 @@ equal :: T -> T -> T
 equal a b = builtin EqualsInteger [a, b]
 
 -- | The hex of the CBOR wrapped script bytes of a UPLC 1.1.0 program whose body is the term.
-v3ScriptHex :: T -> BS.ByteString
-v3ScriptHex body = B16.encode (SBS.fromShort (P.serialiseUPLC (UPLC.Program () plcVersion110 body)))
+scriptHex :: T -> BS.ByteString
+scriptHex body = B16.encode (SBS.fromShort (P.serialiseUPLC (UPLC.Program () plcVersion110 body)))

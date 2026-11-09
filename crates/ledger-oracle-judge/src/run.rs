@@ -337,8 +337,13 @@ mod tests {
     fn records_in_one_epoch_under_one_parameter_set_stay_in_one_run() {
         let records = written(CorpusKind::Supp);
         let fresh = records.iter().filter(|r| r.pre != Pre::FollowsPrev).count();
-        assert_eq!(fresh, 116);
-        assert_eq!(split(records).len(), fresh);
+        let repriced: Vec<u32> = records
+            .windows(2)
+            .filter(|w| w[1].pre == Pre::FollowsPrev && w[1].pparams != w[0].pparams)
+            .map(|w| w[1].n)
+            .collect();
+        assert_eq!((fresh, &repriced[..]), (721, &[374][..]));
+        assert_eq!(split(records).len(), fresh + repriced.len());
     }
 
     #[test]

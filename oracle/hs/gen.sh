@@ -15,6 +15,7 @@ case $1 in
   *) echo "unknown writer $1" >&2; exit 2 ;;
 esac
 sh "$(dirname "$0")/build.sh" "$M" "$STORE" "$WORK"
+cp "$(dirname "$0")/../../test_data/musashi-native-submission/registration-epoch64-parameters.json" "$WORK/"
 rm -f "$WORK/out/$OUT"
 docker run --rm -v "$WORK":/probe conformance-gen-hs:2 "/probe/bin/$M" $MODE --seed 42
 wc -l < "$WORK/out/$OUT"
