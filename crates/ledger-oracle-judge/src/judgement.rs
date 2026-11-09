@@ -131,7 +131,7 @@ named! {
 }
 
 named! {
-    /// A shape of the transaction an evaluation request carries.
+    /// A shape of the transaction a submission or evaluation request carries.
     "request shape" RequestShape {
         Signed = "signed",
         Draft = "draft",

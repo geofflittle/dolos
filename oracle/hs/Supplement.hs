@@ -14,38 +14,44 @@ module Main (main) where
 import qualified Cardano.Chain.Common as Byron
 import Cardano.Crypto.Hash (hashToBytes)
 import Cardano.Crypto.Hashing (unsafeAbstractHashFromBytes)
-import Cardano.Ledger.Address (Addr (..), BootstrapAddress (..), Withdrawals (..), bootstrapKeyHash)
-import Cardano.Ledger.Alonzo.Scripts (AsIx (..), PlutusBinary (..), mkBinaryPlutusScript, pattern SpendingPurpose)
+import Cardano.Ledger.Address (AccountAddress (..), AccountId (..), Addr (..), BootstrapAddress (..), Withdrawals (..), bootstrapKeyHash)
+import Cardano.Ledger.Alonzo.Scripts (AsIx (..), PlutusBinary (..), mkBinaryPlutusScript, pattern CertifyingPurpose, pattern MintingPurpose, pattern RewardingPurpose, pattern SpendingPurpose)
 import Cardano.Ledger.Alonzo.TxAuxData (AlonzoEraTxAuxData (..))
 import Cardano.Ledger.Alonzo.TxWits (Redeemers (..), TxDats (..))
 import Cardano.Ledger.BaseTypes (Globals (..), Network (..), StrictMaybe (..), epochInfoPure, mkCertIxPartial, mkTxIxPartial, natVersion, strictMaybeToMaybe)
 import Cardano.Ledger.Coin (Coin (..))
-import Cardano.Ledger.Conway.Governance (Constitution (..), ConwayEraGov (..), GovAction (..), constitutionGuardrailsScriptHashL)
-import Cardano.Ledger.Conway.TxCert (pattern RegDepositTxCert)
+import Cardano.Ledger.Conway.Governance (Constitution (..), ConwayEraGov (..), GovAction (..), Vote (..), Voter (..), VotingProcedure (..), VotingProcedures (..), constitutionGuardrailsScriptHashL)
+import Cardano.Ledger.Conway.Scripts (pattern ProposingPurpose, pattern VotingPurpose)
+import Cardano.Ledger.Conway.TxCert (Delegatee (..), pattern DelegTxCert, pattern RegDepositDelegTxCert, pattern RegDepositTxCert, pattern UpdateDRepTxCert)
 import Cardano.Ledger.Credential (Credential (..), Ptr (..), SlotNo32 (..), StakeReference (..))
+import Cardano.Ledger.DRep (DRep (..))
 import Cardano.Ledger.Dijkstra.Core
-import Cardano.Ledger.Dijkstra.PParams (ppuPerasCertBoostL)
-import Cardano.Ledger.Dijkstra.Scripts (pattern RequireGuard)
-import Cardano.Ledger.Hashes (EraIndependentTxBody, SafeHash, extractHash, hashAnnotated)
-import Cardano.Ledger.Keys (KeyHash (..), coerceKeyRole)
+import Cardano.Ledger.Dijkstra.PParams
+import Cardano.Ledger.Dijkstra.Scripts (AccountBalanceInterval (..), AccountBalanceIntervals (..), pattern GuardingPurpose, pattern RequireGuard)
+import Cardano.Ledger.Hashes (EraIndependentTxBody, SafeHash, ScriptHash, extractHash, hashAnnotated)
+import Cardano.Ledger.Keys (KeyHash (..), KeyRole (..), coerceKeyRole)
 import Cardano.Ledger.Keys.Bootstrap (BootstrapWitness (..), ChainCode (..), bootstrapWitKeyHash, makeBootstrapWitness)
 import Cardano.Ledger.Mary.Value (AssetName (..), MaryValue (..), PolicyID (..), multiAssetFromList)
 import Cardano.Ledger.Metadata (Metadatum (..))
 import Cardano.Ledger.Plutus.CostModels (mkCostModelsLenient)
 import Cardano.Ledger.Plutus.Data (Data (..), Datum (..), dataToBinaryData, hashData)
 import Cardano.Ledger.Plutus.ExUnits (ExUnits (..))
-import Cardano.Ledger.Plutus.Language (Language (..))
+import Cardano.Ledger.Plutus.Language (Language (..), SLanguage (..), hashPlutusScript)
 import Cardano.Ledger.Plutus.TxInfo (transAddr, transCoinToLovelace, transCred, transKeyHash, transScriptHash)
 import Cardano.Ledger.Shelley.LedgerState (newEpochStateGovStateL)
 import Cardano.Ledger.Shelley.Scripts (pattern RequireAllOf, pattern RequireSignature)
+import Cardano.Ledger.State (PoolMetadata (..), sppMetadataL)
 import Cardano.Ledger.Tools (setMinCoinTxOut)
-import Cardano.Ledger.TxIn (mkTxInPartial)
+import Cardano.Ledger.TxIn (TxIn, mkTxInPartial)
 import Cardano.Ledger.Val (inject)
 import Cardano.Slotting.EpochInfo (EpochInfo (..), epochInfoEpoch, epochInfoSize, epochInfoSlotLength)
 import Cardano.Slotting.Slot (EpochSize (..), SlotNo (..))
 import Cardano.Slotting.Time (SystemStart (..), slotLengthToMillisec)
 import Codec.CBOR.Term (Term (..))
+import Control.Exception (SomeException)
 import Control.Monad (forM_, replicateM_, void, when, (<=<))
+import Data.Foldable (toList)
+import Data.List (isInfixOf)
 import Data.Functor.Identity (runIdentity)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
@@ -70,6 +76,7 @@ import Test.Cardano.Ledger.Core.KeyPair (ByronKeyPair (..))
 import Test.Cardano.Ledger.Core.Utils (txInAt)
 import Test.Cardano.Ledger.Dijkstra.ImpTest
 import Test.Cardano.Ledger.Imp.Common
+import Test.Cardano.Ledger.Plutus.Examples (alwaysSucceedsNoDatum)
 import qualified UplcTerm as U
 
 supplement :: SpecWith (ImpInit (LedgerSpec E))
@@ -216,6 +223,251 @@ supplement = describe "SUPPLEMENT" $ do
   it "a V3 script compares an integer above the 262144 bit bound" $
     spendWithV3In (void . trySubmitTx) (ValidityInterval SNothing SNothing) (Data (PV1.I 0)) (ExUnits 30_000 3_000_000_000) $
       U.v3ScriptHex (U.lam (U.check (U.builtin PLC.LessThanInteger [U.int 1, squared 18 (U.int 2)])))
+  tableCells
+
+-- | Transactions that each reach a cell of the coverage table, with the verdict the ledger gives.
+tableCells :: SpecWith (ImpInit (LedgerSpec E))
+tableCells = describe "table cells" $ do
+  forM_ ([Top, Sub] :: [Level]) $ \level -> do
+    it ("auxiliary data holds V3 bytes that do not deserialise at the " <> show level) $ do
+      let malformed = mkBasicTxAuxData & plutusScriptsTxAuxDataL .~ [(PlutusV3, PlutusBinary "invalid" :| [])]
+          tx :: forall l. Typeable l => Tx l E
+          tx = mkBasicTx mkBasicTxBody & auxDataTxL .~ SJust malformed
+      void . expectLeft =<< trySubmitTx (case level of Top -> tx; Sub -> mkTopTxWithSubTxs [tx])
+  it "a pool registration whose metadata hash has 33 bytes" $ do
+    pool <- freshKeyHash
+    params <- freshPoolParams pool =<< registerAccountAddress
+    url <- arbitrary
+    let metadata = PoolMetadata url (byteArrayFromList (replicate 33 (7 :: Word8)))
+    void . expectLeft =<< trySubmitTx (mkBasicTx (mkBasicTxBody & certsTxBodyL .~ [RegPoolTxCert (params & sppMetadataL .~ SJust metadata)]) :: Tx TopTx E)
+  it "a transaction with no key witness" $
+    void . expectLeft =<< withPostFixup (pure . (witsTxL . addrTxWitsL .~ mempty)) (trySubmitTx (mkBasicTx mkBasicTxBody :: Tx TopTx E))
+  it "a V3 spend whose redeemer declares zero units" $
+    spendWithV3In (void . trySubmitTx) (ValidityInterval SNothing SNothing) (Data (PV1.I 0)) (ExUnits 0 0) "4901010023357369324d"
+  forM_ ([Top, Sub] :: [Level]) $ \level -> do
+    it ("a V4 reference script mints at the " <> show level) $ do
+      (ref, hash) <- v4Reference
+      holder <- freshKeyAddrNoPtr_
+      let token = multiAssetFromList [(PolicyID hash, AssetName (toShort "a"), 1)]
+      redeemsV4 level ref (MintingPurpose (AsIx 0)) (\b -> b & mintTxBodyL .~ token & outputsTxBodyL .~ [mkBasicTxOut holder (MaryValue (Coin 5_000_000) token)])
+    it ("a V4 reference script votes as a committee hot credential at the " <> show level) $ do
+      (ref, hash) <- v4Reference
+      cold <- expectJust . listToMaybe . toList =<< getCommitteeMembers
+      void $ registerCommitteeHotKeys (pure (ScriptHashObj hash)) (cold :| [])
+      action <- submitGovAction InfoAction
+      let votes = VotingProcedures [(CommitteeVoter (ScriptHashObj hash), [(action, VotingProcedure VoteYes SNothing)])]
+      redeemsV4 level ref (VotingPurpose (AsIx 0)) (votingProceduresTxBodyL .~ votes)
+    it ("a V4 reference script registers its stake credential at the " <> show level) $ do
+      (ref, hash) <- v4Reference
+      deposit <- getsPParams ppKeyDepositL
+      redeemsV4 level ref (CertifyingPurpose (AsIx 0)) (certsTxBodyL .~ [RegDepositTxCert (ScriptHashObj hash) deposit])
+    it ("a V4 reference script withdraws zero from its account at the " <> show level) $ do
+      (ref, hash) <- v4Reference
+      deposit <- getsPParams ppKeyDepositL
+      redeemsV4 Top ref (CertifyingPurpose (AsIx 0)) (certsTxBodyL .~ [RegDepositTxCert (ScriptHashObj hash) deposit])
+      network <- networkId <$> use impGlobalsL
+      let account = AccountAddress network (AccountId (ScriptHashObj hash))
+      redeemsV4 level ref (RewardingPurpose (AsIx 0)) (withdrawalsTxBodyL .~ Withdrawals [(account, Coin 0)])
+    it ("a V4 reference script is the guardrail of a parameter change at the " <> show level) $ do
+      (ref, hash) <- v4Reference
+      modifyNES (newEpochStateGovStateL . constitutionGovStateL . constitutionGuardrailsScriptHashL .~ SJust hash)
+      proposal <- mkProposal =<< mkParameterChangeGovAction SNothing (emptyPParamsUpdate & ppuPerasCertBoostL .~ SJust 7)
+      redeemsV4 level ref (ProposingPurpose (AsIx 0)) (proposalProceduresTxBodyL .~ [proposal])
+    it ("a V4 reference script is a guard at the " <> show level) $ do
+      (ref, hash) <- v4Reference
+      redeemsV4 level ref (GuardingPurpose (AsIx 0)) (guardsTxBodyL .~ [ScriptHashObj hash])
+    it ("a hard fork initiation at the " <> show level) $ do
+      version <- getProtVer
+      previous <- getLastEnactedHardForkInitiation
+      proposes level (HardForkInitiation previous (minorFollow version))
+    it ("a treasury withdrawal with no guardrail script at the " <> show level) $ do
+      dropGuardrail
+      account <- registerAccountAddress
+      proposes level =<< mkTreasuryWithdrawalsGovAction [(account, Coin 1_000_000)]
+    it ("a no confidence motion at the " <> show level) $
+      proposes level . NoConfidence =<< getLastEnactedCommittee
+    it ("a vote delegation at the " <> show level) $ do
+      staking <- registeredStaking
+      drep <- registerDRep
+      certifies level (DelegTxCert staking (DelegVote (DRepCredential (KeyHashObj drep))))
+    it ("a stake and vote delegation at the " <> show level) $ do
+      staking <- registeredStaking
+      pool <- freshKeyHash
+      registerPool pool
+      drep <- registerDRep
+      certifies level (DelegTxCert staking (DelegStakeVote pool (DRepCredential (KeyHashObj drep))))
+    it ("a stake registration and delegation at the " <> show level) $ do
+      staking <- KeyHashObj <$> freshKeyHash
+      pool <- freshKeyHash
+      registerPool pool
+      deposit <- getsPParams ppKeyDepositL
+      certifies level (RegDepositDelegTxCert staking (DelegStake pool) deposit)
+    it ("a DRep update at the " <> show level) $ do
+      drep <- registerDRep
+      certifies level (UpdateDRepTxCert (KeyHashObj drep) SNothing)
+    it ("a network id at the " <> show level) $ do
+      network <- networkId <$> use impGlobalsL
+      submitTx_ (atLevel level (mkBasicTxBody & networkIdTxBodyL .~ SJust network))
+  it "guards written as bare key hashes at the top level" $ do
+    guard <- KeyHashObj <$> freshKeyHash
+    submitEdited noEdit {editBody = overKey 14 (everywhere bareKey)} (mkBasicTx (mkBasicTxBody & guardsTxBodyL .~ [guard]))
+  it "guards written as bare key hashes at a sub transaction" $ do
+    guard <- KeyHashObj <$> freshKeyHash
+    subEdited (overKey 14 (everywhere bareKey)) (guardsTxBodyL .~ [guard]) id
+  it "a parameter change proposes the current value of each parameter it names" $ do
+    dropGuardrail
+    pp <- getsPParams id
+    proposes Top =<< mkParameterChangeGovAction SNothing (currentValues pp)
+  it "a withdrawal account given twice" $ do
+    account <- registerStakeCredential . KeyHashObj =<< freshKeyHash
+    submitEdited noEdit {editBody = overKey 5 dupFirst} (mkBasicTx (mkBasicTxBody & withdrawalsTxBodyL .~ Withdrawals [(account, Coin 0)]))
+  it "a bootstrap witness given twice in its set" $
+    customBootstrapSpendWith (submitEdited noEdit {editWits = overKey 2 dupFirst}) Top (replicate 32 7) [0xa0]
+  forM_ ([(4, "certificates"), (13, "collateral inputs"), (18, "reference inputs"), (20, "proposal procedures"), (23, "sub transactions")] :: [(Int, String)]) $ \(key, name) ->
+    it ("an empty " <> name <> " set at body key " <> show key) $
+      submitEdited noEdit {editBody = setKey key emptySet} (mkBasicTx mkBasicTxBody)
+  it "an empty starting account balance intervals map" $
+    submitEdited noEdit {editBody = setKey 27 (TMap [])} (mkBasicTx mkBasicTxBody)
+  it "a sub transaction spends an output a V3 script locks" $ do
+    script <- plutusScript PlutusV3 "4901010023357369324d"
+    let hash = hashScript script
+    locked <- sendCoinTo (Addr Testnet (ScriptHashObj hash) StakeRefNull) (Coin 5_000_000)
+    collateral <- makeCollateralInput
+    let sub :: Tx SubTx E
+        sub =
+          mkBasicTx (mkBasicTxBody & inputsTxBodyL .~ [locked])
+            & witsTxL . scriptTxWitsL .~ [(hash, script)]
+            & witsTxL . rdmrsTxWitsL .~ Redeemers [(SpendingPurpose (AsIx 0), (Data (PV1.I 0), v3Units))]
+    void . expectLeft =<< trySubmitTx (mkTopTxWithSubTxs [sub] & bodyTxL . collateralInputsTxBodyL .~ [collateral])
+  it "a V3 spend beside an account balance interval" $ do
+    account <- registerStakeCredential . KeyHashObj =<< freshKeyHash
+    spendWithV3Using (void . trySubmitTx . (bodyTxL . accountBalanceIntervalsTxBodyL .~ AccountBalanceIntervals [(account, AccountBalanceExact (Coin 0))])) "4901010023357369324d"
+  it "a V3 spend beside a direct deposit" $ do
+    account <- registerStakeCredential . KeyHashObj =<< freshKeyHash
+    spendWithV3Using (void . trySubmitTx . (bodyTxL . directDepositsTxBodyL .~ DirectDeposits [(account, Coin 1_000_000)])) "4901010023357369324d"
+  it "a V4 guard beside an output to a pointer address" $ do
+    (ref, hash) <- v4Reference
+    key <- freshKeyHash
+    let pointer = Addr Testnet (KeyHashObj key) (StakeRefPtr (Ptr (SlotNo32 1) (mkTxIxPartial 2) (mkCertIxPartial 3)))
+    redeemsV4With (void . trySubmitTx) Top ref (GuardingPurpose (AsIx 0)) (\b -> b & guardsTxBodyL .~ [ScriptHashObj hash] & outputsTxBodyL .~ [mkBasicTxOut pointer (inject (Coin 5_000_000))])
+  it "a V4 guard at a sub transaction whose output is to a reward address" $ do
+    (ref, hash) <- v4Reference
+    holder <- freshKeyAddrNoPtr_
+    let reward (TList (_ : rest)) = TList (TBytes (BS.cons 0xe0 (BS.replicate 28 5)) : rest)
+        reward m = setKey 0 (TBytes (BS.cons 0xe0 (BS.replicate 28 5))) m
+    redeemsV4With (submitEdited noEdit {editSubBody = overKey 1 (overFirst reward)}) Sub ref (GuardingPurpose (AsIx 0)) (\b -> b & guardsTxBodyL .~ [ScriptHashObj hash] & outputsTxBodyL .~ [mkBasicTxOut holder (inject (Coin 5_000_000))])
+  it "a V3 spend whose collateral return exceeds its collateral" $ do
+    holder <- freshKeyAddrNoPtr_
+    spendWithV3Using (void . trySubmitTx . (bodyTxL . collateralReturnTxBodyL .~ SJust (mkBasicTxOut holder (inject (Coin 1_000_000_000_000))))) "4901010023357369324d"
+  it "a V1 script no purpose needs" $ do
+    script <- fromPlutusScript <$> mkPlutusScript (alwaysSucceedsNoDatum SPlutusV1)
+    void $ trySubmitTx (mkBasicTx mkBasicTxBody & witsTxL . scriptTxWitsL .~ [(hashScript script, script)] :: Tx TopTx E)
+  it "a fee at a sub transaction body" $
+    subEdited (setKey 2 (TInt 200_000)) id id
+  it "a V3 spend whose redeemer pointer is given twice" $
+    spendWithV3Using (submitEdited noEdit {editWits = overKey 5 dupFirst}) "4901010023357369324d"
+  it "two outputs whose coins sum to two to the 64th, refused with a failure the ledger cannot decode" $
+    submitEdited noEdit {editBody = overKey 1 (overIndex 1 halfWordCoin . overIndex 0 halfWordCoin . dupFirst)} (mkBasicTx mkBasicTxBody)
+      `shouldThrow` (\e -> "MaryValue: expected array or int" `isInfixOf` show (e :: SomeException))
+
+-- | An output term whose coin is two to the 63rd, in either output encoding.
+halfWordCoin :: Term -> Term
+halfWordCoin (TList (address : _ : rest)) = TList (address : TInteger (2 ^ (63 :: Int)) : rest)
+halfWordCoin output = setKey 1 (TInteger (2 ^ (63 :: Int))) output
+
+-- | A guard credential term written as the bare key hash it names, every other term unchanged.
+bareKey :: Term -> Term
+bareKey (TList [TInt 0, TBytes h]) = TBytes h
+bareKey t = t
+
+-- | A stake credential of a fresh key, registered.
+registeredStaking :: ImpTestM E (Credential Staking)
+registeredStaking = do
+  staking <- KeyHashObj <$> freshKeyHash
+  void (registerStakeCredential staking)
+  pure staking
+
+-- | Submits a transaction whose body at the level holds the certificate.
+certifies :: Level -> TxCert E -> ImpTestM E ()
+certifies level cert = submitTx_ (atLevel level (mkBasicTxBody & certsTxBodyL .~ [cert]))
+
+-- | Submits a transaction whose body at the level proposes the action.
+proposes :: Level -> GovAction E -> ImpTestM E ()
+proposes level action = do
+  proposal <- mkProposal action
+  submitTx_ (atLevel level (mkBasicTxBody & proposalProceduresTxBodyL .~ [proposal]))
+
+-- | A reference input whose output holds the V4 script that succeeds on any context, and the hash of that script.
+v4Reference :: ImpTestM E (TxIn, ScriptHash)
+v4Reference = do
+  let plutus = alwaysSucceedsNoDatum SPlutusV4
+  script <- fromPlutusScript <$> mkPlutusScript plutus
+  holder <- freshKeyAddrNoPtr_
+  made <- submitTx (mkBasicTx (mkBasicTxBody & outputsTxBodyL .~ [referenceOutput holder script]) :: Tx TopTx E)
+  pure (txInAt 0 made, hashPlutusScript plutus)
+
+-- | Submits a transaction whose body at the level, after the change, reads the reference input and redeems the purpose, with collateral at the top level.
+redeemsV4 :: Level -> TxIn -> PlutusPurpose AsIx E -> (forall l. Typeable l => TxBody l E -> TxBody l E) -> ImpTestM E ()
+redeemsV4 = redeemsV4With submitTx_
+
+-- | Submits with the given submission a transaction whose body at the level, after the change, reads the reference input and redeems the purpose, with collateral at the top level.
+redeemsV4With :: (Tx TopTx E -> ImpTestM E ()) -> Level -> TxIn -> PlutusPurpose AsIx E -> (forall l. Typeable l => TxBody l E -> TxBody l E) -> ImpTestM E ()
+redeemsV4With submit level ref purpose change = do
+  collateral <- makeCollateralInput
+  let redeemed :: forall l. Typeable l => Tx l E
+      redeemed =
+        mkBasicTx (change (mkBasicTxBody & referenceInputsTxBodyL .~ [ref]))
+          & witsTxL . rdmrsTxWitsL .~ Redeemers [(purpose, (Data (PV1.I 0), v3Units))]
+      top = case level of
+        Top -> redeemed
+        Sub -> mkTopTxWithSubTxs [redeemed]
+  submit (top & bodyTxL . collateralInputsTxBodyL .~ [collateral])
+
+-- | A parameter update that proposes the current value of each parameter it names, and a header size of 1100 bytes where the current one is zero.
+currentValues :: PParams E -> PParamsUpdate E
+currentValues pp =
+  emptyPParamsUpdate
+    & ppuTxFeeFixedL .~ SJust (pp ^. ppTxFeeFixedL)
+    & ppuMaxBBSizeL .~ SJust (pp ^. ppMaxBBSizeL)
+    & ppuMaxTxSizeL .~ SJust (pp ^. ppMaxTxSizeL)
+    & ppuMaxBHSizeL .~ SJust (max 1100 (pp ^. ppMaxBHSizeL))
+    & ppuPoolDepositL .~ SJust (pp ^. ppPoolDepositL)
+    & ppuEMaxL .~ SJust (pp ^. ppEMaxL)
+    & ppuNOptL .~ SJust (pp ^. ppNOptL)
+    & ppuA0L .~ SJust (pp ^. ppA0L)
+    & ppuRhoL .~ SJust (pp ^. ppRhoL)
+    & ppuTauL .~ SJust (pp ^. ppTauL)
+    & ppuMinPoolCostL .~ SJust (pp ^. ppMinPoolCostL)
+    & ppuPricesL .~ SJust (pp ^. ppPricesL)
+    & ppuMaxTxExUnitsL .~ SJust (pp ^. ppMaxTxExUnitsL)
+    & ppuMaxBlockExUnitsL .~ SJust (pp ^. ppMaxBlockExUnitsL)
+    & ppuMaxValSizeL .~ SJust (pp ^. ppMaxValSizeL)
+    & ppuCollateralPercentageL .~ SJust (pp ^. ppCollateralPercentageL)
+    & ppuMaxCollateralInputsL .~ SJust (pp ^. ppMaxCollateralInputsL)
+    & ppuCommitteeMaxTermLengthL .~ SJust (pp ^. ppCommitteeMaxTermLengthL)
+    & ppuDRepActivityL .~ SJust (pp ^. ppDRepActivityL)
+    & ppuMaxRefScriptSizePerBlockL .~ SJust (pp ^. ppMaxRefScriptSizePerBlockL)
+    & ppuMaxRefScriptSizePerTxL .~ SJust (pp ^. ppMaxRefScriptSizePerTxL)
+    & ppuRefScriptCostStrideL .~ SJust (pp ^. ppRefScriptCostStrideL)
+    & ppuRefScriptCostMultiplierL .~ SJust (pp ^. ppRefScriptCostMultiplierL)
+    & ppuMaxPledgeLeverageL .~ SJust (pp ^. ppMaxPledgeLeverageL)
+    & ppuMinPoolMarginL .~ SJust (pp ^. ppMinPoolMarginL)
+    & ppuLeiosAnnouncementPeriodLengthL .~ SJust (pp ^. ppLeiosAnnouncementPeriodLengthL)
+    & ppuLeiosVotePeriodLengthL .~ SJust (pp ^. ppLeiosVotePeriodLengthL)
+    & ppuLeiosDiffusionPeriodLengthL .~ SJust (pp ^. ppLeiosDiffusionPeriodLengthL)
+    & ppuLeiosCommitteeSizeL .~ SJust (pp ^. ppLeiosCommitteeSizeL)
+    & ppuLeiosQuorumStakeThresholdL .~ SJust (pp ^. ppLeiosQuorumStakeThresholdL)
+    & ppuMaxEndorserBlockReferencesSizeL .~ SJust (pp ^. ppMaxEndorserBlockReferencesSizeL)
+    & ppuMaxEndorserBlockTxsSizeL .~ SJust (pp ^. ppMaxEndorserBlockTxsSizeL)
+    & ppuMaxEndorserBlockExUnitsL .~ SJust (pp ^. ppMaxEndorserBlockExUnitsL)
+    & ppuMaxRefScriptSizePerEndorserBlockL .~ SJust (pp ^. ppMaxRefScriptSizePerEndorserBlockL)
+    & ppuPerasMinCandidateBlockAgeL .~ SJust (pp ^. ppPerasMinCandidateBlockAgeL)
+    & ppuPerasHealingFactorL .~ SJust (pp ^. ppPerasHealingFactorL)
+    & ppuPerasTargetCommitteeSizeL .~ SJust (pp ^. ppPerasTargetCommitteeSizeL)
+    & ppuPerasBootstrapRoundL .~ SJust (pp ^. ppPerasBootstrapRoundL)
+    & ppuPerasQuorumThresholdSafetyMarginL .~ SJust (pp ^. ppPerasQuorumThresholdSafetyMarginL)
+    & ppuRefInputsCostPerMultiAssetPolicyL .~ SJust (pp ^. ppRefInputsCostPerMultiAssetPolicyL)
+    & ppuRefInputsCostPerDatumByteL .~ SJust (pp ^. ppRefInputsCostPerDatumByteL)
 
 -- | An integer term squared the given number of times.
 squared :: Int -> U.T -> U.T
@@ -597,7 +849,11 @@ withoutBootstrapWitnesses Sub = withPostFixupSubTxs (pure . (witsTxL . bootAddrT
 
 -- | Submits a spend of a fresh bootstrap input at the level, whose witness carries the given chain code and attribute bytes.
 customBootstrapSpend :: Level -> [Word8] -> [Word8] -> ImpTestM E ()
-customBootstrapSpend level chainCode attributes = do
+customBootstrapSpend level = customBootstrapSpendWith submitTx_ level
+
+-- | Submits with the given submission a spend of a fresh bootstrap input at the level, whose witness carries the given chain code and attribute bytes.
+customBootstrapSpendWith :: (Tx TopTx E -> ImpTestM E ()) -> Level -> [Word8] -> [Word8] -> ImpTestM E ()
+customBootstrapSpendWith submit level chainCode attributes = do
   ByronKeyPair _ signingKey <- uniformM
   let attrs = Byron.mkAttributes (Byron.AddrAttributes Nothing (Byron.NetworkTestnet 0))
       witness :: SafeHash EraIndependentTxBody -> BootstrapWitness
@@ -615,8 +871,8 @@ customBootstrapSpend level chainCode attributes = do
   let spend :: forall l. Typeable l => Tx l E
       spend = mkBasicTx (mkBasicTxBody & inputsTxBodyL .~ [bootIn]) & witsTxL . bootAddrTxWitsL .~ [placeholder]
   case level of
-    Top -> withPostFixup signed (submitTx_ (spend :: Tx TopTx E))
-    Sub -> withPostFixupSubTxs signed (submitTx_ (mkTopTxWithSubTxs [spend]))
+    Top -> withPostFixup signed (submit (spend :: Tx TopTx E))
+    Sub -> withPostFixupSubTxs signed (submit (mkTopTxWithSubTxs [spend]))
 
 -- | Locks coin at a V3 script given as its CBOR hex, then spends it with that script and no datum.
 spendWithV3 :: ByteString -> ImpTestM E ()

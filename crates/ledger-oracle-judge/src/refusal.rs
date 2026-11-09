@@ -153,8 +153,12 @@ ledger_leaves! {
     SubMissingTxBodyMetadataHash: Metadata, Undecided;
     ConflictingMetadataHash: Metadata, Undecided;
     SubConflictingMetadataHash: Metadata, Undecided;
-    InvalidMetadata: Metadata, Undecided;
-    SubInvalidMetadata: Metadata, Undecided;
+    InvalidMetadata: Metadata, Undecided, excluded
+        "the ledger raises it only for an auxiliary data script, which the validator answers as unsupported",
+        "git -C cardano-ledger show 9df9f98:eras/alonzo/impl/src/Cardano/Ledger/Alonzo/TxAuxData.hs | grep -n -A4 '^validateAlonzoTxAuxData plutusScriptsCache'";
+    SubInvalidMetadata: Metadata, Undecided, excluded
+        "the translation of InvalidMetadata, which only an auxiliary data script raises",
+        "git -C cardano-ledger show 9df9f98:eras/alonzo/impl/src/Cardano/Ledger/Alonzo/TxAuxData.hs | grep -n -A4 '^validateAlonzoTxAuxData plutusScriptsCache'";
     OutsideValidityIntervalUTxO: Interval, Undecided;
     SubOutsideValidityIntervalUTxO: Interval, Undecided;
     OutsideForecast: Interval, Undecided, excluded
@@ -355,7 +359,7 @@ mod tests {
             Reach::Counted => None,
         });
         let excluded: Vec<_> = excluded.collect();
-        assert_eq!(excluded.len(), 9, "{excluded:?}");
+        assert_eq!(excluded.len(), 11, "{excluded:?}");
         assert!(excluded
             .iter()
             .all(|(_, c)| c.starts_with("git -C cardano-ledger show 9df9f98:")));

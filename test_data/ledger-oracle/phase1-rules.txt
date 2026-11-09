@@ -1,5 +1,5 @@
 refused[CborDecodingError] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom,DecoderErrorLeftover | reads every
-refused[DecodingError] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom,DecoderErrorLeftover | reads every
+refused[DecodingError] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom,DecoderErrorLeftover | reads every | excluded a submitted payload fails to decode only with a minicbor error, which Dolos answers CborDecodingError command: git -C pallas show dd391716:pallas-traverse/src/tx.rs | grep -n 'pub fn decode_for_era'
 refused[PostAlonzo(AddressDecoding)] | leaves DecoderErrorDeserialiseFailure | reads top.k1,sub.k1
 refused[PostAlonzo(BlockExceedsValInt)] | leaves OutsideValidityIntervalUTxO,SubOutsideValidityIntervalUTxO | reads top.k3,sub.k3
 refused[PostAlonzo(BlockPrecedesValInt)] | leaves OutsideValidityIntervalUTxO,SubOutsideValidityIntervalUTxO | reads top.k8,sub.k8
@@ -10,7 +10,7 @@ refused[PostAlonzo(CollateralNotInUTxO)] | leaves BadInputsUTxO | reads top.k13
 refused[PostAlonzo(CollateralNotVKeyLocked)] | leaves ScriptsNotPaidUTxO | reads top.k13
 refused[PostAlonzo(DatumMissing)] | leaves MissingRequiredDatums,SubMissingRequiredDatums | reads top.w5,sub.w5
 refused[PostAlonzo(FeeBelowMin)] | leaves FeeTooSmallUTxO | reads every
-refused[PostAlonzo(InputDecoding)] | unrepresentable because a resolved input is an output the ledger decoded, which holds no stake address and no Byron payload that fails to decode
+refused[PostAlonzo(InputDecoding)] | unrepresentable because a resolved input is an output the ledger decoded, which holds no stake address and no Byron payload that fails to decode | excluded a resolved input is an output Dolos stored after the ledger decoded it command: grep -n 'MultiEraOutput::try_from(eracbor' dolos/crates/cardano/src/validate.rs
 refused[PostAlonzo(InputNotInUTxO)] | leaves BadInputsUTxO,SubBadInputsUTxO | reads every
 refused[PostAlonzo(MaxTxSizeExceeded)] | leaves MaxTxSizeUTxO | reads every
 refused[PostAlonzo(MaxValSizeExceeded)] | leaves OutputTooBigUTxO,SubOutputTooBigUTxO | reads top.k1,sub.k1
@@ -30,21 +30,21 @@ refused[PostAlonzo(TooManyCollaterals)] | leaves TooManyCollateralInputs | reads
 refused[PostAlonzo(TxExUnitsExceeded)] | leaves ExUnitsTooBigUTxO | reads top.w5,sub.w5
 refused[PostAlonzo(TxInsEmpty)] | leaves InputSetEmptyUTxO,SubInputSetEmptyUTxO | reads every
 refused[PostAlonzo(TxWrongNetworkID)] | leaves WrongNetworkInTxBody,SubWrongNetworkInTxBody,WithdrawalAddressesWithWrongNetwork,SubWithdrawalAddressesWithWrongNetwork,DirectDepositAddressesWithWrongNetwork,SubDirectDepositAddressesWithWrongNetwork,WrongNetworkInAccountBalanceIntervals,SubWrongNetworkInAccountBalanceIntervals,WrongNetworkInStartingAccountBalanceIntervals,ProposalProcedureNetworkIdMismatch,TreasuryWithdrawalsNetworkIdMismatch,WrongNetworkPOOL | reads top.k4,sub.k4,top.k5,sub.k5,top.k15,sub.k15,top.k20,sub.k20,top.k25,sub.k25,top.k26,sub.k26,top.k27
-refused[PostAlonzo(UnknownTxSize)] | unrepresentable because it is a failure to encode a value the validator decoded
+refused[PostAlonzo(UnknownTxSize)] | unrepresentable because it is a failure to encode a value the validator decoded | excluded the one pallas encoder that raises its own error fails only when its inner encode fails, and a Vec writer never fails command: git -C pallas grep -n 'encode::Error::message' dd391716 -- pallas-codec pallas-primitives
 refused[PostAlonzo(UnneededDatum)] | leaves NotAllowedSupplementalDatums,SubNotAllowedSupplementalDatums | reads top.w4,sub.w4
 refused[PostAlonzo(UnneededNativeScript)] | leaves ExtraneousScriptWitnessesUTXOW | reads top.w1,sub.w1
 refused[PostAlonzo(UnneededPlutusV1Script)] | leaves ExtraneousScriptWitnessesUTXOW | reads top.w3,sub.w3
 refused[PostAlonzo(UnneededPlutusV2Script)] | leaves ExtraneousScriptWitnessesUTXOW | reads top.w6,sub.w6
 refused[PostAlonzo(UnneededPlutusV3Script)] | leaves ExtraneousScriptWitnessesUTXOW | reads top.w7,sub.w7
 refused[PostAlonzo(UnneededRedeemer)] | leaves ExtraRedeemers,SubExtraRedeemers | reads top.w5,sub.w5
-refused[PostAlonzo(UnsupportedNativeScript)] | unrepresentable because it is a failure to decode a native script the validator encoded from its decoded form
+refused[PostAlonzo(UnsupportedNativeScript)] | unrepresentable because it is a failure to decode a native script the validator encoded from its decoded form | excluded both sites decode bytes just encoded from a decoded native script command: git -C pallas show dd391716:pallas-validate/src/phase1/dijkstra.rs | grep -n 'let raw = native.encode()'
 refused[PostAlonzo(VKWitnessMissing)] | leaves MissingVKeyWitnessesUTXOW,SubMissingVKeyWitnessesUTXOW | reads every
 refused[PostAlonzo(VKWrongSignature)] | leaves InvalidWitnessesUTXOW,SubInvalidWitnessesUTXOW | reads top.w0,sub.w0
-refused[DijkstraTime(InvalidHistory)] | unrepresentable because the era time history is node state that no transaction sets
-refused[DijkstraTime(BeforeHistory)] | unrepresentable because the era time history is node state that no transaction sets
-refused[DijkstraTime(Overflow)] | unrepresentable because the era time history is node state that no transaction sets
+refused[DijkstraTime(InvalidHistory)] | unrepresentable because the era time history is node state that no transaction sets | excluded Dolos answers a time history the validator refuses as InvalidConfig before validation runs command: grep -n 'invalid chain time history' dolos/crates/cardano/src/eras.rs
+refused[DijkstraTime(BeforeHistory)] | unrepresentable because the era time history is node state that no transaction sets | excluded the first era Dolos records starts at slot 0, so no slot precedes the history command: grep -n -A2 'start: EraBoundary {' dolos/crates/cardano/src/genesis/mod.rs
+refused[DijkstraTime(Overflow)] | unrepresentable because the era time history is node state that no transaction sets | excluded a slot at or past the forecast horizon is answered PastHorizon before it is translated, and a slot before the horizon translates within a u64 command: git -C pallas show dd391716:pallas-validate/src/utils/dijkstra_time.rs | grep -n 'return Err(DijkstraTimeError::PastHorizon'
 refused[DijkstraTime(PastHorizon)] | leaves CollectErrors | reads top.w5,sub.w5
-refused[DijkstraLedgerStateUnavailable] | unrepresentable because it reports ledger state the node lacks, which no transaction sets
+refused[DijkstraLedgerStateUnavailable] | unrepresentable because it reports ledger state the node lacks, which no transaction sets | excluded it reports a store inconsistent with itself, and the oracle seeds its store from one ledger state command: grep -n 'fn unavailable' dolos/crates/cardano/src/validate/ledger.rs
 refused[DijkstraTreasuryValueMismatch] | leaves DijkstraTreasuryValueMismatch,SubTreasuryValueMismatch | reads top.k21,sub.k21
 refused[DijkstraReferenceScriptsTooLarge] | leaves DijkstraTxRefScriptsSizeTooBig | reads every
 refused[DijkstraInputAlreadySpent] | leaves BadInputsUTxO,SubBadInputsUTxO | reads top.k23
@@ -66,6 +66,7 @@ refused[DijkstraInvalidCertificate("DRep deposit")] | leaves DijkstraDRepIncorre
 refused[DijkstraInvalidCertificate("DRep not registered")] | leaves DijkstraDRepNotRegistered | reads top.k4,sub.k4
 refused[DijkstraInvalidCertificate("DRep refund")] | leaves DijkstraDRepIncorrectRefund | reads top.k4,sub.k4
 refused[DijkstraInvalidCertificate("pool cost below the minimum")] | leaves StakePoolCostTooLowPOOL | reads top.k4,sub.k4
+refused[DijkstraInvalidCertificate("pool metadata hash too big")] | leaves PoolMedataHashTooBig | reads top.k4,sub.k4
 refused[DijkstraInvalidCertificate("pool not registered")] | leaves StakePoolNotRegisteredOnKeyPOOL | reads top.k4,sub.k4
 refused[DijkstraInvalidCertificate("pool retirement epoch")] | leaves StakePoolRetirementWrongEpochPOOL | reads top.k4,sub.k4
 refused[DijkstraInvalidCertificate("refund")] | leaves RefundIncorrectDELEG | reads top.k4,sub.k4
@@ -90,13 +91,12 @@ refused[DijkstraInvalidGovernance("vote on an expired action")] | leaves VotingO
 refused[DijkstraInvalidGovernance("voter does not exist")] | leaves VotersDoNotExist | reads top.k19,sub.k19
 refused[DijkstraInvalidGovernance("voter may not vote on the action")] | leaves DisallowedVoters | reads top.k19,sub.k19
 refused[DijkstraInvalidGovernance("zero treasury withdrawals")] | leaves ZeroTreasuryWithdrawals | reads top.k20,sub.k20
-refused[DijkstraMissingParameters("nonzero price denominator")] | unrepresentable because it names a protocol parameter value, which no transaction under test sets
-refused[DijkstraMissingParameters("reference fee stride")] | unrepresentable because it names a protocol parameter value, which no transaction under test sets
+refused[DijkstraMissingParameters("nonzero price denominator")] | unrepresentable because it names a protocol parameter value, which no transaction under test sets | excluded the oracle reads each price as a canonical ratio, which has no zero denominator command: grep -n -A2 'pub fn ratio' dolos/crates/ledger-oracle-judge/src/params.rs
+refused[DijkstraMissingParameters("reference fee stride")] | unrepresentable because it names a protocol parameter value, which no transaction under test sets | excluded every record carries the ledger's own stride, which is nonzero command: gzip -dc dolos/test_data/ledger-oracle/ic.jsonl.gz dolos/test_data/ledger-oracle/p1.jsonl.gz dolos/test_data/ledger-oracle/supp.jsonl.gz | grep -o '"refScriptCostStride":[^,}]*' | sort | uniq -c
 refused[DijkstraInvalidWithdrawal("account missing from the original state")] | leaves WithdrawalAccountsMissingFromOriginal,SubWithdrawalAccountsMissingFromOriginal | reads top.k5,sub.k5
 refused[DijkstraInvalidWithdrawal("amount exceeds the balance")] | leaves WithdrawalAmountsExceedingOriginalBalance | reads top.k5,sub.k5
 refused[DijkstraInvalidWithdrawal("amount exceeds the original balance")] | leaves WithdrawalAmountsExceedingOriginalBalance | reads top.k5,sub.k5
-refused[DijkstraInvalidWithdrawal("duplicate account")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k5,sub.k5
-refused[DijkstraInvalidWithdrawal("encoding")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k5,sub.k5
+refused[DijkstraInvalidWithdrawal("encoding")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k5,sub.k5 | excluded the body decoder already read key 5 as a map from reward accounts to coins, which decodes as the same pairs command: git -C pallas show dd391716:pallas-primitives/src/conway/model.rs | grep -n 'pub type Withdrawals'
 refused[DijkstraInvalidWithdrawal("legacy Plutus withdrawals must drain the account")] | leaves WithdrawalAmountsInexactInLegacyMode | reads top.k5,sub.k5
 refused[DijkstraInvalidWithdrawal("unregistered account")] | leaves WithdrawalAccountsMissing,SubWithdrawalAccountsMissing | reads top.k5,sub.k5
 refused[DijkstraMalformed("bootstrap witness")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w2,sub.w2
@@ -105,22 +105,18 @@ refused[DijkstraMalformed("duplicate datums")] | leaves DecoderErrorDeserialiseF
 refused[DijkstraMalformed("duplicate guards")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k14,sub.k14
 refused[DijkstraMalformed("duplicate key witnesses")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w0,sub.w0
 refused[DijkstraMalformed("duplicate required top-level guards")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k24,sub.k24
+refused[DijkstraMalformed("duplicate withdrawal accounts")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k5,sub.k5
 refused[DijkstraMalformed("empty account balance intervals")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k26,sub.k26
-refused[DijkstraMalformed("empty certificates")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k4,sub.k4
-refused[DijkstraMalformed("empty collateral inputs")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k13
 refused[DijkstraMalformed("empty direct deposits")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k25,sub.k25
-refused[DijkstraMalformed("empty proposal procedures")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k20,sub.k20
 refused[DijkstraMalformed("empty redeemers")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w5,sub.w5
-refused[DijkstraMalformed("empty reference inputs")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k18,sub.k18
 refused[DijkstraMalformed("empty required top-level guards")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k24,sub.k24
 refused[DijkstraMalformed("empty starting account balance intervals")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k27
-refused[DijkstraMalformed("empty subtransactions")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k23
 refused[DijkstraMalformed("empty voting procedures")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k19,sub.k19
 refused[DijkstraMalformed("empty withdrawals")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k5,sub.k5
 refused[DijkstraMalformed("execution units")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w5,sub.w5
 refused[DijkstraMalformed("key witness")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w0,sub.w0
 refused[DijkstraMalformed("multi-asset value")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k1,sub.k1,top.k9,sub.k9
-refused[DijkstraMalformed("protocol parameter update")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k20,sub.k20
+refused[DijkstraMalformed("protocol parameter update")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k20,sub.k20 | excluded the site decodes the map encoding of a typed update, whose keys are integers command: git -C pallas show dd391716:pallas-primitives/src/dijkstra/model.rs | grep -n -B1 'pub struct ProtocolParamUpdate'
 refused[DijkstraMalformed("zero donation")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k22,sub.k22
 refused[DijkstraScriptContext("account balance intervals")] | leaves CollectErrors | reads top.w5,sub.w5
 refused[DijkstraScriptContext("Byron address")] | leaves CollectErrors | reads top.w5,sub.w5
@@ -133,7 +129,7 @@ refused[DijkstraScriptContext("Plutus V1 to V3 script in a subtransaction")] | l
 refused[DijkstraScriptContext("pointer address")] | leaves CollectErrors | reads top.w5,sub.w5
 refused[DijkstraScriptContext("proposal procedures")] | leaves CollectErrors | reads top.w5,sub.w5
 refused[DijkstraScriptContext("required top-level guards")] | leaves CollectErrors | reads top.w5,sub.w5
-refused[DijkstraScriptContext("reward account address")] | leaves CollectErrors | reads top.w5,sub.w5
+refused[DijkstraScriptContext("reward account address")] | leaves CollectErrors | reads top.w5,sub.w5 | excluded every output address decodes before the contexts are built, and a resolved input holds no reward address command: git -C pallas show dd391716:pallas-validate/src/phase1/dijkstra.rs | grep -n 'check_output_addresses(b'
 refused[DijkstraScriptContext("script guards")] | leaves CollectErrors | reads top.w5,sub.w5
 refused[DijkstraScriptContext("treasury donation")] | leaves CollectErrors | reads top.w5,sub.w5
 refused[DijkstraScriptContext("treasury value")] | leaves CollectErrors | reads top.w5,sub.w5
@@ -143,16 +139,15 @@ unsupported[auxiliary scripts] | unrepresentable because it marks a construct th
 unsupported[body fields] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads every
 unsupported[duplicate collateral inputs] | leaves DecoderErrorDeserialiseFailure | reads top.k13
 unsupported[duplicate inputs] | leaves DecoderErrorDeserialiseFailure | reads every
-unsupported[duplicate redeemer pointers] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w5,sub.w5
 unsupported[duplicate reference inputs] | leaves DecoderErrorDeserialiseFailure | reads top.k18,sub.k18
-unsupported[new script language (requires V3)] | unrepresentable because it marks a construct the validator does not implement rather than a ledger rule
+unsupported[new script language (requires V3)] | unrepresentable because it marks a construct the validator does not implement rather than a ledger rule | excluded it reads only outputs viewed as Dijkstra outputs, whose script reference is the Dijkstra variant command: git -C pallas show dd391716:pallas-traverse/src/output.rs | grep -n 'map(|x| MultiEraScriptRef::Dijkstra'
 unsupported[output fields] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k1,sub.k1
-unsupported[Plutus validity upper bound requires forecast state] | unrepresentable because it marks node state the validator lacks rather than a ledger rule
-unsupported[new Plutus script validation requires phase2 feature] | unrepresentable because it marks a build without phase two evaluation rather than a ledger rule
-unsupported[protocol version (requires 12.0)] | unrepresentable because it marks a construct the validator does not implement rather than a ledger rule
-unsupported[reference script language (requires V3)] | unrepresentable because it marks a construct the validator does not implement rather than a ledger rule
-unsupported[required top-level guards] | unrepresentable because it marks a construct the validator does not implement rather than a ledger rule
+unsupported[Plutus validity upper bound requires forecast state] | unrepresentable because it marks node state the validator lacks rather than a ledger rule | excluded Dolos calls only the entry that passes a time context command: grep -n 'validate_dijkstra_tx_with_time(' dolos/crates/cardano/src/validate.rs
+unsupported[new Plutus script validation requires phase2 feature] | unrepresentable because it marks a build without phase two evaluation rather than a ledger rule | excluded Dolos builds pallas-validate with phase2 command: grep -n 'pallas-validate = ' dolos/Cargo.toml
+unsupported[protocol version (requires 12.0)] | unrepresentable because it marks a construct the validator does not implement rather than a ledger rule | excluded Dolos answers a Dijkstra minor version above 0 or an unknown major as InvalidConfig before validation command: grep -n -A1 'match (protocol_era(protocol.0), protocol.1)' dolos/crates/cardano/src/validate.rs
+unsupported[reference script language (requires V3)] | unrepresentable because it marks a construct the validator does not implement rather than a ledger rule | excluded the script reference has a Conway and a Dijkstra variant, both matched before the refusing arm command: git -C pallas show dd391716:pallas-traverse/src/lib.rs | grep -n -A5 'pub enum MultiEraScriptRef'
+unsupported[required top-level guards] | unrepresentable because it marks a construct the validator does not implement rather than a ledger rule | excluded the body decoder already read key 24 as a map from stake credentials to optional data, which decodes as the same pairs command: git -C pallas show dd391716:pallas-primitives/src/dijkstra/model.rs | grep -n 'pub type RequiredTopLevelGuards'
 unsupported[subtransaction body fields] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads sub.k0
-unsupported[subtransactions] | unrepresentable because it marks a construct the validator does not implement rather than a ledger rule
-unsupported[unsuccessful block transaction] | unrepresentable because it marks a construct the validator does not implement rather than a ledger rule
+unsupported[subtransactions] | unrepresentable because it marks a construct the validator does not implement rather than a ledger rule | excluded Dolos sends only a transaction of an era before Dijkstra to the multi era entry that answers it command: grep -n -B2 'phase1::validate_tx' dolos/crates/cardano/src/validate.rs
+unsupported[unsuccessful block transaction] | unrepresentable because it marks a construct the validator does not implement rather than a ledger rule | excluded every submission decodes as a mempool transaction first, whose decoder refuses a false validity flag command: git -C pallas show dd391716:pallas-primitives/src/dijkstra/model.rs | grep -n 'not allowed for .is_valid.'
 unsupported[witness fields] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads every

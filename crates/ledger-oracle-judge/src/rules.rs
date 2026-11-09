@@ -42,15 +42,17 @@ pub enum Reads {
     Holding(BTreeSet<Field>),
 }
 
-/// What the table says of one rule.
+/// What the table says of one rule, with how the oracle reaches the side Dolos refuses by it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Entry {
     Ruled {
         leaves: BTreeSet<String>,
         reads: Reads,
+        refused: Reach,
     },
     Unrepresentable {
         why: String,
+        reach: Reach,
     },
 }
 
@@ -93,11 +95,25 @@ fn reason(words: &str) -> Result<(&str, String), String> {
     }
 }
 
-/// Reads one rule row after its answer.
-fn entry(cells: &[&str]) -> Result<Entry, String> {
+/// Reads the exclusion that ends a row whose refusal no record can reach, `<reason> command: <command>`.
+fn exclusion(cell: &str) -> Result<Reach, String> {
+    let (reason, command) = cell
+        .split_once(" command: ")
+        .ok_or(format!("{cell} names no command"))?;
+    match (reason.trim(), command.trim()) {
+        ("", _) | (_, "") => Err(format!("{cell} gives no reason or no command")),
+        (reason, command) => Ok(Reach::Excluded {
+            reason: reason.to_string(),
+            command: command.to_string(),
+        }),
+    }
+}
+
+/// Reads one rule row after its answer, whose refused side the oracle reaches by `reach`.
+fn entry(cells: &[&str], reach: Reach) -> Result<Entry, String> {
     match cells {
         [unrepresentable] => match reason(unrepresentable)? {
-            ("unrepresentable", why) => Ok(Entry::Unrepresentable { why }),
+            ("unrepresentable", why) => Ok(Entry::Unrepresentable { why, reach }),
             (other, _) => Err(format!("expected unrepresentable, found {other}")),
         },
         [leaves, reads] => {
@@ -118,20 +134,31 @@ fn entry(cells: &[&str]) -> Result<Entry, String> {
                 ),
                 None => return Err(format!("expected reads, found {reads}")),
             };
-            Ok(Entry::Ruled { leaves, reads })
+            Ok(Entry::Ruled {
+                leaves,
+                reads,
+                refused: reach,
+            })
         }
         _ => Err("expected leaves and reads, or unrepresentable".to_string()),
     }
 }
 
-/// Reads the rule table, one `<answer> | leaves <L,...> | reads <every or fields>` row, `<answer> | unrepresentable because <why>` row or `known <record> | <answer> | <ledger answer>` row per line.
+/// Reads the rule table, one `<answer> | leaves <L,...> | reads <every or fields>` row, `<answer> | unrepresentable because <why>` row or `known <record> | <answer> | <ledger answer>` row per line, a rule row ending `| excluded <reason> command: <command>` when no record can reach its refused side.
 pub fn parse(file: &'static str, text: &str) -> Result<Rules, ManifestError> {
     let mut rules = Rules::default();
     let lines = text.lines().enumerate().map(|(i, l)| (i + 1, l.trim()));
     for (line, l) in lines.filter(|(_, l)| !l.is_empty()) {
         let error = |reason: String| ManifestError { file, line, reason };
-        let cells: Vec<&str> = l.split(" | ").map(str::trim).collect();
+        let (row, reach) = match l.split_once(" | excluded ") {
+            Some((row, cell)) => (row, exclusion(cell).map_err(error)?),
+            None => (l, Reach::Counted),
+        };
+        let cells: Vec<&str> = row.split(" | ").map(str::trim).collect();
         match cells.as_slice() {
+            [record, ..] if record.starts_with("known ") && reach != Reach::Counted => {
+                return Err(error(format!("{record} is excluded")));
+            }
             [record, dolos, ledger] if record.starts_with("known ") => {
                 let id: RecordId = record["known ".len()..].parse().map_err(error)?;
                 let known = KnownRule {
@@ -143,7 +170,7 @@ pub fn parse(file: &'static str, text: &str) -> Result<Rules, ManifestError> {
                 }
             }
             [answer, rest @ ..] => {
-                let entry = entry(rest).map_err(error)?;
+                let entry = entry(rest, reach).map_err(error)?;
                 if rules.entries.insert(answer.to_string(), entry).is_some() {
                     return Err(error(format!("{answer} listed twice")));
                 }
@@ -307,14 +334,15 @@ impl Rules {
     pub fn members(&self) -> Vec<Member> {
         let mut members = Vec::new();
         for (answer, entry) in &self.entries {
-            let sides: &[Side] = match entry {
-                Entry::Unrepresentable { .. } => &[Side::Unrepresentable],
-                Entry::Ruled { .. } => &[Side::Refused, Side::Accepted],
+            let sides = match entry {
+                Entry::Unrepresentable { reach, .. } => vec![(Side::Unrepresentable, reach)],
+                Entry::Ruled { refused, .. } => {
+                    vec![(Side::Refused, refused), (Side::Accepted, &Reach::Counted)]
+                }
             };
-            let cells = sides.iter().map(|side| side.cell(answer));
-            members.extend(cells.map(|cell| Member {
-                cell,
-                reach: Reach::Counted,
+            members.extend(sides.into_iter().map(|(side, reach)| Member {
+                cell: side.cell(answer),
+                reach: reach.clone(),
             }));
         }
         members
@@ -679,6 +707,105 @@ unsupported[witness fields] | unrepresentable because the native validator does 
             "refused[DepositIncorrectDELEG,ValueNotConservedUTxO]"
         );
         assert_eq!(ledger_answer(&accepted()), "accepted");
+    }
+
+    const EXCLUDED: &str = "\
+refused[PostAlonzo(FeeBelowMin)] | leaves FeeTooSmallUTxO | reads every | excluded no fee is low command: grep -n fee x.rs | head -1
+unsupported[witness fields] | unrepresentable because the native validator does not decode them | excluded every witness decodes command: grep -n witness y.rs
+refused[DijkstraInvalidMetadata] | leaves DecoderErrorDeserialiseFailure | reads top.aux,sub.aux
+";
+
+    /// The reach of each member of `rules`, by its cell.
+    fn reaches(rules: &Rules) -> BTreeMap<String, Reach> {
+        let members = rules.members().into_iter();
+        members.map(|m| (m.cell.to_string(), m.reach)).collect()
+    }
+
+    #[test]
+    fn a_row_without_an_exclusion_counts_every_side() {
+        let reaches = reaches(&rules(TABLE));
+        assert_eq!(reaches.len(), 9);
+        assert!(
+            reaches.values().all(|r| *r == Reach::Counted),
+            "{reaches:?}"
+        );
+    }
+
+    #[test]
+    fn an_exclusion_cell_excludes_the_refused_or_unrepresentable_side_with_its_command() {
+        let reaches = reaches(&rules(EXCLUDED));
+        let excluded = |reason: &str, command: &str| Reach::Excluded {
+            reason: reason.to_string(),
+            command: command.to_string(),
+        };
+        assert_eq!(
+            reaches,
+            BTreeMap::from([
+                (
+                    "rule:refused[PostAlonzo(FeeBelowMin)].refused".to_string(),
+                    excluded("no fee is low", "grep -n fee x.rs | head -1")
+                ),
+                (
+                    "rule:refused[PostAlonzo(FeeBelowMin)].accepted".to_string(),
+                    Reach::Counted
+                ),
+                (
+                    "rule:unsupported[witness_fields].unrepresentable".to_string(),
+                    excluded("every witness decodes", "grep -n witness y.rs")
+                ),
+                (
+                    "rule:refused[DijkstraInvalidMetadata].refused".to_string(),
+                    Reach::Counted
+                ),
+                (
+                    "rule:refused[DijkstraInvalidMetadata].accepted".to_string(),
+                    Reach::Counted
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_record_on_an_excluded_side_fails_the_coverage_table_and_none_passes_it() {
+        let rules = rules(EXCLUDED);
+        let mut tally = RuleTally::default();
+        judge(&rules, 1, &accepted(), &DolosVerdict::Accepted, &mut tally);
+        let lines = covered(&rules, &tally, 0);
+        assert_eq!(lines.last().unwrap(), "coverage=PASS", "{lines:#?}");
+        assert!(lines.contains(
+            &"COVERAGE rule:refused[PostAlonzo(FeeBelowMin)].refused records=0 committed=none \
+              excluded no fee is low command: grep -n fee x.rs | head -1"
+                .to_string()
+        ));
+        let fee = dolos("PostAlonzo(FeeBelowMin)");
+        judge(&rules, 2, &refused(&["FeeTooSmallUTxO"]), &fee, &mut tally);
+        let witness = DolosVerdict::Unsupported("witness fields".to_string());
+        judge(
+            &rules,
+            3,
+            &refused(&["MissingTxMetadata"]),
+            &witness,
+            &mut tally,
+        );
+        let lines = covered(&rules, &tally, 0);
+        assert_eq!(
+            lines.last().unwrap(),
+            "coverage=FAIL rule:refused[PostAlonzo(FeeBelowMin)].refused,\
+             rule:unsupported[witness_fields].unrepresentable",
+            "{lines:#?}"
+        );
+    }
+
+    #[test]
+    fn an_exclusion_without_its_command_or_on_a_known_row_does_not_parse() {
+        let bare = "refused[PostAlonzo(FeeBelowMin)] | leaves FeeTooSmallUTxO | reads every | excluded no fee is low";
+        assert!(parse("phase1-rules.txt", bare).is_err());
+        let empty = "refused[PostAlonzo(FeeBelowMin)] | leaves FeeTooSmallUTxO | reads every | excluded no fee is low command: ";
+        assert!(parse("phase1-rules.txt", empty).is_err());
+        let known =
+            "known supp#1 | refused[A] | accepted | excluded no fee is low command: grep fee";
+        assert!(parse("phase1-rules.txt", known).is_err());
+        assert!(parse("phase1-rules.txt", EXCLUDED).is_ok());
     }
 
     #[test]

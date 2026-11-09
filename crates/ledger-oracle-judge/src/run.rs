@@ -337,7 +337,7 @@ mod tests {
     fn records_in_one_epoch_under_one_parameter_set_stay_in_one_run() {
         let records = written(CorpusKind::Supp);
         let fresh = records.iter().filter(|r| r.pre != Pre::FollowsPrev).count();
-        assert_eq!(fresh, 69);
+        assert_eq!(fresh, 116);
         assert_eq!(split(records).len(), fresh);
     }
 

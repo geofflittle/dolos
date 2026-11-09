@@ -513,10 +513,18 @@ fn named_inputs(id: RecordId, record: &Record) -> BTreeSet<TxIn> {
         .collect()
 }
 
-/// The coverage cells of a record Dolos agreed on, the transaction cells and the builtins
-/// `builtins` its evaluation called when the ledger accepted it, its leaves when the ledger
-/// refused it.
+/// The coverage cells of a record Dolos agreed on, the request shapes its bytes show when
+/// they decode, the transaction cells and the builtins `builtins` its evaluation called when
+/// the ledger accepted it, its leaves when the ledger refused it.
 fn agreeing_cells(id: RecordId, record: &Record, builtins: &[Builtin]) -> Vec<CellKey> {
+    let shapes = coverage::shape_cells(&record.tx.0).unwrap_or_default();
+    let mut cells = agreeing_outcome_cells(id, record, builtins);
+    cells.extend(shapes);
+    cells
+}
+
+/// The coverage cells of a record Dolos agreed on that its ledger outcome decides.
+fn agreeing_outcome_cells(id: RecordId, record: &Record, builtins: &[Builtin]) -> Vec<CellKey> {
     match &record.outcome {
         LedgerOutcome::Accepted { .. } => {
             let cells = coverage::cells_of_tx(&record.tx.0);
@@ -535,10 +543,8 @@ fn agreeing_cells(id: RecordId, record: &Record, builtins: &[Builtin]) -> Vec<Ce
 }
 
 /// Every output reference a record's transaction and sub transactions could produce, each output index and the index after them that a collateral return takes.
-fn producible(id: RecordId, record: &Record) -> Vec<TxIn> {
-    let tx = MultiEraTx::decode_for_era(Era::Dijkstra, &record.tx.0)
-        .unwrap_or_else(|e| panic!("TX {id} {e}"));
-    let refs = named_txs(tx).into_iter().flat_map(|(_, t)| {
+fn producible(record: &Record) -> Vec<TxIn> {
+    let refs = record_txs(record).into_iter().flat_map(|(_, t)| {
         let hash = *t.hash();
         (0..=t.outputs().len() as u64).map(move |ix| TxIn { tx: hash, ix })
     });
@@ -546,13 +552,9 @@ fn producible(id: RecordId, record: &Record) -> Vec<TxIn> {
 }
 
 /// The bytes of each output a record's transaction and sub transactions write,
-/// its collateral return at the index after its outputs, none when the
-/// transaction does not decode.
+/// its collateral return at the index after its outputs.
 fn written(record: &Record) -> BTreeMap<TxIn, Vec<u8>> {
-    let Ok(tx) = MultiEraTx::decode_for_era(Era::Dijkstra, &record.tx.0) else {
-        return BTreeMap::new();
-    };
-    let txs = named_txs(tx);
+    let txs = record_txs(record);
     let outputs = txs.iter().flat_map(|(_, t)| {
         let hash = *t.hash();
         let outputs = t.outputs().into_iter().chain(t.collateral_return());
@@ -808,10 +810,7 @@ async fn validate_run<'r>(
             records: included.into_iter().map(|(r, _)| r).collect(),
             requeued,
         }));
-        let producible: Vec<TxIn> = records
-            .iter()
-            .flat_map(|r| producible(id_of(r), r))
-            .collect();
+        let producible: Vec<TxIn> = records.iter().flat_map(producible).collect();
         let inputs = run.held_in(records).chain(&producible);
         let wrote = records.iter().flat_map(written).collect();
         compare_utxos(
@@ -1089,6 +1088,14 @@ impl TxName {
     }
 }
 
+/// The transaction a record holds and each of its sub transactions, by name, none when its bytes do not decode.
+fn record_txs(record: &Record) -> Vec<(TxName, MultiEraTx<'_>)> {
+    match MultiEraTx::decode_for_era(Era::Dijkstra, &record.tx.0) {
+        Ok(tx) => named_txs(tx),
+        Err(_) => Vec::new(),
+    }
+}
+
 /// A transaction and each of its sub transactions, by name.
 fn named_txs(tx: MultiEraTx<'_>) -> Vec<(TxName, MultiEraTx<'_>)> {
     let subs = tx.sub_transactions();
@@ -1128,8 +1135,6 @@ async fn compare_read_tx(
             corpus: kind,
             n: record.n,
         };
-        let tx = MultiEraTx::decode_for_era(Era::Dijkstra, &record.tx.0)
-            .unwrap_or_else(|e| panic!("TX {id} {e}"));
         let ledger = match &record.outcome {
             LedgerOutcome::Accepted { .. } => Some(ExpectedTx {
                 slot: record.slot,
@@ -1139,7 +1144,7 @@ async fn compare_read_tx(
             }),
             LedgerOutcome::Refused { .. } => None,
         };
-        for (name, _) in named_txs(tx) {
+        for (name, _) in record_txs(record) {
             let entry = expected.entry(name).or_insert((id, None));
             if let Some(ledger) = ledger {
                 *entry = (id, Some(ledger));
@@ -1273,10 +1278,8 @@ async fn compare_carried<C: Carried>(
             corpus: kind,
             n: record.n,
         };
-        let tx = MultiEraTx::decode_for_era(Era::Dijkstra, &record.tx.0)
-            .unwrap_or_else(|e| panic!("TX {id} {e}"));
         let mut carried = Vec::new();
-        for (name, tx) in named_txs(tx) {
+        for (name, tx) in record_txs(record) {
             let witnessed = C::witnessed(&tx).into_iter();
             carried.extend(witnessed.map(|(h, held)| (h, held, CarriedAt::Witness(name))));
             for hash in tx.outputs().iter().filter_map(C::named) {
@@ -2085,6 +2088,31 @@ fn a_list_names_each_record_once() {
 #[should_panic(expected = "the list names no record")]
 fn an_empty_list_is_refused() {
     named_records(" , ");
+}
+
+#[test]
+fn a_transaction_the_decoder_refuses_names_no_transaction_and_produces_no_reference() {
+    let corpus = load(CorpusKind::Supp);
+    let record = |n: u32| {
+        let mut records = corpus.kept().flat_map(|run| run.records());
+        records
+            .find(|r| r.n == n)
+            .unwrap_or_else(|| panic!("{}", supp(n)))
+    };
+    let decoded = record(372);
+    let tx = MultiEraTx::decode_for_era(Era::Dijkstra, &decoded.tx.0).unwrap();
+    let outputs = 0..=tx.outputs().len() as u64;
+    let expected: Vec<TxIn> = outputs.map(|ix| TxIn { tx: *tx.hash(), ix }).collect();
+    assert_eq!(producible(decoded), expected);
+    let names: Vec<TxName> = record_txs(decoded).into_iter().map(|(n, _)| n).collect();
+    assert_eq!(names, [TxName::Top(*tx.hash())]);
+
+    let refused = record(340);
+    let error = MultiEraTx::decode_for_era(Era::Dijkstra, &refused.tx.0).unwrap_err();
+    assert!(error.to_string().contains("nonempty set"), "{error}");
+    assert_eq!(producible(refused), Vec::<TxIn>::new());
+    assert!(record_txs(refused).is_empty());
+    assert!(written(refused).is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]

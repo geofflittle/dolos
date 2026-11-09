@@ -272,6 +272,37 @@ impl Level<'_> {
         scripts.into_iter().any(|s| signs(s))
     }
 
+    fn signed(&self) -> bool {
+        self.witnesses.vkeywitness.is_some() || self.witnesses.bootstrap_witness.is_some()
+    }
+
+    fn zero_budget(&self) -> bool {
+        let values = self.witnesses.redeemer.iter().flat_map(|r| r.0.values());
+        values
+            .into_iter()
+            .any(|v| v.ex_units.mem == 0 && v.ex_units.steps == 0)
+    }
+
+    fn guard_without_redeemer(&self) -> bool {
+        let script_guard = self
+            .guard_credentials()
+            .into_iter()
+            .any(|c| matches!(c, StakeCredential::ScriptHash(_)));
+        let keys = self.witnesses.redeemer.iter().flat_map(|r| r.0.keys());
+        let guarding = keys.into_iter().any(|k| k.tag == RedeemerTag::Guarding);
+        script_guard && !guarding
+    }
+
+    fn reference_script_only(&self) -> bool {
+        let w = self.witnesses;
+        let redeemed = w.redeemer.as_ref().is_some_and(|r| !r.0.is_empty());
+        let witnessed = w.plutus_v1_script.is_some()
+            || w.plutus_v2_script.is_some()
+            || w.plutus_v3_script.is_some()
+            || w.plutus_v4_script.is_some();
+        redeemed && !witnessed
+    }
+
     fn bootstrap_attributes(&self) -> bool {
         let witnesses = self
             .witnesses
@@ -337,9 +368,35 @@ fn actions(proposals: &Option<NonEmptySet<ProposalProcedure>>) -> Vec<&GovAction
     proposals.map(|p| &p.gov_action).collect()
 }
 
+/// Whether the levels of one transaction show the request shape by their content, never for a shape a judge gives by deriving its request.
+fn shows(shape: RequestShape, levels: &[Level]) -> bool {
+    let mut levels = levels.iter();
+    match shape {
+        RequestShape::Draft | RequestShape::RewardOutputDraft => false,
+        RequestShape::Signed => levels.any(Level::signed),
+        RequestShape::Unsigned => !levels.any(Level::signed),
+        RequestShape::ZeroBudget => levels.any(Level::zero_budget),
+        RequestShape::GuardWithoutRedeemer => levels.any(Level::guard_without_redeemer),
+        RequestShape::ReferenceScriptOnly => levels.any(Level::reference_script_only),
+    }
+}
+
+/// The request shape cells the content of the Dijkstra transaction `tx` shows.
+pub(super) fn shape_cells(tx: &[u8]) -> Result<Vec<CellKey>, minicbor::decode::Error> {
+    let tx = MultiEraTx::decode_for_era(Era::Dijkstra, tx)?;
+    let levels = levels(&tx)?;
+    let shown = RequestShape::ALL.into_iter().filter(|s| shows(*s, &levels));
+    Ok(shown.map(|s| CellKey::new(Axis::RequestShape, s)).collect())
+}
+
 /// The cells of the transaction axes the Dijkstra transaction `tx` touches.
 pub(super) fn cells_of_tx(tx: &[u8]) -> Result<BTreeSet<CellKey>, minicbor::decode::Error> {
     let tx = MultiEraTx::decode_for_era(Era::Dijkstra, tx)?;
+    Ok(levels(&tx)?.iter().flat_map(Level::cells).collect())
+}
+
+/// The top level body and each sub transaction body of the Dijkstra transaction `tx`.
+fn levels<'a>(tx: &'a MultiEraTx) -> Result<Vec<Level<'a>>, minicbor::decode::Error> {
     let Some(tx) = tx.as_dijkstra() else {
         return Err(minicbor::decode::Error::message(
             "not a Dijkstra transaction",
@@ -369,7 +426,7 @@ pub(super) fn cells_of_tx(tx: &[u8]) -> Result<BTreeSet<CellKey>, minicbor::deco
             witnesses: &sub.transaction_witness_set,
         });
     }
-    Ok(levels.iter().flat_map(Level::cells).collect())
+    Ok(levels)
 }
 
 /// Every member of the coverage table, with the rule members `rules` gives.
@@ -572,6 +629,116 @@ mod tests {
             plutus_v3_script,
             plutus_v4_script,
         );
+    }
+
+    /// A witness set with a key witness when `signed`, one redeemer of the tag `tag` with `units` memory and steps when `tag` is some, and one V3 script when `scripted`.
+    fn redeemed(
+        signed: bool,
+        tag: Option<u8>,
+        units: u64,
+        scripted: bool,
+    ) -> Result<Vec<u8>, minicbor::encode::Error<std::convert::Infallible>> {
+        let mut e = minicbor::Encoder::new(Vec::new());
+        let entries = [signed, tag.is_some(), scripted];
+        e.map(entries.iter().filter(|held| **held).count() as u64)?;
+        if signed {
+            e.u8(0)?
+                .array(1)?
+                .array(2)?
+                .bytes(&[9; 32])?
+                .bytes(&[0; 64])?;
+        }
+        if let Some(tag) = tag {
+            e.u8(5)?.map(1)?.array(2)?.u8(tag)?.u8(0)?;
+            e.array(2)?.u8(0)?.array(2)?.u64(units)?.u64(units)?;
+        }
+        if scripted {
+            e.u8(7)?.array(1)?.bytes(&[0])?;
+        }
+        Ok(e.into_writer())
+    }
+
+    /// The request shapes the content of one top level body shows.
+    fn shown(witnesses: &WitnessSet, guards: Option<&Guards>) -> Vec<RequestShape> {
+        let levels = [Level {
+            depth: Depth::Top,
+            keys: Vec::new(),
+            guards,
+            certificates: Vec::new(),
+            actions: Vec::new(),
+            witnesses,
+        }];
+        let shapes = RequestShape::ALL.into_iter();
+        shapes.filter(|s| shows(*s, &levels)).collect()
+    }
+
+    const SPEND: Option<u8> = Some(0);
+    const GUARDING: Option<u8> = Some(6);
+
+    #[test]
+    fn no_content_shows_a_shape_a_judge_derives_by_its_request() {
+        for bytes in [
+            redeemed(false, None, 0, false),
+            redeemed(true, SPEND, 0, false),
+        ] {
+            let bytes = bytes.unwrap();
+            let set: WitnessSet = minicbor::decode(&bytes).unwrap();
+            let shapes = shown(&set, None);
+            assert!(!shapes.contains(&RequestShape::Draft), "{shapes:?}");
+            assert!(
+                !shapes.contains(&RequestShape::RewardOutputDraft),
+                "{shapes:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_body_with_a_key_witness_shows_signed_and_one_with_none_shows_unsigned() {
+        let signed = redeemed(true, None, 0, false).unwrap();
+        let signed: WitnessSet = minicbor::decode(&signed).unwrap();
+        assert_eq!(shown(&signed, None), [RequestShape::Signed]);
+        let unsigned = redeemed(false, None, 0, false).unwrap();
+        let unsigned: WitnessSet = minicbor::decode(&unsigned).unwrap();
+        assert_eq!(shown(&unsigned, None), [RequestShape::Unsigned]);
+    }
+
+    #[test]
+    fn only_a_redeemer_of_zero_memory_and_zero_steps_shows_zero_budget() {
+        let budgeted = redeemed(true, SPEND, 1, true).unwrap();
+        let budgeted: WitnessSet = minicbor::decode(&budgeted).unwrap();
+        assert!(!shown(&budgeted, None).contains(&RequestShape::ZeroBudget));
+        let zero = redeemed(true, SPEND, 0, true).unwrap();
+        let zero: WitnessSet = minicbor::decode(&zero).unwrap();
+        assert!(shown(&zero, None).contains(&RequestShape::ZeroBudget));
+    }
+
+    #[test]
+    fn only_a_script_guard_with_no_guarding_redeemer_shows_guard_without_redeemer() {
+        let script = StakeCredential::ScriptHash(Hash::new([1; 28]));
+        let scripted = Guards::Credentials(NonEmptySet::from_vec(vec![script]).unwrap());
+        let keyed = key_guard(Hash::new([2; 28]));
+        let shape = RequestShape::GuardWithoutRedeemer;
+        let guarding = redeemed(true, GUARDING, 1, true).unwrap();
+        let guarding: WitnessSet = minicbor::decode(&guarding).unwrap();
+        assert!(!shown(&guarding, Some(&scripted)).contains(&shape));
+        let spending = redeemed(true, SPEND, 1, true).unwrap();
+        let spending: WitnessSet = minicbor::decode(&spending).unwrap();
+        assert!(!shown(&spending, Some(&keyed)).contains(&shape));
+        assert!(shown(&spending, Some(&scripted)).contains(&shape));
+    }
+
+    #[test]
+    fn only_redeemers_with_no_witnessed_plutus_script_show_reference_script_only() {
+        let shape = RequestShape::ReferenceScriptOnly;
+        let witnessed = redeemed(true, SPEND, 1, true).unwrap();
+        let witnessed: WitnessSet = minicbor::decode(&witnessed).unwrap();
+        assert!(!shown(&witnessed, None).contains(&shape));
+        let bare = redeemed(true, None, 0, false).unwrap();
+        let bare: WitnessSet = minicbor::decode(&bare).unwrap();
+        assert!(!shown(&bare, None).contains(&shape));
+        let referenced = redeemed(true, SPEND, 1, false).unwrap();
+        let referenced: WitnessSet = minicbor::decode(&referenced).unwrap();
+        assert!(shown(&referenced, None).contains(&shape));
     }
 
     #[test]

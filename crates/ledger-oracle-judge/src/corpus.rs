@@ -16,7 +16,7 @@ use crate::{
 pub const IC_SHA256: &str = "38eb868092373a3d10f9f0da913216115b5ce00459993b435768b2e6274575d6";
 
 /// The sha256 of the decompressed supplement corpus.
-pub const SUPP_SHA256: &str = "73d6d8cf03c66446b18040a506ff7a4060f56818eee1fbcf674917c7600cdddb";
+pub const SUPP_SHA256: &str = "22827bc21be25e578886466b8b553ada0219f477bc9782e4a87f46a89d3825a8";
 
 /// The sha256 of the decompressed phase one corpus.
 pub const P1_SHA256: &str = "861611cc08a7ff09d45e1bdfda556ab8c8a0bed534df8a16ed228a74481539a2";
@@ -296,7 +296,7 @@ mod tests {
         );
         assert_eq!(
             load(CorpusKind::Supp).unwrap().to_string(),
-            "CORPUS supp sha=73d6d8cf03c66446 records=218 runs=69 kept_records=218"
+            "CORPUS supp sha=22827bc21be25e57 records=374 runs=116 kept_records=374"
         );
         assert_eq!(
             load(CorpusKind::P1).unwrap().to_string(),
@@ -348,7 +348,7 @@ mod tests {
             (redeemers.len(), built)
         };
         assert_eq!(built(CorpusKind::Ic), (472, 402));
-        assert_eq!(built(CorpusKind::Supp), (37, 33));
+        assert_eq!(built(CorpusKind::Supp), (58, 50));
     }
 
     #[test]
@@ -362,7 +362,7 @@ mod tests {
                 .count()
         };
         assert_eq!(undecoded(CorpusKind::Ic), 1);
-        assert_eq!(undecoded(CorpusKind::Supp), 33);
+        assert_eq!(undecoded(CorpusKind::Supp), 43);
     }
 
     #[test]
@@ -580,6 +580,6 @@ mod tests {
             input_totals(CorpusKind::Ic),
             [10239, 467, 5162, 473, 475, 16, 474]
         );
-        assert_eq!(input_totals(CorpusKind::Supp), [270, 38, 6, 16, 19, 0, 19]);
+        assert_eq!(input_totals(CorpusKind::Supp), [432, 60, 15, 35, 38, 7, 38]);
     }
 }

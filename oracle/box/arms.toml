@@ -83,6 +83,11 @@ fixes = [
   { commit = "69754a91", arm = "pointer-refused" },
   { commit = "2aaa99af", arm = "builtin-term-walk" },
   { commit = "056bb021", arm = "builtin-call-unaudited" },
+  { commit = "8f9f0681", arm = "redeemer-pointers-refused" },
+  { commit = "dd391716", arm = "output-address-late" },
+  { commit = "51012525", arm = "withdrawal-account-class" },
+  { commit = "9e133114", arm = "pool-metadata-hash-unbounded" },
+  { commit = "d30d4d0d", arm = "collateral-unsigned" },
   { commit = "703f4b9e", arm = "pointer-output-refused" },
   { commit = "ea8c3a65", arm = "v1v2" },
   { commit = "14521063", arm = "top-guards-admitted" },
@@ -219,6 +224,11 @@ flat-enum-definite = ["judge=validation failure:disagree ledger:accepted dolos:C
 indef-array-refused = ["judge=validation failure:disagree ledger:accepted dolos:CborDecodingError"]
 update-keys-dropped = ["judge=served-tx layer:v1 field:dijkstra_keys"]
 proposal-keys-dropped = ["judge=context language:V3|language:V4 answer:differ field:txInfoProposalProcedures"]
+redeemer-pointers-refused = ["judge=validation unsupported:duplicate_redeemer_pointers"]
+output-address-late = ["judge=validation failure:disagree|failure:reason_mismatch", "judge=rules failure:mismatch"]
+withdrawal-account-class = ["judge=validation failure:reason_mismatch ledger:DecoderErrorDeserialiseFailure dolos:DijkstraInvalidWithdrawal"]
+pool-metadata-hash-unbounded = ["judge=validation failure:disagree ledger:PoolMedataHashTooBig dolos:accepted"]
+collateral-unsigned = ["judge=validation failure:reason_mismatch ledger:InsufficientCollateral dolos:PostAlonzo"]
 reward-output-unsupported = ["judge=eval-reward-output answer:refused refusal:output_address_(requires_Shelley)"]
 unsupported-untyped = ["judge=validation failure:stale_manifest unsupported:integer_operand_outside_audited_registration_range dolos:Phase2EvaluationError"]
 coverage-deselect = ["judge=coverage leaf:ConflictingMetadataHash"]

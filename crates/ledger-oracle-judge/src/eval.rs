@@ -1317,17 +1317,26 @@ impl EvalTally {
         let levels = row_counts(&every, judge, |cells| {
             member(cells, Axis::Level).map(str::to_string)
         });
+        let answers = row_counts(&every, judge, |cells| {
+            let ledger = member(cells, Axis::Ledger)?;
+            let name = member(cells, Axis::Purpose)?;
+            Some((ledger.to_string(), tag_number(name), name.to_string()))
+        });
         let layers: Vec<String> = layers.iter().map(|(l, c)| format!("{l}:{c}")).collect();
         let purposes: Vec<String> = purposes
             .iter()
             .map(|((_, p), c)| format!("{p}:{c}"))
             .collect();
         let levels: Vec<String> = levels.iter().map(|(l, c)| format!("{l}:{c}")).collect();
+        let answers: Vec<String> = answers
+            .iter()
+            .map(|((l, _, p), c)| format!("{l}.{p}:{c}"))
+            .collect();
         let (totals_agree, totals_disagree) = part_counts(&every, judge, part::TOTAL);
         let (_, unnamed) = part_counts(&every, judge, part::UNNAMED);
         let (fee_equal, fee_differ) = part_counts(&every, judge, part::FEE);
         format!(
-            "EVAL-ORACLE compared={} agree={} known={} unrepresentable={} disagree={} by_layer={} by_purpose={} by_level={} totals={} totals_disagree={totals_disagree} unnamed={unnamed} fee_unset={} fee_equal={fee_equal} fee_differ={fee_differ} fee_undecoded={} collisions={} skipped_cascade={} undecoded={} every_layer_agrees={}",
+            "EVAL-ORACLE compared={} agree={} known={} unrepresentable={} disagree={} by_layer={} by_purpose={} by_level={} by_ledger={} totals={} totals_disagree={totals_disagree} unnamed={unnamed} fee_unset={} fee_equal={fee_equal} fee_differ={fee_differ} fee_undecoded={} collisions={} skipped_cascade={} undecoded={} every_layer_agrees={}",
             all.compared(),
             all.agree,
             all.known,
@@ -1336,6 +1345,7 @@ impl EvalTally {
             layers.join(","),
             purposes.join(","),
             levels.join(","),
+            answers.join(","),
             totals_agree + totals_disagree,
             self.fee_unset,
             self.fee_undecoded,
@@ -1903,6 +1913,29 @@ mod tests {
             "{line}"
         );
         assert!(line.contains(" undecoded=1 every_layer_agrees="), "{line}");
+    }
+
+    #[test]
+    fn the_tally_line_counts_rows_by_the_ledger_answer_and_purpose() {
+        let mut t = EvalTally::default();
+        let rows = [
+            (key(Level::Top, 5, 0), RowVerdict::Known(refusal("r"))),
+            (key(Level::Top, 0, 0), RowVerdict::Agree(ran(1, 2))),
+            (key(Level::Top, 0, 1), RowVerdict::Agree(Answer::Failed)),
+            (key(Level::Sub(0), 5, 0), RowVerdict::Agree(Answer::Failed)),
+            (
+                key(Level::Top, 5, 1),
+                row_verdict(Some(Answer::Failed), DolosRow::Answered(ran(1, 2)), None),
+            ),
+        ];
+        t.add_rows(Layer::Pallas, ic(1), &rows);
+        let line = t.to_string();
+        assert!(
+            line.contains(
+                " by_ledger=failed.Spend:1/0/0/0,failed.Propose:1/0/0/1,ran.Spend:1/0/0/0 "
+            ),
+            "{line}"
+        );
     }
 
     fn refused_by(leaves: &[LedgerLeaf]) -> LedgerOutcome {
