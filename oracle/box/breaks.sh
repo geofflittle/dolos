@@ -182,7 +182,7 @@ overlay_control_clean() {
   for a in $(switches "$HERE"/overlay/*.diff); do
     if crate_test "$a" >/dev/null; then
       run_overlay "$a" "" "$OUT/overlay-control-$a.log"
-      if ! same_log "$OUT/control-$a.log" "$OUT/overlay-control-$a.log"; then
+      if ! same_crate_log "$OUT/control-$a.log" "$OUT/overlay-control-$a.log"; then
         echo "ARM control OVERLAY_DIFFERS log=$OUT/overlay-control-$a.log"
         clean=1
       fi

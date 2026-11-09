@@ -165,6 +165,13 @@ same_log() {
   cmp -s "$1.untimed" "$2.untimed"
 }
 
+# Whether two crate test logs hold the same lines but for the run time, in any order, as libtest prints each test's line when the test ends.
+same_crate_log() {
+  LC_ALL=C sort "$1" >"$1.sorted"
+  LC_ALL=C sort "$2" >"$2.sorted"
+  same_log "$1.sorted" "$2.sorted"
+}
+
 # Prints HELD when an encoding arm's log $1 holds the lines of the unplanted log $2 in any order but for its ORACLE_PLANT line and a moved bytes_equal count, FIRED when any other line differs, and MISSED when the count did not move.
 encoding_verdict() {
   grep -v '^ORACLE_PLANT reached ' "$1" | sed 's/ bytes_equal=[0-9]*//' | LC_ALL=C sort >"$1.blind" || true

@@ -278,6 +278,22 @@ expect crate_cost_models "$(passed cost-models "$L/cost-models")" passed
 expect crate_failed "$(passed watch-block-copied "$L/watch-failed")" failed
 expect crate_unrun "$(passed watch-block-copied "$L/watch-v1")" failed
 
+# Two runs of the watch arm's crate test, the second printing its tests in the other order at another run time.
+printf '%s\n' "test serve::grpc::v1beta::$watch ... ok" "test serve::grpc::v1alpha::$watch ... ok" \
+  'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 388 filtered out; finished in 0.04s' >"$L/watch-two"
+printf '%s\n' "test serve::grpc::v1alpha::$watch ... ok" "test serve::grpc::v1beta::$watch ... ok" \
+  'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 388 filtered out; finished in 0.00s' >"$L/watch-swapped"
+same_crate() {
+  (
+    HERE=$H
+    . "$LIB"
+    if same_crate_log "$1" "$2"; then echo same; else echo differs; fi
+  )
+}
+# Must not fire on the order the tests ended in, and must fire on a failing test.
+expect crate_log_swapped "$(same_crate "$L/watch-two" "$L/watch-swapped")" same
+expect crate_log_failed "$(same_crate "$L/watch-two" "$L/watch-failed")" differs
+
 # An unplanted log and an encoding arm's logs: one with only bytes_equal moved, one with a context also judged differently, and one with nothing moved.
 context='CONTEXT compared=2 agree=2 differ=0 known=0 unbuilt=0 no_ledger_context=0 pallas_only=0'
 printf '%s\n' "$context bytes_equal=0 by_language=V3=2/0/0 by_level=top=2/0/0" 'RESULT PASS' >"$L/unplanted"
