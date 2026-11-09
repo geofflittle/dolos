@@ -441,6 +441,19 @@ index c45b80f9..da307577 100644
              }),
              ..Default::default()
          });
+@@ -179,7 +186,11 @@
+
+         info!(tx.hash = %hash, "accepted grpc transaction into mempool");
+         Ok(Response::new(SubmitTxResponse {
+-            r#ref: hash.to_vec().into(),
++            r#ref: if pallas::crypto::oracle_plant("v1beta-submit-ref-zeroed") {
++                vec![0u8; 32].into()
++            } else {
++                hash.to_vec().into()
++            },
+         }))
+     }
+
 diff --git a/src/serve/grpc/v1beta/sync.rs b/src/serve/grpc/v1beta/sync.rs
 index d6a37be0..94a26919 100644
 --- a/src/serve/grpc/v1beta/sync.rs

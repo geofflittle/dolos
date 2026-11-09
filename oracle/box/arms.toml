@@ -224,4 +224,5 @@ reward-output-unsupported = ["judge=eval-reward-output answer:refused refusal:ou
 unsupported-untyped = ["judge=validation failure:stale_manifest unsupported:integer_operand_outside_audited_registration_range dolos:Phase2EvaluationError"]
 coverage-deselect = ["judge=coverage leaf:ConflictingMetadataHash"]
 v1beta-as-output-dropped = ["judge=as-output entry=fetch_block:v1beta|dump_history:v1beta|follow_tip:v1beta"]
+v1beta-submit-ref-zeroed = ["judge=submit entry=submit_tx:v1beta answer:submit"]
 watch-block-copied = ["test=serve::grpc::v1beta::watch::tests::the_transactions_of_one_block_share_its_bytes", "test=serve::grpc::v1alpha::watch::tests::the_transactions_of_one_block_share_its_bytes"]
