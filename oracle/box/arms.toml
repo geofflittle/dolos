@@ -232,3 +232,4 @@ collateral-unsigned = ["judge=validation failure:reason_mismatch ledger:Insuffic
 reward-output-unsupported = ["judge=eval-reward-output answer:refused refusal:output_address_(requires_Shelley)"]
 unsupported-untyped = ["judge=validation failure:stale_manifest unsupported:integer_operand_outside_audited_registration_range dolos:Phase2EvaluationError"]
 coverage-deselect = ["judge=coverage leaf:ConflictingMetadataHash"]
+ripemd-160-refused = ["judge=eval-oracle entry=estimate_tx:pallas level:top ledger:ran dolos:refused refusal:V3_builtin_outside_audited_protocol-12_subset !listed:*"]

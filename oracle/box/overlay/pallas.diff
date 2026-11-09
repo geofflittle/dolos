@@ -1010,7 +1010,7 @@ index 198f4462e..5c5003b62 100644
  /// enforcing declared redeemer budgets. Earlier eras return [`Error::WrongEra`].
  ///
 diff --git a/pallas-validate/src/phase2/native_evaluator.rs b/pallas-validate/src/phase2/native_evaluator.rs
-index 97f9659c4..a8fd37273 100644
+index 97f9659c4..dc1d1a029 100644
 --- a/pallas-validate/src/phase2/native_evaluator.rs
 +++ b/pallas-validate/src/phase2/native_evaluator.rs
 @@ -7,6 +7,7 @@ use amaru_kernel::{PlutusVersion, ProtocolVersion};
@@ -1106,7 +1106,7 @@ index 97f9659c4..a8fd37273 100644
      let initial = ExBudget {
          mem: i64::try_from(budget.mem)
              .map_err(|_| Error::DijkstraInvalid(EvaluationFailure::MemoryBudgetOverflow))?,
-@@ -61,6 +133,12 @@ pub(crate) fn eval_native(
+@@ -61,6 +133,17 @@ pub(crate) fn eval_native(
      });
      let mut calls = Vec::new();
      let (value, info) = run(&arena, program, cost_model, initial, &mut calls);
@@ -1116,10 +1116,15 @@ index 97f9659c4..a8fd37273 100644
 +            UnsupportedEvaluation::BuiltinOutsideSubset,
 +        )));
 +    }
++    if pallas_crypto::oracle_plant("ripemd-160-refused") && calls.contains(&Builtin::Ripemd_160) {
++        return Err(Error::DijkstraUnsupported(Unsupported(
++            UnsupportedEvaluation::BuiltinOutsideSubset,
++        )));
++    }
      if matches!(
          value,
          Err(MachineError::Runtime(RuntimeError::IntegerOutOfBounds(_)))
-@@ -155,6 +233,59 @@ fn steps<'a>(
+@@ -155,6 +238,59 @@ fn steps<'a>(
      }
  }
  
