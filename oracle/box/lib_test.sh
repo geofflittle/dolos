@@ -114,26 +114,26 @@ expect planted "$(
 
 # A manifest of catches, a records file for a, and a head log holding one line a's catch selects.
 printf '%s\n' '[dolos]' 'base = "0"' '' '[catches]' \
-  'a = ["judge=validation failure:disagree dolos:Cbor*", "judge=eval-oracle entry=estimate_tx:pallas units:mem !units:steps"]' \
+  'a = ["judge=validation failure:disagree dolos:Cbor*", "judge=eval-oracle entry=estimate_tx_calls units:mem !units:steps"]' \
   'b = ["judge=endorser"]' 'c = ["test=c_bootstrap"]' >"$H/catches.toml"
 printf '%s\n' 'ic#1' 'ic#2' >"$H/a.records"
 printf '%s\n' 'slot=7' >"$H/b.records"
 printf '%s\n' "'c_bootstrap'" >"$H/c.records"
-v='VERDICT judge=validation entry=submit_tx'
-e='VERDICT judge=eval-oracle entry=estimate_tx:pallas'
+v='VERDICT judge=validation entry=receive_tx'
+e='VERDICT judge=eval-oracle entry=estimate_tx_calls'
 printf '%s\n' "$v record=ic#2 cells=failure:disagree,dolos:CborDecodingError outcome=disagree in the head" >"$H/head.log"
 printf '%s\n' \
   "$v record=ic#1 cells=failure:disagree,ledger:accepted,dolos:CborDecodingError outcome=disagree fires" \
   "$v record=ic#3 cells=failure:disagree,dolos:CborDecodingError outcome=disagree another record" \
   "$v record=ic#1 cells=failure:disagree,dolos:accepted outcome=disagree another answer" \
-  "VERDICT judge=rules entry=submit_tx record=ic#1 cells=failure:disagree,dolos:CborDecodingError outcome=disagree another judge" \
+  "VERDICT judge=rules entry=receive_tx record=ic#1 cells=failure:disagree,dolos:CborDecodingError outcome=disagree another judge" \
   "$v record=ic#2 cells=failure:disagree,dolos:CborDecodingError outcome=disagree in the head" \
   "$e record=ic#2 cells=units:mem outcome=disagree mem alone" \
   "$e record=ic#2 cells=units:mem,units:steps outcome=disagree both units" \
-  "VERDICT judge=eval-oracle entry=estimate_tx:v1 record=ic#2 cells=units:mem outcome=disagree another layer" \
+  "VERDICT judge=eval-oracle entry=eval_tx:v1 record=ic#2 cells=units:mem outcome=disagree another layer" \
   "DISAGREE ic#1 ledger=accepted dolos=refused[CborDecodingError]" \
-  'VERDICT judge=endorser entry=fetch_block record=selection cells= outcome=disagree ENDORSER-DIFF service=FetchBlock slot=7 list=ids index=0' \
-  'VERDICT judge=endorser entry=fetch_block record=selection cells= outcome=disagree ENDORSER-DIFF service=FetchBlock slot=70 list=ids index=0' \
+  'VERDICT judge=endorser entry=fetch_block:v1 record=selection cells= outcome=disagree ENDORSER-DIFF entry=fetch_block:v1 slot=7 list=ids index=0' \
+  'VERDICT judge=endorser entry=fetch_block:v1 record=selection cells= outcome=disagree ENDORSER-DIFF entry=fetch_block:v1 slot=70 list=ids index=0' \
   "thread 'c_bootstrap' (9) panicked at x.rs:1:1:" "thread 'c_other' (9) panicked at x.rs:1:1:" >"$H/arm.log"
 caught_by() {
   (
@@ -144,7 +144,7 @@ caught_by() {
 }
 # Must fire on each catch's own line, and must not fire on another record, answer, judge, entry point or test, both units, a line the head holds or a line not of the verdict type.
 expect caught_cells "$(caught_by a)" "fires|mem alone"
-expect caught_selection "$(caught_by b)" "ENDORSER-DIFF service=FetchBlock slot=7 list=ids index=0"
+expect caught_selection "$(caught_by b)" "ENDORSER-DIFF entry=fetch_block:v1 slot=7 list=ids index=0"
 expect caught_test "$(caught_by c)" "thread 'c_bootstrap'"
 expect caught_none "$(caught_by d)" "ARM d NO_CATCH"
 

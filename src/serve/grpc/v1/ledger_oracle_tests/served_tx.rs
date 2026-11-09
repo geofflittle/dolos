@@ -8,9 +8,9 @@ use dolos_cardano::indexes::ScriptLanguage;
 use futures_util::FutureExt as _;
 use itertools::Itertools as _;
 use ledger_oracle_judge::{
-    compare::Tally,
-    eval::{Layer, WireFee},
-    judgement::{Axis, CellKey, Finding},
+    compare::ByEntry,
+    eval::WireFee,
+    judgement::{Axis, CellKey, EntryPoint, Finding, Route, Version},
     record::{CorpusKind, LedgerOutcome, RecordId},
 };
 use pallas::{
@@ -434,9 +434,9 @@ fn differing(ledger: &LedgerTx, mapped: &MappedTx) -> Vec<(Field, String, String
 /// Adds the comparison of what one version answers for one transaction the
 /// ledger accepted.
 fn add(
-    tally: &mut Tally,
+    tally: &mut ByEntry,
     id: RecordId,
-    layer: Layer,
+    layer: Version,
     name: TxName,
     ledger: &LedgerTx,
     answer: Answer<MappedTx>,
@@ -473,6 +473,7 @@ fn add(
     };
     cells.insert(0, CellKey::new(Axis::Layer, layer));
     cells.insert(1, CellKey::new(Axis::Tx, name.kind()));
+    let tally = tally.at(EntryPoint::Route(Route::ReadTx, layer));
     tally.add(agrees, || {
         Finding::new(id, cells, format!("{layer} {name} {dolos}"))
     });
@@ -491,7 +492,7 @@ pub(super) async fn compare(
     domain: &DomainAdapter,
     kind: CorpusKind,
     blocks: &[GroupBlock<'_>],
-    tally: &mut Tally,
+    tally: &mut ByEntry,
 ) -> Option<V1Maps> {
     let mut v1 = Some(V1Maps(()));
     let groups = blocks.iter().filter_map(GroupBlock::rolled);
@@ -538,7 +539,7 @@ pub(super) async fn compare(
                     }
                 }
             });
-            add(tally, id, Layer::V1, *name, ledger, common);
+            add(tally, id, Version::V1, *name, ledger, common);
         }
         for &(name, ref ledger) in &named {
             let hash = match name {
@@ -548,12 +549,12 @@ pub(super) async fn compare(
                 let fee = wire_fee!(v1beta, tx.fee.clone());
                 Answer::Mapped(mapped!(v1beta, tx, Some(fee), None))
             });
-            add(tally, id, Layer::V1beta, name, ledger, answer);
+            add(tally, id, Version::V1beta, name, ledger, answer);
             let answer = read_tx!(v1alpha, domain, hash).then(|tx| {
                 let fee = wire_fee!(v1alpha, tx.fee.clone());
                 Answer::Mapped(mapped!(v1alpha, tx, Some(fee), None))
             });
-            add(tally, id, Layer::V1alpha, name, ledger, answer);
+            add(tally, id, Version::V1alpha, name, ledger, answer);
         }
     }
     v1

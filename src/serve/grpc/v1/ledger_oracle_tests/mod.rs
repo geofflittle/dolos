@@ -12,6 +12,7 @@ mod params;
 mod seed;
 mod serve;
 mod served_tx;
+mod submit;
 mod validate;
 
 use std::{
@@ -34,12 +35,12 @@ use itertools::Itertools as _;
 use ledger_oracle_judge::{
     accounts::{self, Account, Credential, LedgerAccounts},
     cbor::{tx_inputs, Purpose, TxIn},
-    compare::{ByteVerdict, RollFail, StateTallies, Tally},
+    compare::{self, ByEntry, ByteVerdict, RollFail, StateTallies, Tally},
     context::{ContextKnown, ContextTally},
     corpus::{self, Corpus},
     cost::CostTallies,
     eval::{ledger_rows, Answer, EvalKnown, EvalTally, Layer, TxKnown},
-    judgement::{self, Axis, CellKey, EntryPoint, Finding, Judge, RunVerdict},
+    judgement::{self, Axis, CellKey, EntryPoint, Finding, Instrument, Judge, Route, RunVerdict},
     manifest::{self, Candidates, Declared, Feature, Known, KnownList, Locus},
     parallel::in_parallel,
     record::{CorpusKind, LedgerOutcome, PParams, Phase2, Record, RecordId, UtxoEntry},
@@ -68,7 +69,7 @@ use pallas::{
     },
 };
 use seed::SeedPoint;
-use serve::{Event, Served, Service};
+use serve::{Event, RouteServed};
 use served_tx::V1Maps;
 use tokio::{runtime::Handle, task};
 use tonic::{Request, Status};
@@ -76,10 +77,7 @@ use validate::Relay;
 
 use super::{
     query::QueryServiceImpl,
-    spec::{
-        cardano,
-        query::{self as q, query_service_server::QueryService as _},
-    },
+    spec::query::{self as q, query_service_server::QueryService as _},
 };
 use crate::adapters::DomainAdapter;
 
@@ -87,69 +85,10 @@ fn load(kind: CorpusKind) -> Corpus {
     corpus::load(kind).unwrap_or_else(|e| panic!("{e}"))
 }
 
-/// The datum bytes Dolos serves through ReadUtxos for each input it holds.
-async fn read_datums<'a>(
-    domain: &DomainAdapter,
-    inputs: impl IntoIterator<Item = &'a TxIn>,
-) -> BTreeMap<TxIn, Option<Vec<u8>>> {
-    let items = read_utxo_data(domain, inputs).await.into_iter();
-    items
-        .map(|(input, item)| {
-            let datum = match item.parsed_state {
-                Some(q::any_utxo_data::ParsedState::Cardano(output)) => output.datum,
-                None => None,
-            };
-            let bytes = datum.and_then(|d| d.original_cbor).map(|b| b.to_vec());
-            (input, bytes)
-        })
-        .collect()
-}
-
-/// What Dolos serves through ReadUtxos for each input it holds.
-async fn read_utxo_data<'a>(
-    domain: &DomainAdapter,
-    inputs: impl IntoIterator<Item = &'a TxIn>,
-) -> BTreeMap<TxIn, q::AnyUtxoData> {
-    let keys = inputs
-        .into_iter()
-        .map(|i| q::TxoRef {
-            hash: i.tx.to_vec().into(),
-            index: seed::txo_ref(i).1,
-        })
-        .collect();
-    let items = QueryServiceImpl::new(domain.clone())
-        .read_utxos(Request::new(q::ReadUtxosRequest {
-            keys,
-            field_mask: None,
-        }))
-        .await
-        .unwrap()
-        .into_inner()
-        .items;
-    items
-        .into_iter()
-        .map(|item| {
-            let r = item
-                .txo_ref
-                .as_ref()
-                .expect("ReadUtxos names each output it serves");
-            let input = TxIn {
-                tx: r
-                    .hash
-                    .as_ref()
-                    .try_into()
-                    .expect("a served hash is 32 bytes"),
-                ix: r.index.into(),
-            };
-            (input, item)
-        })
-        .collect()
-}
-
 fn parsed_differing(
     id: RecordId,
     ledger: &[u8],
-    parsed: Option<&cardano::TxOutput>,
+    parsed: Option<&output::ServedOutput>,
 ) -> Vec<OutputField> {
     match parsed {
         Some(parsed) => {
@@ -159,9 +98,23 @@ fn parsed_differing(
     }
 }
 
-/// Counts each input and ledger entry where Dolos serves other parsed fields
-/// than the ledger, or other bytes than `written` holds there or else the
-/// ledger.
+/// The ledger bytes of each expected entry, and every input to read, those named and those expected.
+fn utxo_keys<'a>(
+    inputs: impl IntoIterator<Item = &'a TxIn>,
+    expected: impl IntoIterator<Item = &'a UtxoEntry>,
+) -> (BTreeMap<&'a TxIn, &'a [u8]>, Vec<&'a TxIn>) {
+    let expected: BTreeMap<&TxIn, &[u8]> = expected
+        .into_iter()
+        .map(|e| (&e.input, e.output.0.as_slice()))
+        .collect();
+    let mut keys: BTreeSet<&TxIn> = inputs.into_iter().collect();
+    keys.extend(expected.keys());
+    (expected, keys.into_iter().collect())
+}
+
+/// Counts each input and ledger entry where ReadUtxos at v1 serves other
+/// parsed fields than the ledger, or other bytes than `written` holds there
+/// or else the ledger.
 async fn compare_utxos<'a>(
     domain: &DomainAdapter,
     id: RecordId,
@@ -170,27 +123,69 @@ async fn compare_utxos<'a>(
     written: &BTreeMap<TxIn, Vec<u8>>,
     tally: &mut Tally,
 ) {
-    let expected: BTreeMap<&TxIn, &[u8]> = expected
-        .into_iter()
-        .map(|e| (&e.input, e.output.0.as_slice()))
-        .collect();
-    let mut keys: BTreeSet<&TxIn> = inputs.into_iter().collect();
-    keys.extend(expected.keys());
-    let served = read_utxo_data(domain, keys.iter().copied()).await;
-    for input in keys {
+    let (expected, keys) = utxo_keys(inputs, expected);
+    let (_, served) = serve::v1::read_utxos(domain, &keys).await;
+    compare_served_utxos(&served, id, &keys, &expected, written, tally);
+}
+
+/// Counts, at each version, each input and ledger entry where ReadUtxos
+/// serves other parsed fields than the ledger, or other bytes than `written`
+/// holds there or else the ledger, and each ledger entry and found output
+/// where SearchUtxos by the address of each ledger entry does.
+async fn compare_utxos_at_every_version<'a>(
+    domain: &DomainAdapter,
+    id: RecordId,
+    inputs: impl IntoIterator<Item = &'a TxIn>,
+    expected: impl IntoIterator<Item = &'a UtxoEntry>,
+    written: &BTreeMap<TxIn, Vec<u8>>,
+    tallies: &mut ByEntry,
+) {
+    let (expected, keys) = utxo_keys(inputs, expected);
+    for (entry, served) in serve::read_utxos(domain, &keys).await {
+        compare_served_utxos(&served, id, &keys, &expected, written, tallies.at(entry));
+    }
+    let addresses = addresses(id, expected.values().copied());
+    let addresses: Vec<&[u8]> = addresses.iter().map(Vec::as_slice).collect();
+    for (entry, served) in serve::search_utxos(domain, &addresses).await {
+        let found: BTreeSet<&TxIn> = expected.keys().copied().chain(served.keys()).collect();
+        let found: Vec<&TxIn> = found.into_iter().collect();
+        compare_served_utxos(&served, id, &found, &expected, written, tallies.at(entry));
+    }
+}
+
+/// The distinct address of each output.
+fn addresses<'a>(id: RecordId, outputs: impl IntoIterator<Item = &'a [u8]>) -> BTreeSet<Vec<u8>> {
+    let address = |bytes: &[u8]| {
+        let output = MultiEraOutput::decode(Era::Dijkstra, bytes)
+            .unwrap_or_else(|e| panic!("OUTPUT {id} {e}"));
+        let address = output
+            .address()
+            .unwrap_or_else(|e| panic!("OUTPUT {id} {e}"));
+        address.to_vec()
+    };
+    outputs.into_iter().map(address).collect()
+}
+
+/// Counts each of `keys` where `served` holds other parsed fields than the
+/// ledger, or other bytes than `written` holds there or else the ledger.
+fn compare_served_utxos(
+    served: &serve::Utxos,
+    id: RecordId,
+    keys: &[&TxIn],
+    expected: &BTreeMap<&TxIn, &[u8]>,
+    written: &BTreeMap<TxIn, Vec<u8>>,
+    tally: &mut Tally,
+) {
+    for &input in keys {
         let ledger = expected.get(input).copied();
         let bytes = ledger.map(|l| written.get(input).map_or(l, Vec::as_slice));
         let item = served.get(input);
-        let Some(verdict) = ByteVerdict::of(bytes, item.map(|i| i.native_bytes.as_ref())) else {
+        let Some(verdict) = ByteVerdict::of(bytes, item.map(|i| i.bytes.as_slice())) else {
             tally.agree();
             continue;
         };
         let fields = match (ledger, item) {
-            (Some(ledger), Some(item)) => {
-                let parsed = item.parsed_state.as_ref();
-                let parsed = parsed.map(|q::any_utxo_data::ParsedState::Cardano(output)| output);
-                parsed_differing(id, ledger, parsed)
-            }
+            (Some(ledger), Some(item)) => parsed_differing(id, ledger, item.parsed.as_ref()),
             (None, _) | (_, None) => Vec::new(),
         };
         tally.add(verdict.agrees() && fields.is_empty(), || {
@@ -208,21 +203,6 @@ async fn compare_utxos<'a>(
 
 fn show_input(input: &TxIn) -> String {
     format!("{}#{}", hex::encode(input.tx), input.ix)
-}
-
-/// The Cardano parameters Dolos serves through ReadParams.
-async fn read_params(domain: &DomainAdapter) -> cardano::PParams {
-    let values = QueryServiceImpl::new(domain.clone())
-        .read_params(Request::new(q::ReadParamsRequest { field_mask: None }))
-        .await
-        .unwrap()
-        .into_inner()
-        .values
-        .expect("ReadParams answers with values");
-    match values.params {
-        Some(q::any_chain_params::Params::Cardano(p)) => p,
-        None => panic!("ReadParams answers with Cardano parameters"),
-    }
 }
 
 /// The validation outcomes, phase one rules, state comparisons, fee, redeemer
@@ -249,7 +229,7 @@ impl Judged {
         self.cost.report(&mut out);
         self.eval.report(&mut out);
         self.context.report(&mut out);
-        out.require(&[(Judge::Validation, EntryPoint::SubmitTx)]);
+        out.require(&[(Judge::Validation, Instrument::ReceiveTx.into())]);
         out
     }
 
@@ -290,20 +270,28 @@ fn judged_part(uncompared: &[&str]) -> Judged {
     judged.validation.agree.insert(supp(1), Vec::new());
     let state = &mut judged.state;
     let tallies = [
-        ("utxo", &mut state.utxo),
-        ("as_output", &mut state.as_output),
         ("accounts", &mut state.accounts),
         ("undo", &mut state.undo),
-        ("params", &mut state.params),
         ("readtx", &mut state.readtx),
         ("script", &mut state.script),
-        ("datum", &mut state.datum),
         ("plutus_data", &mut state.plutus_data),
-        ("served_tx", &mut state.served_tx),
     ];
     for (name, tally) in tallies {
         if !uncompared.contains(&name) {
             tally.agree();
+        }
+    }
+    let by_entry = [
+        ("utxo", &mut state.utxo, compare::SERVED_UTXOS),
+        ("datum", &mut state.datum, compare::SERVED_UTXOS),
+        ("params", &mut state.params, compare::SERVED_PARAMS),
+        ("as_output", &mut state.as_output, compare::SERVED_OUTPUTS),
+        ("served_tx", &mut state.served_tx, compare::SERVED_TXS),
+        ("submit", &mut state.submit, compare::SERVED_SUBMIT),
+    ];
+    for (name, tallies, routes) in by_entry {
+        if !uncompared.contains(&name) {
+            compare::at_every_version(routes).for_each(|entry| tallies.at(entry).agree());
         }
     }
     judged
@@ -311,8 +299,8 @@ fn judged_part(uncompared: &[&str]) -> Judged {
 
 /// The text of each disagreement.
 #[cfg(test)]
-fn shown(findings: &[Finding]) -> Vec<String> {
-    findings.iter().map(Finding::to_string).collect()
+fn shown<'a>(findings: impl IntoIterator<Item = &'a Finding>) -> Vec<String> {
+    findings.into_iter().map(Finding::to_string).collect()
 }
 
 /// The failing verdict lines of `judge` in a corpus judgement.
@@ -689,6 +677,8 @@ async fn validate_run<'r>(
     for records in run.groups() {
         let group = validate::group(base, records[0].slot, Relay::Held);
         let relayed = validate::group(base, records[0].slot, Relay::Inflight);
+        let routed = validate::group(base, records[0].slot, Relay::Held);
+        let mut watching = submit::Watching::open(routed.domain()).await;
         let mut given = BTreeMap::new();
         let mut dolos_accepted = BTreeSet::new();
         for record in records {
@@ -724,8 +714,19 @@ async fn validate_run<'r>(
                 // reads under a false flag is validated and never held.
                 Phase2::Invalid => group.check(&record.tx.0),
             };
-            let dolos = validate::verdict(&submit(&group));
+            let received = submit(&group);
+            let dolos = validate::verdict(&received);
             let inflight = validate::verdict(&submit(&relayed));
+            if record.flag() == Phase2::Valid {
+                let decoded = MultiEraTx::decode_for_era(Era::Dijkstra, &record.tx.0);
+                let hash = match &received {
+                    Ok(hash) => Some(**hash),
+                    Err(_) => decoded.ok().map(|tx| *tx.hash()),
+                };
+                let (domain, tx) = (routed.domain(), &record.tx.0);
+                let tallies = &mut state.submit;
+                submit::compare(domain, &mut watching, id, tx, hash, &dolos, tallies).await;
+            }
             if matches!(dolos, DolosVerdict::Accepted) {
                 dolos_accepted.insert(record.n);
             }
@@ -814,7 +815,7 @@ async fn validate_run<'r>(
             .collect();
         let inputs = run.held_in(records).chain(&producible);
         let wrote = records.iter().flat_map(written).collect();
-        compare_utxos(
+        compare_utxos_at_every_version(
             group.domain(),
             id_of(last),
             inputs,
@@ -841,13 +842,13 @@ enum ExpectedDatum {
     Unwitnessed,
 }
 
-/// Counts the datum ReadUtxos serves for each ledger output with a datum hash against the datum its making transaction witnesses, or against the hash when it witnesses none.
+/// Counts the datum ReadUtxos and SearchUtxos serve for each ledger output with a datum hash against the datum its making transaction witnesses, or against the hash when it witnesses none.
 async fn compare_datums(
     domain: &DomainAdapter,
     id: RecordId,
     made: &[(&UtxoEntry, &Record)],
     edits: &Edits<'_>,
-    tally: &mut Tally,
+    tally: &mut ByEntry,
 ) {
     let mut expected = BTreeMap::new();
     for (entry, maker) in made {
@@ -876,12 +877,31 @@ async fn compare_datums(
         };
         expected.insert(entry.input, (maker_id, *hash, ledger));
     }
-    let served = read_datums(domain, expected.keys()).await;
-    for (input, (maker, hash, ledger)) in &expected {
-        let served = served.get(input).cloned().flatten();
+    let inputs: Vec<&TxIn> = expected.keys().collect();
+    let made = made.iter().filter(|(e, _)| expected.contains_key(&e.input));
+    let addresses = addresses(id, made.map(|(e, _)| e.output.0.as_slice()));
+    let addresses: Vec<&[u8]> = addresses.iter().map(Vec::as_slice).collect();
+    let read = serve::read_utxos(domain, &inputs).await;
+    let searched = serve::search_utxos(domain, &addresses).await;
+    for (entry, served) in read.into_iter().chain(searched) {
+        compare_served_datums(&served, id, &expected, tally.at(entry));
+    }
+}
+
+/// Counts the datum one route serves for each ledger output with a datum hash against the expected datum.
+fn compare_served_datums(
+    served: &serve::Utxos,
+    id: RecordId,
+    expected: &BTreeMap<TxIn, (RecordId, [u8; 32], ExpectedDatum)>,
+    tally: &mut Tally,
+) {
+    for (input, (maker, hash, ledger)) in expected {
+        let served = served
+            .get(input)
+            .and_then(|u| u.parsed.as_ref()?.datum_cbor());
         let (agrees, dolos, cell) = match ledger {
             ExpectedDatum::Witnessed(bytes) => {
-                let verdict = ByteVerdict::against(bytes, served.as_deref());
+                let verdict = ByteVerdict::against(bytes, served);
                 (verdict.agrees(), verdict.to_string(), verdict.cell())
             }
             ExpectedDatum::Unwitnessed => {
@@ -889,7 +909,7 @@ async fn compare_datums(
                 match served {
                     None => (true, "unwitnessed dolos=none".to_string(), cell),
                     Some(bytes) => {
-                        let served_hash = *Hasher::<256>::hash(&bytes);
+                        let served_hash = *Hasher::<256>::hash(bytes);
                         let dolos = format!("unwitnessed dolos_hash={}", hex::encode(served_hash));
                         (served_hash == *hash, dolos, cell)
                     }
@@ -1437,21 +1457,20 @@ impl Carried for Datum {
     }
 }
 
-/// The output bytes each service serves for the inputs of the blocks a run rolled.
+/// What every served route at every version serves for the inputs of the blocks a run rolled.
 async fn serve_rolled(
     domain: &DomainAdapter,
     seed: &SeedPoint,
     rolled: &[&Rolled<'_>],
     _: &V1Maps,
-) -> [(Service, Served); 4] {
+) -> Vec<RouteServed> {
     let hashes: Vec<BlockHash> = rolled
         .iter()
         .map(|r| r.point.hash().expect("a rolled block has a hash"))
         .collect();
     let txs = rolled.iter().map(|r| r.records.len()).sum();
     let streams = serve::Streams::open(domain, seed.point()).await;
-    let [follow, watch] = streams.read(Event::Apply, hashes.len(), txs).await;
-    let fetch = serve::fetch_block(domain, &hashes).await;
+    let mut served = streams.read(Event::Apply, hashes.len(), txs).await;
     let tx_hashes: Vec<[u8; 32]> = rolled
         .iter()
         .flat_map(|r| &r.records)
@@ -1461,46 +1480,53 @@ async fn serve_rolled(
             *tx.hash()
         })
         .collect();
-    let read = serve::read_tx(domain, &tx_hashes).await;
-    [
-        (Service::FetchBlock, fetch),
-        follow,
-        watch,
-        (Service::ReadTx, read),
-    ]
+    served.extend(serve::fetched(domain, &hashes, &tx_hashes).await);
+    served
 }
 
 /// The verdict on one served output against the ledger's output bytes, none when its bytes and parsed fields agree.
 fn served_verdict(
     id: RecordId,
     ledger: &[u8],
-    served: Option<&cardano::TxOutput>,
+    served: Option<&output::ServedOutput>,
 ) -> Option<String> {
     let Some(served) = served else {
         return Some(ByteVerdict::against(ledger, None).to_string());
     };
-    let bytes = served.original_cbor.as_ref();
-    let bytes = bytes.expect("a served output carries its bytes");
-    let verdict = ByteVerdict::against(ledger, Some(bytes));
     let fields = parsed_differing(id, ledger, Some(served));
-    match (verdict.agrees(), fields.is_empty()) {
+    let verdict = match &served.bytes {
+        output::ServedBytes::NoField => None,
+        output::ServedBytes::Stated(bytes) => {
+            let bytes = bytes.as_deref().expect("a served output carries its bytes");
+            Some(ByteVerdict::against(ledger, Some(bytes)))
+        }
+    };
+    let agrees = verdict.as_ref().is_none_or(ByteVerdict::agrees);
+    let shown = verdict.map_or("fields_only".to_string(), |v| v.to_string());
+    match (agrees, fields.is_empty()) {
         (true, true) => None,
-        (_, true) => Some(verdict.to_string()),
-        (_, false) => Some(format!("{verdict} fields={}", fields.iter().join(","))),
+        (_, true) => Some(shown),
+        (_, false) => Some(format!("{shown} fields={}", fields.iter().join(","))),
     }
 }
 
-/// What each service serves for one input against the ledger's output bytes, grouping the services by each disagreeing verdict.
+/// The disagreeing verdicts on what each route serves for one input against the ledger's output bytes, by the route's entry point, with the routes left uncompared because their version states no sub transaction.
 fn served_verdicts(
     id: RecordId,
     tx: &[u8; 32],
     input: &TxIn,
+    sub_only: bool,
     ledger: &[u8],
-    services: &[(Service, Served)],
-) -> BTreeMap<String, BTreeSet<Service>> {
-    let mut failures: BTreeMap<String, BTreeSet<Service>> = BTreeMap::new();
-    for (service, served) in services {
-        let verdicts: Vec<String> = match served.get(tx) {
+    routes: &[RouteServed],
+) -> (BTreeMap<EntryPoint, Vec<String>>, usize) {
+    let mut verdicts = BTreeMap::new();
+    let mut unheld = 0;
+    for route in routes {
+        if sub_only && !route.subs {
+            unheld += 1;
+            continue;
+        }
+        let failing: Vec<String> = match route.served.get(tx) {
             None => vec!["not_served".to_string()],
             Some(named) => {
                 let occurrences: Vec<_> = named.iter().filter(|(i, _)| i == input).collect();
@@ -1514,28 +1540,27 @@ fn served_verdicts(
                 }
             }
         };
-        for verdict in verdicts {
-            failures.entry(verdict).or_default().insert(*service);
-        }
+        verdicts.insert(route.entry, failing);
     }
-    failures
+    (verdicts, unheld)
 }
 
-/// The served output comparisons of the records of one block, with the inputs left uncompared because the run's seed made them and the compared inputs only sub transactions name.
+/// The served output comparisons of the records of one block, with the inputs left uncompared because the run's seed made them, the compared inputs only sub transactions name, and the route comparisons left out because the route's version states no sub transaction.
 #[derive(Debug, Default)]
 struct ServedChecks {
-    records: BTreeMap<RecordId, Tally>,
+    records: BTreeMap<RecordId, ByEntry>,
     seeded: usize,
     sub_only: usize,
+    sub_unheld: usize,
 }
 
-/// Counts each input a record of the block names that an earlier record made, against what every service serves for it.
+/// Counts each input a record of the block names that an earlier record made, against what every route serves for it.
 fn compare_served(
     kind: CorpusKind,
     run: &KeptRun,
     makers: &BTreeMap<TxIn, RecordId>,
     block: &Rolled<'_>,
-    services: &[(Service, Served)],
+    routes: &[RouteServed],
 ) -> ServedChecks {
     let mut checks = ServedChecks::default();
     for record in &block.records {
@@ -1548,7 +1573,7 @@ fn compare_served(
         let tx = MultiEraTx::decode_for_era(Era::Dijkstra, &record.tx.0)
             .unwrap_or_else(|e| panic!("TX {id} {e}"));
         let hash: [u8; 32] = *tx.hash();
-        let tally = checks.records.entry(id).or_default();
+        let by_entry = checks.records.entry(id).or_default();
         for input in named_inputs(id, record) {
             let shown = show_input(&input);
             let made = match run.origin(&input, record, makers, block.group) {
@@ -1557,7 +1582,7 @@ fn compare_served(
                     continue;
                 }
                 InputOrigin::AbsentFromPre => {
-                    tally.add(false, || {
+                    by_entry.at(endorser::FETCH_BLOCK).add(false, || {
                         let cells = vec![CellKey::new(Axis::Input, "absent_from_pre")];
                         Finding::new(id, cells, format!("absent_from_pre input={shown}"))
                     });
@@ -1566,25 +1591,23 @@ fn compare_served(
                 InputOrigin::InRun { made_by } => format!("in_run made_by={made_by}"),
                 InputOrigin::InGroup { made_by } => format!("in_group made_by={made_by}"),
             };
-            if sub_only.contains(&input) {
+            let sub = sub_only.contains(&input);
+            if sub {
                 checks.sub_only += 1;
             }
             let ledger = &run
                 .pre_entry(record, &input)
                 .expect("an input made in the run is in the pre state")
                 .output;
-            let failures = served_verdicts(id, &hash, &input, &ledger.0, services);
-            tally.add(failures.is_empty(), || {
-                let services = failures.values().flatten();
-                let cells = services.map(|s| CellKey::new(Axis::Service, s));
-                let lines = failures.iter().map(|(verdict, services)| {
-                    let mut names = services.iter().map(Service::to_string);
-                    let names = names.join(",");
-                    format!("{verdict} input={shown} {made} services={names}")
+            let (verdicts, unheld) = served_verdicts(id, &hash, &input, sub, &ledger.0, routes);
+            checks.sub_unheld += unheld;
+            for (entry, failing) in verdicts {
+                by_entry.at(entry).add(failing.is_empty(), || {
+                    let cells = vec![CellKey::new(Axis::Entry, entry)];
+                    let detail = format!("{} input={shown} {made}", failing.join(","));
+                    Finding::new(id, cells, detail)
                 });
-                let detail = lines.collect::<Vec<_>>().join(" and ");
-                Finding::new(id, cells.unique().collect(), detail)
-            });
+            }
         }
     }
     checks
@@ -1595,15 +1618,16 @@ fn compare_as_output(
     kind: CorpusKind,
     run: &KeptRun,
     rolled: &[&Rolled<'_>],
-    services: &[(Service, Served)],
+    routes: &[RouteServed],
     state: &mut StateTallies,
-    checks: &mut BTreeMap<RecordId, Tally>,
+    checks: &mut BTreeMap<RecordId, ByEntry>,
 ) {
     let makers = run.makers(kind);
     for block in rolled {
-        let served = compare_served(kind, run, &makers, block, services);
+        let served = compare_served(kind, run, &makers, block, routes);
         state.seeded_unjudged += served.seeded;
         state.sub_only += served.sub_only;
+        state.sub_unheld += served.sub_unheld;
         for (id, tally) in served.records {
             checks.entry(id).or_default().merge(tally);
         }
@@ -1731,9 +1755,11 @@ async fn sweep(
             state.revalidate.add(kept, || rollback(*rid, "dropped"));
         }
         let tally = &mut state.undo;
-        let services = streams.read(Event::Undo, 1, block.records.len()).await;
-        for (_, checked) in compare_served(kind, run, &makers, block, &services).records {
-            tally.merge(checked);
+        let routes = streams.read(Event::Undo, 1, block.records.len()).await;
+        for (_, checked) in compare_served(kind, run, &makers, block, &routes).records {
+            for (_, at_entry) in checked.0 {
+                tally.merge(at_entry);
+            }
         }
         let wrote: BTreeMap<TxIn, Vec<u8>> = run.records().iter().flat_map(written).collect();
         for record in &block.records {
@@ -1789,7 +1815,7 @@ impl Default for Edits<'_> {
 struct RunJudged {
     judged: Judged,
     ids: BTreeSet<RecordId>,
-    as_output: BTreeMap<RecordId, Tally>,
+    as_output: BTreeMap<RecordId, ByEntry>,
     accounts: BTreeMap<RecordId, Tally>,
 }
 
@@ -1825,7 +1851,7 @@ async fn judge_run(
         first,
     );
     let seed = run.seed();
-    compare_utxos(
+    compare_utxos_at_every_version(
         &seeded.domain,
         id,
         [],
@@ -1837,11 +1863,16 @@ async fn judge_run(
     let served = dolos_accounts(&seeded.domain);
     let checks = account_checks.entry(id).or_default();
     accounts::compare(id, &first.accounts_pre, &served, checks);
-    let served = read_params(&seeded.domain).await;
     let expected = (edits.expected_params)(run.pparams());
-    params::compare(&expected, &served, &mut judged.state.params, |key, d| {
-        Finding::new(id, vec![CellKey::new(Axis::Param, key)], d)
-    });
+    for (version, served) in serve::read_params(&seeded.domain).await {
+        let tally = judged
+            .state
+            .params
+            .at(EntryPoint::Route(Route::ReadParams, version));
+        params::compare(&expected, &served, version, tally, |key, d| {
+            Finding::new(id, vec![CellKey::new(Axis::Param, key)], d)
+        });
+    }
     let (blocks, run_accounts) =
         validate_run(&seeded.domain, kind, run, manifests, edits, ids, judged).await;
     for (id, tally) in run_accounts {
@@ -1858,8 +1889,8 @@ async fn judge_run(
     let readtx = &mut judged.state.readtx;
     compare_read_tx(&seeded.domain, kind, &blocks, readtx, &v1).await;
     let rolled: Vec<&Rolled> = blocks.iter().filter_map(GroupBlock::rolled).collect();
-    let services = serve_rolled(&seeded.domain, &seeded.seed, &rolled, &v1).await;
-    compare_as_output(kind, run, &rolled, &services, &mut judged.state, as_output);
+    let routes = serve_rolled(&seeded.domain, &seeded.seed, &rolled, &v1).await;
+    compare_as_output(kind, run, &rolled, &routes, &mut judged.state, as_output);
     sweep(
         &seeded.domain,
         &seeded.seed,
@@ -1888,7 +1919,7 @@ async fn judge(corpus: &Corpus, manifests: &Manifests, edits: &Edits<'_>) -> Jud
     });
     let mut judged = Judged::default();
     let mut judged_ids = BTreeSet::new();
-    let mut as_output: BTreeMap<RecordId, Tally> = BTreeMap::new();
+    let mut as_output: BTreeMap<RecordId, ByEntry> = BTreeMap::new();
     let mut account_checks: BTreeMap<RecordId, Tally> = BTreeMap::new();
     for part in parts {
         judged.merge(part.judged);
@@ -1944,7 +1975,7 @@ async fn ledger_oracle() {
         let judged = judge(&corpus, &manifests, &Edits::default()).await;
         println!("{judged}");
         let mut part = judged.report();
-        part.require(&[(Judge::Cost, EntryPoint::MinFee)]);
+        part.require(&[(Judge::Cost, Instrument::MinFee.into())]);
         verdicts.merge(part);
         all.merge(judged);
     }
@@ -1954,7 +1985,7 @@ async fn ledger_oracle() {
     }
     let revalidated = all.state.revalidate.compared;
     println!("REVALIDATE all compared={revalidated}");
-    verdicts.require(&[(Judge::Revalidate, EntryPoint::Revalidate)]);
+    verdicts.require(&[(Judge::Revalidate, Instrument::Revalidate.into())]);
     let cases = endorser::load(&endorser::fixture_path());
     let endorsed = endorser::judge(&cases).await;
     println!("{}", endorsed.line());
@@ -2093,8 +2124,8 @@ async fn dropping_one_seed_pair_prints_utxo_disagree() {
     let corpus = load(CorpusKind::Supp);
     let manifests = Manifests::committed();
     let intact = judge(&corpus, &manifests, &Edits::default()).await;
-    assert!(intact.state.utxo.compared > 0);
-    assert!(intact.state.utxo.disagree.is_empty(), "{intact}");
+    assert!(intact.state.utxo.compared() > 0);
+    assert!(intact.state.utxo.disagree().next().is_none(), "{intact}");
     let dropped = AtomicBool::new(false);
     let edits = Edits {
         pre: Box::new(|_, pre| {
@@ -2114,7 +2145,7 @@ async fn dropping_one_seed_pair_prints_utxo_disagree() {
         hex::encode(&pair.output.0)
     );
     assert!(
-        shown(&planted.state.utxo.disagree).contains(&line),
+        shown(planted.state.utxo.disagree()).contains(&line),
         "{planted}"
     );
     assert!(!failing(&planted, Judge::Utxo).is_empty());
@@ -2126,8 +2157,8 @@ async fn one_changed_cost_model_entry_prints_params_disagree() {
     let corpus = load(CorpusKind::Supp);
     let manifests = Manifests::committed();
     let intact = judge(&corpus, &manifests, &Edits::default()).await;
-    assert!(intact.state.params.compared > 0);
-    assert!(intact.state.params.disagree.is_empty(), "{intact}");
+    assert!(intact.state.params.compared() > 0);
+    assert_eq!(intact.state.params.disagree().count(), 0, "{intact}");
     let changed = AtomicBool::new(false);
     let edits = Edits {
         expected_params: Box::new(|pparams| {
@@ -2377,7 +2408,7 @@ async fn leaving_an_accepted_tx_out_of_its_block_prints_utxo_disagree() {
         .expect("a group ends in an accepted record");
     let missing = |judged: &Judged| {
         let prefix = format!("{left_out} input=");
-        let lines = shown(&judged.state.utxo.disagree);
+        let lines = shown(judged.state.utxo.disagree());
         lines
             .iter()
             .filter(|d| d.starts_with(&prefix) && d.ends_with(" dolos=none"))
@@ -2439,10 +2470,11 @@ async fn a_block_that_does_not_roll_prints_one_roll_fail_and_no_state_line_for_i
     );
     assert!(!passes(&planted));
     let state = &planted.state;
-    let loci = [&state.utxo, &state.readtx, &state.script];
+    let loci = [&state.readtx, &state.script];
     let named = loci
         .iter()
         .flat_map(|t| &t.disagree)
+        .chain(state.utxo.disagree())
         .filter(|d| group.contains(&d.id))
         .join("\n");
     assert!(named.is_empty(), "{named}");
@@ -2461,7 +2493,7 @@ async fn supp8_written_as_phase2_valid_leaves_the_input_of_supp9_missing() {
     assert!(matches!(supp8.outcome, LedgerOutcome::Accepted { .. }));
     let manifests = Manifests::committed();
     let of_supp9 = |judged: &Judged| -> Vec<String> {
-        let prefix = "VERDICT judge=validation entry=submit_tx record=supp#9 ";
+        let prefix = "VERDICT judge=validation entry=receive_tx record=supp#9 ";
         let lines = failing(judged, Judge::Validation).into_iter();
         lines.filter(|l| l.starts_with(prefix)).collect()
     };
@@ -2486,7 +2518,7 @@ async fn an_output_dolos_holds_that_the_ledger_never_made_prints_utxo_disagree()
     let manifests = Manifests::committed();
     let intact = judge(&corpus, &manifests, &Edits::default()).await;
     let unmade = |judged: &Judged, tx: Option<[u8; 32]>| -> Vec<String> {
-        let lines = shown(&judged.state.utxo.disagree).into_iter();
+        let lines = shown(judged.state.utxo.disagree()).into_iter();
         let lines = lines.filter(|d| d.contains(" ledger=none dolos="));
         let named =
             |d: &String| tx.is_none_or(|tx| d.contains(&format!(" input={}#", hex::encode(tx))));
@@ -2554,7 +2586,7 @@ async fn the_collateral_return_supp9_spends_is_served() {
     let intact = judge_supp(|_| ()).await;
     let text = intact.to_string();
     assert!(!text.contains("\nKNOWN row=S3 "), "{text}");
-    assert!(intact.state.as_output.disagree.is_empty(), "{text}");
+    assert!(intact.state.as_output.disagree().next().is_none(), "{text}");
     let listed = judge_supp(|m| {
         m.known.insert((Locus::AsOutput, supp(9)), Row::S3);
     })
@@ -2714,7 +2746,7 @@ async fn a_witnessed_datum_changed_in_its_last_byte_prints_datum_differ() {
     let corpus = load(CorpusKind::Supp);
     let manifests = Manifests::committed();
     let intact = judge(&corpus, &manifests, &Edits::default()).await;
-    assert!(intact.state.datum.compared > 0, "{intact}");
+    assert!(intact.state.datum.compared() > 0, "{intact}");
     let (maker, input, len) = corpus
         .kept()
         .flat_map(KeptRun::records)
@@ -2724,7 +2756,7 @@ async fn a_witnessed_datum_changed_in_its_last_byte_prints_datum_differ() {
     let named = format!(" input={} made_by={maker} ", show_input(&input));
     let text = intact.to_string();
     assert!(
-        shown(&intact.state.datum.disagree)
+        shown(intact.state.datum.disagree())
             .iter()
             .all(|d| !d.contains(&named)),
         "{text}"
@@ -2741,13 +2773,13 @@ async fn a_witnessed_datum_changed_in_its_last_byte_prints_datum_differ() {
         ..Edits::default()
     };
     let planted = judge(&corpus, &manifests, &edits).await;
-    let lines: Vec<String> = shown(&planted.state.datum.disagree)
+    let lines: Vec<String> = shown(planted.state.datum.disagree())
         .into_iter()
         .filter(|d| d.contains(&named))
         .collect();
     println!(
         "PLANTED datum disagree={} named={}",
-        planted.state.datum.disagree.len(),
+        planted.state.datum.disagree().count(),
         lines.len()
     );
     assert!(!lines.is_empty(), "{planted}");

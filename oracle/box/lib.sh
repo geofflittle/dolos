@@ -50,6 +50,7 @@ crate_test() {
   case $1 in
     cost-models) echo "-p dolos-cardano --features strict --test musashi_cost_models" ;;
     endorser-tx-dropped) echo "-p dolos --lib" ;;
+    watch-block-copied) echo "-p dolos --lib" ;;
     *) return 1 ;;
   esac
 }
@@ -59,6 +60,7 @@ crate_test_source() {
   case $1 in
     cost-models) echo crates/cardano/tests/musashi_cost_models.rs ;;
     endorser-tx-dropped) echo src/serve/grpc/v1/ledger_oracle_tests/endorser.rs ;;
+    watch-block-copied) printf '%s\n' src/serve/grpc/v1beta/watch.rs src/serve/grpc/v1alpha/watch.rs ;;
   esac
 }
 
@@ -67,6 +69,7 @@ crate_test_filter() {
   case $1 in
     cost-models) echo "musashi_era_translation_keeps_the_published_v3_cost_model --exact" ;;
     endorser-tx-dropped) echo "$ORACLE_TESTS::endorser::served_endorser_transactions_are_the_nodes --exact" ;;
+    watch-block-copied) echo "watch::tests::the_transactions_of_one_block_share_its_bytes" ;;
   esac
 }
 

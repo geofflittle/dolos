@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    judgement::{self, Axis, CellKey, EntryPoint, Judge, Verdict},
+    judgement::{self, Axis, CellKey, EntryPoint, Instrument, Judge, Verdict},
     manifest::Feature,
     record::{FailurePath, LedgerOutcome, NonEmpty, RecordId},
     refusal::{DolosClass, LedgerLeaf, RefusalClass},
@@ -440,7 +440,7 @@ impl ValidationTally {
     pub fn report(&self, out: &mut judgement::Tally) {
         let passed = |cells, pass| judgement::Passed {
             judge: Judge::Validation,
-            entry: EntryPoint::SubmitTx,
+            entry: EntryPoint::Instrument(Instrument::ReceiveTx),
             cells,
             pass,
         };
@@ -472,7 +472,7 @@ impl ValidationTally {
             Outcome::Pass(Pass::Known { row, shown }) => self.known.push((id, row, shown)),
             Outcome::Fail(fail) => self.failing.push(Verdict::disagree(
                 Judge::Validation,
-                EntryPoint::SubmitTx,
+                EntryPoint::Instrument(Instrument::ReceiveTx),
                 id,
                 fail.cells(),
                 fail.to_string(),
@@ -588,7 +588,7 @@ mod tests {
         };
         Verdict::disagree(
             Judge::Validation,
-            EntryPoint::SubmitTx,
+            EntryPoint::Instrument(Instrument::ReceiveTx),
             supp(n),
             fail.cells(),
             fail.to_string(),
@@ -605,7 +605,7 @@ mod tests {
         t.add(supp(3), Outcome::Fail(fail), vec![leaf_cell(3)]);
         assert_eq!(
             t.failing[0].to_string(),
-            "VERDICT judge=validation entry=submit_tx record=supp#3 \
+            "VERDICT judge=validation entry=receive_tx record=supp#3 \
              cells=failure:disagree,ledger:PtrPresentInCollateralReturn,dolos:DijkstraInvalidAccount \
              outcome=disagree ledger=refused[PtrPresentInCollateralReturn] \
              dolos=refused[DijkstraInvalidAccount(Credential)]"
@@ -737,7 +737,7 @@ mod tests {
         assert_eq!(
             tally.failing.iter().map(Verdict::to_string).collect::<Vec<_>>(),
             vec![
-                "VERDICT judge=validation entry=submit_tx record=supp#3 cells=failure:relay_dependent \
+                "VERDICT judge=validation entry=receive_tx record=supp#3 cells=failure:relay_dependent \
                  outcome=disagree held=accepted inflight=refused[WithdrawalNotRegistered]"
             ]
         );
@@ -776,11 +776,11 @@ mod tests {
         assert_eq!(
             tally.failing.iter().map(Verdict::to_string).collect::<Vec<_>>(),
             [
-                "VERDICT judge=validation entry=submit_tx record=supp#5 \
+                "VERDICT judge=validation entry=receive_tx record=supp#5 \
                  cells=failure:reason_mismatch,ledger:BadInputsUTxO,dolos:PreservationOfValue \
                  outcome=disagree ledger=refused[BadInputsUTxO,BadInputsUTxO] \
                  ledger_class=inputs dolos=refused[PreservationOfValue] dolos_class=value",
-                "VERDICT judge=validation entry=submit_tx record=supp#6 \
+                "VERDICT judge=validation entry=receive_tx record=supp#6 \
                  cells=failure:reason_mismatch,ledger:BadInputsUTxO,dolos:DijkstraMissingParameters \
                  outcome=disagree ledger=refused[BadInputsUTxO,BadInputsUTxO] \
                  ledger_class=inputs dolos=refused[DijkstraMissingParameters] dolos_class=none"
@@ -825,7 +825,7 @@ mod tests {
                 .iter()
                 .map(Verdict::to_string)
                 .collect::<Vec<_>>(),
-            ["VERDICT judge=validation entry=submit_tx record=supp#4 \
+            ["VERDICT judge=validation entry=receive_tx record=supp#4 \
                  cells=failure:unknown_refusal,dolos:FutureVariant outcome=disagree \
                  dolos=refused[FutureVariant]"]
         );
@@ -904,7 +904,7 @@ mod tests {
                 .iter()
                 .map(Verdict::to_string)
                 .collect::<Vec<_>>(),
-            ["VERDICT judge=validation entry=submit_tx record=supp#5 \
+            ["VERDICT judge=validation entry=receive_tx record=supp#5 \
                  cells=failure:disagree,ledger:BadInputsUTxO,dolos:accepted outcome=disagree \
                  ledger=refused[BadInputsUTxO] dolos=accepted"]
         );
@@ -1146,7 +1146,7 @@ mod tests {
                 .iter()
                 .map(Verdict::to_string)
                 .collect::<Vec<_>>(),
-            ["VERDICT judge=validation entry=submit_tx record=supp#1 \
+            ["VERDICT judge=validation entry=receive_tx record=supp#1 \
                  cells=failure:unsupported_unexpected,unsupported:plutus_v4 outcome=disagree \
                  label=plutus v4"]
         );

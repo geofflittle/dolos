@@ -4,7 +4,7 @@
 
 use std::{collections::BTreeMap, fmt};
 
-use crate::{eval::Layer, record::RecordId};
+use crate::record::RecordId;
 
 /// A name that no member of the named kind prints.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -79,6 +79,7 @@ named! {
         Datum = "datum",
         PlutusData = "plutus-data",
         ServedTx = "served-tx",
+        Submit = "submit",
         ApplyBlock = "apply-block",
         Cost = "cost",
         Coverage = "coverage",
@@ -122,7 +123,6 @@ named! {
         Rollback = "rollback",
         Row = "row",
         Rule = "rule",
-        Service = "service",
         Tx = "tx",
         Units = "units",
         Unsupported = "unsupported",
@@ -143,64 +143,92 @@ named! {
     }
 }
 
+named! {
+    /// A version of the utxorpc spec Dolos serves.
+    "version" Version {
+        V1 = "v1",
+        V1beta = "v1beta",
+        V1alpha = "v1alpha",
+    }
+}
+
+named! {
+    /// A method of the utxorpc spec, by its name in snake case.
+    "route" Route {
+        SubmitTx = "submit_tx",
+        EvalTx = "eval_tx",
+        WaitForTx = "wait_for_tx",
+        ReadMempool = "read_mempool",
+        WatchMempool = "watch_mempool",
+        FetchBlock = "fetch_block",
+        FollowTip = "follow_tip",
+        DumpHistory = "dump_history",
+        ReadTip = "read_tip",
+        WatchTx = "watch_tx",
+        ReadParams = "read_params",
+        ReadData = "read_data",
+        ReadUtxos = "read_utxos",
+        SearchUtxos = "search_utxos",
+        ReadTx = "read_tx",
+        ReadGenesis = "read_genesis",
+        ReadEraSummary = "read_era_summary",
+        ReadState = "read_state",
+    }
+}
+
+impl Route {
+    /// Whether the spec defines the method at `version`.
+    pub fn at(self, version: Version) -> bool {
+        !matches!((self, version), (Route::ReadState, Version::V1alpha))
+    }
+}
+
+named! {
+    /// A function of Dolos a judge calls in place of a served route.
+    "instrument" Instrument {
+        ReceiveTx = "receive_tx",
+        EstimateTxCalls = "estimate_tx_calls",
+        RedeemerArguments = "redeemer_arguments",
+        MinFee = "min_fee",
+        ApplyBlock = "apply_block",
+        Revalidate = "revalidate",
+        ReadAccounts = "read_accounts",
+        ScriptByHash = "script_by_hash",
+        PlutusData = "plutus_data",
+    }
+}
+
 /// The node entry point a judgement drove.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum EntryPoint {
-    SubmitTx,
-    EstimateTx(Layer),
-    EstimateTxCalls,
-    RedeemerArguments,
-    MinFee,
-    ApplyBlock,
-    Revalidate,
-    ReadUtxos,
-    ReadAccounts,
-    ReadParams,
-    ReadData,
-    ReadTx(Layer),
-    FetchBlock,
+    Instrument(Instrument),
+    Route(Route, Version),
+}
+
+impl From<Instrument> for EntryPoint {
+    fn from(instrument: Instrument) -> Self {
+        EntryPoint::Instrument(instrument)
+    }
 }
 
 impl fmt::Display for EntryPoint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EntryPoint::SubmitTx => f.write_str("submit_tx"),
-            EntryPoint::EstimateTx(layer) => write!(f, "estimate_tx:{layer}"),
-            EntryPoint::EstimateTxCalls => f.write_str("estimate_tx_calls"),
-            EntryPoint::RedeemerArguments => f.write_str("redeemer_arguments"),
-            EntryPoint::MinFee => f.write_str("min_fee"),
-            EntryPoint::ApplyBlock => f.write_str("apply_block"),
-            EntryPoint::Revalidate => f.write_str("revalidate"),
-            EntryPoint::ReadUtxos => f.write_str("read_utxos"),
-            EntryPoint::ReadAccounts => f.write_str("read_accounts"),
-            EntryPoint::ReadParams => f.write_str("read_params"),
-            EntryPoint::ReadData => f.write_str("read_data"),
-            EntryPoint::ReadTx(layer) => write!(f, "read_tx:{layer}"),
-            EntryPoint::FetchBlock => f.write_str("fetch_block"),
+            EntryPoint::Instrument(instrument) => write!(f, "{instrument}"),
+            EntryPoint::Route(route, version) => write!(f, "{route}:{version}"),
         }
     }
 }
 
 impl EntryPoint {
-    /// Every entry point, each that takes a layer at every layer.
+    /// Every instrument and every route at each version the spec defines it.
     pub fn every() -> Vec<EntryPoint> {
-        use EntryPoint as E;
-        let mut every = vec![
-            E::SubmitTx,
-            E::EstimateTxCalls,
-            E::RedeemerArguments,
-            E::MinFee,
-            E::ApplyBlock,
-            E::Revalidate,
-            E::ReadUtxos,
-            E::ReadAccounts,
-            E::ReadParams,
-            E::ReadData,
-            E::FetchBlock,
-        ];
-        every.extend(Layer::ALL.map(E::EstimateTx));
-        every.extend(Layer::ALL.map(E::ReadTx));
-        every
+        let instruments = Instrument::ALL.map(EntryPoint::Instrument);
+        let routes = Route::ALL.into_iter().flat_map(|route| {
+            let versions = Version::ALL.into_iter().filter(move |v| route.at(*v));
+            versions.map(move |version| EntryPoint::Route(route, version))
+        });
+        instruments.into_iter().chain(routes).collect()
     }
 }
 
@@ -499,14 +527,14 @@ impl Tally {
         by_judge
     }
 
-    /// Adds a failing verdict for each judge of `required` that passed no
-    /// verdict, so a judge that judged nothing fails the run.
+    /// Adds a failing verdict for each judge and entry point of `required`
+    /// with no verdict, so an entry point a judge judged nothing at fails the
+    /// run.
     pub fn require(&mut self, required: &[(Judge, EntryPoint)]) {
-        let by_judge = self.by_judge();
         for (judge, entry) in required {
-            if by_judge.get(judge).copied().unwrap_or(0) == 0
-                && !self.failing.iter().any(|v| v.judge == *judge)
-            {
+            let at = |j: Judge, e: EntryPoint| j == *judge && e == *entry;
+            let passed = self.passing.keys().any(|p| at(p.judge, p.entry));
+            if !passed && !self.failing.iter().any(|v| at(v.judge, v.entry)) {
                 self.add(Verdict::selection_fails(*judge, *entry, "judged=0"));
             }
         }
@@ -559,6 +587,8 @@ mod tests {
     use super::*;
     use crate::record::CorpusKind;
 
+    const MIN_FEE: EntryPoint = EntryPoint::Instrument(Instrument::MinFee);
+
     fn id(n: u32) -> RecordId {
         RecordId {
             corpus: CorpusKind::Supp,
@@ -569,7 +599,7 @@ mod tests {
     fn agree(judge: Judge) -> Verdict {
         Verdict {
             judge,
-            entry: EntryPoint::MinFee,
+            entry: MIN_FEE,
             subject: Subject::Record(id(1)),
             cells: Vec::new(),
             outcome: Outcome::Agree,
@@ -584,7 +614,7 @@ mod tests {
             outcome: Outcome::Known("row=S1".into()),
             ..agree(Judge::Utxo)
         });
-        tally.require(&[(Judge::Cost, EntryPoint::MinFee)]);
+        tally.require(&[(Judge::Cost, MIN_FEE)]);
         assert_eq!(
             tally.verdict(),
             RunVerdict::Pass {
@@ -610,7 +640,7 @@ mod tests {
         tally.add(spend(Judge::EvalDraft, Outcome::Agree));
         let compared = Passed {
             judge: Judge::Cost,
-            entry: EntryPoint::MinFee,
+            entry: MIN_FEE,
             cells: Vec::new(),
             pass: Pass::Agree,
         };
@@ -618,7 +648,7 @@ mod tests {
         tally.pass(compared.clone(), 0);
         let passed = |pass| Passed {
             judge: Judge::EvalOracle,
-            entry: EntryPoint::MinFee,
+            entry: MIN_FEE,
             cells: vec![CellKey::new(Axis::Purpose, "Spend")],
             pass,
         };
@@ -646,7 +676,7 @@ mod tests {
             tally.add(agree(Judge::Validation));
             tally.add(Verdict::disagree(
                 judge,
-                EntryPoint::MinFee,
+                MIN_FEE,
                 id(2),
                 vec![CellKey::new(Axis::Units, "mem")],
                 "ledger=1 dolos=2",
@@ -664,11 +694,29 @@ mod tests {
     fn a_required_judge_that_judged_nothing_fails_the_tally() {
         let mut tally = Tally::default();
         tally.add(agree(Judge::Validation));
-        tally.require(&[(Judge::Cost, EntryPoint::MinFee)]);
+        tally.require(&[(Judge::Cost, MIN_FEE)]);
         assert_eq!(tally.verdict(), RunVerdict::Fail { failing: 1 });
         assert_eq!(
             tally.failing[0].to_string(),
             "VERDICT judge=cost entry=min_fee record=selection cells= outcome=disagree judged=0"
+        );
+    }
+
+    #[test]
+    fn a_required_entry_point_a_judge_judged_nothing_at_fails_the_tally() {
+        let eval_tx = |version| EntryPoint::Route(Route::EvalTx, version);
+        let mut tally = Tally::default();
+        tally.add(Verdict {
+            entry: eval_tx(Version::V1),
+            ..agree(Judge::Cost)
+        });
+        tally.require(&[(Judge::Cost, eval_tx(Version::V1))]);
+        assert!(tally.failing.is_empty(), "{tally}");
+        tally.require(&[(Judge::Cost, eval_tx(Version::V1beta))]);
+        assert_eq!(tally.verdict(), RunVerdict::Fail { failing: 1 });
+        assert_eq!(
+            tally.failing[0].to_string(),
+            "VERDICT judge=cost entry=eval_tx:v1beta record=selection cells= outcome=disagree judged=0"
         );
     }
 
@@ -680,7 +728,7 @@ mod tests {
         b.add(agree(Judge::Cost));
         b.add(Verdict::disagree(
             Judge::Utxo,
-            EntryPoint::ReadUtxos,
+            EntryPoint::Route(Route::ReadUtxos, Version::V1),
             id(3),
             Vec::new(),
             "x",
@@ -694,7 +742,7 @@ mod tests {
     fn a_verdict_line_prints_its_cells_with_spaces_replaced() {
         let line = Verdict::disagree(
             Judge::EvalOracle,
-            EntryPoint::EstimateTx(Layer::V1beta),
+            EntryPoint::Route(Route::EvalTx, Version::V1beta),
             id(4),
             vec![
                 CellKey::new(Axis::Purpose, "Spend"),
@@ -705,7 +753,7 @@ mod tests {
         .to_string();
         assert_eq!(
             line,
-            "VERDICT judge=eval-oracle entry=estimate_tx:v1beta record=supp#4 \
+            "VERDICT judge=eval-oracle entry=eval_tx:v1beta record=supp#4 \
              cells=purpose:Spend,label:new_script_language outcome=disagree ledger=(none)"
         );
     }
@@ -732,13 +780,16 @@ mod tests {
         let names: std::collections::BTreeSet<String> =
             every.iter().map(EntryPoint::to_string).collect();
         assert_eq!(names.len(), every.len());
-        for entry in every {
-            assert_eq!(entry.to_string().parse(), Ok(entry));
+        for entry in &every {
+            assert_eq!(entry.to_string().parse(), Ok(*entry));
         }
         let unknown = UnknownName {
             kind: "entry point",
             name: "submit".into(),
         };
         assert_eq!("submit".parse::<EntryPoint>(), Err(unknown));
+        let read_state = EntryPoint::Route(Route::ReadState, Version::V1alpha);
+        assert!(!every.contains(&read_state));
+        assert_eq!(every.len(), Instrument::ALL.len() + 53);
     }
 }

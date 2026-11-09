@@ -111,7 +111,7 @@ index c91bdb20..d9adb395 100644
                  delta
                      .produced_utxo
 diff --git a/crates/cardano/src/validate.rs b/crates/cardano/src/validate.rs
-index e50cf9b8..652cb0ff 100644
+index 4f67df0d..bc17c54a 100644
 --- a/crates/cardano/src/validate.rs
 +++ b/crates/cardano/src/validate.rs
 @@ -71,6 +71,11 @@ pub fn validate_tx<D: Domain>(
@@ -401,6 +401,22 @@ index 3b7094a4..bef35ded 100644
              }),
              ..Default::default()
          });
+diff --git a/src/serve/grpc/v1alpha/watch.rs b/src/serve/grpc/v1alpha/watch.rs
+--- a/src/serve/grpc/v1alpha/watch.rs
++++ b/src/serve/grpc/v1alpha/watch.rs
+@@ -386,7 +386,11 @@
+     txs.into_iter().map(move |x| u5c::watch::AnyChainTx {
+         chain: Some(u5c::watch::any_chain_tx::Chain::Cardano(x)),
+         block: Some(u5c::watch::AnyChainBlock {
+-            native_bytes: native_bytes.clone(),
++            native_bytes: if pallas::crypto::oracle_plant("watch-block-copied") {
++                bytes::Bytes::copy_from_slice(&native_bytes)
++            } else {
++                native_bytes.clone()
++            },
+             chain: mapped
+                 .clone()
+                 .map(u5c::watch::any_chain_block::Chain::Cardano),
 diff --git a/src/serve/grpc/v1beta/submit.rs b/src/serve/grpc/v1beta/submit.rs
 index c45b80f9..da307577 100644
 --- a/src/serve/grpc/v1beta/submit.rs
@@ -425,3 +441,41 @@ index c45b80f9..da307577 100644
              }),
              ..Default::default()
          });
+diff --git a/src/serve/grpc/v1beta/sync.rs b/src/serve/grpc/v1beta/sync.rs
+index d6a37be0..94a26919 100644
+--- a/src/serve/grpc/v1beta/sync.rs
++++ b/src/serve/grpc/v1beta/sync.rs
+@@ -35,8 +35,15 @@ fn raw_to_anychain<C: ChainReads>(
+         chain: if mask.chain {
+             let block = MultiEraBlock::decode(body).unwrap();
+             let prepared = BlockContext::new(context.clone(), &block);
+-            u5c::sync::any_chain_block::Chain::Cardano(Mapper::new(prepared).map_block(&block))
+-                .into()
++            let mut mapped = Mapper::new(prepared).map_block(&block);
++            if pallas::crypto::oracle_plant("v1beta-as-output-dropped") {
++                for tx in mapped.body.iter_mut().flat_map(|b| &mut b.tx) {
++                    for input in &mut tx.inputs {
++                        input.as_output = None;
++                    }
++                }
++            }
++            u5c::sync::any_chain_block::Chain::Cardano(mapped).into()
+         } else {
+             None
+         },
+diff --git a/src/serve/grpc/v1beta/watch.rs b/src/serve/grpc/v1beta/watch.rs
+--- a/src/serve/grpc/v1beta/watch.rs
++++ b/src/serve/grpc/v1beta/watch.rs
+@@ -378,7 +378,11 @@
+     txs.into_iter().map(move |x| u5c::watch::AnyChainTx {
+         chain: Some(u5c::watch::any_chain_tx::Chain::Cardano(x)),
+         block: Some(u5c::watch::AnyChainBlock {
+-            native_bytes: native_bytes.clone(),
++            native_bytes: if pallas::crypto::oracle_plant("watch-block-copied") {
++                bytes::Bytes::copy_from_slice(&native_bytes)
++            } else {
++                native_bytes.clone()
++            },
+             chain: mapped
+                 .clone()
+                 .map(u5c::watch::any_chain_block::Chain::Cardano),

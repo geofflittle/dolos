@@ -4,7 +4,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    judgement::{self, Axis, CellKey, EntryPoint, Judge, Pass, Passed, Subject, Verdict},
+    judgement::{
+        self, Axis, CellKey, EntryPoint, Instrument, Judge, Pass, Passed, Subject, Verdict,
+    },
     manifest::{lines, ManifestError},
 };
 
@@ -112,7 +114,7 @@ pub fn table(
         failed.push(cell.to_string());
         out.add(Verdict {
             judge: Judge::Coverage,
-            entry: EntryPoint::SubmitTx,
+            entry: EntryPoint::Instrument(Instrument::ReceiveTx),
             subject: Subject::Selection,
             cells: vec![cell.clone()],
             outcome: judgement::Outcome::Disagree(detail),
@@ -121,7 +123,7 @@ pub fn table(
     let pass = |cell: &CellKey, pass, out: &mut judgement::Tally| {
         let passed = Passed {
             judge: Judge::Coverage,
-            entry: EntryPoint::SubmitTx,
+            entry: EntryPoint::Instrument(Instrument::ReceiveTx),
             cells: vec![cell.clone()],
             pass,
         };
@@ -187,7 +189,7 @@ pub fn table(
         ));
         out.add(Verdict::selection_fails(
             Judge::Coverage,
-            EntryPoint::SubmitTx,
+            EntryPoint::Instrument(Instrument::ReceiveTx),
             format!("cell={cell} {detail}"),
         ));
     }
@@ -219,7 +221,7 @@ mod tests {
     fn agreeing(cells: Vec<CellKey>) -> Verdict {
         Verdict {
             judge: Judge::Validation,
-            entry: EntryPoint::SubmitTx,
+            entry: EntryPoint::Instrument(Instrument::ReceiveTx),
             subject: Subject::Record(RecordId {
                 corpus: CorpusKind::Ic,
                 n: 1,
@@ -277,7 +279,7 @@ mod tests {
                 .map(Verdict::to_string)
                 .collect::<Vec<_>>(),
             [
-                "VERDICT judge=coverage entry=submit_tx record=selection cells=leaf:A \
+                "VERDICT judge=coverage entry=receive_tx record=selection cells=leaf:A \
               outcome=disagree records=0 committed=1"
             ]
         );
@@ -325,7 +327,10 @@ mod tests {
             counts(&out),
             BTreeMap::from([
                 (leaf("B"), 1),
-                (CellKey::new(Axis::Entry, EntryPoint::SubmitTx), 1)
+                (
+                    CellKey::new(Axis::Entry, EntryPoint::Instrument(Instrument::ReceiveTx)),
+                    1
+                )
             ])
         );
     }

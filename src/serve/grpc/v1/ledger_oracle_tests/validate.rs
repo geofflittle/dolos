@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Once, PoisonError},
 };
 
-use dolos_cardano::CardanoLogic;
+use dolos_cardano::{indexes::utxo_index_delta_from_utxo_delta, CardanoLogic};
 use dolos_core::{
     BlockHash, BlockSlot, ChainError, ChainLogic as _, ChainPoint, Domain as _, DomainError,
     EraCbor, MempoolAwareUtxoStore, MempoolStore as _, RawBlock, StateStore as _, StateWriter as _,
@@ -271,6 +271,8 @@ impl Group {
         };
         let writer = self.domain.state().start_writer().unwrap();
         writer.apply_utxoset(&delta).unwrap();
+        let tags = utxo_index_delta_from_utxo_delta(&delta);
+        writer.apply_utxo_tags(&tags).unwrap();
         writer.commit().unwrap();
     }
 
