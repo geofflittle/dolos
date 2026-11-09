@@ -1496,10 +1496,7 @@ fn served_verdict(
     let fields = parsed_differing(id, ledger, Some(served));
     let verdict = match &served.bytes {
         output::ServedBytes::NoField => None,
-        output::ServedBytes::Stated(bytes) => {
-            let bytes = bytes.as_deref().expect("a served output carries its bytes");
-            Some(ByteVerdict::against(ledger, Some(bytes)))
-        }
+        output::ServedBytes::Stated(bytes) => Some(ByteVerdict::against(ledger, bytes.as_deref())),
     };
     let agrees = verdict.as_ref().is_none_or(ByteVerdict::agrees);
     let shown = verdict.map_or("fields_only".to_string(), |v| v.to_string());
@@ -1508,6 +1505,27 @@ fn served_verdict(
         (_, true) => Some(shown),
         (_, false) => Some(format!("{shown} fields={}", fields.iter().join(","))),
     }
+}
+
+#[test]
+fn a_served_output_stating_no_bytes_disagrees_and_one_stating_the_ledger_bytes_agrees() {
+    let address = [[0x58, 0x1d, 0x61].as_slice(), &[0x11; 28]].concat();
+    let ledger = [
+        vec![0xa2, 0x00],
+        address,
+        vec![0x01, 0x1a, 0x00, 0x0f, 0x42, 0x40],
+    ]
+    .concat();
+    let id = RecordId {
+        corpus: CorpusKind::Supp,
+        n: 1,
+    };
+    let mut served = output::v1::output(&output::mapped(&ledger));
+    let stated = served_verdict(id, &ledger, Some(&served));
+    served.bytes = output::ServedBytes::Stated(None);
+    let unstated = served_verdict(id, &ledger, Some(&served));
+    let absent = ByteVerdict::against(&ledger, None).to_string();
+    assert_eq!((stated, unstated), (None, Some(absent)));
 }
 
 /// The disagreeing verdicts on what each route serves for one input against the ledger's output bytes, by the route's entry point, with the routes left uncompared because their version states no sub transaction.
