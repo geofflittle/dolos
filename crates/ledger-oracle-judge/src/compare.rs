@@ -602,19 +602,21 @@ mod tests {
     }
 
     fn compared() -> StateTallies {
-        let mut state = StateTallies::default();
-        state.utxo = agreed_at(SERVED_UTXOS);
+        let mut state = StateTallies {
+            utxo: agreed_at(SERVED_UTXOS),
+            params: agreed_at(SERVED_PARAMS),
+            datum: agreed_at(SERVED_UTXOS),
+            as_output: agreed_at(SERVED_OUTPUTS),
+            served_tx: agreed_at(SERVED_TXS),
+            submit: agreed_at(SERVED_SUBMIT),
+            ..Default::default()
+        };
         state.accounts.agree();
         state.undo.agree();
         state.revalidate.agree();
-        state.params = agreed_at(SERVED_PARAMS);
         state.readtx.agree();
         state.script.agree();
-        state.datum = agreed_at(SERVED_UTXOS);
         state.plutus_data.agree();
-        state.as_output = agreed_at(SERVED_OUTPUTS);
-        state.served_tx = agreed_at(SERVED_TXS);
-        state.submit = agreed_at(SERVED_SUBMIT);
         state
     }
 
@@ -765,7 +767,8 @@ mod tests {
         state.as_output.at(FETCH_BLOCK).agree();
         assert!(passes(&state), "{state}");
         let entries = |routes| at_every_version(routes).count();
-        let empties: [(fn(&mut StateTallies), usize); 11] = [
+        type Emptied = (fn(&mut StateTallies), usize);
+        let empties: [Emptied; 11] = [
             (|s| s.utxo = ByEntry::default(), entries(SERVED_UTXOS)),
             (
                 |s| s.as_output = ByEntry::default(),
