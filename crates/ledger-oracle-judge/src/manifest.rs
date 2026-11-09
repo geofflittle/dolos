@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, fmt, str::FromStr};
 use thiserror::Error;
 
 use crate::{
-    judgement::{Axis, EntryPoint, Judge, UnknownName},
+    judgement::{Axis, EntryPoint, Instrument, Judge, Route, UnknownName, Version},
     record::{CorpusKind, RecordId},
     row::{coverage, Check, Row},
 };
@@ -44,9 +44,12 @@ impl Locus {
     /// drives.
     pub fn judge(self) -> (Judge, EntryPoint) {
         match self {
-            Locus::Validation => (Judge::Validation, EntryPoint::SubmitTx),
-            Locus::AsOutput => (Judge::AsOutput, EntryPoint::FetchBlock),
-            Locus::Accounts => (Judge::Accounts, EntryPoint::ReadAccounts),
+            Locus::Validation => (Judge::Validation, Instrument::ReceiveTx.into()),
+            Locus::AsOutput => (
+                Judge::AsOutput,
+                EntryPoint::Route(Route::FetchBlock, Version::V1),
+            ),
+            Locus::Accounts => (Judge::Accounts, Instrument::ReadAccounts.into()),
         }
     }
 }
@@ -433,15 +436,15 @@ mod tests {
     fn a_catch_entry_is_an_entry_point_or_fails_the_load() {
         let text = |catch: &str| format!("[catches]\nb = [\"{catch}\"]\n");
         let parsed = |catch| parse_catches("arms", &text(catch));
-        let caught = parsed("entry=estimate_tx:pallas|submit_tx").unwrap();
-        let pallas = EntryPoint::EstimateTx(crate::eval::Layer::Pallas);
-        let entries = vec![pallas, EntryPoint::SubmitTx];
+        let caught = parsed("entry=estimate_tx_calls|eval_tx:v1beta").unwrap();
+        let calls = Instrument::EstimateTxCalls.into();
+        let entries = vec![calls, EntryPoint::Route(Route::EvalTx, Version::V1beta)];
         assert_eq!(caught["b"][0], [CatchTerm::Entry(entries)]);
         assert_eq!(
-            parsed("entry=submit_tx|estimate_tx:v9")
+            parsed("entry=receive_tx|eval_tx:v9")
                 .unwrap_err()
                 .to_string(),
-            "MANIFEST arms line=2 no entry point is named estimate_tx:v9"
+            "MANIFEST arms line=2 no entry point is named eval_tx:v9"
         );
     }
 

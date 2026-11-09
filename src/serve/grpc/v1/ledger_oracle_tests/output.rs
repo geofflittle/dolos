@@ -11,8 +11,6 @@ use pallas::{
 
 use std::fmt;
 
-use super::super::spec::cardano;
-
 /// A part of a served output compared against the ledger's output bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum OutputField {
@@ -39,7 +37,7 @@ impl fmt::Display for OutputField {
 
 /// An integer as CBOR states it, its sign and the big endian magnitude, without leading zeros, of the value when nonnegative or of minus one minus the value when negative.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct Integer {
+pub(super) struct Integer {
     negative: bool,
     magnitude: Vec<u8>,
 }
@@ -60,21 +58,11 @@ impl Integer {
             magnitude: bytes[start..].to_vec(),
         }
     }
-
-    /// The integer a served big integer states, none when the message states none.
-    fn served(value: &cardano::BigInt) -> Option<Self> {
-        use cardano::big_int::BigInt as B;
-        match value.big_int.as_ref()? {
-            B::Int(i) => Some(Integer::of((*i).into())),
-            B::BigUInt(bytes) => Some(Integer::from_bytes(false, bytes)),
-            B::BigNInt(bytes) => Some(Integer::from_bytes(true, bytes)),
-        }
-    }
 }
 
 /// A Plutus datum in the terms both the ledger's bytes and a served datum state.
-#[derive(Debug, PartialEq, Eq)]
-enum Data {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Data {
     Constr {
         tag: u64,
         any_constructor: u64,
@@ -109,43 +97,18 @@ impl Data {
             PlutusData::BoundedBytes(b) => Data::Bytes(b.to_vec()),
         }
     }
-
-    /// The datum a served Plutus data message states, none when a message in it states none.
-    fn served(data: &cardano::PlutusData) -> Option<Self> {
-        use cardano::plutus_data::PlutusData as P;
-        let all = |items: &[cardano::PlutusData]| -> Option<Vec<Data>> {
-            items.iter().map(Data::served).collect()
-        };
-        Some(match data.plutus_data.as_ref()? {
-            P::Constr(c) => Data::Constr {
-                tag: c.tag.into(),
-                any_constructor: c.any_constructor,
-                fields: all(&c.fields)?,
-            },
-            P::Map(m) => {
-                let pair = |p: &cardano::PlutusDataPair| {
-                    let key = Data::served(p.key.as_ref()?)?;
-                    Some((key, Data::served(p.value.as_ref()?)?))
-                };
-                Data::Map(m.pairs.iter().map(pair).collect::<Option<_>>()?)
-            }
-            P::BigInt(i) => Data::Integer(Integer::served(i)?),
-            P::BoundedBytes(b) => Data::Bytes(b.to_vec()),
-            P::Array(a) => Data::Array(all(&a.items)?),
-        })
-    }
 }
 
 /// A credential in the terms both the ledger's bytes and a served credential state.
-#[derive(Debug, PartialEq, Eq)]
-enum Credential {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Credential {
     Key(Vec<u8>),
     Script(Vec<u8>),
 }
 
 /// A native script in the terms both the ledger's bytes and a served native script state.
-#[derive(Debug, PartialEq, Eq)]
-enum Native {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Native {
     Pubkey(Vec<u8>),
     All(Vec<Native>),
     Any(Vec<Native>),
@@ -153,12 +116,15 @@ enum Native {
     InvalidBefore(u64),
     InvalidHereafter(u64),
     RequireGuard(Credential),
+    /// A clause a version without a guard clause serves for a guard clause.
+    Unset,
 }
 
 impl Native {
-    fn ledger(script: &dijkstra::NativeScript) -> Self {
+    /// The native script of the ledger as a version serves it, a guard clause unset where `guards` is false.
+    fn ledger(script: &dijkstra::NativeScript, guards: bool) -> Self {
         use dijkstra::NativeScript as N;
-        let all = |items: &[N]| items.iter().map(Native::ledger).collect();
+        let all = |items: &[N]| items.iter().map(|s| Native::ledger(s, guards)).collect();
         match script {
             N::ScriptPubkey(h) => Native::Pubkey(h.to_vec()),
             N::ScriptAll(items) => Native::All(all(items)),
@@ -166,6 +132,7 @@ impl Native {
             N::ScriptNOfK(k, items) => Native::NOfK(*k, all(items)),
             N::InvalidBefore(slot) => Native::InvalidBefore(*slot),
             N::InvalidHereafter(slot) => Native::InvalidHereafter(*slot),
+            N::ScriptRequireGuard(_) if !guards => Native::Unset,
             N::ScriptRequireGuard(StakeCredential::AddrKeyhash(h)) => {
                 Native::RequireGuard(Credential::Key(h.to_vec()))
             }
@@ -174,60 +141,56 @@ impl Native {
             }
         }
     }
-
-    /// The native script a served message states, none when a message in it states none.
-    fn served(script: &cardano::NativeScript) -> Option<Self> {
-        use cardano::{native_script::NativeScript as N, stake_credential::StakeCredential as C};
-        let all = |items: &[cardano::NativeScript]| -> Option<Vec<Native>> {
-            items.iter().map(Native::served).collect()
-        };
-        Some(match script.native_script.as_ref()? {
-            N::ScriptPubkeyHash(h) => Native::Pubkey(h.to_vec()),
-            N::ScriptAll(list) => Native::All(all(&list.items)?),
-            N::ScriptAny(list) => Native::Any(all(&list.items)?),
-            N::ScriptNOfK(n) => Native::NOfK(n.k.into(), all(&n.scripts)?),
-            N::InvalidBefore(slot) => Native::InvalidBefore(*slot),
-            N::InvalidHereafter(slot) => Native::InvalidHereafter(*slot),
-            N::ScriptRequireGuard(c) => {
-                Native::RequireGuard(match c.stake_credential.as_ref()? {
-                    C::AddrKeyHash(h) => Credential::Key(h.to_vec()),
-                    C::ScriptHash(h) => Credential::Script(h.to_vec()),
-                })
-            }
-        })
-    }
 }
 
 /// A reference script in the terms both the ledger's bytes and a served script state.
-#[derive(Debug, PartialEq, Eq)]
-enum Script {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Script {
     Native(Native),
     Plutus(u8, Vec<u8>),
 }
 
 impl Script {
-    fn ledger(script: &dijkstra::ScriptRef<'_>) -> Self {
+    fn ledger(script: &dijkstra::ScriptRef<'_>, guards: bool) -> Self {
         use dijkstra::ScriptRef as R;
         match script {
-            R::NativeScript(s) => Script::Native(Native::ledger(s)),
+            R::NativeScript(s) => Script::Native(Native::ledger(s, guards)),
             R::PlutusV1Script(s) => Script::Plutus(1, s.0.to_vec()),
             R::PlutusV2Script(s) => Script::Plutus(2, s.0.to_vec()),
             R::PlutusV3Script(s) => Script::Plutus(3, s.0.to_vec()),
             R::PlutusV4Script(s) => Script::Plutus(4, s.0.to_vec()),
         }
     }
+}
 
-    /// The script a served message states, none when a message in it states none.
-    fn served(script: &cardano::Script) -> Option<Self> {
-        use cardano::script::Script as S;
-        Some(match script.script.as_ref()? {
-            S::Native(s) => Script::Native(Native::served(s)?),
-            S::PlutusV1(b) => Script::Plutus(1, b.to_vec()),
-            S::PlutusV2(b) => Script::Plutus(2, b.to_vec()),
-            S::PlutusV3(b) => Script::Plutus(3, b.to_vec()),
-            S::PlutusV4(b) => Script::Plutus(4, b.to_vec()),
-        })
-    }
+/// The datum a served output states, each field none where the message states none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ServedDatum {
+    hash: Vec<u8>,
+    payload: Option<Option<Data>>,
+    original_cbor: Option<Vec<u8>>,
+}
+
+/// What a served output states of its bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ServedBytes {
+    /// The version's output message has no bytes field.
+    NoField,
+    /// The bytes the message states, none when it states none.
+    Stated(Option<Vec<u8>>),
+}
+
+/// The fields of a served output in terms every version of the spec states them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ServedOutput {
+    /// Whether the version states a native guard clause.
+    guards: bool,
+    pub(super) bytes: ServedBytes,
+    address: Vec<u8>,
+    coin: Option<Integer>,
+    assets: Option<Vec<Asset>>,
+    datum: Option<ServedDatum>,
+    script: Option<Option<Script>>,
 }
 
 /// The datum of a ledger output.
@@ -244,7 +207,7 @@ enum LedgerDatum {
 
 impl LedgerDatum {
     /// Whether a served datum states this datum, its hash for a datum hash and its hash, bytes and value for an inline datum.
-    fn agrees(&self, served: Option<&cardano::Datum>) -> bool {
+    fn agrees(&self, served: Option<&ServedDatum>) -> bool {
         match (self, served) {
             (LedgerDatum::None, None) => true,
             (LedgerDatum::None, Some(d)) => {
@@ -256,10 +219,9 @@ impl LedgerDatum {
                 d.hash == *hash && bytes_hash.is_none_or(|h| h.as_slice() == hash.as_slice())
             }
             (LedgerDatum::Inline { hash, cbor, data }, Some(d)) => {
-                let served = d.payload.as_ref().and_then(Data::served);
                 d.hash == *hash
                     && d.original_cbor.as_deref() == Some(cbor.as_slice())
-                    && served.as_ref() == Some(data)
+                    && d.payload.as_ref().and_then(Option::as_ref) == Some(data)
             }
         }
     }
@@ -309,7 +271,7 @@ fn conway_assets(value: &conway::Value) -> (u64, Vec<Asset>) {
 }
 
 impl LedgerOutput {
-    fn decode(bytes: &[u8]) -> Result<Self, minicbor::decode::Error> {
+    fn decode(bytes: &[u8], guards: bool) -> Result<Self, minicbor::decode::Error> {
         let output: dijkstra::TransactionOutput = minicbor::decode(bytes)?;
         let (address, (coin, mut assets), datum, script) = match &output {
             GenTransactionOutput::Legacy(o) => {
@@ -329,7 +291,7 @@ impl LedgerOutput {
                         data: Data::ledger(d),
                     },
                 };
-                let script = o.script_ref.as_ref().map(|s| Script::ledger(s));
+                let script = o.script_ref.as_ref().map(|s| Script::ledger(s, guards));
                 (o.address.to_vec(), conway_assets(&o.value), datum, script)
             }
         };
@@ -344,33 +306,34 @@ impl LedgerOutput {
     }
 }
 
+impl ServedOutput {
+    /// The datum bytes the output states, none when it states no datum or no bytes.
+    pub(super) fn datum_cbor(&self) -> Option<&[u8]> {
+        self.datum.as_ref()?.original_cbor.as_deref()
+    }
+}
+
 /// The fields of a served output that state other values than the ledger's output bytes hold.
 pub(super) fn differing(
     ledger: &[u8],
-    served: &cardano::TxOutput,
+    served: &ServedOutput,
 ) -> Result<Vec<OutputField>, minicbor::decode::Error> {
-    let ledger = LedgerOutput::decode(ledger)?;
-    let coin = served.coin.as_ref().and_then(Integer::served);
-    let assets = served.assets.iter().flat_map(|policy| {
-        let assets = policy.assets.iter();
-        assets.map(|a| {
-            let amount = Integer::served(a.quantity.as_ref()?)?;
-            Some((policy.policy_id.to_vec(), a.name.to_vec(), amount))
-        })
-    });
-    let mut assets: Option<Vec<Asset>> = assets.collect();
-    if let Some(assets) = &mut assets {
-        assets.sort();
-    }
+    let ledger = LedgerOutput::decode(ledger, served.guards)?;
     let script = match (&ledger.script, &served.script) {
         (None, None) => true,
-        (Some(ledger), Some(served)) => Script::served(served).as_ref() == Some(ledger),
+        (Some(ledger), Some(served)) => served.as_ref() == Some(ledger),
         (None, Some(_)) | (Some(_), None) => false,
     };
     let fields = [
         (OutputField::Address, served.address == ledger.address),
-        (OutputField::Coin, coin == Some(ledger.coin)),
-        (OutputField::Assets, assets == Some(ledger.assets)),
+        (
+            OutputField::Coin,
+            served.coin.as_ref() == Some(&ledger.coin),
+        ),
+        (
+            OutputField::Assets,
+            served.assets.as_ref() == Some(&ledger.assets),
+        ),
         (
             OutputField::Datum,
             ledger.datum.agrees(served.datum.as_ref()),
@@ -380,6 +343,157 @@ pub(super) fn differing(
     let differing = fields.into_iter().filter(|(_, same)| !same);
     Ok(differing.map(|(name, _)| name).collect())
 }
+
+/// Generates the conversion of one version's output message into a served output.
+macro_rules! served_output {
+    (
+        $version:ident,
+        guards: $guards:literal,
+        pubkey: $pubkey:ident,
+        $(guard: $guard:ident,)?
+        bytes: |$o:ident| $bytes:expr,
+        datum_cbor: |$d:ident| $cbor:expr,
+        quantity: |$a:ident| $quantity:expr $(,)?
+    ) => {
+        pub(super) mod $version {
+            use super::{Data, Integer, Native, Script, ServedBytes, ServedDatum, ServedOutput};
+            use crate::serve::grpc::$version::spec::cardano;
+
+            /// The integer a served big integer states, none when the message states none.
+            fn integer(value: &cardano::BigInt) -> Option<Integer> {
+                use cardano::big_int::BigInt as B;
+                match value.big_int.as_ref()? {
+                    B::Int(i) => Some(Integer::of((*i).into())),
+                    B::BigUInt(bytes) => Some(Integer::from_bytes(false, bytes)),
+                    B::BigNInt(bytes) => Some(Integer::from_bytes(true, bytes)),
+                }
+            }
+
+            /// The datum a served Plutus data message states, none when a message in it states none.
+            fn data(value: &cardano::PlutusData) -> Option<Data> {
+                use cardano::plutus_data::PlutusData as P;
+                let all = |items: &[cardano::PlutusData]| -> Option<Vec<Data>> {
+                    items.iter().map(data).collect()
+                };
+                Some(match value.plutus_data.as_ref()? {
+                    P::Constr(c) => Data::Constr {
+                        tag: c.tag.into(),
+                        any_constructor: c.any_constructor,
+                        fields: all(&c.fields)?,
+                    },
+                    P::Map(m) => {
+                        let pair = |p: &cardano::PlutusDataPair| {
+                            let key = data(p.key.as_ref()?)?;
+                            Some((key, data(p.value.as_ref()?)?))
+                        };
+                        Data::Map(m.pairs.iter().map(pair).collect::<Option<_>>()?)
+                    }
+                    P::BigInt(i) => Data::Integer(integer(i)?),
+                    P::BoundedBytes(b) => Data::Bytes(b.to_vec()),
+                    P::Array(a) => Data::Array(all(&a.items)?),
+                })
+            }
+
+            /// The native script a served message states, none when a message in it states none.
+            fn native(script: &cardano::NativeScript) -> Option<Native> {
+                use cardano::native_script::NativeScript as N;
+                let all = |items: &[cardano::NativeScript]| -> Option<Vec<Native>> {
+                    items.iter().map(native).collect()
+                };
+                let Some(clause) = script.native_script.as_ref() else {
+                    return (!$guards).then_some(Native::Unset);
+                };
+                Some(match clause {
+                    N::$pubkey(h) => Native::Pubkey(h.to_vec()),
+                    N::ScriptAll(list) => Native::All(all(&list.items)?),
+                    N::ScriptAny(list) => Native::Any(all(&list.items)?),
+                    N::ScriptNOfK(n) => Native::NOfK(n.k.into(), all(&n.scripts)?),
+                    N::InvalidBefore(slot) => Native::InvalidBefore(*slot),
+                    N::InvalidHereafter(slot) => Native::InvalidHereafter(*slot),
+                    $(N::$guard(c) => {
+                        use cardano::stake_credential::StakeCredential as C;
+                        use super::Credential;
+                        Native::RequireGuard(match c.stake_credential.as_ref()? {
+                            C::AddrKeyHash(h) => Credential::Key(h.to_vec()),
+                            C::ScriptHash(h) => Credential::Script(h.to_vec()),
+                        })
+                    })?
+                })
+            }
+
+            /// The script a served message states, none when a message in it states none.
+            fn script(script: &cardano::Script) -> Option<Script> {
+                use cardano::script::Script as S;
+                Some(match script.script.as_ref()? {
+                    S::Native(s) => Script::Native(native(s)?),
+                    S::PlutusV1(b) => Script::Plutus(1, b.to_vec()),
+                    S::PlutusV2(b) => Script::Plutus(2, b.to_vec()),
+                    S::PlutusV3(b) => Script::Plutus(3, b.to_vec()),
+                    S::PlutusV4(b) => Script::Plutus(4, b.to_vec()),
+                })
+            }
+
+            /// The served output this version's output message states.
+            pub(in super::super) fn output($o: &cardano::TxOutput) -> ServedOutput {
+                let assets = $o.assets.iter().flat_map(|policy| {
+                    policy.assets.iter().map(|$a| {
+                        let amount = $quantity?;
+                        Some((policy.policy_id.to_vec(), $a.name.to_vec(), amount))
+                    })
+                });
+                let mut assets: Option<Vec<_>> = assets.collect();
+                if let Some(assets) = &mut assets {
+                    assets.sort();
+                }
+                let datum = $o.datum.as_ref().map(|$d| ServedDatum {
+                    hash: $d.hash.to_vec(),
+                    payload: $d.payload.as_ref().map(data),
+                    original_cbor: $cbor,
+                });
+                ServedOutput {
+                    guards: $guards,
+                    bytes: $bytes,
+                    address: $o.address.to_vec(),
+                    coin: $o.coin.as_ref().and_then(integer),
+                    assets,
+                    datum,
+                    script: $o.script.as_ref().map(script),
+                }
+            }
+        }
+    };
+}
+
+served_output!(
+    v1,
+    guards: true,
+    pubkey: ScriptPubkeyHash,
+    guard: ScriptRequireGuard,
+    bytes: |o| ServedBytes::Stated(o.original_cbor.as_ref().map(|b| b.to_vec())),
+    datum_cbor: |d| d.original_cbor.as_ref().map(|c| c.to_vec()),
+    quantity: |a| integer(a.quantity.as_ref()?),
+);
+
+served_output!(
+    v1beta,
+    guards: false,
+    pubkey: ScriptPubkeyHash,
+    bytes: |o| ServedBytes::Stated(o.original_cbor.as_ref().map(|b| b.to_vec())),
+    datum_cbor: |d| d.original_cbor.as_ref().map(|c| c.to_vec()),
+    quantity: |a| integer(a.quantity.as_ref()?),
+);
+
+served_output!(
+    v1alpha,
+    guards: false,
+    pubkey: ScriptPubkey,
+    bytes: |o| ServedBytes::NoField,
+    datum_cbor: |d| (!d.original_cbor.is_empty()).then(|| d.original_cbor.to_vec()),
+    quantity: |a| match a.quantity.as_ref()? {
+        cardano::asset::Quantity::OutputCoin(q) => integer(q),
+        cardano::asset::Quantity::MintCoin(_) => None,
+    },
+);
 
 /// A ledger context that resolves nothing.
 #[cfg(test)]
@@ -400,12 +514,20 @@ impl pallas::interop::utxorpc::LedgerContext for Unresolved {
     }
 }
 
-/// The output Dolos serves for Dijkstra output bytes.
+/// The output each version of Dolos serves for Dijkstra output bytes.
 #[cfg(test)]
-pub(super) fn mapped(bytes: &[u8]) -> cardano::TxOutput {
-    use pallas::ledger::traverse::{Era, MultiEraOutput};
-    let output = MultiEraOutput::decode(Era::Dijkstra, bytes).unwrap();
-    pallas::interop::utxorpc::v1::Mapper::new(Unresolved).map_tx_output(&output, None)
+macro_rules! mapped {
+    ($version:ident, $bytes:expr) => {{
+        use pallas::ledger::traverse::{Era, MultiEraOutput};
+        let output = MultiEraOutput::decode(Era::Dijkstra, $bytes).unwrap();
+        pallas::interop::utxorpc::$version::Mapper::new(Unresolved).map_tx_output(&output, None)
+    }};
+}
+
+/// The output v1 of Dolos serves for Dijkstra output bytes.
+#[cfg(test)]
+pub(super) fn mapped(bytes: &[u8]) -> super::super::spec::cardano::TxOutput {
+    mapped!(v1, bytes)
 }
 
 #[cfg(test)]
@@ -416,6 +538,7 @@ mod tests {
     };
     use std::collections::BTreeSet;
 
+    use super::super::super::spec::cardano;
     use super::*;
 
     /// Every output the accepted records of both corpora leave in the ledger state.
@@ -454,7 +577,7 @@ mod tests {
         [head, bytes.to_vec()].concat()
     }
 
-    /// An output with assets, an inline datum and a native reference script, and one with a datum hash and a Plutus reference script.
+    /// An output with assets, an inline datum and a native reference script with a guard clause, and one with a datum hash and a Plutus reference script.
     fn constructed() -> [Vec<u8>; 2] {
         let address = cbor_bytes(&[[0x61].as_slice(), &[0x11; 28]].concat());
         let policy = cbor_bytes(&[0x22; 28]);
@@ -509,12 +632,19 @@ mod tests {
     }
 
     #[test]
-    fn the_mapped_form_of_every_corpus_output_agrees_with_its_bytes() {
+    fn the_mapped_form_of_every_corpus_output_agrees_with_its_bytes_at_every_version() {
         let outputs = ledger_outputs();
         assert!(!outputs.is_empty());
         for bytes in &outputs {
-            let differing = differing(bytes, &mapped(bytes)).unwrap();
-            assert!(differing.is_empty(), "{} {differing:?}", hex::encode(bytes));
+            let served = [
+                v1::output(&mapped!(v1, bytes)),
+                v1beta::output(&mapped!(v1beta, bytes)),
+                v1alpha::output(&mapped!(v1alpha, bytes)),
+            ];
+            for served in &served {
+                let differing = differing(bytes, served).unwrap();
+                assert!(differing.is_empty(), "{} {differing:?}", hex::encode(bytes));
+            }
         }
     }
 
@@ -522,7 +652,7 @@ mod tests {
     fn a_served_output_with_one_changed_field_names_that_field() {
         let [first, second] = constructed();
         for bytes in [&first, &second] {
-            let differing = differing(bytes, &mapped(bytes)).unwrap();
+            let differing = differing(bytes, &v1::output(&mapped(bytes))).unwrap();
             assert!(differing.is_empty(), "{} {differing:?}", hex::encode(bytes));
         }
         type Change = fn(&mut cardano::TxOutput);
@@ -551,7 +681,60 @@ mod tests {
         for (bytes, field, change) in changes {
             let mut served = mapped(bytes);
             change(&mut served);
-            assert_eq!(differing(bytes, &served).unwrap(), [field], "{served:?}");
+            assert_eq!(
+                differing(bytes, &v1::output(&served)).unwrap(),
+                [field],
+                "{served:?}"
+            );
         }
+    }
+
+    #[test]
+    fn a_guard_clause_agrees_unset_only_at_a_version_without_one() {
+        let [first, _] = constructed();
+        let at_v1beta = v1beta::output(&mapped!(v1beta, &first));
+        let at_v1alpha = v1alpha::output(&mapped!(v1alpha, &first));
+        assert!(differing(&first, &at_v1beta).unwrap().is_empty());
+        assert!(differing(&first, &at_v1alpha).unwrap().is_empty());
+        let mut unset = mapped(&first);
+        let Some(cardano::script::Script::Native(native)) =
+            unset.script.as_mut().and_then(|s| s.script.as_mut())
+        else {
+            panic!("the first output carries a native script");
+        };
+        let Some(cardano::native_script::NativeScript::ScriptAll(all)) =
+            native.native_script.as_mut()
+        else {
+            panic!("the native script is a list of all");
+        };
+        let Some(cardano::native_script::NativeScript::ScriptNOfK(n_of_k)) =
+            all.items[2].native_script.as_mut()
+        else {
+            panic!("the third clause is an n of k");
+        };
+        n_of_k.scripts[0].native_script = None;
+        assert_eq!(
+            differing(&first, &v1::output(&unset)).unwrap(),
+            [OutputField::Script]
+        );
+    }
+
+    #[test]
+    fn a_mint_quantity_where_an_output_quantity_belongs_differs_at_v1alpha() {
+        use pallas::interop::utxorpc::v1alpha::spec::cardano as alpha;
+        let [first, _] = constructed();
+        let mut served = mapped!(v1alpha, &first);
+        assert!(differing(&first, &v1alpha::output(&served))
+            .unwrap()
+            .is_empty());
+        let quantity = served.assets[0].assets[0].quantity.take();
+        let Some(alpha::asset::Quantity::OutputCoin(q)) = quantity else {
+            panic!("an output asset states an output quantity");
+        };
+        served.assets[0].assets[0].quantity = Some(alpha::asset::Quantity::MintCoin(q));
+        assert_eq!(
+            differing(&first, &v1alpha::output(&served)).unwrap(),
+            [OutputField::Assets]
+        );
     }
 }

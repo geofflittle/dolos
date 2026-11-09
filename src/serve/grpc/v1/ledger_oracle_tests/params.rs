@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use dolos_cardano::model::PParamValue as P;
 use ledger_oracle_judge::{
     compare::Tally,
+    judgement::Version,
     params::{first_difference, Canon},
     record::PParams,
 };
@@ -47,8 +48,15 @@ type ServedFn = fn(&u5c::PParams) -> Canon;
 
 /// How one ledger parameter is seeded into Dolos and read back from ReadParams.
 struct Param {
+    key: &'static str,
     seed: SeedFn,
     served: ServedFn,
+}
+
+impl Param {
+    const fn new(key: &'static str, seed: SeedFn, served: ServedFn) -> Param {
+        Param { key, seed, served }
+    }
 }
 
 fn int(c: &Canon) -> u64 {
@@ -250,9 +258,15 @@ fn served_version(p: &u5c::PParams) -> Canon {
     }
 }
 
-/// The seed and served forms of a ledger parameter, none when the key is unmapped.
-fn param(key: &str) -> Option<Param> {
-    let (seed, served): (SeedFn, ServedFn) = match key {
+/// Builds the parameter table from each key's seed and served forms.
+macro_rules! params {
+    ($($key:literal => ($seed:expr, $served:expr $(,)?)),* $(,)?) => {
+        [$(Param::new($key, $seed, $served)),*]
+    };
+}
+
+/// Each ledger parameter with its seed and served forms.
+static PARAMS: [Param; 54] = params! {
         "collateralPercentage" => (
             |c| vec![P::CollateralPercentage(small(c))],
             |p| n(p.collateral_percentage),
@@ -469,9 +483,125 @@ fn param(key: &str) -> Option<Param> {
             |c| vec![P::AdaPerUtxoByte(int(c))],
             |p| big(&p.coins_per_utxo_byte),
         ),
-        _ => return None,
+};
+
+/// The seed and served forms of a ledger parameter, none when the key is unmapped.
+fn param(key: &str) -> Option<&'static Param> {
+    PARAMS.iter().find(|p| p.key == key)
+}
+
+/// The fields of a latest version's message that the parameters message of `version` states.
+fn narrowed(full: &u5c::PParams, version: Version) -> u5c::PParams {
+    use crate::serve::grpc::{v1alpha, v1beta};
+    use prost::Message as _;
+    let bytes = full.encode_to_vec();
+    let older = "a latest parameters message decodes as an older one";
+    match version {
+        Version::V1 => full.clone(),
+        Version::V1beta => {
+            as_latest(&v1beta::spec::cardano::PParams::decode(bytes.as_slice()).expect(older))
+        }
+        Version::V1alpha => {
+            as_latest(&v1alpha::spec::cardano::PParams::decode(bytes.as_slice()).expect(older))
+        }
+    }
+}
+
+/// Parameters of the latest version's message with every field stated and none at its default.
+fn every_field_stated() -> u5c::PParams {
+    let big = || {
+        Some(u5c::BigInt {
+            big_int: Some(u5c::big_int::BigInt::Int(7)),
+        })
     };
-    Some(Param { seed, served })
+    let rat = || {
+        Some(u5c::RationalNumber {
+            numerator: 3,
+            denominator: 7,
+        })
+    };
+    let units = || {
+        Some(u5c::ExUnits {
+            steps: 7,
+            memory: 9,
+        })
+    };
+    let thresholds = |count| {
+        Some(u5c::VotingThresholds {
+            thresholds: vec![rat().unwrap(); count],
+        })
+    };
+    let model = || Some(u5c::CostModel { values: vec![7] });
+    u5c::PParams {
+        coins_per_utxo_byte: big(),
+        max_tx_size: 7,
+        min_fee_coefficient: big(),
+        min_fee_constant: big(),
+        max_block_body_size: 7,
+        max_block_header_size: 7,
+        stake_key_deposit: big(),
+        pool_deposit: big(),
+        pool_retirement_epoch_bound: 7,
+        desired_number_of_pools: 7,
+        pool_influence: rat(),
+        monetary_expansion: rat(),
+        treasury_expansion: rat(),
+        min_pool_cost: big(),
+        protocol_version: Some(u5c::ProtocolVersion { major: 7, minor: 1 }),
+        max_value_size: 7,
+        collateral_percentage: 7,
+        max_collateral_inputs: 7,
+        cost_models: Some(u5c::CostModels {
+            plutus_v1: model(),
+            plutus_v2: model(),
+            plutus_v3: model(),
+            plutus_v4: model(),
+        }),
+        prices: Some(u5c::ExPrices {
+            steps: rat(),
+            memory: rat(),
+        }),
+        max_execution_units_per_transaction: units(),
+        max_execution_units_per_block: units(),
+        min_fee_script_ref_cost_per_byte: rat(),
+        pool_voting_thresholds: thresholds(POOL_THRESHOLDS.len()),
+        drep_voting_thresholds: thresholds(DREP_THRESHOLDS.len()),
+        min_committee_size: 7,
+        committee_term_limit: 7,
+        governance_action_validity_period: 7,
+        governance_action_deposit: big(),
+        drep_deposit: big(),
+        drep_inactivity_period: 7,
+        max_ref_script_size_per_block: Some(7),
+        max_ref_script_size_per_tx: Some(7),
+        ref_script_cost_stride: Some(7),
+        ref_script_cost_multiplier: rat(),
+        max_pledge_leverage: rat(),
+        min_pool_margin: rat(),
+        leios_announcement_period_length: Some(7),
+        leios_vote_period_length: Some(7),
+        leios_diffusion_period_length: Some(7),
+        leios_committee_size: Some(7),
+        leios_quorum_stake_threshold: rat(),
+        max_endorser_block_references_size: Some(7),
+        max_endorser_block_txs_size: Some(7),
+        max_endorser_block_execution_units: units(),
+        max_ref_script_size_per_endorser_block: Some(7),
+        peras_min_candidate_block_age: Some(7),
+        peras_healing_factor: rat(),
+        peras_cert_boost: Some(7),
+        peras_target_committee_size: Some(7),
+        peras_bootstrap_round: Some(7),
+        peras_quorum_threshold_safety_margin: rat(),
+        ref_inputs_cost_per_multi_asset_policy: big(),
+        ref_inputs_cost_per_datum_byte: big(),
+    }
+}
+
+/// The parameters an older version's message states, read as the latest version's message whose fields it is a prefix of.
+pub(super) fn as_latest(served: &impl prost::Message) -> u5c::PParams {
+    prost::Message::decode(served.encode_to_vec().as_slice())
+        .expect("an older parameters message decodes as the latest")
 }
 
 fn canon(key: &str, value: &serde_json::Value) -> Result<Canon, String> {
@@ -488,15 +618,21 @@ pub(super) fn seed_values(pparams: &PParams) -> Result<Vec<P>, String> {
     Ok(out)
 }
 
-/// Counts each ledger parameter of a run against the value Dolos serves for it.
+/// Counts each ledger parameter of a run that the parameters message of `version` states against the value Dolos serves for it.
 pub(super) fn compare<F>(
     pparams: &PParams,
     served: &u5c::PParams,
+    version: Version,
     tally: &mut Tally<F>,
     describe: impl Fn(&str, String) -> F,
 ) {
+    let full = every_field_stated();
+    let stated = narrowed(&full, version);
     for (key, value) in &pparams.0 {
         let param = param(key).unwrap_or_else(|| panic!("PARAMS unmapped key={key}"));
+        if (param.served)(&full) != (param.served)(&stated) {
+            continue;
+        }
         let ledger = canon(key, value).unwrap_or_else(|e| panic!("{e}"));
         let difference = first_difference(key, &ledger, &(param.served)(served));
         tally.add(difference.is_none(), || {
@@ -508,6 +644,36 @@ pub(super) fn compare<F>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_older_version_states_the_parameters_its_message_has_fields_for() {
+        let full = every_field_stated();
+        let mut stated = BTreeMap::new();
+        for version in Version::ALL {
+            let narrowed = narrowed(&full, version);
+            for p in &PARAMS {
+                let kept = (p.served)(&full) == (p.served)(&narrowed);
+                *stated.entry((version, kept)).or_insert(0) += 1;
+            }
+        }
+        let counts: Vec<_> = stated.into_iter().collect();
+        assert_eq!(
+            counts,
+            [
+                ((Version::V1, true), 54),
+                ((Version::V1beta, false), 23),
+                ((Version::V1beta, true), 31),
+                ((Version::V1alpha, false), 23),
+                ((Version::V1alpha, true), 31),
+            ]
+        );
+    }
+
+    #[test]
+    fn each_parameter_key_is_listed_once() {
+        let keys: std::collections::BTreeSet<&str> = PARAMS.iter().map(|p| p.key).collect();
+        assert_eq!(keys.len(), PARAMS.len());
+    }
 
     #[test]
     fn an_unmapped_key_fails_the_seed() {

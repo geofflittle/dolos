@@ -9,8 +9,8 @@ use std::{
 use crate::{
     cbor::Purpose,
     judgement::{
-        self, member, Axis, CellKey, EntryPoint, Judge, Outcome, Pass, RequestShape, Subject,
-        Verdict,
+        self, member, Axis, CellKey, EntryPoint, Instrument, Judge, Outcome, Pass, RequestShape,
+        Route, Subject, Verdict, Version,
     },
     manifest::ManifestError,
     record::{Evaluation, LedgerOutcome, LedgerRedeemers, Record, RecordId, Units},
@@ -205,6 +205,19 @@ judgement::named! {
         V1 = "v1",
         V1beta = "v1beta",
         V1alpha = "v1alpha",
+    }
+}
+
+impl Layer {
+    /// The entry point that answers at the layer.
+    pub fn entry(self) -> EntryPoint {
+        let eval_tx = |version| EntryPoint::Route(Route::EvalTx, version);
+        match self {
+            Layer::Pallas => Instrument::EstimateTxCalls.into(),
+            Layer::V1 => eval_tx(Version::V1),
+            Layer::V1beta => eval_tx(Version::V1beta),
+            Layer::V1alpha => eval_tx(Version::V1alpha),
+        }
     }
 }
 
@@ -830,7 +843,7 @@ fn estimate(
     cells.push(CellKey::new(Axis::RequestShape, judge.shape()));
     Verdict {
         judge: judge.judge(),
-        entry: EntryPoint::EstimateTx(layer),
+        entry: layer.entry(),
         subject: Subject::Record(id),
         cells,
         outcome,
@@ -1282,7 +1295,7 @@ impl EvalTally {
         for layer in Layer::ALL {
             for judge in EvalJudge::ALL {
                 if !self.judged_at(judge, layer) {
-                    let entry = EntryPoint::EstimateTx(layer);
+                    let entry = layer.entry();
                     let verdict =
                         Verdict::selection_fails(judge.judge(), entry, "layer_judged=false");
                     failing.push(verdict);
@@ -1823,11 +1836,11 @@ mod tests {
         }
         assert!(passes(&no_v1alpha) && !no_v1alpha.every_layer_judged(EvalJudge::Oracle));
         let unjudged = lines(&no_v1alpha.every_layer());
-        let v1alpha = "VERDICT judge=eval-oracle entry=estimate_tx:v1alpha record=selection cells= outcome=disagree layer_judged=false";
+        let v1alpha = "VERDICT judge=eval-oracle entry=eval_tx:v1alpha record=selection cells= outcome=disagree layer_judged=false";
         assert!(unjudged.iter().any(|l| l == v1alpha), "{unjudged:?}");
         assert!(!unjudged
             .iter()
-            .any(|l| l.contains("judge=eval-oracle entry=estimate_tx:pallas")));
+            .any(|l| l.contains("judge=eval-oracle entry=estimate_tx_calls")));
         let mut twice = t.clone();
         let ledger = BTreeMap::from([(key(Level::Top, 0, 0), ran(1, 2))]);
         let malformed = Err(Malformed::Twice(key(Level::Top, 0, 0)));
@@ -1835,7 +1848,7 @@ mod tests {
         assert!(verdicts.is_empty());
         assert_eq!(
             lines(&failed(&twice, Judge::EvalOracle)),
-            ["VERDICT judge=eval-oracle entry=estimate_tx:v1 record=ic#4 cells=purpose:Spend,index:0,level:top,answer:row,dolos:twice,request_shape:signed outcome=disagree top Spend#0 answered twice"]
+            ["VERDICT judge=eval-oracle entry=eval_tx:v1 record=ic#4 cells=purpose:Spend,index:0,level:top,answer:row,dolos:twice,request_shape:signed outcome=disagree top Spend#0 answered twice"]
         );
         assert!(!passes(&twice));
         let mut differing_fee = t.clone();
@@ -1847,7 +1860,7 @@ mod tests {
         assert!(!passes(&refused));
         assert_eq!(
             lines(&failed(&refused, Judge::EvalOracle)),
-            ["VERDICT judge=eval-oracle entry=estimate_tx:pallas record=ic#2 cells=purpose:Spend,index:0,level:sub,answer:row,ledger:failed,dolos:refused,refusal:r,request_shape:signed outcome=disagree sub0 Spend#0 ledger=(failed) dolos=(refused r)"]
+            ["VERDICT judge=eval-oracle entry=estimate_tx_calls record=ic#2 cells=purpose:Spend,index:0,level:sub,answer:row,ledger:failed,dolos:refused,refusal:r,request_shape:signed outcome=disagree sub0 Spend#0 ledger=(failed) dolos=(refused r)"]
         );
         let mut slow = t.clone();
         let row = row_verdict(Some(ran(1, 2)), DolosRow::Answered(ran(3, 2)), None);
@@ -2078,7 +2091,7 @@ mod tests {
         );
         assert_eq!(
             lines(&failed(&t, Judge::EvalTx)),
-            ["VERDICT judge=eval-tx entry=estimate_tx:v1beta record=ic#4 cells=demand:refuse,request_shape:signed outcome=disagree demand=refuse[MissingRedeemers] dolos=evaluated[0 rows]"]
+            ["VERDICT judge=eval-tx entry=eval_tx:v1beta record=ic#4 cells=demand:refuse,request_shape:signed outcome=disagree demand=refuse[MissingRedeemers] dolos=evaluated[0 rows]"]
         );
         let mut one_layer = EvalTally::default();
         one_layer.add_tx(Layer::Pallas, ic(1), &TxVerdict::EvaluatedNone);
@@ -2125,7 +2138,7 @@ mod tests {
         t.tx_unjudged(&list, CorpusKind::Ic);
         assert_eq!(
             lines(&failed(&t, Judge::EvalTx)),
-            ["VERDICT judge=eval-tx entry=estimate_tx:pallas record=ic#2 cells=answer:unjudged,request_shape:signed outcome=disagree not judged listed=(evaluated[0 rows])"]
+            ["VERDICT judge=eval-tx entry=estimate_tx_calls record=ic#2 cells=answer:unjudged,request_shape:signed outcome=disagree not judged listed=(evaluated[0 rows])"]
         );
         let line = t.tx_line();
         let head = "EVAL-TX compared=4 agree=0 known=4 disagree=1 ";
@@ -2171,8 +2184,8 @@ mod tests {
         assert_eq!(
             lines(&failed(&t, Judge::EvalDraft)),
             [
-                "VERDICT judge=eval-draft entry=estimate_tx:pallas record=ic#2 cells=purpose:Spend,index:0,level:top,answer:row,ledger:ran,dolos:refused,refusal:missing_key_witnesses,request_shape:draft outcome=disagree top Spend#0 ledger=(ran mem=5 steps=7) dolos=(refused missing key witnesses)",
-                "VERDICT judge=eval-draft entry=estimate_tx:v1 record=ic#2 cells=purpose:Spend,index:0,level:top,answer:row,ledger:ran,dolos:failed,request_shape:draft outcome=disagree top Spend#0 ledger=(ran mem=5 steps=7) dolos=(failed)"
+                "VERDICT judge=eval-draft entry=estimate_tx_calls record=ic#2 cells=purpose:Spend,index:0,level:top,answer:row,ledger:ran,dolos:refused,refusal:missing_key_witnesses,request_shape:draft outcome=disagree top Spend#0 ledger=(ran mem=5 steps=7) dolos=(refused missing key witnesses)",
+                "VERDICT judge=eval-draft entry=eval_tx:v1 record=ic#2 cells=purpose:Spend,index:0,level:top,answer:row,ledger:ran,dolos:failed,request_shape:draft outcome=disagree top Spend#0 ledger=(ran mem=5 steps=7) dolos=(failed)"
             ]
         );
         let mut underived = EvalTally::default();
@@ -2206,8 +2219,8 @@ mod tests {
         assert_eq!(
             lines(&failed(&t, Judge::EvalRewardOutput)),
             [
-                "VERDICT judge=eval-reward-output entry=estimate_tx:pallas record=ic#2 cells=answer:refused,refusal:output_address_(requires_Shelley),request_shape:reward_output_draft outcome=disagree expected=(reward account address) dolos=refused[output address (requires Shelley)]",
-                "VERDICT judge=eval-reward-output entry=estimate_tx:v1 record=ic#2 cells=answer:evaluated,request_shape:reward_output_draft outcome=disagree expected=(reward account address) dolos=evaluated[0 rows]"
+                "VERDICT judge=eval-reward-output entry=estimate_tx_calls record=ic#2 cells=answer:refused,refusal:output_address_(requires_Shelley),request_shape:reward_output_draft outcome=disagree expected=(reward account address) dolos=refused[output address (requires Shelley)]",
+                "VERDICT judge=eval-reward-output entry=eval_tx:v1 record=ic#2 cells=answer:evaluated,request_shape:reward_output_draft outcome=disagree expected=(reward account address) dolos=evaluated[0 rows]"
             ]
         );
         let mut one = EvalTally::default();
@@ -2224,5 +2237,13 @@ mod tests {
             assert_eq!(leaf.name(), name);
         }
         assert_eq!(LedgerLeaf::of_name("NoSuchLeaf"), None);
+    }
+
+    #[test]
+    fn the_layers_answer_at_the_calls_instrument_and_eval_tx_at_each_version() {
+        let entries: Vec<EntryPoint> = Layer::ALL.map(Layer::entry).into();
+        let mut expected = vec![Instrument::EstimateTxCalls.into()];
+        expected.extend(Version::ALL.map(|v| EntryPoint::Route(Route::EvalTx, v)));
+        assert_eq!(entries, expected);
     }
 }

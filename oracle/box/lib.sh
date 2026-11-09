@@ -51,6 +51,7 @@ crate_test() {
     cost-models) echo "-p dolos-cardano --features strict --test musashi_cost_models" ;;
     endorser-tx-dropped) echo "-p dolos --lib" ;;
     unsupported-untyped) echo "-p dolos-cardano --lib" ;;
+    watch-block-copied) echo "-p dolos --lib" ;;
     *) return 1 ;;
   esac
 }
@@ -61,6 +62,7 @@ crate_test_source() {
     cost-models) echo crates/cardano/tests/musashi_cost_models.rs ;;
     endorser-tx-dropped) echo src/serve/grpc/v1/ledger_oracle_tests/endorser.rs ;;
     unsupported-untyped) echo crates/cardano/src/validate.rs ;;
+    watch-block-copied) printf '%s\n' src/serve/grpc/v1beta/watch.rs src/serve/grpc/v1alpha/watch.rs ;;
   esac
 }
 
@@ -70,7 +72,19 @@ crate_test_filter() {
     cost-models) echo "musashi_era_translation_keeps_the_published_v3_cost_model --exact" ;;
     endorser-tx-dropped) echo "$ORACLE_TESTS::endorser::served_endorser_transactions_are_the_nodes --exact" ;;
     unsupported-untyped) echo "validate::evaluation_tests::an_unsupported_evaluation_keeps_its_label --exact" ;;
+    watch-block-copied) echo "serve::grpc::v1beta::watch::tests::the_transactions_of_one_block_share_its_bytes serve::grpc::v1alpha::watch::tests::the_transactions_of_one_block_share_its_bytes --exact" ;;
   esac
+}
+
+# Whether the crate test log $2 of arm $1 shows a passing result and each test its filter names passing.
+crate_test_passed() {
+  grep -q '^test result: ok\. [1-9][0-9]* passed' "$2" || return 1
+  for name in $(crate_test_filter "$1"); do
+    case $name in
+      --*) ;;
+      *) grep -q -x -F "test $name ... ok" "$2" || return 1 ;;
+    esac
+  done
 }
 
 # The Dolos files that name the pallas commit Dolos builds against.
@@ -152,6 +166,13 @@ same_log() {
   sed 's/; finished in [0-9.]*s$//' "$1" >"$1.untimed"
   sed 's/; finished in [0-9.]*s$//' "$2" >"$2.untimed"
   cmp -s "$1.untimed" "$2.untimed"
+}
+
+# Whether two crate test logs hold the same lines but for the run time, in any order, as libtest prints each test's line when the test ends.
+same_crate_log() {
+  LC_ALL=C sort "$1" >"$1.sorted"
+  LC_ALL=C sort "$2" >"$2.sorted"
+  same_log "$1.sorted" "$2.sorted"
 }
 
 # Prints HELD when an encoding arm's log $1 holds the lines of the unplanted log $2 in any order but for its ORACLE_PLANT line and a moved bytes_equal count, FIRED when any other line differs, and MISSED when the count did not move.

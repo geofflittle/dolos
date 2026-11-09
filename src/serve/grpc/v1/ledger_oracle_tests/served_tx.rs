@@ -8,9 +8,9 @@ use dolos_cardano::indexes::ScriptLanguage;
 use futures_util::FutureExt as _;
 use itertools::Itertools as _;
 use ledger_oracle_judge::{
-    compare::Tally,
-    eval::{Layer, WireFee},
-    judgement::{Axis, CellKey, Finding},
+    compare::ByEntry,
+    eval::WireFee,
+    judgement::{Axis, CellKey, EntryPoint, Finding, Route, Version},
     record::{CorpusKind, LedgerOutcome, RecordId},
 };
 use pallas::{
@@ -434,9 +434,9 @@ fn differing(ledger: &LedgerTx, mapped: &MappedTx) -> Vec<(Field, String, String
 /// Adds the comparison of what one version answers for one transaction the
 /// ledger accepted.
 fn add(
-    tally: &mut Tally,
+    tally: &mut ByEntry,
     id: RecordId,
-    layer: Layer,
+    layer: Version,
     name: TxName,
     ledger: &LedgerTx,
     answer: Answer<MappedTx>,
@@ -473,27 +473,29 @@ fn add(
     };
     cells.insert(0, CellKey::new(Axis::Layer, layer));
     cells.insert(1, CellKey::new(Axis::Tx, name.kind()));
+    let tally = tally.at(EntryPoint::Route(Route::ReadTx, layer));
     tally.add(agrees, || {
         Finding::new(id, cells, format!("{layer} {name} {dolos}"))
     });
 }
 
-/// Evidence that ReadTx v1 mapped each accepted transaction of a run without a
-/// panic, which the passes that serve the run through v1 take.
-pub(super) struct V1Maps(());
+/// Evidence that ReadTx at every version mapped each accepted transaction of a
+/// run without a panic, which the passes that serve the run through every
+/// version take.
+pub(super) struct EveryVersionMaps(());
 
 /// Counts what each ReadTx version maps for the accepted records of the blocks
 /// a run rolled against the ledger's transactions, v1 by each top level hash
 /// with its sub transactions and v1beta and v1alpha by each top level and sub
-/// transaction hash, with the evidence that v1 mapped them when no v1 mapping
-/// panicked.
+/// transaction hash, with the evidence that every version mapped them when no
+/// mapping panicked.
 pub(super) async fn compare(
     domain: &DomainAdapter,
     kind: CorpusKind,
     blocks: &[GroupBlock<'_>],
-    tally: &mut Tally,
-) -> Option<V1Maps> {
-    let mut v1 = Some(V1Maps(()));
+    tally: &mut ByEntry,
+) -> Option<EveryVersionMaps> {
+    let mut maps = Some(EveryVersionMaps(()));
     let groups = blocks.iter().filter_map(GroupBlock::rolled);
     let accepted = groups
         .flat_map(|rolled| rolled.group)
@@ -513,7 +515,7 @@ pub(super) async fn compare(
             .collect();
         let served = read_tx!(v1, domain, top);
         if let Answer::Panicked(_) = served {
-            v1 = None;
+            maps = None;
         }
         for (name, ledger) in &named {
             let common = served.then(|tx| match name {
@@ -538,25 +540,33 @@ pub(super) async fn compare(
                     }
                 }
             });
-            add(tally, id, Layer::V1, *name, ledger, common);
+            add(tally, id, Version::V1, *name, ledger, common);
         }
         for &(name, ref ledger) in &named {
             let hash = match name {
                 TxName::Top(h) | TxName::Sub(h) => h,
             };
-            let answer = read_tx!(v1beta, domain, hash).then(|tx| {
+            let served = read_tx!(v1beta, domain, hash);
+            if let Answer::Panicked(_) = served {
+                maps = None;
+            }
+            let answer = served.then(|tx| {
                 let fee = wire_fee!(v1beta, tx.fee.clone());
                 Answer::Mapped(mapped!(v1beta, tx, Some(fee), None))
             });
-            add(tally, id, Layer::V1beta, name, ledger, answer);
-            let answer = read_tx!(v1alpha, domain, hash).then(|tx| {
+            add(tally, id, Version::V1beta, name, ledger, answer);
+            let served = read_tx!(v1alpha, domain, hash);
+            if let Answer::Panicked(_) = served {
+                maps = None;
+            }
+            let answer = served.then(|tx| {
                 let fee = wire_fee!(v1alpha, tx.fee.clone());
                 Answer::Mapped(mapped!(v1alpha, tx, Some(fee), None))
             });
-            add(tally, id, Layer::V1alpha, name, ledger, answer);
+            add(tally, id, Version::V1alpha, name, ledger, answer);
         }
     }
-    v1
+    maps
 }
 
 #[test]

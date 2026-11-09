@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use ledger_oracle_judge::{
     context::{language_members, Language},
     coverage::{Member, Reach},
-    judgement::{Axis, CellKey, EntryPoint, RequestShape},
+    judgement::{Axis, CellKey, EntryPoint, RequestShape, Route},
     refusal::leaf_members,
     rules::Rules,
 };
@@ -434,6 +434,48 @@ pub(super) fn builtin_member(language: Language, builtin: Builtin) -> String {
     format!("{language}.{builtin:?}")
 }
 
+/// How the oracle reaches an entry point, with the reason and command for each route it does not judge.
+fn entry_reach(entry: EntryPoint) -> Reach {
+    let excluded = |reason: &str, command: &str| Reach::Excluded {
+        reason: reason.to_string(),
+        command: command.to_string(),
+    };
+    let route = match entry {
+        EntryPoint::Instrument(_) => return Reach::Counted,
+        EntryPoint::Route(route, _) => route,
+    };
+    match route {
+        Route::SubmitTx
+        | Route::EvalTx
+        | Route::WaitForTx
+        | Route::WatchMempool
+        | Route::FetchBlock
+        | Route::FollowTip
+        | Route::DumpHistory
+        | Route::WatchTx
+        | Route::ReadParams
+        | Route::ReadUtxos
+        | Route::SearchUtxos
+        | Route::ReadTx => Reach::Counted,
+        Route::ReadMempool => excluded(
+            "row S23, ReadMempool is unimplemented",
+            "grep -n 'read_mempool is not yet available' src/serve/grpc/v1/submit.rs",
+        ),
+        Route::ReadData => excluded(
+            "row S14, ReadData panics on any call and serves nothing from chain state",
+            "grep -n -A8 'async fn read_data' src/serve/grpc/v1/query.rs",
+        ),
+        Route::ReadTip => excluded(
+            "row S24, the tip is judged only against a node",
+            "grep -n -A3 'S24 =>' crates/ledger-oracle-judge/src/row.rs",
+        ),
+        Route::ReadGenesis | Route::ReadEraSummary | Route::ReadState => excluded(
+            "a record holds no genesis file, era summary or stake distribution snapshot",
+            "grep -n -A16 'pub struct Record ' crates/ledger-oracle-judge/src/record.rs",
+        ),
+    }
+}
+
 /// Every member of the coverage table, with the rule members `rules` gives.
 pub(super) fn members(rules: &Rules) -> Vec<Member> {
     let mut members = Vec::new();
@@ -470,7 +512,10 @@ pub(super) fn members(rules: &Rules) -> Vec<Member> {
     members.extend(leaf_members());
     members.extend(rules.members());
     let entries = EntryPoint::every().into_iter();
-    members.extend(entries.map(|e| Member::counted(Axis::Entry, e)));
+    members.extend(entries.map(|e| Member {
+        cell: CellKey::new(Axis::Entry, e),
+        reach: entry_reach(e),
+    }));
     let shapes = RequestShape::ALL.into_iter();
     members.extend(shapes.map(|s| Member::counted(Axis::RequestShape, s)));
     members.extend(language_members());
@@ -485,6 +530,65 @@ mod tests {
     use pallas::ledger::primitives::dijkstra::{BootstrapWitness, VKeyWitness};
 
     use super::*;
+
+    /// The method names, in snake case, of every service the descriptor sets of one version declare.
+    fn spec_methods(sets: [&[u8]; 4]) -> BTreeSet<String> {
+        use prost::Message as _;
+        let decoded = sets.into_iter().map(prost_types::FileDescriptorSet::decode);
+        let files = decoded.flat_map(|set| set.expect("a spec descriptor set decodes").file);
+        let methods = files.flat_map(|f| f.service).flat_map(|s| s.method);
+        let snake = |name: &str| {
+            let mut snake = String::new();
+            for c in name.chars() {
+                if c.is_uppercase() && !snake.is_empty() {
+                    snake.push('_');
+                }
+                snake.push(c.to_ascii_lowercase());
+            }
+            snake
+        };
+        methods.map(|m| snake(m.name())).collect()
+    }
+
+    #[test]
+    fn every_method_the_spec_declares_is_a_route_at_its_version() {
+        use ledger_oracle_judge::judgement::Version;
+        use pallas::interop::utxorpc::{v1, v1alpha, v1beta};
+        let sets = [
+            (
+                Version::V1,
+                [
+                    v1::spec::query::FILE_DESCRIPTOR_SET,
+                    v1::spec::submit::FILE_DESCRIPTOR_SET,
+                    v1::spec::sync::FILE_DESCRIPTOR_SET,
+                    v1::spec::watch::FILE_DESCRIPTOR_SET,
+                ],
+            ),
+            (
+                Version::V1beta,
+                [
+                    v1beta::spec::query::FILE_DESCRIPTOR_SET,
+                    v1beta::spec::submit::FILE_DESCRIPTOR_SET,
+                    v1beta::spec::sync::FILE_DESCRIPTOR_SET,
+                    v1beta::spec::watch::FILE_DESCRIPTOR_SET,
+                ],
+            ),
+            (
+                Version::V1alpha,
+                [
+                    v1alpha::spec::query::FILE_DESCRIPTOR_SET,
+                    v1alpha::spec::submit::FILE_DESCRIPTOR_SET,
+                    v1alpha::spec::sync::FILE_DESCRIPTOR_SET,
+                    v1alpha::spec::watch::FILE_DESCRIPTOR_SET,
+                ],
+            ),
+        ];
+        for (version, sets) in sets {
+            let routes = Route::ALL.into_iter().filter(|r| r.at(version));
+            let routes: BTreeSet<String> = routes.map(|r| r.name().to_string()).collect();
+            assert_eq!(routes, spec_methods(sets), "{version}");
+        }
+    }
 
     fn witnesses(vkeys: &[&[u8]], attributes: &[u8]) -> WitnessSet<'static> {
         let vkeys = vkeys.iter().map(|k| VKeyWitness {
