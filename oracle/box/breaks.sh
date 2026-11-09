@@ -154,7 +154,7 @@ control_clean() {
     log=$OUT/control.log
     if crate_test "$a" >/dev/null; then
       log=$OUT/control-$a.log
-      if ! grep -q '^test result: ok\. 1 passed' "$log"; then
+      if ! crate_test_passed "$a" "$log"; then
         echo "ARM control CRATE_TEST_FAILED arm=$a log=$log"
         clean=1
       fi

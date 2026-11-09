@@ -252,6 +252,32 @@ same() {
 expect retimed "$(same "$L/head" "$L/retimed")" same
 expect differs "$(same "$L/head" "$L/differs")" differs
 
+# Crate test logs of the watch arm: every version passing, its v1beta test failing, and only the v1 test run.
+watch=watch::tests::the_transactions_of_one_block_share_its_bytes
+printf '%s\n' "test serve::grpc::v1beta::$watch ... ok" "test serve::grpc::v1alpha::$watch ... ok" "test serve::grpc::v1::$watch ... ok" \
+  'test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 386 filtered out; finished in 0.02s' >"$L/watch-all"
+printf '%s\n' "test serve::grpc::v1beta::$watch ... FAILED" "test serve::grpc::v1alpha::$watch ... ok" \
+  'test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 387 filtered out; finished in 0.02s' >"$L/watch-failed"
+printf '%s\n' "test serve::grpc::v1::$watch ... ok" \
+  'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 388 filtered out; finished in 0.02s' >"$L/watch-v1"
+printf '%s\n' 'test serve::grpc::v1::ledger_oracle_tests::endorser::served_endorser_transactions_are_the_nodes ... ok' \
+  'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 388 filtered out; finished in 0.31s' >"$L/endorser"
+printf '%s\n' 'test musashi_era_translation_keeps_the_published_v3_cost_model ... ok' \
+  'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s' >"$L/cost-models"
+passed() {
+  (
+    HERE=$H
+    . "$LIB"
+    if crate_test_passed "$1" "$2"; then echo passed; else echo failed; fi
+  )
+}
+# Must not fire when every test passes, and must fire on a failing test and on a planted test that did not run.
+expect crate_passed "$(passed watch-block-copied "$L/watch-all")" passed
+expect crate_endorser "$(passed endorser-tx-dropped "$L/endorser")" passed
+expect crate_cost_models "$(passed cost-models "$L/cost-models")" passed
+expect crate_failed "$(passed watch-block-copied "$L/watch-failed")" failed
+expect crate_unrun "$(passed watch-block-copied "$L/watch-v1")" failed
+
 # An unplanted log and an encoding arm's logs: one with only bytes_equal moved, one with a context also judged differently, and one with nothing moved.
 context='CONTEXT compared=2 agree=2 differ=0 known=0 unbuilt=0 no_ledger_context=0 pallas_only=0'
 printf '%s\n' "$context bytes_equal=0 by_language=V3=2/0/0 by_level=top=2/0/0" 'RESULT PASS' >"$L/unplanted"
