@@ -9,7 +9,7 @@
 {-# LANGUAGE TypeApplications #-}
 
 -- | One JSON line per LEDGER rule run, written from the Imp post submit hook.
-module Dump (E, counter, decodeTx, dumpTo, editedBytes, evalJson, failurePath, hex) where
+module Dump (E, Line (..), counter, decodeTx, dumpRecord, editedBytes, evalJson, failurePath, hex, recordLine) where
 
 import Cardano.Ledger.Alonzo.PParams (ppCostModelsL, ppMaxTxExUnitsL)
 import Cardano.Ledger.Alonzo.Plutus.Context (EraPlutusContext (..), LedgerLevelTxInfo (..), LedgerTxInfo (..), toScriptHashByPurpose)
@@ -206,18 +206,45 @@ timeJson g s =
       where
         mid = lo + (hi - lo) `div` 2
 
-dumpTo ::
+-- | The UTxO, certificate state and governance state a record's pre state is compared with to tell whether it follows the previous record.
+type Continuity = (UTxO E, A.Value, A.Value)
+
+-- | The LEDGER rule's result on one transaction.
+type Result = Either (NE.NonEmpty (PredicateFailure (EraRule "LEDGER" E))) (State (EraRule "LEDGER" E))
+
+-- | One record's line with what the writer keeps after it.
+data Line = Line
+  { lineValue :: A.Value
+  , lineNext :: Continuity
+  , lineAccepted :: Maybe BS8.ByteString
+  , lineRule :: Either String Int
+  }
+
+-- | Writes the record of one LEDGER rule run, giving its number and bytes when the ledger accepted them.
+dumpRecord ::
   FilePath ->
   Globals ->
   TRC (EraRule "LEDGER" E) ->
   Either (NE.NonEmpty (PredicateFailure (EraRule "LEDGER" E))) (State (EraRule "LEDGER" E), [Event (EraRule "LEDGER" E)]) ->
-  ImpM t ()
-dumpTo out g (TRC (env, st, stAnn)) res = liftIO $ do
+  ImpM t (Maybe (Int, BS8.ByteString))
+dumpRecord out g trc res = liftIO $ do
   n <- readIORef counter
   writeIORef counter (n + 1)
   prev <- readIORef lastPost
   edited <- readIORef editedBytes
   writeIORef editedBytes Nothing
+  let Line {lineValue, lineNext, lineAccepted, lineRule} = recordLine n prev edited g trc (fmap fst res)
+  keys <- either (\e -> fail ("record " <> show n <> ", " <> e)) pure lineRule
+  modifyIORef' ruleKeys (+ keys)
+  total <- readIORef ruleKeys
+  when (keys > 0) $ hPutStrLn stderr ("rule arguments agree on " <> show total <> " redeemers")
+  writeIORef lastPost (Just lineNext)
+  BL8.appendFile out (A.encode lineValue <> "\n")
+  pure (fmap ((,) n) lineAccepted)
+
+-- | The line of record `n`, whose pre state is fresh unless it is `prev`, carrying `edited` in place of its transaction's encoding.
+recordLine :: Int -> Maybe Continuity -> Maybe BS8.ByteString -> Globals -> TRC (EraRule "LEDGER" E) -> Result -> Line
+recordLine n prev edited g (TRC (env, st, stAnn)) res =
   let tx = stAnn ^. txStAnnTxG
       pre = st ^. lsUTxOStateL . utxoL
       epoch = ledgerEpochNo env
@@ -227,7 +254,7 @@ dumpTo out g (TRC (env, st, stAnn)) res = liftIO $ do
       refused shown names =
         A.object ["refused" A..= A.object ["failures" A..= take 300 shown, "failure_names" A..= names]]
       decoded = decodeTx (pvMajor (ledgerPp env ^. ppProtocolVersionL)) bytes
-      (outcome, post) = outcomeOf (fmap fst res)
+      (outcome, post) = outcomeOf res
       outcomeOf result = case (decoded, result) of
         (Left e, _) -> (refused (show e) [failurePath (show e)], Nothing)
         (Right _, Left fs) -> (refused (show (NE.toList fs)) (map (failurePath . show) (NE.toList fs)), Nothing)
@@ -269,12 +296,12 @@ dumpTo out g (TRC (env, st, stAnn)) res = liftIO $ do
         let flagged = tx & isPhase2ValidTxL .~ Phase2Valid
             annotated = mkStAnnTx (epochInfo g) (systemStart g) (ledgerPp env) pre mempty flagged
          in fst (outcomeOf (runReader (applySTS @(EraRule "LEDGER" E) (TRC (env, st, annotated))) g))
-  keys <- either (\e -> fail ("record " <> show n <> ", " <> e)) pure (maybe (Right 0) (uncurry (ruleAgrees (ledgerPp env) stAnn)) reports)
-  modifyIORef' ruleKeys (+ keys)
-  total <- readIORef ruleKeys
-  when (keys > 0) $ hPutStrLn stderr ("rule arguments agree on " <> show total <> " redeemers")
-  writeIORef lastPost (Just (continuity (fromMaybe st post)))
-  BL8.appendFile out (A.encode line <> "\n")
+   in Line
+        { lineValue = line
+        , lineNext = continuity (fromMaybe st post)
+        , lineAccepted = bytes <$ post
+        , lineRule = maybe (Right 0) (uncurry (ruleAgrees (ledgerPp env) stAnn)) reports
+        }
   where
     continuity s = (s ^. lsUTxOStateL . utxoL, certsJson s, govJson s)
     certsJson s = case A.toJSON (s ^. lsCertStateL) of
