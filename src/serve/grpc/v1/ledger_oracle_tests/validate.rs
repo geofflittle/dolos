@@ -504,13 +504,11 @@ mod tests {
     fn an_unsupported_phase_two_evaluation_is_phase_two_unsupported_with_its_label() {
         use pallas::ledger::validate::phase2::error::{Unsupported, UnsupportedEvaluation};
         let error = ChainError::Phase2EvaluationUnsupported(Unsupported(
-            UnsupportedEvaluation::IntegerOutsideRegistrationRange,
+            UnsupportedEvaluation::ReferenceScriptLanguage,
         ));
         assert_eq!(
             verdict(&refusal(error)),
-            DolosVerdict::Phase2Unsupported(
-                "integer operand outside audited registration range".to_string()
-            )
+            DolosVerdict::Phase2Unsupported("reference script language (requires V3)".to_string())
         );
     }
 

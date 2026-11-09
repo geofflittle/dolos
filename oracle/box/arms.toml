@@ -128,6 +128,7 @@ fixes = [
   { commit = "e6db7afd", arm = "witness-v3-v4-dropped" },
   { commit = "01461888", arm = "sub-valid-always" },
   { commit = "73cef926", arm = "proposal-keys-dropped" },
+  { commit = "c13da1a9", arm = "integer-bound-restored" },
 ]
 
 [catches]
@@ -230,5 +231,7 @@ withdrawal-account-class = ["judge=validation failure:reason_mismatch ledger:Dec
 pool-metadata-hash-unbounded = ["judge=validation failure:disagree ledger:PoolMedataHashTooBig dolos:accepted"]
 collateral-unsigned = ["judge=validation failure:reason_mismatch ledger:InsufficientCollateral dolos:PostAlonzo"]
 reward-output-unsupported = ["judge=eval-reward-output answer:refused refusal:output_address_(requires_Shelley)"]
-unsupported-untyped = ["judge=validation failure:stale_manifest unsupported:integer_operand_outside_audited_registration_range dolos:Phase2EvaluationError"]
+unsupported-untyped = ["test=validate::evaluation_tests::an_unsupported_evaluation_keeps_its_label"]
+integer-bound-restored = ["judge=eval-oracle entry=estimate_tx:pallas level:top ledger:ran dolos:failed"]
+ripemd-160-refused = ["judge=eval-oracle entry=estimate_tx:pallas level:top ledger:ran dolos:refused refusal:V3_builtin_outside_audited_protocol-12_subset !listed:*"]
 coverage-deselect = ["judge=coverage leaf:ConflictingMetadataHash"]

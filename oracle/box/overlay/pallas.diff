@@ -943,15 +943,14 @@ index cdc70b06a..1a9b4acbd 100644
      }
  
 diff --git a/pallas-validate/src/phase2/error.rs b/pallas-validate/src/phase2/error.rs
-index 3aff93985..39f1c1d66 100644
+index 38ace336e..616aeb686 100644
 --- a/pallas-validate/src/phase2/error.rs
 +++ b/pallas-validate/src/phase2/error.rs
-@@ -14,8 +14,12 @@ pub struct Unsupported(pub UnsupportedEvaluation);
+@@ -14,7 +14,11 @@ pub struct Unsupported(pub UnsupportedEvaluation);
  labels! {
      /// A construct the native Dijkstra evaluation does not implement.
      pub enum UnsupportedEvaluation {
 +        BuiltinOutsideSubset => "V3 builtin outside audited protocol-12 subset",
-         IntegerOutsideRegistrationRange => "integer operand outside audited registration range",
 +        NativeScriptGuards => "native script guards",
 +        OutputAddress => "output address (requires Shelley)",
          ParametersRequireDijkstra => "protocol parameters require Dijkstra",
@@ -1010,10 +1009,17 @@ index 198f4462e..5c5003b62 100644
  /// enforcing declared redeemer budgets. Earlier eras return [`Error::WrongEra`].
  ///
 diff --git a/pallas-validate/src/phase2/native_evaluator.rs b/pallas-validate/src/phase2/native_evaluator.rs
-index 97f9659c4..a8fd37273 100644
+index d84f5bb49..5f08c1ec4 100644
 --- a/pallas-validate/src/phase2/native_evaluator.rs
 +++ b/pallas-validate/src/phase2/native_evaluator.rs
-@@ -7,6 +7,7 @@ use amaru_kernel::{PlutusVersion, ProtocolVersion};
+@@ -1,12 +1,13 @@
+ //! Native Dijkstra evaluation with the protocol-aware backend.
+ use super::{
+-    error::{Error, EvaluationFailure},
++    error::{Error, EvaluationFailure, Unsupported, UnsupportedEvaluation},
+     evaluator::{MachineFailure, ScriptEvalResult},
+ };
+ use amaru_kernel::{PlutusVersion, ProtocolVersion};
  use amaru_uplc_native::{
      arena::Arena,
      binder::DeBruijn,
@@ -1021,10 +1027,14 @@ index 97f9659c4..a8fd37273 100644
      bumpalo::Bump,
      constant::Constant,
      data::PlutusData as PragmaPlutusData,
-@@ -39,6 +40,11 @@ pub(crate) fn eval_native(
+@@ -39,9 +40,18 @@ pub(crate) fn eval_native(
      let flat_bytes: minicbor::bytes::ByteVec = minicbor::decode(script_bytes)?;
      let version = plutus_version(&language);
      let protocol = ProtocolVersion::new(12, 0);
++    let semantics = match pallas_crypto::oracle_plant("integer-bound-restored") {
++        true => ProtocolVersion::new(11, 0),
++        false => protocol,
++    };
 +    let mut costs = costs.to_vec();
 +    if language == Language::PlutusV3 && pallas_crypto::oracle_plant("cost") {
 +        costs[173] /= 2;
@@ -1032,8 +1042,12 @@ index 97f9659c4..a8fd37273 100644
 +    let costs = &costs[..];
      let cost_model = match language {
          Language::PlutusV1 | Language::PlutusV2 | Language::PlutusV3 => {
-             CostModel::new(version, protocol, costs)
-@@ -50,6 +56,72 @@ pub(crate) fn eval_native(
+-            CostModel::new(version, protocol, costs)
++            CostModel::new(version, semantics, costs)
+         }
+         Language::PlutusV4 => CostModel::v4(costs),
+     };
+@@ -50,6 +60,72 @@ pub(crate) fn eval_native(
      if remainder > 0 {
          return Err(amaru_uplc_native::flat::FlatDecodeError::TrailingBytes(remainder).into());
      }
@@ -1106,7 +1120,7 @@ index 97f9659c4..a8fd37273 100644
      let initial = ExBudget {
          mem: i64::try_from(budget.mem)
              .map_err(|_| Error::DijkstraInvalid(EvaluationFailure::MemoryBudgetOverflow))?,
-@@ -61,6 +133,12 @@ pub(crate) fn eval_native(
+@@ -61,6 +137,17 @@ pub(crate) fn eval_native(
      });
      let mut calls = Vec::new();
      let (value, info) = run(&arena, program, cost_model, initial, &mut calls);
@@ -1116,10 +1130,15 @@ index 97f9659c4..a8fd37273 100644
 +            UnsupportedEvaluation::BuiltinOutsideSubset,
 +        )));
 +    }
-     if matches!(
-         value,
-         Err(MachineError::Runtime(RuntimeError::IntegerOutOfBounds(_)))
-@@ -155,6 +233,59 @@ fn steps<'a>(
++    if pallas_crypto::oracle_plant("ripemd-160-refused") && calls.contains(&Builtin::Ripemd_160) {
++        return Err(Error::DijkstraUnsupported(Unsupported(
++            UnsupportedEvaluation::BuiltinOutsideSubset,
++        )));
++    }
+     let units = budget_to_ex_units(info.consumed_budget);
+     let logs = info.logs;
+     let mut failure = value.as_ref().err().map(|err| MachineFailure {
+@@ -147,6 +234,59 @@ fn steps<'a>(
      }
  }
  

@@ -2197,7 +2197,8 @@ async fn the_v2_record_is_known_and_its_maker_agrees() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "judges Dolos against the committed ledger corpora, run in release"]
-async fn every_layer_accepts_the_sha2_256_and_mk_nil_data_records_in_the_ledger_units() {
+async fn every_layer_accepts_the_sha2_256_mk_nil_data_and_wide_integer_records_in_the_ledger_units()
+{
     let corpus = load(CorpusKind::Supp);
     let records: BTreeMap<u32, &Record> = corpus
         .kept()
@@ -2205,7 +2206,12 @@ async fn every_layer_accepts_the_sha2_256_and_mk_nil_data_records_in_the_ledger_
         .map(|r| (r.n, r))
         .collect();
     let judged = judge_supp(|_| ()).await;
-    for (n, units) in [(211, (1004, 437_340)), (214, (1965, 445_825))] {
+    let units = [
+        (211, (1004, 437_340)),
+        (214, (1965, 445_825)),
+        (217, (22_628, 2_910_755_398)),
+    ];
+    for (n, units) in units {
         let record = records[&n];
         let ledger: Vec<_> = ledger_rows(record).into_iter().collect();
         let [(key, Answer::Ran(ran))] = &ledger[..] else {
@@ -2225,8 +2231,6 @@ async fn every_layer_accepts_the_sha2_256_and_mk_nil_data_records_in_the_ledger_
             "supp#{n}"
         );
     }
-    assert!(!judged.validation.agree.contains_key(&supp(217)));
-    assert_eq!(judged.eval.ran.get(&supp(217)), None);
 }
 
 #[tokio::test(flavor = "multi_thread")]

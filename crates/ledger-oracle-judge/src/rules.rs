@@ -584,13 +584,13 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         );
     }
 
-    const INTEGER: &str = "integer operand outside audited registration range";
+    const LABEL: &str = "reference script language (requires V3)";
 
     #[test]
     fn an_unsupported_phase_two_evaluation_is_no_phase_one_answer() {
         let rules = rules(TABLE);
         let mut tally = every_side(&rules);
-        let evaluation = DolosVerdict::Phase2Unsupported(INTEGER.to_string());
+        let evaluation = DolosVerdict::Phase2Unsupported(LABEL.to_string());
         judge(&rules, 8, &accepted(), &evaluation, &mut tally);
         let (lines, failing) = bar(&rules, &tally, false);
         assert_eq!(failing, Vec::<String>::new(), "{lines:?}");
@@ -600,14 +600,14 @@ unsupported[witness fields] | unrepresentable because the native validator does 
     fn an_unsupported_phase_one_answer_the_table_lacks_is_unmapped() {
         let rules = rules(TABLE);
         let mut tally = every_side(&rules);
-        let feature = DolosVerdict::Unsupported(INTEGER.to_string());
+        let feature = DolosVerdict::Unsupported(LABEL.to_string());
         judge(&rules, 8, &accepted(), &feature, &mut tally);
         let (_, failing) = bar(&rules, &tally, false);
         assert_eq!(
             failing,
             [format!(
                 "VERDICT judge=rules entry=submit_tx record=supp#8 cells=failure:unmapped \
-                 outcome=disagree dolos=unsupported[{INTEGER}] ledger=accepted"
+                 outcome=disagree dolos=unsupported[{LABEL}] ledger=accepted"
             )]
         );
     }

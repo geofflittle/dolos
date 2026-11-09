@@ -1143,7 +1143,7 @@ mod evaluation_tests {
 
     #[test]
     fn an_unsupported_evaluation_keeps_its_label() {
-        let unsupported = Unsupported(UnsupportedEvaluation::IntegerOutsideRegistrationRange);
+        let unsupported = Unsupported(UnsupportedEvaluation::ReferenceScriptLanguage);
         let error = evaluation_error(Error::DijkstraUnsupported(unsupported));
         assert!(
             matches!(&error, ChainError::Phase2EvaluationUnsupported(x) if *x == unsupported),
@@ -1152,7 +1152,7 @@ mod evaluation_tests {
         assert_eq!(
             error.to_string(),
             "couldn't evaluate phase-2 script: unsupported native Dijkstra evaluation: \
-             integer operand outside audited registration range"
+             reference script language (requires V3)"
         );
     }
 }

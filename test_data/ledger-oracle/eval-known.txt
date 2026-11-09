@@ -83,7 +83,6 @@ supp#136 top Spend#0 couldn't evaluate phase-2 script: Dijkstra time translation
 supp#179 top Spend#1 couldn't evaluate phase-2 script: invalid native Dijkstra evaluation: script guards
 supp#189 top Spend#1 couldn't evaluate phase-2 script: invalid native Dijkstra evaluation: required top-level guards
 supp#208 top Spend#1 couldn't evaluate phase-2 script: invalid native Dijkstra evaluation: Byron address
-supp#217 top Spend#0 integer operand outside audited registration range
 supp#348 sub0 Spend#0 couldn't evaluate phase-2 script: invalid native Dijkstra evaluation: Plutus V1 to V3 script in a subtransaction
 supp#352 top Spend#1 couldn't evaluate phase-2 script: invalid native Dijkstra evaluation: account balance intervals
 supp#356 top Spend#1 couldn't evaluate phase-2 script: invalid native Dijkstra evaluation: direct deposits
