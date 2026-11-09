@@ -6,6 +6,7 @@ use std::{
 
 use ledger_oracle_judge::{
     cbor::{self, EraBound, NodeEra, TxIn},
+    judgement::Version,
     live::{
         block_bytes, chunk_blocks, compare_era_summary, compare_utxos, settle, Aligned, AtPoint,
         Endorsed, NodeBlock, NodeSlot, NodeTime, NodeTip, Point, ServedEra, ServedTime, Tally,
@@ -27,8 +28,9 @@ use super::super::spec::{
 };
 use super::{
     endorser::{judge_served, node_txs, Judged, NodeEndorser},
-    output, params,
-    serve::{add_block, add_tx, Served, Service},
+    output::{self, ServedOutput},
+    params,
+    serve::{v1::add_block, v1::add_tx, Served},
     show_input,
 };
 
@@ -128,7 +130,7 @@ fn batch_hashes(block: &s::AnyChainBlock) -> Vec<[u8; 32]> {
         .collect()
 }
 
-fn presence(output: Option<&Option<cardano::TxOutput>>) -> &'static str {
+fn presence(output: Option<&Option<ServedOutput>>) -> &'static str {
     match output {
         None => "absent",
         Some(None) => "no_output",
@@ -218,7 +220,7 @@ fn compare_blocks(dir: &Path, tally: &mut Tally) {
         let (endorsed, lines) = if certifying {
             let judged = endorsed(dir, &node, header.slot, &block);
             let lines = match &judged {
-                Ok(judged) => judged.lines(Service::FetchBlock, header.slot),
+                Ok(judged) => judged.lines(super::endorser::FETCH_BLOCK, header.slot),
                 Err(e) => vec![format!("unjudged={e}")],
             };
             let agreed = judged.ok().and_then(|j| j.agreed());
@@ -275,7 +277,7 @@ fn endorsed(
 
 /// The fields of a served output that state other values than the output
 /// bytes hold.
-fn fields(ledger: &[u8], served: &cardano::TxOutput) -> Vec<String> {
+fn fields(ledger: &[u8], served: &ServedOutput) -> Vec<String> {
     match output::differing(ledger, served) {
         Ok(fields) => fields.iter().map(ToString::to_string).collect(),
         Err(e) => vec![format!("undecodable({e})")],
@@ -341,7 +343,7 @@ fn judge_as_output(
     producers: &BTreeMap<String, Vec<u8>>,
     name: &str,
     input: &TxIn,
-    served: &cardano::TxOutput,
+    served: &ServedOutput,
     tally: &mut Tally,
 ) {
     let key = show_input(input);
@@ -454,7 +456,7 @@ fn compare_served_utxos(dir: &Path, tally: &mut Tally) -> Option<usize> {
     };
     match AtPoint::new(&bracket, reads) {
         Some(reads) => Some(compare_utxos(&reads, tally, |node, served| {
-            fields(node, served)
+            fields(node, &output::v1::output(served))
         })),
         None => {
             tally.add(false, || format!("utxo reads at two points {bracket}"));
@@ -494,6 +496,7 @@ fn live() {
         params::compare(
             ledger,
             served,
+            Version::V1,
             tallies.entry(LiveLocus::Params).or_default(),
             |_, difference| format!("{label} {difference}"),
         );
@@ -584,10 +587,11 @@ mod tests {
     fn a_served_output_agrees_only_with_the_fields_the_node_bytes_hold() {
         let node = hex::decode(OUTPUT).unwrap();
         let served = output::mapped(&node);
-        assert_eq!(fields(&node, &served), Vec::<String>::new());
+        let served_fields = |o| fields(&node, &output::v1::output(o));
+        assert_eq!(served_fields(&served), Vec::<String>::new());
         let mut moved = served.clone();
         moved.address = vec![0x60; 29].into();
-        assert_eq!(fields(&node, &moved), vec!["address"]);
+        assert_eq!(served_fields(&moved), vec!["address"]);
     }
 
     #[test]
@@ -600,13 +604,15 @@ mod tests {
             tx: *tx.hash(),
             ix: 0,
         };
-        let served = output::mapped(&producers[&show_input(&input)]);
+        let mapped = output::mapped(&producers[&show_input(&input)]);
+        let served = output::v1::output(&mapped);
         let mut t = Tally::default();
         judge_as_output(&producers, "block", &input, &served, &mut t);
         assert_eq!((t.compared, t.disagree.len()), (1, 0));
 
-        let mut moved = served.clone();
+        let mut moved = mapped.clone();
         moved.address = vec![0x60; 29].into();
+        let moved = output::v1::output(&moved);
         judge_as_output(&producers, "block", &input, &moved, &mut t);
         let unclaimed = TxIn { tx: [0; 32], ix: 0 };
         judge_as_output(&producers, "block", &unclaimed, &served, &mut t);

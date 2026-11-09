@@ -1,144 +1,48 @@
-use std::{collections::BTreeMap, fmt, time::Duration};
+use std::{collections::BTreeMap, time::Duration};
 
 use dolos_core::{BlockHash, ChainPoint};
-use futures_util::StreamExt as _;
-use ledger_oracle_judge::cbor::TxIn;
-use tokio_util::sync::CancellationToken;
-use tonic::Request;
-
-use super::super::{
-    query::QueryServiceImpl,
-    spec::{
-        cardano,
-        query::{self as q, query_service_server::QueryService as _},
-        sync::{self as s, sync_service_server::SyncService as _},
-        watch::{self as w, watch_service_server::WatchService as _},
-    },
-    sync::SyncServiceImpl,
-    watch::WatchServiceImpl,
+use ledger_oracle_judge::{
+    cbor::TxIn,
+    judgement::{EntryPoint, Route, Version},
 };
-use crate::{adapters::DomainAdapter, prelude::CancelTokenImpl};
+
+use super::output::ServedOutput;
 
 /// How long a stream read waits for its next response.
 pub(super) const NEXT: Duration = Duration::from_secs(10);
 
-/// A service that maps a transaction with its resolved inputs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) enum Service {
-    FetchBlock,
-    FollowTip,
-    WatchTx,
-    ReadTx,
+/// The output one route serves for each input a transaction names, by transaction hash.
+pub(super) type Served = BTreeMap<[u8; 32], Vec<(TxIn, Option<ServedOutput>)>>;
+
+/// What one route at one version serves for the inputs of the transactions it serves.
+#[derive(Debug)]
+pub(super) struct RouteServed {
+    pub(super) entry: EntryPoint,
+    /// Whether the version states the inputs only sub transactions name.
+    pub(super) subs: bool,
+    pub(super) served: Served,
 }
 
-impl fmt::Display for Service {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = match self {
-            Service::FetchBlock => "FetchBlock",
-            Service::FollowTip => "FollowTip",
-            Service::WatchTx => "WatchTx",
-            Service::ReadTx => "ReadTx",
-        };
-        f.write_str(name)
-    }
+/// What ReadTx at one version serves for a transaction hash, nothing when it answers not found, or the status it answers with otherwise.
+pub(super) struct TxFound {
+    pub(super) entry: EntryPoint,
+    /// Whether the version states sub transactions, so answers the hash of one with the transaction that lists it.
+    pub(super) subs: bool,
+    pub(super) answer: Result<Option<super::ServedTx>, tonic::Status>,
 }
 
-/// The output one service serves for each input a transaction names, by transaction hash.
-pub(super) type Served = BTreeMap<[u8; 32], Vec<(TxIn, Option<cardano::TxOutput>)>>;
-
-fn hash32(bytes: &[u8]) -> [u8; 32] {
-    bytes.try_into().expect("a served hash is 32 bytes")
+/// The bytes of one output a route serves, with the fields it parses from them.
+#[derive(Debug)]
+pub(super) struct Utxo {
+    pub(super) bytes: Vec<u8>,
+    pub(super) parsed: Option<ServedOutput>,
 }
 
-fn served_input(input: &cardano::TxInput) -> (TxIn, Option<cardano::TxOutput>) {
-    let txin = TxIn {
-        tx: hash32(&input.tx_hash),
-        ix: input.output_index.into(),
-    };
-    (txin, input.as_output.clone())
-}
+/// The output a route serves for each input it holds.
+pub(super) type Utxos = BTreeMap<TxIn, Utxo>;
 
-/// Adds the inputs a served transaction names, with the output served for each.
-pub(super) fn add_tx(served: &mut Served, tx: &cardano::Tx) {
-    let common = tx
-        .common
-        .as_ref()
-        .expect("a served transaction has common fields");
-    let collateral = tx.collateral.iter().flat_map(|c| &c.collateral);
-    let subs = tx
-        .sub_transactions
-        .iter()
-        .flat_map(|s| s.inputs.iter().chain(&s.reference_inputs));
-    let inputs = common
-        .inputs
-        .iter()
-        .chain(collateral)
-        .chain(&common.reference_inputs)
-        .chain(subs)
-        .map(served_input)
-        .collect();
-    served.insert(hash32(&common.hash), inputs);
-}
-
-/// Adds the inputs each transaction of a served block names, with the output served for each.
-pub(super) fn add_block(served: &mut Served, block: &s::AnyChainBlock) {
-    let Some(s::any_chain_block::Chain::Cardano(block)) = &block.chain else {
-        panic!("a served block is a Cardano block");
-    };
-    for tx in block.body.iter().flat_map(|b| &b.tx) {
-        add_tx(served, tx);
-    }
-}
-
-fn block_ref(point: &ChainPoint) -> s::BlockRef {
-    s::BlockRef {
-        slot: point.slot(),
-        hash: point.hash().map(|h| h.to_vec()).unwrap_or_default().into(),
-        ..Default::default()
-    }
-}
-
-/// The inputs FetchBlock serves for the transactions of each block.
-pub(super) async fn fetch_block(domain: &DomainAdapter, blocks: &[BlockHash]) -> Served {
-    let service = SyncServiceImpl::new(domain.clone(), CancelTokenImpl::default());
-    let mut served = Served::new();
-    for hash in blocks {
-        let request = s::FetchBlockRequest {
-            r#ref: Some(s::BlockRef {
-                hash: hash.to_vec().into(),
-                ..Default::default()
-            }),
-            field_mask: None,
-        };
-        let response = service.fetch_block(Request::new(request)).await;
-        let block = response.unwrap().into_inner().block;
-        add_block(
-            &mut served,
-            &block.expect("FetchBlock serves a block it holds"),
-        );
-    }
-    served
-}
-
-/// The inputs ReadTx serves for each transaction hash it finds.
-pub(super) async fn read_tx(domain: &DomainAdapter, txs: &[[u8; 32]]) -> Served {
-    let service = QueryServiceImpl::new(domain.clone());
-    let mut served = Served::new();
-    for hash in txs {
-        let request = q::ReadTxRequest {
-            hash: hash.to_vec().into(),
-            ..Default::default()
-        };
-        let Ok(response) = service.read_tx(Request::new(request)).await else {
-            continue;
-        };
-        let tx = response.into_inner().tx.and_then(|tx| tx.chain);
-        if let Some(q::any_chain_tx::Chain::Cardano(tx)) = tx {
-            add_tx(&mut served, &tx);
-        }
-    }
-    served
-}
+/// The parameters message of the latest version.
+pub(super) type LatestParams = super::super::spec::cardano::PParams;
 
 /// Which tip event a stream read takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,94 +51,545 @@ pub(super) enum Event {
     Undo,
 }
 
-type FollowStream =
-    <SyncServiceImpl<DomainAdapter, CancelTokenImpl> as s::sync_service_server::SyncService>::FollowTipStream;
-type WatchStream =
-    <WatchServiceImpl<DomainAdapter, CancelTokenImpl> as w::watch_service_server::WatchService>::WatchTxStream;
-
-/// A FollowTip stream and a WatchTx stream subscribed at one point.
-pub(super) struct Streams {
-    follow: FollowStream,
-    watch: WatchStream,
-    cancel: CancellationToken,
+fn hash32(bytes: &[u8]) -> [u8; 32] {
+    bytes.try_into().expect("a served hash is 32 bytes")
 }
 
-impl Streams {
-    /// Subscribes both streams at the point.
-    pub(super) async fn open(domain: &DomainAdapter, from: &ChainPoint) -> Self {
-        let cancel = CancellationToken::new();
-        let token = || CancelTokenImpl(cancel.clone());
-        let from = block_ref(from);
-        let follow = SyncServiceImpl::new(domain.clone(), token())
-            .follow_tip(Request::new(s::FollowTipRequest {
-                intersect: vec![from.clone()],
-                field_mask: None,
-            }))
-            .await
-            .unwrap()
-            .into_inner();
-        let watch = WatchServiceImpl::new(domain.clone(), token())
-            .watch_tx(Request::new(w::WatchTxRequest {
-                intersect: vec![w::BlockRef {
-                    slot: from.slot,
-                    hash: from.hash,
-                    height: 0,
-                }],
-                predicate: None,
-                field_mask: None,
-            }))
-            .await
-            .unwrap()
-            .into_inner();
-        Streams {
-            follow,
-            watch,
-            cancel,
+/// Generates the served routes of one version over its own messages.
+macro_rules! served_routes {
+    (
+        $version:ident,
+        $name:ident,
+        subs: $subs:literal,
+        inputs: |$tx:ident| $inputs:expr,
+        fetch_ref: |$r:ident| $fetch_ref:expr,
+        fetched: |$f:ident| $fetched:expr,
+        exact_address: |$a:ident| $exact_address:expr $(,)?
+    ) => {
+        pub(super) mod $version {
+            use dolos_core::{BlockHash, ChainPoint};
+            use futures_util::StreamExt as _;
+            use ledger_oracle_judge::cbor::TxIn;
+            use tokio_util::sync::CancellationToken;
+            use tonic::Request;
+
+            use super::{hash32, Event, LatestParams, RouteServed, Served, Utxo, Utxos, NEXT};
+            use super::{EntryPoint, Route, Version};
+            use crate::serve::grpc::$version::{
+                query::QueryServiceImpl,
+                spec::{
+                    cardano,
+                    query::{self as q, query_service_server::QueryService as _},
+                    sync::{self as s, sync_service_server::SyncService as _},
+                    watch::{self as w, watch_service_server::WatchService as _},
+                },
+                sync::SyncServiceImpl,
+                watch::WatchServiceImpl,
+            };
+            use crate::{adapters::DomainAdapter, prelude::CancelTokenImpl};
+
+            /// The version these routes answer at.
+            pub(in super::super) const VERSION: Version = Version::$name;
+
+            fn route(route: Route, served: Served) -> RouteServed {
+                RouteServed {
+                    entry: EntryPoint::Route(route, VERSION),
+                    subs: $subs,
+                    served,
+                }
+            }
+
+            fn served_input(
+                input: &cardano::TxInput,
+            ) -> (TxIn, Option<super::super::output::ServedOutput>) {
+                let txin = TxIn {
+                    tx: hash32(&input.tx_hash),
+                    ix: input.output_index.into(),
+                };
+                let output = input.as_output.as_ref();
+                (txin, output.map(super::super::output::$version::output))
+            }
+
+            /// Adds the inputs a served transaction names, with the output served for each.
+            pub(in super::super) fn add_tx(served: &mut Served, $tx: &cardano::Tx) {
+                let (hash, inputs): (&[u8], Vec<&cardano::TxInput>) = $inputs;
+                served.insert(hash32(hash), inputs.into_iter().map(served_input).collect());
+            }
+
+            /// Adds the inputs each transaction of a served block names, with the output served for each.
+            pub(in super::super) fn add_block(served: &mut Served, block: &s::AnyChainBlock) {
+                let Some(s::any_chain_block::Chain::Cardano(block)) = &block.chain else {
+                    panic!("a served block is a Cardano block");
+                };
+                for tx in block.body.iter().flat_map(|b| &b.tx) {
+                    add_tx(served, tx);
+                }
+            }
+
+            fn block_ref(point: &ChainPoint) -> s::BlockRef {
+                s::BlockRef {
+                    slot: point.slot(),
+                    hash: point.hash().map(|h| h.to_vec()).unwrap_or_default().into(),
+                    ..Default::default()
+                }
+            }
+
+            /// The inputs FetchBlock serves for the transactions of each block.
+            pub(in super::super) async fn fetch_block(
+                domain: &DomainAdapter,
+                blocks: &[BlockHash],
+            ) -> RouteServed {
+                let service = SyncServiceImpl::new(domain.clone(), CancelTokenImpl::default());
+                let mut served = Served::new();
+                for hash in blocks {
+                    let $r = s::BlockRef {
+                        hash: hash.to_vec().into(),
+                        ..Default::default()
+                    };
+                    let request = s::FetchBlockRequest {
+                        r#ref: $fetch_ref,
+                        field_mask: None,
+                    };
+                    let response = service.fetch_block(Request::new(request)).await;
+                    let $f = response.unwrap().into_inner();
+                    let fetched: Vec<s::AnyChainBlock> = $fetched;
+                    assert_eq!(fetched.len(), 1, "FetchBlock serves one block a ref names");
+                    add_block(&mut served, &fetched[0]);
+                }
+                route(Route::FetchBlock, served)
+            }
+
+            /// The inputs DumpHistory serves for the transactions of each block, read one block a page from it.
+            pub(in super::super) async fn dump_history(
+                domain: &DomainAdapter,
+                blocks: &[BlockHash],
+            ) -> RouteServed {
+                let service = SyncServiceImpl::new(domain.clone(), CancelTokenImpl::default());
+                let mut served = Served::new();
+                for hash in blocks {
+                    let request = s::DumpHistoryRequest {
+                        start_token: Some(s::BlockRef {
+                            hash: hash.to_vec().into(),
+                            ..Default::default()
+                        }),
+                        max_items: 1,
+                        field_mask: None,
+                    };
+                    let response = service.dump_history(Request::new(request)).await;
+                    let page = response.unwrap().into_inner().block;
+                    assert_eq!(page.len(), 1, "DumpHistory serves the page a token starts");
+                    add_block(&mut served, &page[0]);
+                }
+                route(Route::DumpHistory, served)
+            }
+
+            /// The inputs ReadTx serves for each transaction hash it finds.
+            pub(in super::super) async fn read_tx(
+                domain: &DomainAdapter,
+                txs: &[[u8; 32]],
+            ) -> RouteServed {
+                let service = QueryServiceImpl::new(domain.clone());
+                let mut served = Served::new();
+                for hash in txs {
+                    let request = q::ReadTxRequest {
+                        hash: hash.to_vec().into(),
+                        ..Default::default()
+                    };
+                    let Ok(response) = service.read_tx(Request::new(request)).await else {
+                        continue;
+                    };
+                    let tx = response.into_inner().tx.and_then(|tx| tx.chain);
+                    if let Some(q::any_chain_tx::Chain::Cardano(tx)) = tx {
+                        add_tx(&mut served, &tx);
+                    }
+                }
+                route(Route::ReadTx, served)
+            }
+
+            /// What ReadTx serves for a transaction hash.
+            pub(in super::super) async fn read_tx_found(
+                domain: &DomainAdapter,
+                hash: &[u8; 32],
+            ) -> super::TxFound {
+                let found = |answer| super::TxFound {
+                    entry: EntryPoint::Route(Route::ReadTx, VERSION),
+                    subs: $subs,
+                    answer,
+                };
+                let request = q::ReadTxRequest {
+                    hash: hash.to_vec().into(),
+                    ..Default::default()
+                };
+                let service = QueryServiceImpl::new(domain.clone());
+                let tx = match service.read_tx(Request::new(request)).await {
+                    Ok(answer) => answer.into_inner().tx.expect("ReadTx answers with a transaction"),
+                    Err(status) if status.code() == tonic::Code::NotFound => return found(Ok(None)),
+                    Err(status) => return found(Err(status)),
+                };
+                let block = tx.block_ref.expect("ReadTx names the block");
+                let served = super::super::ServedTx {
+                    block: super::super::BlockAt {
+                        slot: block.slot,
+                        hash: hash32(&block.hash),
+                    },
+                    bytes: tx.native_bytes.to_vec(),
+                };
+                found(Ok(Some(served)))
+            }
+
+            /// The output ReadUtxos serves for each input it holds.
+            pub(in super::super) async fn read_utxos(
+                domain: &DomainAdapter,
+                inputs: &[&TxIn],
+            ) -> (EntryPoint, Utxos) {
+                let keys = inputs.iter().map(|i| q::TxoRef {
+                    hash: i.tx.to_vec().into(),
+                    index: super::super::seed::txo_ref(i).1,
+                });
+                let request = q::ReadUtxosRequest {
+                    keys: keys.collect(),
+                    field_mask: None,
+                };
+                let service = QueryServiceImpl::new(domain.clone());
+                let response = service.read_utxos(Request::new(request)).await;
+                let items = response.unwrap().into_inner().items;
+                (EntryPoint::Route(Route::ReadUtxos, VERSION), utxos(items))
+            }
+
+            /// The output SearchUtxos serves for each input it finds at any of the addresses, one search an address.
+            pub(in super::super) async fn search_utxos(
+                domain: &DomainAdapter,
+                addresses: &[&[u8]],
+            ) -> (EntryPoint, Utxos) {
+                let service = QueryServiceImpl::new(domain.clone());
+                let mut served = Utxos::new();
+                for $a in addresses {
+                    let address = cardano::AddressPattern {
+                        exact_address: $exact_address,
+                        ..Default::default()
+                    };
+                    let pattern = cardano::TxOutputPattern {
+                        address: Some(address),
+                        asset: None,
+                    };
+                    let pattern = q::any_utxo_pattern::UtxoPattern::Cardano(pattern);
+                    let predicate = q::UtxoPredicate {
+                        r#match: Some(q::AnyUtxoPattern {
+                            utxo_pattern: Some(pattern),
+                        }),
+                        ..Default::default()
+                    };
+                    let request = q::SearchUtxosRequest {
+                        predicate: Some(predicate),
+                        ..Default::default()
+                    };
+                    let response = service.search_utxos(Request::new(request)).await;
+                    served.extend(utxos(response.unwrap().into_inner().items));
+                }
+                (EntryPoint::Route(Route::SearchUtxos, VERSION), served)
+            }
+
+            /// The served output of each item, by the input it names.
+            fn utxos(items: Vec<q::AnyUtxoData>) -> Utxos {
+                let served = items.into_iter().map(|item| {
+                    let r = item.txo_ref.expect("a served output names its input");
+                    let input = TxIn {
+                        tx: hash32(&r.hash),
+                        ix: r.index.into(),
+                    };
+                    let parsed = item.parsed_state.map(|q::any_utxo_data::ParsedState::Cardano(o)| {
+                        super::super::output::$version::output(&o)
+                    });
+                    let utxo = Utxo {
+                        bytes: item.native_bytes.to_vec(),
+                        parsed,
+                    };
+                    (input, utxo)
+                });
+                served.collect()
+            }
+
+            /// The parameters ReadParams serves, read as the latest version's message.
+            pub(in super::super) async fn read_params(domain: &DomainAdapter) -> (Version, LatestParams) {
+                let request = q::ReadParamsRequest { field_mask: None };
+                let service = QueryServiceImpl::new(domain.clone());
+                let response = service.read_params(Request::new(request)).await;
+                let values = response.unwrap().into_inner().values;
+                match values.and_then(|v| v.params) {
+                    Some(q::any_chain_params::Params::Cardano(p)) => {
+                        (VERSION, super::super::params::as_latest(&p))
+                    }
+                    None => panic!("ReadParams answers with Cardano parameters"),
+                }
+            }
+
+            type FollowStream = <SyncServiceImpl<DomainAdapter, CancelTokenImpl> as s::sync_service_server::SyncService>::FollowTipStream;
+            type WatchStream = <WatchServiceImpl<DomainAdapter, CancelTokenImpl> as w::watch_service_server::WatchService>::WatchTxStream;
+
+            /// A FollowTip stream and a WatchTx stream subscribed at one point.
+            pub(in super::super) struct Streams {
+                follow: FollowStream,
+                watch: WatchStream,
+                cancel: CancellationToken,
+            }
+
+            impl Streams {
+                /// Subscribes both streams at the point.
+                pub(in super::super) async fn open(domain: &DomainAdapter, from: &ChainPoint) -> Self {
+                    let cancel = CancellationToken::new();
+                    let token = || CancelTokenImpl(cancel.clone());
+                    let from = block_ref(from);
+                    let follow = SyncServiceImpl::new(domain.clone(), token())
+                        .follow_tip(Request::new(s::FollowTipRequest {
+                            intersect: vec![from.clone()],
+                            field_mask: None,
+                        }))
+                        .await
+                        .unwrap()
+                        .into_inner();
+                    let watch = WatchServiceImpl::new(domain.clone(), token())
+                        .watch_tx(Request::new(w::WatchTxRequest {
+                            intersect: vec![w::BlockRef {
+                                slot: from.slot,
+                                hash: from.hash,
+                                height: 0,
+                            }],
+                            predicate: None,
+                            field_mask: None,
+                        }))
+                        .await
+                        .unwrap()
+                        .into_inner();
+                    Streams {
+                        follow,
+                        watch,
+                        cancel,
+                    }
+                }
+
+                /// The inputs each stream serves for the next blocks and transactions of the event, reading until the given counts arrive or a read waits too long.
+                pub(in super::super) async fn read(
+                    mut self,
+                    event: Event,
+                    blocks: usize,
+                    txs: usize,
+                ) -> [RouteServed; 2] {
+                    use s::follow_tip_response::Action as F;
+                    use w::watch_tx_response::Action as W;
+                    let mut follow = Served::new();
+                    let mut taken = 0;
+                    while taken < blocks {
+                        let Ok(Some(next)) = tokio::time::timeout(NEXT, self.follow.next()).await
+                        else {
+                            break;
+                        };
+                        match (event, next.unwrap().action) {
+                            (_, Some(F::Reset(_))) => {}
+                            (Event::Apply, Some(F::Apply(block)))
+                            | (Event::Undo, Some(F::Undo(block))) => {
+                                add_block(&mut follow, &block);
+                                taken += 1;
+                            }
+                            (_, other) => {
+                                panic!("FollowTip serves {other:?} where it reads {event:?}")
+                            }
+                        }
+                    }
+                    let mut watch = Served::new();
+                    let mut taken = 0;
+                    while taken < txs {
+                        let Ok(Some(next)) = tokio::time::timeout(NEXT, self.watch.next()).await
+                        else {
+                            break;
+                        };
+                        match (event, next.unwrap().action) {
+                            (_, Some(W::Idle(_))) => {}
+                            (Event::Apply, Some(W::Apply(tx))) | (Event::Undo, Some(W::Undo(tx))) => {
+                                let Some(w::any_chain_tx::Chain::Cardano(tx)) = &tx.chain else {
+                                    panic!("a watched transaction is a Cardano transaction");
+                                };
+                                add_tx(&mut watch, tx);
+                                taken += 1;
+                            }
+                            (_, other) => {
+                                panic!("WatchTx serves {other:?} where it reads {event:?}")
+                            }
+                        }
+                    }
+                    self.cancel.cancel();
+                    [route(Route::FollowTip, follow), route(Route::WatchTx, watch)]
+                }
+            }
         }
+    };
+}
+
+served_routes!(
+    v1,
+    V1,
+    subs: true,
+    inputs: |tx| {
+        let common = tx
+            .common
+            .as_ref()
+            .expect("a served transaction has common fields");
+        let collateral = tx.collateral.iter().flat_map(|c| &c.collateral);
+        let subs = tx
+            .sub_transactions
+            .iter()
+            .flat_map(|s| s.inputs.iter().chain(&s.reference_inputs));
+        let inputs = common
+            .inputs
+            .iter()
+            .chain(collateral)
+            .chain(&common.reference_inputs)
+            .chain(subs);
+        (&common.hash, inputs.collect())
+    },
+    fetch_ref: |r| Some(r),
+    fetched: |f| f.block.into_iter().collect(),
+    exact_address: |a| Some(a.to_vec().into()),
+);
+
+served_routes!(
+    v1beta,
+    V1beta,
+    subs: false,
+    inputs: |tx| {
+        let collateral = tx.collateral.iter().flat_map(|c| &c.collateral);
+        let inputs = tx.inputs.iter().chain(collateral).chain(&tx.reference_inputs);
+        (&tx.hash, inputs.collect())
+    },
+    fetch_ref: |r| vec![r],
+    fetched: |f| f.block,
+    exact_address: |a| Some(a.to_vec().into()),
+);
+
+served_routes!(
+    v1alpha,
+    V1alpha,
+    subs: false,
+    inputs: |tx| {
+        let collateral = tx.collateral.iter().flat_map(|c| &c.collateral);
+        let inputs = tx.inputs.iter().chain(collateral).chain(&tx.reference_inputs);
+        (&tx.hash, inputs.collect())
+    },
+    fetch_ref: |r| vec![r],
+    fetched: |f| f.block,
+    exact_address: |a| a.to_vec().into(),
+);
+
+/// Streams of FollowTip and WatchTx at every version, subscribed at one point.
+pub(super) struct Streams([Box<dyn StreamsAt>; 3]);
+
+/// The streams of one version, read once.
+#[async_trait::async_trait]
+trait StreamsAt: Send {
+    async fn read(self: Box<Self>, event: Event, blocks: usize, txs: usize) -> [RouteServed; 2];
+}
+
+macro_rules! streams_at {
+    ($($version:ident),*) => {
+        $(
+            #[async_trait::async_trait]
+            impl StreamsAt for $version::Streams {
+                async fn read(
+                    self: Box<Self>,
+                    event: Event,
+                    blocks: usize,
+                    txs: usize,
+                ) -> [RouteServed; 2] {
+                    $version::Streams::read(*self, event, blocks, txs).await
+                }
+            }
+        )*
+    };
+}
+
+streams_at!(v1, v1beta, v1alpha);
+
+impl Streams {
+    /// Subscribes the streams of every version at the point.
+    pub(super) async fn open(domain: &crate::adapters::DomainAdapter, from: &ChainPoint) -> Self {
+        Streams([
+            Box::new(v1::Streams::open(domain, from).await),
+            Box::new(v1beta::Streams::open(domain, from).await),
+            Box::new(v1alpha::Streams::open(domain, from).await),
+        ])
     }
 
-    /// The inputs each stream serves for the next blocks and transactions of the event, reading until the given counts arrive or a read waits too long.
-    pub(super) async fn read(
-        mut self,
-        event: Event,
-        blocks: usize,
-        txs: usize,
-    ) -> [(Service, Served); 2] {
-        use s::follow_tip_response::Action as F;
-        use w::watch_tx_response::Action as W;
-        let mut follow = Served::new();
-        let mut taken = 0;
-        while taken < blocks {
-            let Ok(Some(next)) = tokio::time::timeout(NEXT, self.follow.next()).await else {
-                break;
-            };
-            match (event, next.unwrap().action) {
-                (_, Some(F::Reset(_))) => {}
-                (Event::Apply, Some(F::Apply(block))) | (Event::Undo, Some(F::Undo(block))) => {
-                    add_block(&mut follow, &block);
-                    taken += 1;
-                }
-                (_, other) => panic!("FollowTip serves {other:?} where it reads {event:?}"),
-            }
+    /// The inputs every stream serves for the next blocks and transactions of the event.
+    pub(super) async fn read(self, event: Event, blocks: usize, txs: usize) -> Vec<RouteServed> {
+        let mut served = Vec::new();
+        for streams in self.0 {
+            served.extend(streams.read(event, blocks, txs).await);
         }
-        let mut watch = Served::new();
-        let mut taken = 0;
-        while taken < txs {
-            let Ok(Some(next)) = tokio::time::timeout(NEXT, self.watch.next()).await else {
-                break;
-            };
-            match (event, next.unwrap().action) {
-                (Event::Apply, Some(W::Apply(tx))) | (Event::Undo, Some(W::Undo(tx))) => {
-                    let Some(w::any_chain_tx::Chain::Cardano(tx)) = &tx.chain else {
-                        panic!("a watched transaction is a Cardano transaction");
-                    };
-                    add_tx(&mut watch, tx);
-                    taken += 1;
-                }
-                (_, other) => panic!("WatchTx serves {other:?} where it reads {event:?}"),
-            }
-        }
-        self.cancel.cancel();
-        [(Service::FollowTip, follow), (Service::WatchTx, watch)]
+        served
     }
+}
+
+/// The output ReadUtxos serves at every version for each input it holds.
+pub(super) async fn read_utxos(
+    domain: &crate::adapters::DomainAdapter,
+    inputs: &[&TxIn],
+) -> [(EntryPoint, Utxos); 3] {
+    [
+        v1::read_utxos(domain, inputs).await,
+        v1beta::read_utxos(domain, inputs).await,
+        v1alpha::read_utxos(domain, inputs).await,
+    ]
+}
+
+/// The output SearchUtxos serves at every version for each input it finds at any of the addresses.
+pub(super) async fn search_utxos(
+    domain: &crate::adapters::DomainAdapter,
+    addresses: &[&[u8]],
+) -> [(EntryPoint, Utxos); 3] {
+    [
+        v1::search_utxos(domain, addresses).await,
+        v1beta::search_utxos(domain, addresses).await,
+        v1alpha::search_utxos(domain, addresses).await,
+    ]
+}
+
+/// What ReadTx serves at every version for a transaction hash.
+pub(super) async fn read_tx_found(
+    domain: &crate::adapters::DomainAdapter,
+    hash: &[u8; 32],
+) -> [TxFound; 3] {
+    [
+        v1::read_tx_found(domain, hash).await,
+        v1beta::read_tx_found(domain, hash).await,
+        v1alpha::read_tx_found(domain, hash).await,
+    ]
+}
+
+/// The parameters ReadParams serves at every version.
+pub(super) async fn read_params(
+    domain: &crate::adapters::DomainAdapter,
+) -> [(Version, LatestParams); 3] {
+    [
+        v1::read_params(domain).await,
+        v1beta::read_params(domain).await,
+        v1alpha::read_params(domain).await,
+    ]
+}
+
+/// What FetchBlock, DumpHistory and ReadTx serve at every version for the blocks and transactions.
+pub(super) async fn fetched(
+    domain: &crate::adapters::DomainAdapter,
+    blocks: &[BlockHash],
+    txs: &[[u8; 32]],
+) -> Vec<RouteServed> {
+    vec![
+        v1::fetch_block(domain, blocks).await,
+        v1beta::fetch_block(domain, blocks).await,
+        v1alpha::fetch_block(domain, blocks).await,
+        v1::dump_history(domain, blocks).await,
+        v1beta::dump_history(domain, blocks).await,
+        v1alpha::dump_history(domain, blocks).await,
+        v1::read_tx(domain, txs).await,
+        v1beta::read_tx(domain, txs).await,
+        v1alpha::read_tx(domain, txs).await,
+    ]
 }

@@ -9,7 +9,7 @@ use crate::{
     cbor::{self, Data},
     coverage::{Member, Reach},
     eval::{parse_purpose, Level, Refusal, RowKey},
-    judgement::{self, Axis, CellKey, EntryPoint, Judge, Verdict},
+    judgement::{self, Axis, CellKey, Instrument, Judge, Verdict},
     manifest::ManifestError,
     record::{Argument, CorpusKind, Evaluation, LedgerRedeemers, Record, RecordId, Redeemers},
 };
@@ -659,7 +659,7 @@ impl ContextTally {
                 }
                 None => key.to_string(),
             };
-            let entry = EntryPoint::RedeemerArguments;
+            let entry = Instrument::RedeemerArguments.into();
             self.failing
                 .push(Verdict::disagree(Judge::Context, entry, id, cells, detail));
         }
@@ -774,7 +774,7 @@ impl ContextTally {
     pub fn report(&self, out: &mut judgement::Tally) {
         let passed = |pass, cells| judgement::Passed {
             judge: Judge::Context,
-            entry: EntryPoint::RedeemerArguments,
+            entry: Instrument::RedeemerArguments.into(),
             cells,
             pass,
         };

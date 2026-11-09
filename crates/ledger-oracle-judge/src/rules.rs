@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::{
     cbor::{tx_fields, CborError, Field},
     coverage::{Member, Reach},
-    judgement::{self, Axis, CellKey, EntryPoint, Judge, Verdict},
+    judgement::{self, Axis, CellKey, EntryPoint, Instrument, Judge, Verdict},
     manifest::ManifestError,
     record::{LedgerOutcome, RecordId},
     refusal::LedgerLeaf,
@@ -325,7 +325,13 @@ impl Rules {
             (Shown::Agrees | Shown::Unrepresentable | Shown::Unjudged, None) => return Ok(()),
         };
         let cells = vec![CellKey::new(Axis::Failure, kind.name())];
-        let verdict = Verdict::disagree(Judge::Rules, EntryPoint::SubmitTx, id, cells, detail);
+        let verdict = Verdict::disagree(
+            Judge::Rules,
+            EntryPoint::Instrument(Instrument::ReceiveTx),
+            id,
+            cells,
+            detail,
+        );
         tally.failures.insert(id, verdict);
         Ok(())
     }
@@ -374,7 +380,7 @@ impl Rules {
             };
             let passed = judgement::Passed {
                 judge: Judge::Rules,
-                entry: EntryPoint::SubmitTx,
+                entry: EntryPoint::Instrument(Instrument::ReceiveTx),
                 cells: sides.clone(),
                 pass,
             };
@@ -382,7 +388,7 @@ impl Rules {
         }
         for id in unjudged {
             let cells = vec![CellKey::new(Axis::Answer, "unjudged")];
-            let entry = EntryPoint::SubmitTx;
+            let entry = EntryPoint::Instrument(Instrument::ReceiveTx);
             out.add(Verdict::disagree(
                 Judge::Rules,
                 entry,
@@ -518,7 +524,7 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         let side = |answer: &str, side: &str| CellKey::new(Axis::Rule, format!("{answer}.{side}"));
         let fee = "refused[PostAlonzo(FeeBelowMin)]";
         let deposit = format!("refused[{DEPOSIT}]");
-        let entry = CellKey::new(Axis::Entry, EntryPoint::SubmitTx);
+        let entry = CellKey::new(Axis::Entry, EntryPoint::Instrument(Instrument::ReceiveTx));
         assert_eq!(
             coverage::counts(&out),
             BTreeMap::from([
@@ -560,7 +566,7 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         assert_eq!(
             failing,
             [format!(
-                "VERDICT judge=rules entry=submit_tx record=supp#6 cells=failure:mismatch \
+                "VERDICT judge=rules entry=receive_tx record=supp#6 cells=failure:mismatch \
                  outcome=disagree dolos=refused[{REFUND}] ledger=refused[DepositIncorrectDELEG]"
             )]
         );
@@ -577,7 +583,7 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         assert_eq!(
             failing,
             [
-                "VERDICT judge=rules entry=submit_tx record=supp#7 cells=failure:unmapped \
+                "VERDICT judge=rules entry=receive_tx record=supp#7 cells=failure:unmapped \
               outcome=disagree dolos=refused[PostAlonzo(MaxTxSizeExceeded)] \
               ledger=refused[FeeTooSmallUTxO]"
             ]
@@ -606,7 +612,7 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         assert_eq!(
             failing,
             [format!(
-                "VERDICT judge=rules entry=submit_tx record=supp#8 cells=failure:unmapped \
+                "VERDICT judge=rules entry=receive_tx record=supp#8 cells=failure:unmapped \
                  outcome=disagree dolos=unsupported[{LABEL}] ledger=accepted"
             )]
         );
@@ -648,7 +654,7 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         assert_eq!(
             failing,
             [format!(
-                "VERDICT judge=rules entry=submit_tx record=supp#6 cells=failure:known_stale \
+                "VERDICT judge=rules entry=receive_tx record=supp#6 cells=failure:known_stale \
                  outcome=disagree dolos=refused[PostAlonzo(FeeBelowMin)] \
                  ledger=refused[DepositIncorrectDELEG] known_dolos=refused[{REFUND}] \
                  known_ledger=refused[DepositIncorrectDELEG]"
@@ -668,7 +674,7 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         assert_eq!(
             failing,
             [
-                "VERDICT judge=rules entry=submit_tx record=supp#9 cells=answer:unjudged \
+                "VERDICT judge=rules entry=receive_tx record=supp#9 cells=answer:unjudged \
               outcome=disagree known not judged"
             ]
         );

@@ -114,26 +114,26 @@ expect planted "$(
 
 # A manifest of catches, a records file for a, and a head log holding one line a's catch selects.
 printf '%s\n' '[dolos]' 'base = "0"' '' '[catches]' \
-  'a = ["judge=validation failure:disagree dolos:Cbor*", "judge=eval-oracle entry=estimate_tx:pallas units:mem !units:steps"]' \
+  'a = ["judge=validation failure:disagree dolos:Cbor*", "judge=eval-oracle entry=estimate_tx_calls units:mem !units:steps"]' \
   'b = ["judge=endorser"]' 'c = ["test=c_bootstrap"]' >"$H/catches.toml"
 printf '%s\n' 'ic#1' 'ic#2' >"$H/a.records"
 printf '%s\n' 'slot=7' >"$H/b.records"
 printf '%s\n' "'c_bootstrap'" >"$H/c.records"
-v='VERDICT judge=validation entry=submit_tx'
-e='VERDICT judge=eval-oracle entry=estimate_tx:pallas'
+v='VERDICT judge=validation entry=receive_tx'
+e='VERDICT judge=eval-oracle entry=estimate_tx_calls'
 printf '%s\n' "$v record=ic#2 cells=failure:disagree,dolos:CborDecodingError outcome=disagree in the head" >"$H/head.log"
 printf '%s\n' \
   "$v record=ic#1 cells=failure:disagree,ledger:accepted,dolos:CborDecodingError outcome=disagree fires" \
   "$v record=ic#3 cells=failure:disagree,dolos:CborDecodingError outcome=disagree another record" \
   "$v record=ic#1 cells=failure:disagree,dolos:accepted outcome=disagree another answer" \
-  "VERDICT judge=rules entry=submit_tx record=ic#1 cells=failure:disagree,dolos:CborDecodingError outcome=disagree another judge" \
+  "VERDICT judge=rules entry=receive_tx record=ic#1 cells=failure:disagree,dolos:CborDecodingError outcome=disagree another judge" \
   "$v record=ic#2 cells=failure:disagree,dolos:CborDecodingError outcome=disagree in the head" \
   "$e record=ic#2 cells=units:mem outcome=disagree mem alone" \
   "$e record=ic#2 cells=units:mem,units:steps outcome=disagree both units" \
-  "VERDICT judge=eval-oracle entry=estimate_tx:v1 record=ic#2 cells=units:mem outcome=disagree another layer" \
+  "VERDICT judge=eval-oracle entry=eval_tx:v1 record=ic#2 cells=units:mem outcome=disagree another layer" \
   "DISAGREE ic#1 ledger=accepted dolos=refused[CborDecodingError]" \
-  'VERDICT judge=endorser entry=fetch_block record=selection cells= outcome=disagree ENDORSER-DIFF service=FetchBlock slot=7 list=ids index=0' \
-  'VERDICT judge=endorser entry=fetch_block record=selection cells= outcome=disagree ENDORSER-DIFF service=FetchBlock slot=70 list=ids index=0' \
+  'VERDICT judge=endorser entry=fetch_block:v1 record=selection cells= outcome=disagree ENDORSER-DIFF entry=fetch_block:v1 slot=7 list=ids index=0' \
+  'VERDICT judge=endorser entry=fetch_block:v1 record=selection cells= outcome=disagree ENDORSER-DIFF entry=fetch_block:v1 slot=70 list=ids index=0' \
   "thread 'c_bootstrap' (9) panicked at x.rs:1:1:" "thread 'c_other' (9) panicked at x.rs:1:1:" >"$H/arm.log"
 caught_by() {
   (
@@ -144,7 +144,7 @@ caught_by() {
 }
 # Must fire on each catch's own line, and must not fire on another record, answer, judge, entry point or test, both units, a line the head holds or a line not of the verdict type.
 expect caught_cells "$(caught_by a)" "fires|mem alone"
-expect caught_selection "$(caught_by b)" "ENDORSER-DIFF service=FetchBlock slot=7 list=ids index=0"
+expect caught_selection "$(caught_by b)" "ENDORSER-DIFF entry=fetch_block:v1 slot=7 list=ids index=0"
 expect caught_test "$(caught_by c)" "thread 'c_bootstrap'"
 expect caught_none "$(caught_by d)" "ARM d NO_CATCH"
 
@@ -251,6 +251,48 @@ same() {
 # Must not fire on a run time alone, and must fire on one record.
 expect retimed "$(same "$L/head" "$L/retimed")" same
 expect differs "$(same "$L/head" "$L/differs")" differs
+
+# Crate test logs of the watch arm: every version passing, its v1beta test failing, and only the v1 test run.
+watch=watch::tests::the_transactions_of_one_block_share_its_bytes
+printf '%s\n' "test serve::grpc::v1beta::$watch ... ok" "test serve::grpc::v1alpha::$watch ... ok" "test serve::grpc::v1::$watch ... ok" \
+  'test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 386 filtered out; finished in 0.02s' >"$L/watch-all"
+printf '%s\n' "test serve::grpc::v1beta::$watch ... FAILED" "test serve::grpc::v1alpha::$watch ... ok" \
+  'test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 387 filtered out; finished in 0.02s' >"$L/watch-failed"
+printf '%s\n' "test serve::grpc::v1::$watch ... ok" \
+  'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 388 filtered out; finished in 0.02s' >"$L/watch-v1"
+printf '%s\n' 'test serve::grpc::v1::ledger_oracle_tests::endorser::served_endorser_transactions_are_the_nodes ... ok' \
+  'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 388 filtered out; finished in 0.31s' >"$L/endorser"
+printf '%s\n' 'test musashi_era_translation_keeps_the_published_v3_cost_model ... ok' \
+  'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s' >"$L/cost-models"
+passed() {
+  (
+    HERE=$H
+    . "$LIB"
+    if crate_test_passed "$1" "$2"; then echo passed; else echo failed; fi
+  )
+}
+# Must not fire when every test passes, and must fire on a failing test and on a planted test that did not run.
+expect crate_passed "$(passed watch-block-copied "$L/watch-all")" passed
+expect crate_endorser "$(passed endorser-tx-dropped "$L/endorser")" passed
+expect crate_cost_models "$(passed cost-models "$L/cost-models")" passed
+expect crate_failed "$(passed watch-block-copied "$L/watch-failed")" failed
+expect crate_unrun "$(passed watch-block-copied "$L/watch-v1")" failed
+
+# Two runs of the watch arm's crate test, the second printing its tests in the other order at another run time.
+printf '%s\n' "test serve::grpc::v1beta::$watch ... ok" "test serve::grpc::v1alpha::$watch ... ok" \
+  'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 388 filtered out; finished in 0.04s' >"$L/watch-two"
+printf '%s\n' "test serve::grpc::v1alpha::$watch ... ok" "test serve::grpc::v1beta::$watch ... ok" \
+  'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 388 filtered out; finished in 0.00s' >"$L/watch-swapped"
+same_crate() {
+  (
+    HERE=$H
+    . "$LIB"
+    if same_crate_log "$1" "$2"; then echo same; else echo differs; fi
+  )
+}
+# Must not fire on the order the tests ended in, and must fire on a failing test.
+expect crate_log_swapped "$(same_crate "$L/watch-two" "$L/watch-swapped")" same
+expect crate_log_failed "$(same_crate "$L/watch-two" "$L/watch-failed")" differs
 
 # An unplanted log and an encoding arm's logs: one with only bytes_equal moved, one with a context also judged differently, and one with nothing moved.
 context='CONTEXT compared=2 agree=2 differ=0 known=0 unbuilt=0 no_ledger_context=0 pallas_only=0'

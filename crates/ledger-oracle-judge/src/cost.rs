@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::{
     compare::Tally,
-    judgement::{self, Axis, CellKey, EntryPoint, Finding, Judge},
+    judgement::{self, Axis, CellKey, Finding, Instrument, Judge},
     record::{LedgerOutcome, RecordId},
 };
 
@@ -62,7 +62,7 @@ impl CostTallies {
 
     /// Adds the verdict of each compared fee.
     pub fn report(&self, out: &mut judgement::Tally) {
-        self.fee.report(Judge::Cost, EntryPoint::MinFee, out);
+        self.fee.report(Judge::Cost, Instrument::MinFee.into(), out);
     }
 }
 

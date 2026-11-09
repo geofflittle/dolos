@@ -7,7 +7,7 @@ use dolos_core::SyncExt as _;
 use futures_util::StreamExt as _;
 use ledger_oracle_judge::{
     compare::Tally,
-    judgement::{self, Axis, CellKey, EntryPoint, Judge, RunVerdict, Verdict},
+    judgement::{self, Axis, CellKey, EntryPoint, Judge, Route, RunVerdict, Verdict, Version},
 };
 use pallas::{
     codec::{
@@ -25,7 +25,7 @@ use super::super::{
     spec::sync::{self as s, sync_service_server::SyncService as _},
     sync::SyncServiceImpl,
 };
-use super::serve::{Service, NEXT};
+use super::serve::NEXT;
 use crate::{
     prelude::CancelTokenImpl,
     sync::{
@@ -36,6 +36,12 @@ use crate::{
         pull::announced_by,
     },
 };
+
+/// The v1 FetchBlock route.
+pub(super) const FETCH_BLOCK: EntryPoint = EntryPoint::Route(Route::FetchBlock, Version::V1);
+
+/// The v1 FollowTip route.
+pub(super) const FOLLOW_TIP: EntryPoint = EntryPoint::Route(Route::FollowTip, Version::V1);
 
 /// The endorser block the node stores, as the slot of the block that announced
 /// it, its body and its transactions in body order.
@@ -154,10 +160,10 @@ impl Judged {
         cells
     }
 
-    /// The disagreement lines of the service at the slot, one per list that
+    /// The disagreement lines of the route at the slot, one per list that
     /// differs.
-    pub(super) fn lines(&self, service: Service, slot: u64) -> Vec<String> {
-        let at = format!("ENDORSER-DIFF service={service} slot={slot}");
+    pub(super) fn lines(&self, entry: EntryPoint, slot: u64) -> Vec<String> {
+        let at = format!("ENDORSER-DIFF entry={entry} slot={slot}");
         let mut lines = Vec::new();
         if let Listed::Differs {
             index,
@@ -415,7 +421,7 @@ async fn resolved(case: &Case) -> Result<Vec<u8>, String> {
 async fn served(
     case: &Case,
     resolved: Vec<u8>,
-) -> Result<[(Service, s::AnyChainBlock); 2], String> {
+) -> Result<[(EntryPoint, s::AnyChainBlock); 2], String> {
     let toy = crate::tests::musashi::musashi_domain();
     let parent = MultiEraBlock::decode(&case.parent).map_err(|e| e.to_string())?;
     let block = MultiEraBlock::decode(&case.block).map_err(|e| e.to_string())?;
@@ -462,10 +468,7 @@ async fn served(
         }
     };
     cancel.cancel();
-    Ok([
-        (Service::FetchBlock, fetched),
-        (Service::FollowTip, followed?),
-    ])
+    Ok([(FETCH_BLOCK, fetched), (FOLLOW_TIP, followed?)])
 }
 
 /// The tally of the endorser transaction judge over cases, its lines, and
@@ -473,31 +476,33 @@ async fn served(
 #[derive(Debug, Default)]
 pub(super) struct EndorserTally {
     tally: Tally<Verdict>,
+    agreed: std::collections::BTreeMap<EntryPoint, usize>,
     txs: usize,
     certifying: usize,
 }
 
 impl EndorserTally {
     /// Counts one served block, keeping its failing verdict when it disagrees.
-    pub(super) fn add(&mut self, judged: Result<Judged, String>, service: Service, slot: u64) {
-        let fails = |mut cells: Vec<CellKey>, detail: String| {
-            cells.insert(0, CellKey::new(Axis::Service, service));
-            Verdict {
-                cells,
-                ..Verdict::selection_fails(Judge::Endorser, EntryPoint::FetchBlock, detail)
-            }
+    pub(super) fn add(&mut self, judged: Result<Judged, String>, entry: EntryPoint, slot: u64) {
+        let fails = |cells: Vec<CellKey>, detail: String| Verdict {
+            cells,
+            ..Verdict::selection_fails(Judge::Endorser, entry, detail)
         };
+        let agrees = matches!(&judged, Ok(j) if j.agreed().is_some());
         match judged {
             Ok(judged) => {
                 self.txs += judged.agreed().unwrap_or(0);
-                self.tally.add(judged.agreed().is_some(), || {
-                    fails(judged.cells(), judged.lines(service, slot).join(" "))
+                self.tally.add(agrees, || {
+                    fails(judged.cells(), judged.lines(entry, slot).join(" "))
                 });
             }
             Err(e) => self.tally.add(false, || {
-                let detail = format!("ENDORSER-DIFF service={service} slot={slot} unjudged={e}");
+                let detail = format!("ENDORSER-DIFF entry={entry} slot={slot} unjudged={e}");
                 fails(vec![CellKey::new(Axis::Answer, "unjudged")], detail)
             }),
+        }
+        if agrees {
+            *self.agreed.entry(entry).or_default() += 1;
         }
     }
 
@@ -517,19 +522,21 @@ impl EndorserTally {
     /// did not judge two served blocks each or lack a block of either kind.
     pub(super) fn report(&self, cases: usize, out: &mut judgement::Tally) {
         let Tally { compared, disagree } = &self.tally;
-        let passed = judgement::Passed {
-            judge: Judge::Endorser,
-            entry: EntryPoint::FetchBlock,
-            cells: Vec::new(),
-            pass: judgement::Pass::Agree,
-        };
-        out.pass(passed, compared - disagree.len());
+        for (entry, agreed) in &self.agreed {
+            let passed = judgement::Passed {
+                judge: Judge::Endorser,
+                entry: *entry,
+                cells: Vec::new(),
+                pass: judgement::Pass::Agree,
+            };
+            out.pass(passed, *agreed);
+        }
         disagree.iter().cloned().for_each(|v| out.add(v));
         if *compared != 2 * cases {
             let detail = format!("served={compared} cases={cases}");
             out.add(Verdict::selection_fails(
                 Judge::Endorser,
-                EntryPoint::FetchBlock,
+                FETCH_BLOCK,
                 detail,
             ));
         }
@@ -537,7 +544,7 @@ impl EndorserTally {
             let detail = format!("certifying={} cases={cases}", self.certifying);
             out.add(Verdict::selection_fails(
                 Judge::Endorser,
-                EntryPoint::FetchBlock,
+                FETCH_BLOCK,
                 detail,
             ));
         }
@@ -556,16 +563,16 @@ pub(super) async fn judge(cases: &[Case]) -> EndorserTally {
             Ok(block) => served(case, block).await,
             Err(e) => Err(format!("resolve: {e}")),
         };
-        for service in [Service::FetchBlock, Service::FollowTip] {
+        for entry in [FETCH_BLOCK, FOLLOW_TIP] {
             let judged = match (&node, &served) {
                 (Err(e), _) => Err(format!("node: {e}")),
                 (_, Err(e)) => Err(e.clone()),
                 (Ok(node), Ok(served)) => {
-                    let block = &served.iter().find(|(s, _)| *s == service).unwrap().1;
+                    let block = &served.iter().find(|(s, _)| *s == entry).unwrap().1;
                     judge_served(block, node)
                 }
             };
-            tally.add(judged, service, slot);
+            tally.add(judged, entry, slot);
         }
     }
     tally
@@ -631,7 +638,7 @@ fn endpoint_endorser() {
             let node = node_txs(&case.parent, &case.block, case.endorser.as_ref())?;
             judge_served(&served, &node)
         });
-        tally.add(judged, Service::FetchBlock, slot);
+        tally.add(judged, FETCH_BLOCK, slot);
     }
     println!("{}", tally.line());
     for line in &tally.tally.disagree {
@@ -695,7 +702,7 @@ fn a_block_agrees_only_when_both_lists_are_the_same() {
         bytes: Listed::Same(2),
     };
     assert_eq!(same.agreed(), Some(2));
-    assert!(same.lines(Service::FetchBlock, 7).is_empty());
+    assert!(same.lines(FETCH_BLOCK, 7).is_empty());
     let bytes_differ = Judged {
         ids: Listed::Same(2),
         bytes: Listed::Differs {
@@ -705,9 +712,9 @@ fn a_block_agrees_only_when_both_lists_are_the_same() {
         },
     };
     assert_eq!(bytes_differ.agreed(), None);
-    let lines = bytes_differ.lines(Service::FollowTip, 7);
+    let lines = bytes_differ.lines(FOLLOW_TIP, 7);
     assert_eq!(lines.len(), 1);
-    assert!(lines[0].starts_with("ENDORSER-DIFF service=FollowTip slot=7 list=bytes index=1 "));
+    assert!(lines[0].starts_with("ENDORSER-DIFF entry=follow_tip:v1 slot=7 list=bytes index=1 "));
     let shown = |judged: &Judged| {
         judged
             .cells()

@@ -5,6 +5,7 @@ use dolos_core::{ChainError, MempoolAwareUtxoStore};
 use pallas::interop::utxorpc::v1::spec as rpc;
 use pallas::ledger::primitives::dijkstra as n;
 use rpc::submit::submit_service_server::SubmitService as _;
+use tonic::Request;
 
 pub(super) struct Fixture {
     _seed: seed::Seeded,
