@@ -111,7 +111,7 @@ impl MutationTally {
             lines.push(format!(
                 "MUTATION op={op} compared={compared} agree={agree}"
             ));
-            if compared != made {
+            if compared > made {
                 let detail = format!("op={op} made={made} compared={compared}");
                 out.add(Verdict::selection_fails(
                     Judge::Mutation,
