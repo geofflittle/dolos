@@ -728,9 +728,9 @@ entry:eval_tx:v1alpha 20468
 entry:wait_for_tx:v1 10096
 entry:wait_for_tx:v1beta 10096
 entry:wait_for_tx:v1alpha 10096
-entry:watch_mempool:v1 4899
-entry:watch_mempool:v1beta 4895
-entry:watch_mempool:v1alpha 4892
+entry:watch_mempool:v1 10096
+entry:watch_mempool:v1beta 10096
+entry:watch_mempool:v1alpha 10096
 entry:fetch_block:v1 14444
 entry:fetch_block:v1beta 14154
 entry:fetch_block:v1alpha 14154
@@ -753,8 +753,8 @@ entry:search_utxos:v1 9254
 entry:search_utxos:v1beta 9254
 entry:search_utxos:v1alpha 9254
 entry:read_tx:v1 35044
-entry:read_tx:v1beta 24138
-entry:read_tx:v1alpha 24138
+entry:read_tx:v1beta 34759
+entry:read_tx:v1alpha 34759
 request_shape:signed 69290
 request_shape:draft 1306
 request_shape:reward_output_draft 1276
