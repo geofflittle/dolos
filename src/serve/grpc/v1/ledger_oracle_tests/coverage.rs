@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 
 use ledger_oracle_judge::{
-    context::language_members,
+    context::{language_members, Language},
     coverage::{Member, Reach},
     judgement::{Axis, CellKey, EntryPoint, RequestShape},
     refusal::leaf_members,
@@ -429,6 +429,48 @@ fn levels<'a>(tx: &'a MultiEraTx) -> Result<Vec<Level<'a>>, minicbor::decode::Er
     Ok(levels)
 }
 
+/// The builtins with no cost parameter among the entries of the PlutusV4 cost model the corpora run under.
+const V4_UNPRICED: [Builtin; 26] = [
+    Builtin::AndByteString,
+    Builtin::OrByteString,
+    Builtin::XorByteString,
+    Builtin::ComplementByteString,
+    Builtin::ReadBit,
+    Builtin::WriteBits,
+    Builtin::ReplicateByte,
+    Builtin::ShiftByteString,
+    Builtin::RotateByteString,
+    Builtin::CountSetBits,
+    Builtin::FindFirstSetBit,
+    Builtin::Ripemd_160,
+    Builtin::ExpModInteger,
+    Builtin::DropList,
+    Builtin::LengthOfArray,
+    Builtin::ListToArray,
+    Builtin::IndexArray,
+    Builtin::Bls12_381_G1_MultiScalarMul,
+    Builtin::Bls12_381_G2_MultiScalarMul,
+    Builtin::InsertCoin,
+    Builtin::LookupCoin,
+    Builtin::UnionValue,
+    Builtin::ValueContains,
+    Builtin::ValueData,
+    Builtin::UnValueData,
+    Builtin::ScaleValue,
+];
+
+/// Why no PlutusV4 script the ledger accepts calls a builtin of `V4_UNPRICED`.
+const V4_UNPRICED_REASON: &str =
+    "the PlutusV4 cost model has 251 entries, which end before the builtin's parameters";
+
+/// The command that prints the number of entries of the PlutusV4 cost model.
+const V4_COSTS: &str = "jq '.cost_models_raw.PlutusV4|length' test_data/musashi-native-submission/registration-epoch64-parameters.json";
+
+/// The member of the builtin axis for `builtin` called by a script of `language`.
+pub(super) fn builtin_member(language: Language, builtin: Builtin) -> String {
+    format!("{language}.{builtin:?}")
+}
+
 /// Every member of the coverage table, with the rule members `rules` gives.
 pub(super) fn members(rules: &Rules) -> Vec<Member> {
     let mut members = Vec::new();
@@ -457,8 +499,16 @@ pub(super) fn members(rules: &Rules) -> Vec<Member> {
             .iter()
             .map(|k| Member::counted(Axis::ParamKey, k)),
     );
-    let builtins = (0..=u8::MAX).filter_map(|tag| Builtin::try_from(tag).ok());
-    members.extend(builtins.map(|b| Member::counted(Axis::Builtin, format!("{b:?}"))));
+    for language in Language::ALL {
+        let builtins = (0..=u8::MAX).filter_map(|tag| Builtin::try_from(tag).ok());
+        members.extend(builtins.map(|builtin| {
+            let member = builtin_member(language, builtin);
+            match language == Language::V4 && V4_UNPRICED.contains(&builtin) {
+                true => Member::excluded(Axis::Builtin, member, V4_UNPRICED_REASON, V4_COSTS),
+                false => Member::counted(Axis::Builtin, member),
+            }
+        }));
+    }
     members.extend(leaf_members());
     members.extend(rules.members());
     let entries = EntryPoint::every().into_iter();
@@ -765,8 +815,19 @@ mod tests {
                 "witness:sub.plutus_v3_script",
             ]
         );
-        let builtins = members.iter().filter(|m| m.cell.axis == Axis::Builtin);
-        assert_eq!(builtins.count(), 101);
+        for language in Language::ALL {
+            let prefix = format!("{language}.");
+            let builtins: Vec<&Member> = members
+                .iter()
+                .filter(|m| m.cell.axis == Axis::Builtin && m.cell.member.starts_with(&prefix))
+                .collect();
+            let counted = builtins.iter().filter(|m| m.reach == Reach::Counted);
+            let unpriced = match language {
+                Language::V4 => 26,
+                Language::V1 | Language::V2 | Language::V3 => 0,
+            };
+            assert_eq!((builtins.len(), counted.count()), (101, 101 - unpriced));
+        }
     }
 
     /// The cells of each kept record of a corpus that pallas decodes.

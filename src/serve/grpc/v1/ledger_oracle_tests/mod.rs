@@ -30,6 +30,7 @@ use dolos_core::{
     AsyncQueryFacade, BlockHash, ChainPoint, Domain as _, DomainError, EraCbor, MempoolStore as _,
     MempoolTx, RawBlock, StateStore as _, SubmitExt as _, SyncExt as _, TxHash, TxoRef,
 };
+use eval::AgreedCall;
 use itertools::Itertools as _;
 use ledger_oracle_judge::{
     accounts::{self, Account, Credential, LedgerAccounts},
@@ -64,7 +65,7 @@ use pallas::{
             ComputeHash as _, Era, MultiEraOutput, MultiEraRedeemerTag as RedeemerTag, MultiEraTx,
             OriginalHash as _,
         },
-        validate::phase2::{tx::MultiEraTxEvalResult as TxEvalResult, Builtin},
+        validate::phase2::tx::MultiEraTxEvalResult as TxEvalResult,
     },
 };
 use seed::SeedPoint;
@@ -514,23 +515,22 @@ fn named_inputs(id: RecordId, record: &Record) -> BTreeSet<TxIn> {
 }
 
 /// The coverage cells of a record Dolos agreed on, the request shapes its bytes show when
-/// they decode, the transaction cells and the builtins `builtins` its evaluation called when
-/// the ledger accepted it, its leaves when the ledger refused it.
-fn agreeing_cells(id: RecordId, record: &Record, builtins: &[Builtin]) -> Vec<CellKey> {
+/// they decode, the transaction cells and the cells of the calls `calls` when the ledger
+/// accepted it, its leaves when the ledger refused it.
+fn agreeing_cells(id: RecordId, record: &Record, calls: &[AgreedCall]) -> Vec<CellKey> {
     let shapes = coverage::shape_cells(&record.tx.0).unwrap_or_default();
-    let mut cells = agreeing_outcome_cells(id, record, builtins);
+    let mut cells = agreeing_outcome_cells(id, record, calls);
     cells.extend(shapes);
     cells
 }
 
 /// The coverage cells of a record Dolos agreed on that its ledger outcome decides.
-fn agreeing_outcome_cells(id: RecordId, record: &Record, builtins: &[Builtin]) -> Vec<CellKey> {
+fn agreeing_outcome_cells(id: RecordId, record: &Record, calls: &[AgreedCall]) -> Vec<CellKey> {
     match &record.outcome {
         LedgerOutcome::Accepted { .. } => {
             let cells = coverage::cells_of_tx(&record.tx.0);
             let mut cells = cells.unwrap_or_else(|e| panic!("TX {id} {e}"));
-            let builtins = builtins.iter().map(|b| format!("{b:?}"));
-            cells.extend(builtins.map(|b| CellKey::new(Axis::Builtin, b)));
+            cells.extend(calls.iter().map(AgreedCall::cell));
             cells.into_iter().collect()
         }
         LedgerOutcome::Refused { failure_names, .. } => {
@@ -703,18 +703,18 @@ async fn validate_run<'r>(
                 tally.dependent.push((id, missing.seeded_by));
             }
             let declared = manifests.declared.get(&id);
-            let mut builtins = Vec::new();
+            let mut calls = Vec::new();
             if missing.failed_by.is_empty() {
                 compare_fee(&group, id, record, cost);
                 let listed = manifests.eval.get(&id).unwrap_or(&unlisted);
                 let tx_listed = manifests.tx.get(&id).map(String::as_str);
-                let calls =
+                let runs =
                     eval::judge_record(&group, id, record, listed, tx_listed, evaluations).await;
                 let listed = manifests.context.get(&id).unwrap_or(&context_unlisted);
-                eval::judge_context(&group, id, record, listed, context);
+                let languages = eval::judge_context(&group, id, record, listed, context);
                 let covering = (record.submitted(), record.flag(), declared);
                 if let (LedgerOutcome::Accepted { .. }, Phase2::Valid, None) = covering {
-                    builtins = calls;
+                    calls = AgreedCall::of(runs, &languages);
                 }
             } else {
                 cost.skipped_cascade += 1;
@@ -750,7 +750,7 @@ async fn validate_run<'r>(
             let known = manifests.known.get(&(Locus::Validation, id));
             let judgement = with_known(judgement, known);
             let cells = match &judgement {
-                Outcome::Pass(Pass::Agree) => agreeing_cells(id, record, &builtins),
+                Outcome::Pass(Pass::Agree) => agreeing_cells(id, record, &calls),
                 _ => Vec::new(),
             };
             if let Outcome::Pass(Pass::Known { row, .. }) = &judgement {

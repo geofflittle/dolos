@@ -5,11 +5,12 @@ use std::collections::BTreeMap;
 use dolos_core::{ChainError, DomainError};
 use ledger_oracle_judge::{
     cbor::Purpose,
-    context::{self, ContextTally, Listing, PallasContext, PallasContexts},
+    context::{self, ContextTally, ContextVerdict, Listing, PallasContext, PallasContexts},
     eval::{
         self, named_in_message, wire_purpose, Answer, DolosAnswer, EvalTally, Layer, Level,
         Malformed, Refusal, RowKey, RowVerdict, TxDemand, WireEval, WireFee,
     },
+    judgement::{Axis, CellKey},
     record::{LedgerOutcome, LedgerRedeemers, Phase2, Record, RecordId, Units},
 };
 use pallas::codec::minicbor;
@@ -28,7 +29,7 @@ use pallas::ledger::validate::phase2::{
 use pallas::ledger::validate::utils::ContextFailure;
 use tonic::Request;
 
-use super::{purpose, tag_number, validate::Group};
+use super::{coverage::builtin_member, purpose, tag_number, validate::Group};
 
 /// The evaluator's answer for one transaction, with the builtins each redeemer called and what an EvalTx response says in its place.
 struct Evaluator {
@@ -314,6 +315,38 @@ async fn judge_draft(
     tally.add_draft(Layer::Pallas, draft.signed, ledger, listed, pallas);
 }
 
+/// The builtins each redeemer of one record called, for the redeemers the evaluator ran in the ledger's units.
+pub(super) struct AgreedRuns(BTreeMap<RowKey, Vec<Builtin>>);
+
+/// The language of each redeemer of one record whose script the evaluator applied to the ledger's arguments.
+pub(super) struct AgreedLanguages(BTreeMap<RowKey, context::Language>);
+
+/// A builtin called by a redeemer of a script of `language` on which the evaluator agrees with the ledger in units and arguments.
+pub(super) struct AgreedCall {
+    language: context::Language,
+    builtin: Builtin,
+}
+
+impl AgreedCall {
+    /// The calls of the redeemers that both `runs` and `languages` hold.
+    pub(super) fn of(runs: AgreedRuns, languages: &AgreedLanguages) -> Vec<AgreedCall> {
+        let calls = runs.0.into_iter().filter_map(|(key, builtins)| {
+            let language = *languages.0.get(&key)?;
+            Some(
+                builtins
+                    .into_iter()
+                    .map(move |builtin| AgreedCall { language, builtin }),
+            )
+        });
+        calls.flatten().collect()
+    }
+
+    /// The cell of the builtin axis the call touches.
+    pub(super) fn cell(&self) -> CellKey {
+        CellKey::new(Axis::Builtin, builtin_member(self.language, self.builtin))
+    }
+}
+
 /// Judges the evaluator's and each EvalTx version's answer for one record against the ledger's rows, the rows the known list gives it and, when the ledger evaluated none, its outcome's demand and the answer the transaction known list gives it, and returns the builtins called by each redeemer the evaluator ran in the ledger's units.
 pub(super) async fn judge_record(
     group: &Group,
@@ -322,7 +355,7 @@ pub(super) async fn judge_record(
     listed: &BTreeMap<RowKey, Refusal>,
     tx_listed: Option<&str>,
     tally: &mut EvalTally,
-) -> Vec<Builtin> {
+) -> AgreedRuns {
     let tx = &record.tx.0;
     let wires = wire_evals(group, tx).await;
     for (layer, wire) in &wires {
@@ -331,7 +364,7 @@ pub(super) async fn judge_record(
     }
     if record.redeemers == LedgerRedeemers::Undecoded {
         tally.undecoded += 1;
-        return Vec::new();
+        return AgreedRuns(BTreeMap::new());
     }
     let ledger = eval::ledger_rows(record);
     tally.collisions += eval::collisions(&ledger);
@@ -371,10 +404,10 @@ pub(super) async fn judge_record(
     }
     let verdicts = tally.add_answer(Layer::Pallas, id, &ledger, listed, evaluator.answer);
     let ran = verdicts.iter().filter_map(|(key, verdict)| match verdict {
-        RowVerdict::Agree(Answer::Ran(_)) => evaluator.calls.get(key),
+        RowVerdict::Agree(Answer::Ran(_)) => Some((*key, evaluator.calls.get(key)?.clone())),
         _ => None,
     });
-    ran.flatten().copied().collect()
+    AgreedRuns(ran.collect())
 }
 
 /// The contexts the evaluator builds for one transaction, keyed by row.
@@ -406,17 +439,25 @@ fn pallas_contexts(arguments: Result<Vec<RedeemerArguments>, ChainError>) -> Pal
     PallasContexts::built(rows).unwrap_or_else(|key| panic!("the evaluator built {key} twice"))
 }
 
-/// Judges the arguments the evaluator applies each redeemer's script of one record to against the ledger's and the listing the known list gives each row.
+/// Judges the arguments the evaluator applies each redeemer's script of one record to against the ledger's and the listing the known list gives each row, and returns the language of each row on whose arguments they agree.
 pub(super) fn judge_context(
     group: &Group,
     id: RecordId,
     record: &Record,
     listed: &BTreeMap<RowKey, Listing>,
     tally: &mut ContextTally,
-) {
+) -> AgreedLanguages {
     let ledger = context::ledger_contexts(record);
     let pallas = pallas_contexts(group.arguments(&record.tx.0));
-    tally.add(id, &context::judge_tx(&ledger, &pallas, listed));
+    let verdicts = context::judge_tx(&ledger, &pallas, listed);
+    tally.add(id, &verdicts);
+    let agreed = verdicts
+        .into_iter()
+        .filter_map(|(key, language, verdict)| match verdict {
+            ContextVerdict::Agree { .. } => Some((key, language?)),
+            _ => None,
+        });
+    AgreedLanguages(agreed.collect())
 }
 
 #[test]
