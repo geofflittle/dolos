@@ -381,6 +381,7 @@ macro_rules! served_routes {
                     while taken < blocks {
                         let Ok(Some(next)) = tokio::time::timeout(NEXT, self.follow.next()).await
                         else {
+                            println!("STREAM short version={VERSION} route=follow_tip event={event:?} wanted={blocks} got={taken}");
                             break;
                         };
                         match (event, next.unwrap().action) {
@@ -400,6 +401,7 @@ macro_rules! served_routes {
                     while taken < txs {
                         let Ok(Some(next)) = tokio::time::timeout(NEXT, self.watch.next()).await
                         else {
+                            println!("STREAM short version={VERSION} route=watch_tx event={event:?} wanted={txs} got={taken}");
                             break;
                         };
                         match (event, next.unwrap().action) {
