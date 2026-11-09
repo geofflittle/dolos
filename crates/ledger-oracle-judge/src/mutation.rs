@@ -63,7 +63,7 @@ impl MutationTally {
         let counts = self.counts.entry(op.clone()).or_default();
         counts.compared += 1;
         let Tally { passing, failing } = verdicts;
-        let other = passing.keys().find(|p| p.pass != Pass::Agree);
+        let other = passing.keys().find(|p| p.pass == Pass::Excluded);
         let validated = passing.keys().any(|p| p.judge == Judge::Validation);
         let entries: BTreeSet<EntryPoint> = passing.keys().map(|p| p.entry).collect();
         let first_failing = failing.first().map(|v| (v.judge, v.entry, "disagree"));
