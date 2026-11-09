@@ -42,6 +42,7 @@ use ledger_oracle_judge::{
     eval::{ledger_rows, Answer, EvalKnown, EvalTally, Layer, TxKnown},
     judgement::{self, Axis, CellKey, EntryPoint, Finding, Judge, RunVerdict},
     manifest::{self, Candidates, Declared, Feature, Known, KnownList, Locus},
+    mutation::{Mutation, MutationTally},
     parallel::in_parallel,
     record::{CorpusKind, LedgerOutcome, PParams, Phase2, Record, RecordId, UtxoEntry},
     row::Row,
@@ -1878,17 +1879,29 @@ async fn judge_run(
 /// Judges every kept run of a corpus, each seeded from its first pre state, on
 /// one thread per core.
 async fn judge(corpus: &Corpus, manifests: &Manifests, edits: &Edits<'_>) -> Judged {
+    let parts = judge_runs(corpus, manifests, edits);
+    settle(corpus.kind, parts, manifests)
+}
+
+/// Judges every kept run of a corpus apart, each seeded from its first pre state, on one thread
+/// per core.
+fn judge_runs(corpus: &Corpus, manifests: &Manifests, edits: &Edits<'_>) -> Vec<RunJudged> {
     let runs: Vec<&KeptRun> = corpus.kept().collect();
     let threads = thread::available_parallelism().map_or(1, usize::from);
     let handle = Handle::current();
-    let parts = task::block_in_place(|| {
+    task::block_in_place(|| {
         in_parallel(
             &runs,
             threads,
             |run| run.records().len(),
             |run| handle.block_on(judge_run(corpus.kind, run, manifests, edits)),
         )
-    });
+    })
+}
+
+/// The judgement of the runs of a corpus of `kind` together, with the manifest entries they
+/// leave unjudged and the served output and account comparisons settled.
+fn settle(kind: CorpusKind, parts: Vec<RunJudged>, manifests: &Manifests) -> Judged {
     let mut judged = Judged::default();
     let mut judged_ids = BTreeSet::new();
     let mut as_output: BTreeMap<RecordId, Tally> = BTreeMap::new();
@@ -1903,16 +1916,12 @@ async fn judge(corpus: &Corpus, manifests: &Manifests, edits: &Edits<'_>) -> Jud
             account_checks.entry(id).or_default().merge(tally);
         }
     }
-    manifests.unjudged(corpus.kind, &judged_ids, &mut judged.validation);
-    judged.eval.unjudged(&manifests.eval, corpus.kind);
-    judged.eval.tx_unjudged(&manifests.tx, corpus.kind);
-    judged.context.unjudged(&manifests.context, corpus.kind);
-    judged
-        .state
-        .settle_as_output(corpus.kind, as_output, &manifests.known);
-    judged
-        .state
-        .settle_accounts(corpus.kind, account_checks, &manifests.known);
+    manifests.unjudged(kind, &judged_ids, &mut judged.validation);
+    judged.eval.unjudged(&manifests.eval, kind);
+    judged.eval.tx_unjudged(&manifests.tx, kind);
+    judged.context.unjudged(&manifests.context, kind);
+    judged.state.settle_as_output(kind, as_output, &manifests.known);
+    judged.state.settle_accounts(kind, account_checks, &manifests.known);
     let fired = judged.state.known_fired.clone();
     judged.candidates.known.records.extend(fired);
     judged
@@ -1939,11 +1948,19 @@ async fn ledger_oracle() {
     let left_out = left_out();
     let mut verdicts = judgement::Tally::default();
     let mut all = Judged::default();
+    let (mutants, changes) = corpus::load_mutants().unwrap_or_else(|e| panic!("{e}"));
+    let mut mutations = MutationTally::new(changes.values());
     for kind in CorpusKind::ALL {
-        let corpus = load(kind)
-            .without(&left_out)
-            .unwrap_or_else(|e| panic!("{e}"));
+        let corpus = match kind {
+            CorpusKind::Ic | CorpusKind::Supp | CorpusKind::P1 => load(kind),
+            CorpusKind::Mut => mutants.clone(),
+        };
+        let corpus = corpus.without(&left_out).unwrap_or_else(|e| panic!("{e}"));
         println!("{corpus}");
+        if kind == CorpusKind::Mut {
+            judge_mutants(&corpus, &changes, &manifests, &mut mutations, &mut verdicts);
+            continue;
+        }
         let judged = judge(&corpus, &manifests, &Edits::default()).await;
         println!("{judged}");
         let mut part = judged.report();
@@ -1962,13 +1979,39 @@ async fn ledger_oracle() {
     let endorsed = endorser::judge(&cases).await;
     println!("{}", endorsed.line());
     endorsed.report(cases.len(), &mut verdicts);
-    let members = coverage::members(&manifests.rules);
+    for line in mutations.report(&mut verdicts) {
+        println!("{line}");
+    }
+    let mut members = coverage::members(&manifests.rules);
+    members.extend(mutations.members());
     let committed = ledger_oracle_judge::coverage::committed();
     let committed = committed.unwrap_or_else(|e| panic!("{e}"));
     for line in ledger_oracle_judge::coverage::table(&members, &committed, &mut verdicts) {
         println!("{line}");
     }
     conclude(&verdicts);
+}
+
+/// Judges each mutant of the mutant corpus from the verdicts on its own run, adding the mutation
+/// verdicts to `out`.
+fn judge_mutants(
+    corpus: &Corpus,
+    changes: &BTreeMap<u32, Mutation>,
+    manifests: &Manifests,
+    mutations: &mut MutationTally,
+    out: &mut judgement::Tally,
+) {
+    for part in judge_runs(corpus, manifests, &Edits::default()) {
+        let ids: Vec<RecordId> = part.ids.iter().copied().collect();
+        let judged = settle(corpus.kind, vec![part], manifests);
+        let mut verdicts = judged.report();
+        manifests.rules.report(&judged.rules, false, &mut verdicts);
+        let [id] = ids[..] else {
+            panic!("MUTATION a run judged {} mutants", ids.len());
+        };
+        let change = changes.get(&id.n).unwrap_or_else(|| panic!("MUTATION {id} has no change"));
+        mutations.judge(id, change, verdicts, out);
+    }
 }
 
 /// Prints the rule lines, the evaluation and script context views and the

@@ -8,10 +8,16 @@
 module Edit (
   Edit (..),
   noEdit,
+  firstSub,
   submitEdited,
   editTx,
+  editBytes,
+  encoded,
   emptySet,
+  entries,
+  lookupKey,
   setKey,
+  deleteKey,
   dupKey,
   addEntry,
   overKey,
@@ -33,32 +39,40 @@ import Cardano.Ledger.Plutus.Language (Language)
 import Codec.CBOR.Read (deserialiseFromBytes)
 import Codec.CBOR.Term (Term (..), decodeTerm, encodeTerm)
 import Codec.CBOR.Write (toStrictByteString)
-import Control.Monad (forM, void)
+import Control.Monad (void, zipWithM)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.Foldable (toList)
 import Data.IORef (writeIORef)
 import Data.List (find, subsequences)
+import qualified Data.Map.Strict as Map
 import qualified Data.OMap.Strict as OMap
 import qualified Data.Set as Set
 import Dump (E, decodeTx, editedBytes)
 import Lens.Micro ((^.))
-import Test.Cardano.Ledger.Core.KeyPair (mkWitnessesVKey)
+import Lens.Micro.Mtl (use)
+import Test.Cardano.Ledger.Core.KeyPair (KeyPair, mkWitnessesVKey)
 import Test.Cardano.Ledger.Dijkstra.ImpTest
 
--- | Changes to the terms of a top level transaction, its first sub transaction body, and bytes after it.
+-- | Changes to the terms of a top level transaction, each of its sub transactions by index, and bytes after it.
 data Edit = Edit
   { editBody :: Term -> Term
   , editWits :: Term -> Term
   , editAux :: Term -> Term
-  , editSubBody :: Term -> Term
+  , editSubBody :: Int -> Term -> Term
+  , editSubWits :: Int -> Term -> Term
   , trailing :: BS.ByteString
   }
 
 -- | The edit that changes nothing.
 noEdit :: Edit
-noEdit = Edit id id id id ""
+noEdit = Edit id id id (const id) (const id) ""
+
+-- | A change to the sub transaction at index zero only.
+firstSub :: (Term -> Term) -> Int -> Term -> Term
+firstSub f 0 = f
+firstSub _ _ = id
 
 -- | Submits the transaction after the fixups and the edit, so the node's decoder judges the edited bytes.
 submitEdited :: Edit -> Tx TopTx E -> ImpTestM E ()
@@ -68,47 +82,56 @@ submitEdited e tx = void $ withPostFixup (editTx e) (trySubmitTx tx)
 editTx :: Edit -> Tx TopTx E -> ImpTestM E (Tx TopTx E)
 editTx e tx = do
   pp <- getsPParams id
-  topKeys <- mapM getKeyPair (keyHashes tx)
-  subKeys <- forM (OMap.elems (tx ^. bodyTxL . subTransactionsTxBodyL)) (mapM getKeyPair . keyHashes)
-  let signed keys body = termOf (mkWitnessesVKey (unsafeMakeSafeHash (castHash (hashWith @HASH id (encoded body)))) keys)
-      resign keys body w
-        | null keys = w
-        | otherwise = setKey 0 (signed keys body) w
-      (b0, w0, middle, a0) = case termOf tx of
-        TList [b, w, v, a] -> (b, w, [v], a)
-        TList [b, w, a] -> (b, w, [], a)
-        other -> error ("a transaction of an unknown shape " <> show other)
-      a1 = editAux e a0
-      b1 = if a1 == a0 then b0 else setKey 7 (TBytes (blake (encoded a1))) b0
-      b2 = case subKeys of
-        keys : _ -> overKey 23 (overFirst (editSub keys)) b1
-        [] -> b1
-      editSub keys sub = case sub of
-        TList (sb : sw : rest) ->
-          let sb' = editSubBody e sb
-           in TList (sb' : (if sb' == sb then sw else resign keys sb' sw) : rest)
-        other -> error ("a sub transaction of an unknown shape " <> show other)
-      b3 = editBody e b2
-      b4 = integrity pp b3 w0 (editWits e w0)
-      w1 = editWits e (resign topKeys b4 w0)
-      bytes = encoded (TList ([b4, w1] <> middle <> [a1])) <> trailing e
+  pairs <- use impKeyPairsG
+  let bytes = either error id (editBytes pp (`Map.lookup` pairs) e tx (termOf tx))
   case decodeTx (pvMajor (pp ^. ppProtocolVersionL)) bytes of
     Right edited -> pure edited
     Left _ -> do
       liftIO (writeIORef editedBytes (Just bytes))
       pure tx
 
+-- | The bytes of a transaction's term with the edit applied, its hashes recomputed and the key witnesses of each changed body signed again, or why one cannot be.
+editBytes :: PParams E -> (KeyHash Witness -> Maybe (KeyPair Witness)) -> Edit -> Tx TopTx E -> Term -> Either String BS.ByteString
+editBytes pp keyPair e tx term = do
+  (b0, w0, middle, a0) <- case term of
+    TList [b, w, v, a] -> Right (b, w, [v], a)
+    TList [b, w, a] -> Right (b, w, [], a)
+    other -> Left ("a transaction of an unknown shape " <> show other)
+  let a1 = editAux e a0
+      b1 = if a1 == a0 then b0 else setKey 7 (TBytes (blake (encoded a1))) b0
+      subKeys = map keyHashes (OMap.elems (tx ^. bodyTxL . subTransactionsTxBodyL))
+  b2 <- case lookupKey 23 b1 of
+    Just subs | not (null subKeys) -> (\s -> setKey 23 s b1) <$> overElems (\j -> editSub j (drop j subKeys)) subs
+    _ -> Right b1
+  let b3 = editBody e b2
+  b4 <- integrity pp b3 w0 (editWits e w0)
+  w1 <- editWits e <$> (if b4 == b0 then Right w0 else resign (keyHashes tx) b4 w0)
+  pure (encoded (TList ([b4, w1] <> middle <> [a1])) <> trailing e)
+  where
+    resign hashes body w
+      | null hashes = Right w
+      | otherwise = do
+          keys <- mapM (\h -> maybe (Left ("no key pair for " <> show h)) Right (keyPair h)) hashes
+          Right (setKey 0 (termOf (mkWitnessesVKey (unsafeMakeSafeHash (castHash (hashWith @HASH id (encoded body)))) keys)) w)
+    editSub j hashes sub = case sub of
+      TList (sb : sw : rest) -> do
+        let sb1 = editSubBody e j sb
+        sb2 <- integrity pp sb1 sw (editSubWits e j sw)
+        sw1 <- if sb2 == sb then Right sw else resign (concat (take 1 hashes)) sb2 sw
+        Right (TList (sb2 : editSubWits e j sw1 : rest))
+      other -> Left ("a sub transaction of an unknown shape " <> show other)
+
 -- | The hashes of the keys that sign a transaction's key witnesses.
 keyHashes :: Tx l E -> [KeyHash Witness]
 keyHashes tx = map witVKeyHash (toList (tx ^. witsTxL . addrTxWitsL))
 
 -- | The body with its script integrity hash recomputed over the edited witnesses, keeping the language views the old hash covers.
-integrity :: PParams E -> Term -> Term -> Term -> Term
+integrity :: PParams E -> Term -> Term -> Term -> Either String Term
 integrity pp body old new = case lookupKey 11 body of
   Just (TBytes hash) | old /= new -> case find (\views -> blake (preimage old views) == hash) candidates of
-    Just views -> setKey 11 (TBytes (blake (preimage new views))) body
-    Nothing -> error "no set of language views gives the script integrity hash"
-  _ -> body
+    Just views -> Right (setKey 11 (TBytes (blake (preimage new views))) body)
+    Nothing -> Left "no set of language views gives the script integrity hash"
+  _ -> Right body
   where
     candidates = [serialize' (pvMajor (pp ^. ppProtocolVersionL)) (encodeLangViews (Set.fromList (map (getLanguageView pp) langs))) | langs <- subsequences [minBound .. maxBound :: Language]]
     preimage w views = maybe (encoded (TMap [])) encoded (lookupKey 5 w) <> maybe "" encoded (lookupKey 4 w) <> views
@@ -147,6 +170,10 @@ setKey k v t
   | any ((== TInt k) . fst) (entries t) = TMap [(key, if key == TInt k then v else x) | (key, x) <- entries t]
   | otherwise = addEntry (TInt k) v t
 
+-- | The map term without the entry at the key.
+deleteKey :: Int -> Term -> Term
+deleteKey k t = TMap (filter ((/= TInt k) . fst) (entries t))
+
 -- | The map term with the entry at the key given again at the end.
 dupKey :: Int -> Term -> Term
 dupKey k t = maybe t (\v -> addEntry (TInt k) v t) (lookupKey k t)
@@ -158,6 +185,13 @@ addEntry k v t = TMap (entries t <> [(k, v)])
 -- | The map term with the value at the key changed.
 overKey :: Int -> (Term -> Term) -> Term -> Term
 overKey k f t = maybe t (\v -> setKey k (f v) t) (lookupKey k t)
+
+-- | A list or set term with each element changed by its index, or the first failure.
+overElems :: (Int -> Term -> Either String Term) -> Term -> Either String Term
+overElems f (TTagged n t) = TTagged n <$> overElems f t
+overElems f (TList xs) = TList <$> zipWithM f [0 ..] xs
+overElems f (TListI xs) = TListI <$> zipWithM f [0 ..] xs
+overElems _ t = Right t
 
 -- | A list, set or map term with its first element given again after it.
 dupFirst :: Term -> Term

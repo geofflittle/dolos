@@ -74,8 +74,9 @@ import qualified Data.OMap.Strict as OMap
 import Data.Primitive.ByteArray (byteArrayFromList)
 import Data.Typeable (Typeable)
 import Data.Word (Word64, Word8)
-import Dump (E, dumpTo)
+import Dump (E)
 import Edit
+import Mutate (capturingKeys, recordTo, withMutants)
 import Lens.Micro ((%~), (&), (.~), (^.))
 import Lens.Micro.Mtl (use, (%=))
 import qualified PlutusCore as PLC
@@ -506,7 +507,7 @@ tableCells = describe "table cells" $ do
     holder <- freshKeyAddrNoPtr_
     let reward (TList (_ : rest)) = TList (TBytes (BS.cons 0xe0 (BS.replicate 28 5)) : rest)
         reward m = setKey 0 (TBytes (BS.cons 0xe0 (BS.replicate 28 5))) m
-    redeemsV4With (submitEdited noEdit {editSubBody = overKey 1 (overFirst reward)}) Sub ref (GuardingPurpose (AsIx 0)) (\b -> b & guardsTxBodyL .~ [ScriptHashObj hash] & outputsTxBodyL .~ [mkBasicTxOut holder (inject (Coin 5_000_000))])
+    redeemsV4With (submitEdited noEdit {editSubBody = firstSub (overKey 1 (overFirst reward))}) Sub ref (GuardingPurpose (AsIx 0)) (\b -> b & guardsTxBodyL .~ [ScriptHashObj hash] & outputsTxBodyL .~ [mkBasicTxOut holder (inject (Coin 5_000_000))])
   it "a V3 spend whose collateral return exceeds its collateral" $ do
     holder <- freshKeyAddrNoPtr_
     spendWithV3Using (void . trySubmitTx . (bodyTxL . collateralReturnTxBodyL .~ SJust (mkBasicTxOut holder (inject (Coin 1_000_000_000_000))))) "4901010023357369324d"
@@ -979,7 +980,7 @@ subEdited :: (Term -> Term) -> (TxBody SubTx E -> TxBody SubTx E) -> (TxBody Top
 subEdited f subBody topBody = do
   x <- freshFundedTxIn
   let sub = mkBasicTx (subBody (mkBasicTxBody & inputsTxBodyL .~ [x])) :: Tx SubTx E
-  submitEdited noEdit {editSubBody = f} (mkTopTxWithSubTxs [sub] & bodyTxL %~ topBody)
+  submitEdited noEdit {editSubBody = firstSub f} (mkTopTxWithSubTxs [sub] & bodyTxL %~ topBody)
 
 -- | Where a body goes in a submitted transaction.
 data Level = Top | Sub
@@ -1103,7 +1104,9 @@ registeredCostModels = do
 
 main :: IO ()
 main =
-  hspec $
-    withImpInit @(LedgerSpec E) $
-      modifyImpInitProtVer @E (natVersion @12) $
-        modifyImpInitPostSubmitTxHook (dumpTo "/probe/out/supp.jsonl") supplement
+  withMutants "supp" 1000000 $ \mutants ->
+    hspec $
+      withImpInit @(LedgerSpec E) $
+        capturingKeys $
+          modifyImpInitProtVer @E (natVersion @12) $
+            modifyImpInitPostSubmitTxHook (recordTo mutants "/probe/out/supp.jsonl") supplement

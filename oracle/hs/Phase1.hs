@@ -34,7 +34,8 @@ import Data.ByteString.Short (toShort)
 import Data.Primitive.ByteArray (byteArrayFromList)
 import qualified Data.Set as Set
 import Data.Word (Word8)
-import Dump (E, dumpTo)
+import Dump (E)
+import Mutate (capturingKeys, recordTo, withMutants)
 import Edit
 import Lens.Micro ((&), (.~))
 import qualified PlutusLedgerApi.V1 as PV1
@@ -191,11 +192,13 @@ subSubmitted :: (Term -> Term) -> (Tx SubTx E -> Tx SubTx E) -> ImpTestM E ()
 subSubmitted f change = do
   x <- freshFundedTxIn
   let sub = change (mkBasicTx (mkBasicTxBody & inputsTxBodyL .~ [x]))
-  submitEdited noEdit {editSubBody = f} (mkTopTxWithSubTxs [sub])
+  submitEdited noEdit {editSubBody = firstSub f} (mkTopTxWithSubTxs [sub])
 
 main :: IO ()
 main =
-  hspec $
-    withImpInit @(LedgerSpec E) $
-      modifyImpInitProtVer @E (natVersion @12) $
-        modifyImpInitPostSubmitTxHook (dumpTo "/probe/out/p1.jsonl") phase1
+  withMutants "p1" 2000000 $ \mutants ->
+    hspec $
+      withImpInit @(LedgerSpec E) $
+        capturingKeys $
+          modifyImpInitProtVer @E (natVersion @12) $
+            modifyImpInitPostSubmitTxHook (recordTo mutants "/probe/out/p1.jsonl") phase1

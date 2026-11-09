@@ -83,6 +83,7 @@ named! {
         Cost = "cost",
         Coverage = "coverage",
         Endorser = "endorser",
+        Mutation = "mutation",
     }
 }
 
@@ -113,6 +114,7 @@ named! {
         Level = "level",
         List = "list",
         Listed = "listed",
+        Mutation = "mutation",
         Param = "param",
         ParamKey = "param_key",
         Purpose = "purpose",
@@ -306,7 +308,8 @@ pub enum Pass {
     Excluded,
 }
 
-/// A passing verdict without its record and text, the key a tally counts passing verdicts under.
+/// A passing verdict without its record and text, the key a tally counts
+/// passing verdicts under.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Passed {
     pub judge: Judge,
