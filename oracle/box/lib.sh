@@ -26,7 +26,7 @@ PLANTED_ARMS=$({
   done
 } | sort -u | paste -sd ' ' -)
 
-# Whether an arm leaves the records plants/<arm>.deselect names out of the whole run of the head.
+# Whether an arm leaves the records plants/<arm>.deselect names out of the head's coverage counts.
 deselect_arm() {
   [ -f "$HERE/plants/$1.deselect" ]
 }

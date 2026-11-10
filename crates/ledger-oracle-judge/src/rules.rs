@@ -511,7 +511,8 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         let members = rules.members();
         let counted = members.iter().filter(|m| m.reach == Reach::Counted);
         let committed = counted.map(|m| (m.cell.to_string(), count));
-        coverage::table(&members, &committed.collect(), &mut out)
+        let counts = coverage::counts(&out);
+        coverage::table(&members, &committed.collect(), &counts, &mut out)
     }
 
     #[test]
