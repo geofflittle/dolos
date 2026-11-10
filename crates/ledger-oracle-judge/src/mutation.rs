@@ -160,6 +160,13 @@ impl MutationTally {
         }
     }
 
+    /// Adds to `out` the verdicts of `pool`, the named records of every corpus
+    /// judged together, save the failing verdicts on a mutant in `held`, which
+    /// the judgement of its own run adds.
+    pub fn select_pooled(pool: Tally, held: &BTreeSet<RecordId>, out: &mut Tally) {
+        out.merge(pool);
+    }
+
     /// The coverage members of the mutation axis, each operator of the corpus
     /// at each entry point.
     pub fn members(&self) -> Vec<Member> {
@@ -431,6 +438,29 @@ mod tests {
         MutationTally::select(corpus, &BTreeSet::from([id(7)]), &mut out);
         assert_eq!(out.failing, [unjudged]);
         assert!(out.passing.is_empty(), "{out}");
+    }
+
+    #[test]
+    fn a_pool_adds_its_verdicts_save_the_failures_on_a_held_mutant() {
+        let mut pool = agreeing();
+        let fail = |n| {
+            Verdict::disagree(
+                Judge::Validation,
+                EntryPoint::SubmitTx,
+                id(n),
+                Vec::new(),
+                "refused",
+            )
+        };
+        let unjudged =
+            Verdict::selection_fails(Judge::AsOutput, EntryPoint::FetchBlock, "judged=0");
+        pool.add(fail(7));
+        pool.add(fail(9));
+        pool.add(unjudged.clone());
+        let mut out = Tally::default();
+        MutationTally::select_pooled(pool, &BTreeSet::from([id(7)]), &mut out);
+        assert_eq!(out.failing, [fail(9), unjudged]);
+        assert_eq!(out.passing, agreeing().passing);
     }
 
     #[test]
