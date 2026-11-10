@@ -110,9 +110,7 @@ pub fn replace_part(
         };
         let added = part.get(cell).copied().unwrap_or(0);
         let kept = rest.get(cell).copied().unwrap_or(0);
-        let Some(others) = held.checked_sub(added) else {
-            return Err(format!("{cell} head={held} part={added}"));
-        };
+        let others = held.saturating_sub(added);
         counts.insert(cell.clone(), others + kept);
     }
     Ok(counts)
