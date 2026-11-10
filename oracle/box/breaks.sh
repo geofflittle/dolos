@@ -11,7 +11,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 TEST=$ORACLE_TESTS::ledger_oracle
 mkdir -p "$OUT"
 take_lock
-ARMS=${ARMS:-head control $PLANTED_ARMS}
+ARMS=$(arm_order ${ARMS:-head control $PLANTED_ARMS} | paste -sd ' ' -)
 unset ORACLE_PLANT ORACLE_DESELECT ORACLE_HEAD_COUNTS
 require_free
 

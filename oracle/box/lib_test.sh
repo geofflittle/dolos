@@ -235,6 +235,12 @@ expect deselect_arm "$(
   . "$LIB"
   echo "$PLANTED_ARMS|$(deselect_arm k && echo k)|$(deselect_arm d || echo not-d)|$(plant_files k)"
 )" "cost-models d e g h k|k|not-d|"
+# Must not move an arm of a list with no deselect arm, and must move k after head and before control.
+expect arm_order "$(
+  HERE=$A/box
+  . "$LIB"
+  echo "$(arm_order head control d e | paste -sd ' ' -)|$(arm_order head control d k e | paste -sd ' ' -)"
+)" "head control d e|head k control d e"
 
 # A head control log, the same log with another run time, and the same log with one record judged differently.
 L=$W/logs

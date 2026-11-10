@@ -31,6 +31,19 @@ deselect_arm() {
   [ -f "$HERE/plants/$1.deselect" ]
 }
 
+# The arms it is given in judging order, one per line, head first and each deselect arm next, so a deselect arm runs on the head's build before another arm's build changes the target.
+arm_order() {
+  for arm in "$@"; do
+    if [ "$arm" = head ]; then echo "$arm"; fi
+  done
+  for arm in "$@"; do
+    if [ "$arm" != head ] && deselect_arm "$arm"; then echo "$arm"; fi
+  done
+  for arm in "$@"; do
+    if [ "$arm" != head ] && ! deselect_arm "$arm"; then echo "$arm"; fi
+  done
+}
+
 # Whether an arm is a switch of the overlay, judged on the one overlay build with ORACLE_PLANT naming it.
 overlay_arm() {
   switches "$HERE"/overlay/*.diff | grep -q -x -F "$1"
