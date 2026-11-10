@@ -9,9 +9,13 @@ export ROOT
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/lib.sh"
 TEST=$ORACLE_TESTS::ledger_oracle
+# The number of switched arms judged at once.
+ARM_JOBS=${ARM_JOBS:-4}
 mkdir -p "$OUT"
 take_lock
 ARMS=$(arm_order ${ARMS:-head control $PLANTED_ARMS} | paste -sd ' ' -)
+# The arms of ARMS whose crate test the control and the overlay build.
+CRATE_ARMS=$(crate_arms $ARMS)
 unset ORACLE_PLANT ORACLE_DESELECT ORACLE_HEAD_COUNTS
 require_free
 
@@ -57,13 +61,17 @@ plant_dolos() {
   git -C "$ROOT/$SCRATCH" apply "$HERE/plants/$1.diff"
 }
 
-# Builds and runs the crate test of an arm over the scratch trees as they stand, its output in $2.
+# Runs the crate test of an arm with the executable $3, or one it builds over the scratch trees as they stand, its output in $2.
 run_crate_test() {
-  if ! built=$(build_checked "$2.build" test --release $(crate_test "$1") --no-run $locked); then
-    echo "BUILD_REFUSED $built" >"$2"
-    return
+  test_bin=${3:-}
+  if [ -z "$test_bin" ]; then
+    if ! built=$(build_checked "$2.build" test --release $(crate_test "$1") --no-run $locked); then
+      echo "BUILD_REFUSED $built" >"$2"
+      return
+    fi
+    test_bin=$(executable "$2.build" "$(crate_test_target "$1")")
   fi
-  RUST_BACKTRACE=0 sh "$IN_IMAGE" "$SCRATCH" "$(executable "$2.build")" $(crate_test_filter "$1") --nocapture >"$2" 2>&1 || true
+  RUST_BACKTRACE=0 sh "$IN_IMAGE" "$SCRATCH" "$test_bin" $(crate_test_filter "$1") --nocapture >"$2" 2>&1 || true
 }
 
 # Applies the named pallas plant over the pinned pallas commit.
@@ -73,7 +81,7 @@ plant_pallas() {
 }
 
 overlay=
-# Builds the judge and each switched crate test once, from the scratch tree and the pinned pallas with overlay/ applied, and copies them to $OUT/bin, since a later arm's build of the same units writes the same target files.
+# Builds the judge and each switched crate test ARMS selects once, the joint crate tests in the judge's cargo invocation, from the scratch tree and the pinned pallas with overlay/ applied, and copies them to $OUT/bin, since a later arm's build of the same units writes the same target files.
 build_overlay() {
   case $overlay in
     built) return 0 ;;
@@ -92,19 +100,25 @@ build_overlay() {
     return 1
   fi
   overlay_started=$(date +%s)
-  if ! built=$(build_judge "$OUT/overlay.build"); then
+  if ! built=$(build_judge "$OUT/overlay.build" $(joint_packages $CRATE_ARMS)); then
     echo "OVERLAY BUILD_REFUSED $built"
     return 1
   fi
-  built=$(executable "$OUT/overlay.build")
+  built=$(executable "$OUT/overlay.build" dolos)
   cp "$ROOT${built#/w}" "$OUT/bin/overlay-judge"
-  for switch in $(switches "$HERE"/overlay/*.diff); do
-    if crate_test "$switch" >/dev/null; then
+  for switch in $CRATE_ARMS; do
+    if overlay_arm "$switch" && joint_crate_test "$switch"; then
+      built=$(executable "$OUT/overlay.build" "$(crate_test_target "$switch")")
+      cp "$ROOT${built#/w}" "$OUT/bin/overlay-$switch"
+    fi
+  done
+  for switch in $CRATE_ARMS; do
+    if overlay_arm "$switch" && ! joint_crate_test "$switch"; then
       if ! built=$(build_checked "$OUT/overlay-$switch.build" test --release $(crate_test "$switch") --no-run); then
         echo "OVERLAY BUILD_REFUSED $built"
         return 1
       fi
-      built=$(executable "$OUT/overlay-$switch.build")
+      built=$(executable "$OUT/overlay-$switch.build" "$(crate_test_target "$switch")")
       cp "$ROOT${built#/w}" "$OUT/bin/overlay-$switch"
     fi
   done
@@ -142,7 +156,7 @@ caught() {
   [ -s "$at.new" ]
 }
 
-# Whether the unplanted head judges every planted arm's records with a pass and no arm's line, the case where each arm must not fire.
+# Whether the unplanted head judges every planted arm's records, and runs each crate test ARMS selects, with a pass and no arm's line, the case where each arm must not fire.
 control_clean() {
   if ! grep -q '^RESULT PASS' "$OUT/control.log"; then
     echo "ARM control RESULT not PASS log=$OUT/control.log"
@@ -153,6 +167,10 @@ control_clean() {
   for a in $PLANTED_ARMS; do
     log=$OUT/control.log
     if crate_test "$a" >/dev/null; then
+      case " $CRATE_ARMS " in
+        *" $a "*) ;;
+        *) continue ;;
+      esac
       log=$OUT/control-$a.log
       if ! crate_test_passed "$a" "$log"; then
         echo "ARM control CRATE_TEST_FAILED arm=$a log=$log"
@@ -167,7 +185,7 @@ control_clean() {
   return $clean
 }
 
-# Whether the overlay build with no switch set prints the head's control logs, on every planted arm's records and in each switched crate test.
+# Whether the overlay build with no switch set prints the head's control logs, on every planted arm's records and in each switched crate test ARMS selects.
 overlay_control_clean() {
   if ! build_overlay; then
     echo "ARM control OVERLAY_UNBUILT"
@@ -179,8 +197,8 @@ overlay_control_clean() {
     echo "ARM control OVERLAY_DIFFERS log=$OUT/overlay-control.log"
     clean=1
   fi
-  for a in $(switches "$HERE"/overlay/*.diff); do
-    if crate_test "$a" >/dev/null; then
+  for a in $CRATE_ARMS; do
+    if overlay_arm "$a"; then
       run_overlay "$a" "" "$OUT/overlay-control-$a.log"
       if ! same_crate_log "$OUT/control-$a.log" "$OUT/overlay-control-$a.log"; then
         echo "ARM control OVERLAY_DIFFERS log=$OUT/overlay-control-$a.log"
@@ -210,40 +228,67 @@ for arm in $ARMS; do
   fi
 done
 
-head_result=SKIPPED
-verdicts=""
-for arm in $ARMS; do
+# Judges the switched arm $1 on the overlay build, printing its lines and writing its verdict to $OUT/$1.verdict.
+judge_switched() {
+  arm=$1
+  echo "ARM $arm dolos=$dolos_rev pallas=$pin_short-overlay switch=$arm"
+  started=$(date +%s)
+  run_overlay "$arm" "$arm" "$OUT/$arm.log" "$(paste -sd, "$HERE/plants/$arm.records")"
+  echo "ARM $arm records=$(grep -c . "$HERE/plants/$arm.records" || true) judge_seconds=$(($(date +%s) - started))"
+  if ! grep -q -x -F "ORACLE_PLANT reached $arm" "$OUT/$arm.log"; then
+    echo "ARM $arm UNREACHED log=$OUT/$arm.log"
+    verdict=MISSED
+  elif encoding_arm "$arm"; then
+    held "$arm"
+    verdict=$held
+  elif caught "$arm" "$OUT/$arm.log" "$OUT/$arm"; then
+    verdict=CAUGHT
+  else
+    verdict=MISSED
+  fi
+  echo "$arm=$verdict"
+  echo "$verdict" >"$OUT/$arm.verdict"
+}
+
+switched_batch=
+# Judges the switched arms of switched_batch on one overlay build, ARM_JOBS at a time, and adds their verdicts in their order, MISSED for an arm that wrote none.
+judge_batch() {
+  if [ -z "$switched_batch" ]; then
+    return 0
+  fi
   reset_scratch
   pin=$(pallas_pin)
   pin_short=$(echo "$pin" | cut -c1-7)
   dolos_rev=$(git -C "$ROOT/$SCRATCH" rev-parse --short HEAD)
+  for batch_arm in $switched_batch; do
+    rm -f "$OUT/$batch_arm.verdict"
+  done
+  if build_overlay; then
+    pool "$ARM_JOBS" judge_switched $switched_batch
+  else
+    for batch_arm in $switched_batch; do
+      echo "$batch_arm=MISSED"
+    done
+  fi
+  for batch_arm in $switched_batch; do
+    verdict=$(cat "$OUT/$batch_arm.verdict" 2>/dev/null || echo MISSED)
+    verdicts="$verdicts $batch_arm=$verdict"
+  done
+  switched_batch=
+}
+
+head_result=SKIPPED
+verdicts=""
+for arm in $ARMS; do
   if switched "$arm"; then
-    if ! build_overlay; then
-      echo "$arm=MISSED"
-      verdicts="$verdicts $arm=MISSED"
-      continue
-    fi
-    echo "ARM $arm dolos=$dolos_rev pallas=$pin_short-overlay switch=$arm"
-    started=$(date +%s)
-    run_overlay "$arm" "$arm" "$OUT/$arm.log" "$(paste -sd, "$HERE/plants/$arm.records")"
-    echo "ARM $arm records=$(grep -c . "$HERE/plants/$arm.records" || true) judge_seconds=$(($(date +%s) - started))"
-    if ! grep -q -x -F "ORACLE_PLANT reached $arm" "$OUT/$arm.log"; then
-      echo "ARM $arm UNREACHED log=$OUT/$arm.log"
-      echo "$arm=MISSED"
-      verdicts="$verdicts $arm=MISSED"
-    elif encoding_arm "$arm"; then
-      held "$arm"
-      echo "$arm=$held"
-      verdicts="$verdicts $arm=$held"
-    elif caught "$arm" "$OUT/$arm.log" "$OUT/$arm"; then
-      echo "$arm=CAUGHT"
-      verdicts="$verdicts $arm=CAUGHT"
-    else
-      echo "$arm=MISSED"
-      verdicts="$verdicts $arm=MISSED"
-    fi
+    switched_batch="$switched_batch $arm"
     continue
   fi
+  judge_batch
+  reset_scratch
+  pin=$(pallas_pin)
+  pin_short=$(echo "$pin" | cut -c1-7)
+  dolos_rev=$(git -C "$ROOT/$SCRATCH" rev-parse --short HEAD)
   locked=--locked
   if pallas_arm "$arm"; then
     locked=
@@ -290,12 +335,16 @@ for arm in $ARMS; do
     fi
     continue
   fi
-  if ! built=$(build_judge "$OUT/$arm.build" $locked); then
+  joint=
+  if [ "$arm" = control ]; then
+    joint=$(joint_packages $CRATE_ARMS)
+  fi
+  if ! built=$(build_judge "$OUT/$arm.build" $joint $locked); then
     echo "ARM $arm BUILD_REFUSED $built"
     verdicts="$verdicts $arm=MISSED"
     continue
   fi
-  judge=$(executable "$OUT/$arm.build")
+  judge=$(executable "$OUT/$arm.build" dolos)
   deselect= head_counts=
   case $arm in
     head) test=$TEST records= ;;
@@ -315,8 +364,10 @@ for arm in $ARMS; do
     sh "$IN_IMAGE" "$SCRATCH" "$judge" "$test" --exact --ignored --nocapture >"$OUT/$arm.log" 2>&1 || true
   echo "ARM $arm judge_seconds=$(($(date +%s) - started))"
   if [ "$arm" = control ]; then
-    for a in $PLANTED_ARMS; do
-      if crate_test "$a" >/dev/null; then
+    for a in $CRATE_ARMS; do
+      if joint_crate_test "$a"; then
+        run_crate_test "$a" "$OUT/control-$a.log" "$(executable "$OUT/$arm.build" "$(crate_test_target "$a")")"
+      else
         run_crate_test "$a" "$OUT/control-$a.log"
       fi
     done
@@ -347,6 +398,7 @@ for arm in $ARMS; do
     verdicts="$verdicts $arm=MISSED"
   fi
 done
+judge_batch
 reset_scratch
 
 echo "ARMS$verdicts logs=$OUT"
