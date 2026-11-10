@@ -51,6 +51,53 @@ impl fmt::Display for RecordId {
     }
 }
 
+/// A corpus of transactions a chain recorded, every corpus but the mutants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RecordedKind {
+    Ic,
+    Supp,
+    P1,
+}
+
+impl From<RecordedKind> for CorpusKind {
+    fn from(kind: RecordedKind) -> Self {
+        match kind {
+            RecordedKind::Ic => CorpusKind::Ic,
+            RecordedKind::Supp => CorpusKind::Supp,
+            RecordedKind::P1 => CorpusKind::P1,
+        }
+    }
+}
+
+impl TryFrom<CorpusKind> for RecordedKind {
+    type Error = CorpusKind;
+
+    fn try_from(kind: CorpusKind) -> Result<Self, CorpusKind> {
+        match kind {
+            CorpusKind::Ic => Ok(RecordedKind::Ic),
+            CorpusKind::Supp => Ok(RecordedKind::Supp),
+            CorpusKind::P1 => Ok(RecordedKind::P1),
+            CorpusKind::Mut => Err(kind),
+        }
+    }
+}
+
+/// One record of a recorded corpus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RecordedId {
+    pub corpus: RecordedKind,
+    pub n: u32,
+}
+
+impl From<RecordedId> for RecordId {
+    fn from(id: RecordedId) -> Self {
+        RecordId {
+            corpus: id.corpus.into(),
+            n: id.n,
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for RecordId {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         String::deserialize(d)?.parse().map_err(D::Error::custom)

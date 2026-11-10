@@ -19,6 +19,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     convert::Infallible,
     fmt,
+    str::FromStr,
     sync::atomic::{AtomicBool, Ordering},
     thread,
 };
@@ -49,7 +50,10 @@ use ledger_oracle_judge::{
     manifest::{self, Candidates, Declared, Feature, Known, KnownList, Locus},
     mutation::{Mutation, MutationTally},
     parallel::in_parallel,
-    record::{CorpusKind, LedgerOutcome, PParams, Phase2, Record, RecordId, UtxoEntry},
+    record::{
+        CorpusKind, LedgerOutcome, PParams, Phase2, Record, RecordId, RecordedId, RecordedKind,
+        UtxoEntry,
+    },
     row::Row,
     rules::{self, RuleTally, Rules},
     run::{InputOrigin, KeptRun},
@@ -2232,15 +2236,11 @@ fn coverage_members(
 #[ignore = "judges the coverage of the head's counts in ORACLE_HEAD_COUNTS without the records ORACLE_DESELECT names, run in release"]
 async fn ledger_oracle_without() {
     let list = std::env::var("ORACLE_DESELECT").unwrap_or_default();
-    let named = match list.trim() {
+    let named: BTreeSet<RecordedId> = match list.trim() {
         "" => BTreeSet::new(),
         list => named_records(list),
     };
-    let mutant = named.iter().find(|id| id.corpus == CorpusKind::Mut);
-    assert!(
-        mutant.is_none(),
-        "{mutant:?} is a mutant, which the mutation judge counts"
-    );
+    let named: BTreeSet<RecordId> = named.into_iter().map(RecordId::from).collect();
     let path =
         std::env::var("ORACLE_HEAD_COUNTS").unwrap_or_else(|e| panic!("ORACLE_HEAD_COUNTS {e}"));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path} {e}"));
@@ -2249,8 +2249,13 @@ async fn ledger_oracle_without() {
     let manifests = Manifests::committed();
     let mut part = judgement::Tally::default();
     let mut rest = judgement::Tally::default();
-    for kind in [CorpusKind::Ic, CorpusKind::Supp, CorpusKind::P1] {
-        let corpus = load(kind).select(&named).unwrap_or_else(|e| panic!("{e}"));
+    let recorded = CorpusKind::ALL
+        .into_iter()
+        .filter_map(|kind| RecordedKind::try_from(kind).ok());
+    for kind in recorded {
+        let corpus = load(kind.into())
+            .select(&named)
+            .unwrap_or_else(|e| panic!("{e}"));
         let kept = corpus.without(&named).unwrap_or_else(|e| panic!("{e}"));
         println!("{corpus}");
         println!("{kept}");
@@ -2303,9 +2308,9 @@ fn held_records(corpus: &Corpus) -> BTreeSet<RecordId> {
 }
 
 /// The records a comma separated list names.
-fn named_records(list: &str) -> BTreeSet<RecordId> {
+fn named_records<T: FromStr<Err = String> + Ord>(list: &str) -> BTreeSet<T> {
     let names = list.split(',').map(str::trim).filter(|s| !s.is_empty());
-    let named: BTreeSet<RecordId> = names
+    let named: BTreeSet<T> = names
         .map(|s| s.parse().unwrap_or_else(|e| panic!("{e}")))
         .collect();
     assert!(!named.is_empty(), "the list names no record: {list:?}");
@@ -2426,7 +2431,7 @@ fn a_list_names_each_record_once() {
 #[test]
 #[should_panic(expected = "the list names no record")]
 fn an_empty_list_is_refused() {
-    named_records(" , ");
+    named_records::<RecordId>(" , ");
 }
 
 #[test]

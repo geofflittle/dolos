@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use crate::{
     judgement::{Axis, EntryPoint, Judge, UnknownName},
-    record::{CorpusKind, RecordId},
+    record::{CorpusKind, RecordId, RecordedId, RecordedKind},
     row::{coverage, Check, Row},
 };
 
@@ -148,6 +148,17 @@ impl FromStr for RecordId {
             .ok_or(format!("unknown corpus {corpus}"))?;
         let n = n.parse().map_err(|_| format!("bad record number {n}"))?;
         Ok(RecordId { corpus, n })
+    }
+}
+
+impl FromStr for RecordedId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let id: RecordId = s.parse()?;
+        let corpus = RecordedKind::try_from(id.corpus)
+            .map_err(|_| format!("{id} is a mutant, which the mutation judge counts"))?;
+        Ok(RecordedId { corpus, n: id.n })
     }
 }
 
@@ -401,6 +412,20 @@ mod tests {
                 }]),
             ]
         );
+    }
+
+    #[test]
+    fn a_recorded_id_names_a_recorded_record_and_no_mutant() {
+        let parsed = |s: &str| s.parse::<RecordedId>().map(RecordId::from);
+        let record = |corpus, n| Ok(RecordId { corpus, n });
+        assert_eq!(parsed("ic#3"), record(CorpusKind::Ic, 3));
+        assert_eq!(parsed("supp#4"), record(CorpusKind::Supp, 4));
+        assert_eq!(parsed("p1#5"), record(CorpusKind::P1, 5));
+        assert_eq!(
+            parsed("mut#1"),
+            Err("mut#1 is a mutant, which the mutation judge counts".to_string())
+        );
+        assert_eq!(parsed("zz#1"), Err("unknown corpus zz".to_string()));
     }
 
     #[test]
