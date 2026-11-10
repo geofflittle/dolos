@@ -25,9 +25,9 @@ pub struct BlockRefData {
 
 /// Fetch a `BlockRefData` for every UTxO in `txo_refs`, deduplicating by
 /// source transaction and reading each block that holds one once. The
-/// returned map is keyed by `TxHash`; entries are
-/// absent for transactions that are not in the archive (e.g. genesis UTxOs,
-/// custom UTxOs, or transactions ahead of the current indexer cursor).
+/// returned map is keyed by `TxHash`, with no entry for transactions that are
+/// not in the archive (e.g. genesis UTxOs, custom UTxOs, or transactions
+/// ahead of the current indexer cursor).
 ///
 /// Storage errors surface as `Status::internal`. Block-decode errors for
 /// archive entries that did exist degrade to a `debug!` log and a missing map
