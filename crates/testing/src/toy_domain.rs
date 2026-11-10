@@ -34,12 +34,14 @@ pub fn seed_random_memory_store(utxo_generator: impl UtxoGenerator) -> impl Stat
 #[derive(Clone)]
 pub struct Mempool {
     pending: Arc<RwLock<Vec<MempoolTx>>>,
+    submit: Arc<std::sync::Mutex<()>>,
 }
 
 impl Default for Mempool {
     fn default() -> Self {
         Self {
             pending: Arc::new(RwLock::new(Vec::new())),
+            submit: Arc::default(),
         }
     }
 }
@@ -135,6 +137,14 @@ impl dolos_core::MempoolStore for Mempool {
             items: vec![],
             next_cursor: None,
         }
+    }
+
+    fn read_unconfirmed<R>(&self, f: impl FnOnce(&dolos_core::UnconfirmedIndex) -> R) -> R {
+        f(&dolos_core::UnconfirmedIndex::of(&self.peek_pending()))
+    }
+
+    fn submit_lock(&self) -> &std::sync::Mutex<()> {
+        &self.submit
     }
 
     fn subscribe(&self) -> Self::Stream {
@@ -373,9 +383,7 @@ impl<B: ToyStores> ToyDomain<B> {
             stores,
             wal: dolos_redb3::wal::RedbWalStore::memory().unwrap(),
             chain: Arc::new(RwLock::new(chain)),
-            mempool: Mempool {
-                pending: Arc::new(RwLock::new(Vec::new())),
-            },
+            mempool: Mempool::default(),
             storage_config: storage_config.unwrap_or_default(),
             sync_config: SyncConfig::default(),
             genesis: genesis.clone(),

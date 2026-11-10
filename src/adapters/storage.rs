@@ -1423,6 +1423,20 @@ impl MempoolStore for MempoolBackend {
         }
     }
 
+    fn read_unconfirmed<R>(&self, f: impl FnOnce(&dolos_core::UnconfirmedIndex) -> R) -> R {
+        match self {
+            Self::Ephemeral(s) => s.read_unconfirmed(f),
+            Self::Redb(s) => s.read_unconfirmed(f),
+        }
+    }
+
+    fn submit_lock(&self) -> &std::sync::Mutex<()> {
+        match self {
+            Self::Ephemeral(s) => s.submit_lock(),
+            Self::Redb(s) => s.submit_lock(),
+        }
+    }
+
     fn subscribe(&self) -> Self::Stream {
         match self {
             Self::Ephemeral(s) => MempoolStreamBackend::Ephemeral(s.subscribe()),

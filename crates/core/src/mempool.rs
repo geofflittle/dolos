@@ -7,7 +7,7 @@ use futures_core::Stream;
 use std::convert::Infallible;
 use std::pin::Pin;
 use std::sync::OnceLock;
-use tracing::{debug, warn};
+use tracing::warn;
 
 #[derive(Debug)]
 pub struct MempoolTx {
@@ -319,6 +319,13 @@ pub trait MempoolStore: Clone + Send + Sync + 'static {
     /// [`MempoolPage`] with the next cursor (`None` if exhausted).
     fn dump_finalized(&self, cursor: u64, limit: usize) -> MempoolPage;
 
+    /// Runs `f` over the index of the transactions pending or inflight.
+    fn read_unconfirmed<R>(&self, f: impl FnOnce(&UnconfirmedIndex) -> R) -> R;
+
+    /// The lock that orders the validation and admission of submissions to this
+    /// mempool.
+    fn submit_lock(&self) -> &std::sync::Mutex<()>;
+
     /// Returns a stream of lifecycle events.
     ///
     /// Implementors should emit an event for every stage transition.
@@ -389,73 +396,117 @@ impl<D: Domain> MempoolAwareUtxoStore<'_, D> {
             Pending::Only(txs) => txs.clone(),
         }
     }
-
-    fn unconfirmed(&self) -> Vec<MempoolTx> {
-        let mut all_txs = self.pending();
-        all_txs.extend(self.mempool.peek_inflight());
-        all_txs
-    }
 }
 
-fn scan_mempool_utxos<F>(predicate: F, all_txs: &[MempoolTx]) -> HashSet<TxoRef>
-where
-    F: Fn(&MultiEraOutput<'_>) -> bool,
-{
-    let mut refs = HashSet::new();
+/// The outputs a set of mempool transactions make and the inputs they spend,
+/// each counted once per transaction.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct UnconfirmedIndex {
+    produced: HashMap<TxoRef, (usize, Arc<EraCbor>)>,
+    consumed: HashMap<TxoRef, usize>,
+}
 
-    for mtx in all_txs {
-        let Some(effects) = mtx.effects() else {
-            continue;
-        };
-
-        for (txoref, era_cbor) in &effects.produced {
-            let Ok(inflight) = MultiEraOutput::try_from(era_cbor) else {
-                continue;
-            };
-            if predicate(&inflight) {
-                debug!(txoref = %txoref, "mempool utxo matches predicate");
-                refs.insert(txoref.clone());
-            }
+impl UnconfirmedIndex {
+    /// The index of the given transactions.
+    pub fn of<'a>(txs: impl IntoIterator<Item = &'a MempoolTx>) -> Self {
+        let mut index = Self::default();
+        for tx in txs {
+            index.insert(tx);
         }
+        index
     }
 
-    refs
-}
-
-fn exclude_inflight_stxis(refs: &mut HashSet<TxoRef>, all_txs: &[MempoolTx]) {
-    debug!("excluding inflight stxis");
-
-    for mtx in all_txs {
-        let Some(effects) = mtx.effects() else {
-            warn!("invalid inflight tx");
-            continue;
+    /// Counts the outputs `tx` makes and the inputs it spends.
+    pub fn insert(&mut self, tx: &MempoolTx) {
+        let Some(effects) = tx.effects() else {
+            warn!(tx.hash = %tx.hash(), "mempool tx does not decode");
+            return;
         };
-
+        for (txoref, era_cbor) in &effects.produced {
+            self.produced
+                .entry(txoref.clone())
+                .or_insert_with(|| (0, Arc::new(era_cbor.clone())))
+                .0 += 1;
+        }
         for txoref in &effects.consumed {
-            if refs.remove(txoref) {
-                debug!(txoref = %txoref, "excluded stxi");
+            *self.consumed.entry(txoref.clone()).or_default() += 1;
+        }
+    }
+
+    /// Uncounts the outputs `tx` makes and the inputs it spends.
+    pub fn remove(&mut self, tx: &MempoolTx) {
+        let Some(effects) = tx.effects() else {
+            return;
+        };
+        for (txoref, _) in &effects.produced {
+            if let std::collections::hash_map::Entry::Occupied(mut entry) =
+                self.produced.entry(txoref.clone())
+            {
+                entry.get_mut().0 -= 1;
+                if entry.get().0 == 0 {
+                    entry.remove();
+                }
             }
         }
+        for txoref in &effects.consumed {
+            if let std::collections::hash_map::Entry::Occupied(mut entry) =
+                self.consumed.entry(txoref.clone())
+            {
+                *entry.get_mut() -= 1;
+                if *entry.get() == 0 {
+                    entry.remove();
+                }
+            }
+        }
+    }
+
+    /// Removes from `refs` each input a transaction of the index spends.
+    pub fn exclude_consumed(&self, refs: &mut HashSet<TxoRef>) {
+        refs.retain(|txoref| !self.consumed.contains_key(txoref));
+    }
+
+    /// Removes from `refs` and returns each output a transaction of the index
+    /// makes.
+    pub fn take_produced(&self, refs: &mut HashSet<TxoRef>) -> UtxoMap {
+        let mut taken = HashMap::new();
+        refs.retain(|txoref| match self.produced.get(txoref) {
+            Some((_, era_cbor)) => {
+                taken.insert(txoref.clone(), era_cbor.clone());
+                false
+            }
+            None => true,
+        });
+        taken
+    }
+
+    /// The outputs the transactions of the index make that `predicate` admits.
+    pub fn scan_produced(
+        &self,
+        predicate: impl Fn(&MultiEraOutput<'_>) -> bool,
+    ) -> HashSet<TxoRef> {
+        self.produced
+            .iter()
+            .filter(|(_, (_, era_cbor))| {
+                MultiEraOutput::try_from(&**era_cbor).is_ok_and(|output| predicate(&output))
+            })
+            .map(|(txoref, _)| txoref.clone())
+            .collect()
     }
 }
 
-fn select_mempool_utxos(refs: &mut HashSet<TxoRef>, all_txs: &[MempoolTx]) -> UtxoMap {
-    let mut map = HashMap::new();
-
-    for mtx in all_txs {
-        let Some(effects) = mtx.effects() else {
-            continue;
-        };
-
-        for (txoref, era_cbor) in &effects.produced {
-            if refs.remove(txoref) {
-                debug!(txoref = %txoref, "selected utxo available inmempool tx");
-                map.insert(txoref.clone(), Arc::new(era_cbor.clone()));
-            }
-        }
+/// Runs `f` over the index of the transactions a view counting `pending` treats
+/// as unconfirmed.
+fn with_unconfirmed<M: MempoolStore, R>(
+    mempool: &M,
+    pending: &Pending,
+    f: impl FnOnce(&UnconfirmedIndex) -> R,
+) -> R {
+    match pending {
+        Pending::Queue => mempool.read_unconfirmed(f),
+        Pending::Only(txs) => f(&UnconfirmedIndex::of(
+            txs.iter().chain(&mempool.peek_inflight()),
+        )),
     }
-
-    map
 }
 
 impl<'a, D: Domain> MempoolAwareUtxoStore<'a, D> {
@@ -502,25 +553,21 @@ impl<'a, D: Domain> MempoolAwareUtxoStore<'a, D> {
     where
         F: Fn(&MultiEraOutput<'_>) -> bool,
     {
-        let unconfirmed = self.unconfirmed();
-
-        let from_mempool = scan_mempool_utxos(predicate, &unconfirmed);
-
         let mut utxos = self.inner.utxos_by_tag(dimension, key)?;
 
-        utxos.extend(from_mempool);
-
-        exclude_inflight_stxis(&mut utxos, &unconfirmed);
+        with_unconfirmed(self.mempool, &self.pending, |index| {
+            utxos.extend(index.scan_produced(predicate));
+            index.exclude_consumed(&mut utxos);
+        });
 
         Ok(utxos)
     }
 
     pub fn get_utxos(&self, mut refs: HashSet<TxoRef>) -> Result<UtxoMap, StateError> {
-        let unconfirmed = self.unconfirmed();
-
-        exclude_inflight_stxis(&mut refs, &unconfirmed);
-
-        let from_mempool = select_mempool_utxos(&mut refs, &unconfirmed);
+        let from_mempool = with_unconfirmed(self.mempool, &self.pending, |index| {
+            index.exclude_consumed(&mut refs);
+            index.take_produced(&mut refs)
+        });
 
         let mut utxos = self.inner.get_utxos(Vec::from_iter(refs))?;
 
@@ -617,6 +664,15 @@ mod tests {
                 items: vec![],
                 next_cursor: None,
             }
+        }
+
+        fn read_unconfirmed<R>(&self, f: impl FnOnce(&UnconfirmedIndex) -> R) -> R {
+            f(&UnconfirmedIndex::default())
+        }
+
+        fn submit_lock(&self) -> &std::sync::Mutex<()> {
+            static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            &LOCK
         }
 
         fn subscribe(&self) -> Self::Stream {
@@ -878,7 +934,7 @@ mod tests {
         let past = past_parent_outputs(&mtx);
         let mut refs = HashSet::from([past.clone()]);
 
-        let selected = select_mempool_utxos(&mut refs, &[mtx]);
+        let selected = UnconfirmedIndex::of([&mtx]).take_produced(&mut refs);
 
         assert!(selected.is_empty());
         assert_eq!(refs, HashSet::from([past]));
@@ -889,7 +945,7 @@ mod tests {
         let mtx = pending_with_sub();
         let mut refs = HashSet::from([txo(SUB, 0)]);
 
-        let selected = select_mempool_utxos(&mut refs, &[mtx]);
+        let selected = UnconfirmedIndex::of([&mtx]).take_produced(&mut refs);
 
         assert_eq!(
             selected.keys().cloned().collect::<HashSet<_>>(),
@@ -903,7 +959,7 @@ mod tests {
         let mtx = pending_with_sub();
         let mut refs = HashSet::from([txo(PARENT, 0)]);
 
-        exclude_inflight_stxis(&mut refs, &[mtx]);
+        UnconfirmedIndex::of([&mtx]).exclude_consumed(&mut refs);
 
         assert_eq!(refs, HashSet::from([txo(PARENT, 0)]));
     }
@@ -913,7 +969,7 @@ mod tests {
         let mtx = pending_with_sub();
         let mut refs = HashSet::from([txo(SUB_SPENDS, 0)]);
 
-        exclude_inflight_stxis(&mut refs, &[mtx]);
+        UnconfirmedIndex::of([&mtx]).exclude_consumed(&mut refs);
 
         assert!(refs.is_empty());
     }
@@ -923,7 +979,7 @@ mod tests {
         let mtx = pending_with_sub();
         let past = past_parent_outputs(&mtx);
 
-        let found = scan_mempool_utxos(|_| true, &[mtx]);
+        let found = UnconfirmedIndex::of([&mtx]).scan_produced(|_| true);
 
         assert!(found.contains(&txo(SUB, 0)));
         assert!(!found.contains(&past));
@@ -939,8 +995,9 @@ mod tests {
         let mtx = MempoolTx::new(PARENT.parse().unwrap(), undecodable(), vec![]);
         let mut refs = HashSet::from([txo(SUB, 0), txo(SUB_SPENDS, 0)]);
 
-        exclude_inflight_stxis(&mut refs, std::slice::from_ref(&mtx));
-        let selected = select_mempool_utxos(&mut refs, &[mtx]);
+        let index = UnconfirmedIndex::of([&mtx]);
+        index.exclude_consumed(&mut refs);
+        let selected = index.take_produced(&mut refs);
 
         assert!(selected.is_empty());
         assert_eq!(refs, HashSet::from([txo(SUB, 0), txo(SUB_SPENDS, 0)]));
@@ -950,19 +1007,172 @@ mod tests {
     fn a_read_after_the_first_decodes_no_payload() {
         let mut stored = pending_with_sub();
         let mut first = HashSet::from([txo(SUB, 0)]);
-        select_mempool_utxos(&mut first, &[stored.clone()]);
+        UnconfirmedIndex::of([&stored.clone()]).take_produced(&mut first);
         // These bytes do not decode, so a read that still finds the output
         // answers from the effects of the first read.
         stored.payload = undecodable();
         let mut refs = HashSet::from([txo(SUB, 0), txo(SUB_SPENDS, 0)]);
 
-        exclude_inflight_stxis(&mut refs, &[stored.clone()]);
-        let selected = select_mempool_utxos(&mut refs, &[stored]);
+        let index = UnconfirmedIndex::of([&stored]);
+        index.exclude_consumed(&mut refs);
+        let selected = index.take_produced(&mut refs);
 
         assert_eq!(
             selected.keys().cloned().collect::<HashSet<_>>(),
             HashSet::from([txo(SUB, 0)])
         );
         assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn removing_a_transaction_uncounts_only_its_own_effects() {
+        let mtx = pending_with_sub();
+        let mut index = UnconfirmedIndex::of([&mtx, &mtx]);
+
+        index.remove(&mtx);
+
+        assert_eq!(index, UnconfirmedIndex::of([&mtx]));
+        index.remove(&mtx);
+        assert_eq!(index, UnconfirmedIndex::default());
+    }
+
+    /// A mempool that counts the transactions its peeks hand out.
+    #[derive(Clone, Default)]
+    struct Counting {
+        inner: crate::builtin::EphemeralMempool,
+        walked: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Counting {
+        fn walked(&self) -> usize {
+            self.walked.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        fn count(&self, txs: Vec<MempoolTx>) -> Vec<MempoolTx> {
+            self.walked
+                .fetch_add(txs.len(), std::sync::atomic::Ordering::SeqCst);
+            txs
+        }
+    }
+
+    impl MempoolStore for Counting {
+        type Stream = crate::builtin::EphemeralMempoolStream;
+
+        fn receive(&self, tx: MempoolTx) -> Result<(), MempoolError> {
+            self.inner.receive(tx)
+        }
+
+        fn has_pending(&self) -> bool {
+            self.inner.has_pending()
+        }
+
+        fn peek_pending(&self) -> Vec<MempoolTx> {
+            self.count(self.inner.peek_pending())
+        }
+
+        fn mark_inflight(&self, hashes: &[TxHash]) -> Result<(), MempoolError> {
+            self.inner.mark_inflight(hashes)
+        }
+
+        fn mark_acknowledged(&self, hashes: &[TxHash]) -> Result<(), MempoolError> {
+            self.inner.mark_acknowledged(hashes)
+        }
+
+        fn find_inflight(&self, tx_hash: &TxHash) -> Option<MempoolTx> {
+            self.inner.find_inflight(tx_hash)
+        }
+
+        fn peek_inflight(&self) -> Vec<MempoolTx> {
+            self.count(self.inner.peek_inflight())
+        }
+
+        fn confirm(
+            &self,
+            point: &ChainPoint,
+            seen_txs: &[TxHash],
+            unseen_txs: &[TxHash],
+            finalize_threshold: u32,
+            drop_threshold: u32,
+        ) -> Result<(), MempoolError> {
+            self.inner.confirm(
+                point,
+                seen_txs,
+                unseen_txs,
+                finalize_threshold,
+                drop_threshold,
+            )
+        }
+
+        fn check_status(&self, tx_hash: &TxHash) -> TxStatus {
+            self.inner.check_status(tx_hash)
+        }
+
+        fn drop_pending(&self, hashes: &[TxHash]) -> Result<(), MempoolError> {
+            self.inner.drop_pending(hashes)
+        }
+
+        fn dump_finalized(&self, cursor: u64, limit: usize) -> MempoolPage {
+            self.inner.dump_finalized(cursor, limit)
+        }
+
+        fn read_unconfirmed<R>(&self, f: impl FnOnce(&UnconfirmedIndex) -> R) -> R {
+            self.inner.read_unconfirmed(f)
+        }
+
+        fn submit_lock(&self) -> &std::sync::Mutex<()> {
+            self.inner.submit_lock()
+        }
+
+        fn subscribe(&self) -> Self::Stream {
+            self.inner.subscribe()
+        }
+    }
+
+    /// A mempool holding the transaction that lists a sub transaction, one in
+    /// flight, and `filler` more that decode as no transaction.
+    fn crowded(filler: u8) -> Counting {
+        let store = Counting::default();
+        store.receive(pending_with_sub()).unwrap();
+        let flying = MempoolTx::new(test_hash(0), undecodable(), vec![]);
+        store.receive(flying.clone()).unwrap();
+        store.mark_inflight(&[flying.hash()]).unwrap();
+        for n in 1..=filler {
+            store
+                .receive(MempoolTx::new(test_hash(n), undecodable(), vec![]))
+                .unwrap();
+        }
+        store
+    }
+
+    #[test]
+    fn a_view_of_given_pending_transactions_ignores_the_queue() {
+        let store = crowded(3);
+        let mut refs = HashSet::from([txo(SUB, 0), txo(SUB_SPENDS, 0)]);
+
+        let selected = with_unconfirmed(&store, &Pending::Only(Vec::new()), |index| {
+            index.exclude_consumed(&mut refs);
+            index.take_produced(&mut refs)
+        });
+
+        assert!(selected.is_empty());
+        assert_eq!(refs, HashSet::from([txo(SUB, 0), txo(SUB_SPENDS, 0)]));
+    }
+
+    #[test]
+    fn a_lookup_over_the_queue_walks_no_transaction() {
+        let store = crowded(40);
+        let mut refs = HashSet::from([txo(SUB, 0), txo(SUB_SPENDS, 0)]);
+
+        let selected = with_unconfirmed(&store, &Pending::Queue, |index| {
+            index.exclude_consumed(&mut refs);
+            index.take_produced(&mut refs)
+        });
+
+        assert_eq!(
+            selected.keys().cloned().collect::<HashSet<_>>(),
+            HashSet::from([txo(SUB, 0)])
+        );
+        assert!(refs.is_empty());
+        assert_eq!(store.walked(), 0, "transactions walked for one lookup");
     }
 }

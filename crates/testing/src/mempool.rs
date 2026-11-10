@@ -81,6 +81,15 @@ impl MempoolStore for MockMempoolStore {
         }
     }
 
+    fn read_unconfirmed<R>(&self, f: impl FnOnce(&dolos_core::UnconfirmedIndex) -> R) -> R {
+        f(&dolos_core::UnconfirmedIndex::default())
+    }
+
+    fn submit_lock(&self) -> &std::sync::Mutex<()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        &LOCK
+    }
+
     fn subscribe(&self) -> Self::Stream {
         ScriptedStream::empty()
     }
