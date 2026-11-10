@@ -235,6 +235,17 @@ supplement = describe "SUPPLEMENT" $ do
       U.scriptHex (U.lam (U.check (U.builtin PLC.LessThanInteger [U.int 1, squared 18 (U.int 2)])))
   tableCells
   builtinCalls
+  scriptsGivenTwice
+
+-- | Spends whose witness set gives the native script or the V3 script they spend at twice.
+scriptsGivenTwice :: SpecWith (ImpInit (LedgerSpec E))
+scriptsGivenTwice = describe "scripts given twice" $ do
+  it "a native script given twice in its set" $ do
+    script <- impAddNativeScript (RequireAllOf [])
+    locked <- sendCoinTo (Addr Testnet (ScriptHashObj script) StakeRefNull) (Coin 5_000_000)
+    submitEdited noEdit {editWits = overKey 1 dupFirst} (mkBasicTx (mkBasicTxBody & inputsTxBodyL .~ [locked]))
+  it "a V3 script given twice in its set" $
+    spendWithV3Using (submitEdited noEdit {editWits = overKey 7 dupFirst}) "450102002499"
 
 -- | Spends at a script of each language that calls one builtin, under the cost models the chain registered, at a V3 script that calls it on an argument of the wrong type, and at a V4 script that calls it under the default cost models.
 builtinCalls :: SpecWith (ImpInit (LedgerSpec E))

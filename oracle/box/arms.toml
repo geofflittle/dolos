@@ -129,6 +129,7 @@ fixes = [
   { commit = "01461888", arm = "sub-valid-always" },
   { commit = "73cef926", arm = "proposal-keys-dropped" },
   { commit = "c13da1a9", arm = "integer-bound-restored" },
+  { commit = "f5554bf5", arm = "duplicate-scripts-accepted" },
 ]
 
 [catches]
@@ -235,3 +236,4 @@ unsupported-untyped = ["test=validate::evaluation_tests::an_unsupported_evaluati
 integer-bound-restored = ["judge=eval-oracle entry=estimate_tx:pallas level:top ledger:ran dolos:failed"]
 ripemd-160-refused = ["judge=eval-oracle entry=estimate_tx:pallas level:top ledger:ran dolos:refused refusal:V3_builtin_outside_audited_protocol-12_subset !listed:*"]
 coverage-deselect = ["judge=coverage leaf:ConflictingMetadataHash"]
+duplicate-scripts-accepted = ["judge=validation failure:disagree ledger:DecoderErrorDeserialiseFailure dolos:accepted"]

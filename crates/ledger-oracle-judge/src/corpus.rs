@@ -18,13 +18,13 @@ use crate::{
 pub const IC_SHA256: &str = "38eb868092373a3d10f9f0da913216115b5ce00459993b435768b2e6274575d6";
 
 /// The sha256 of the decompressed supplement corpus.
-pub const SUPP_SHA256: &str = "35b4b7df6a4a2f2723738f910679fe810796fa2b1cf66808352589bd0ebb21c7";
+pub const SUPP_SHA256: &str = "9b2c7e5715c7c633bd394c3b29aa76704f226d76bdee225d610bd9e893af4dd3";
 
 /// The sha256 of the decompressed phase one corpus.
 pub const P1_SHA256: &str = "861611cc08a7ff09d45e1bdfda556ab8c8a0bed534df8a16ed228a74481539a2";
 
 /// The sha256 of the decompressed mutant corpus.
-pub const MUT_SHA256: &str = "2ae44a4b86673ea2f170c111f4c611390237612709b25f5f1a47afa2f06187b7";
+pub const MUT_SHA256: &str = "c1bc44e941219581185bf6e2010ba4b83dad021e14d2050eda4566e84cf6e80c";
 
 const IC_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/ic.jsonl.gz");
 const SUPP_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/supp.jsonl.gz");
@@ -330,7 +330,7 @@ mod tests {
         );
         assert_eq!(
             load(CorpusKind::Supp).unwrap().to_string(),
-            "CORPUS supp sha=35b4b7df6a4a2f27 records=2192 runs=722 kept_records=2192"
+            "CORPUS supp sha=9b2c7e5715c7c633 records=2197 runs=724 kept_records=2197"
         );
         assert_eq!(
             load(CorpusKind::P1).unwrap().to_string(),
@@ -338,7 +338,7 @@ mod tests {
         );
         assert_eq!(
             load(CorpusKind::Mut).unwrap().to_string(),
-            "CORPUS mut sha=2ae44a4b86673ea2 records=1392 runs=1392 kept_records=1392"
+            "CORPUS mut sha=c1bc44e941219581 records=1392 runs=1392 kept_records=1392"
         );
     }
 
@@ -400,7 +400,7 @@ mod tests {
                 .count()
         };
         assert_eq!(undecoded(CorpusKind::Ic), 1);
-        assert_eq!(undecoded(CorpusKind::Supp), 43);
+        assert_eq!(undecoded(CorpusKind::Supp), 45);
     }
 
     #[test]
@@ -620,7 +620,7 @@ mod tests {
         );
         assert_eq!(
             input_totals(CorpusKind::Supp),
-            [2856, 666, 15, 35, 38, 7, 38]
+            [2863, 667, 15, 35, 38, 7, 38]
         );
     }
 }

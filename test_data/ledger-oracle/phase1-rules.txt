@@ -105,6 +105,7 @@ refused[DijkstraMalformed("duplicate datums")] | leaves DecoderErrorDeserialiseF
 refused[DijkstraMalformed("duplicate guards")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k14,sub.k14
 refused[DijkstraMalformed("duplicate key witnesses")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w0,sub.w0
 refused[DijkstraMalformed("duplicate required top-level guards")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k24,sub.k24
+refused[DijkstraMalformed("duplicate scripts")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w1,top.w3,top.w6,top.w7,top.w8,sub.w1,sub.w3,sub.w6,sub.w7,sub.w8
 refused[DijkstraMalformed("duplicate withdrawal accounts")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k5,sub.k5
 refused[DijkstraMalformed("empty account balance intervals")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k26,sub.k26
 refused[DijkstraMalformed("empty direct deposits")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k25,sub.k25
