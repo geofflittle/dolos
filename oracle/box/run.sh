@@ -33,16 +33,21 @@ case ${1:-} in
   quick | done | ship | live | regen | value) ;;
   *) echo "usage: run.sh quick|done|ship|live|regen|value" ; exit 2 ;;
 esac
+if [ -z "${JUDGED:-}" ]; then
+  REV=$(full_commit REV "$REV")
+  if [ -n "$BASE" ]; then
+    BASE=$(full_commit BASE "$BASE")
+  fi
+fi
 take_lock
 trap finish EXIT
 # The tier runs the scripts and plants of the commit it judges, from that
 # commit's oracle/box in $OUT/box.
 if [ -z "${JUDGED:-}" ]; then
-  JUDGED=$(git -C "$ROOT/dolos.git" rev-parse --verify "$REV^{commit}")
+  JUDGED=$REV
   mkdir -p "$OUT/box"
   git -C "$ROOT/dolos.git" archive "$JUDGED" oracle/box | tar -x -C "$OUT/box"
-  REV=$JUDGED
-  export JUDGED REV ROOT OUT RUN_LOCK
+  export JUDGED REV BASE ROOT OUT RUN_LOCK
   exec sh "$OUT/box/oracle/box/run.sh" "$@"
 fi
 export ROOT REV MIN_FREE_G CANDIDATE_NEED_G OUT RUN_LOCK

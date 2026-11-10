@@ -233,6 +233,14 @@ require_free() {
   fi
 }
 
+# Prints the full sha of the commit the ref $2 names in $ROOT/dolos.git, or exits 2 with a REFUSED line naming the variable $1 when it names none.
+full_commit() {
+  if ! git -C "$ROOT/dolos.git" rev-parse --verify --quiet "$2^{commit}"; then
+    echo "REFUSED $1=$2 names no commit in $ROOT/dolos.git" >&2
+    exit 2
+  fi
+}
+
 LOCK_POLL_SECONDS=${LOCK_POLL_SECONDS:-30}
 # The file of the box's one oracle run lock, since the candidate's name, its port and the build disk are the box's.
 RUN_LOCK=${RUN_LOCK:-/run/lock/dolos-oracle.lock}
