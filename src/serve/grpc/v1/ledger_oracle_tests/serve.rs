@@ -74,8 +74,8 @@ pub(super) struct ReadTxs<P> {
 fn unpanicked<T>(answers: Answers<T, String>) -> Option<Answers<T, Infallible>> {
     let unpanicked = answers
         .into_iter()
-        .map(|(hash, answer)| Some((hash, answer.unpanicked().ok()?)));
-    unpanicked.collect()
+        .filter_map(|(hash, answer)| Some((hash, answer.unpanicked().ok()?)));
+    Some(unpanicked.collect())
 }
 
 impl ReadTxs<String> {

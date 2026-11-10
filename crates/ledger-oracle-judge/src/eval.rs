@@ -230,7 +230,7 @@ impl fmt::Display for Layer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Layer::Pallas => f.write_str("pallas"),
-            Layer::Eval(version) => write!(f, "{version}"),
+            Layer::Eval(version) => write!(f, "eval:{version}"),
         }
     }
 }
