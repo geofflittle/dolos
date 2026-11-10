@@ -392,10 +392,10 @@ fn a_records_run_fails_a_state_tally_neither_its_corpora_nor_its_mutants_compare
     let uncompared = ["served_tx", "datum", "accounts", "as_output"];
     let out = records_run(judged_part(&["served_tx"]), mutant_part(&uncompared));
     let failing: Vec<String> = out.failing.iter().map(|v| v.to_string()).collect();
-    assert_eq!(
-        failing,
-        ["VERDICT judge=served-tx entry=fetch_block record=selection cells= outcome=disagree judged=0"]
-    );
+    let at = |version| {
+        format!("VERDICT judge=served-tx entry=read_tx:{version} record=selection cells= outcome=disagree judged=0")
+    };
+    assert_eq!(failing, [at("v1"), at("v1beta"), at("v1alpha")]);
 }
 
 #[test]
