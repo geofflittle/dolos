@@ -106,7 +106,7 @@ pub fn replace_part(
         let held = match (head.get(&cell.to_string()), reach) {
             (Some(held), _) => *held,
             (None, Reach::Excluded { .. }) => 0,
-            (None, Reach::Counted) => return Err(format!("{cell} head=none")),
+            (None, Reach::Counted) => 0,
         };
         let added = part.get(cell).copied().unwrap_or(0);
         let kept = rest.get(cell).copied().unwrap_or(0);
