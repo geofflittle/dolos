@@ -611,6 +611,42 @@ expect lock_old "$(cat "$K/old.seen")" "lock=held pid=$(cat "$K/run.lock")"
 # Must not fire: the entry run.sh prints no exit line of its own when it hands the run to the judged commit's run.sh.
 expect lock_old_exit "$(run_out "$K")" "exit=0"
 
+# Runs the entry run.sh on the build root $1, whose judged commit's run.sh records the REV and BASE it receives in $1/old.seen, with REV $2 and BASE $3.
+named_run() {
+  (
+    REV=$2 BASE=$3
+    export REV BASE
+    tier "$1" entry
+  )
+}
+lock_root named
+mkdir -p "$K/old/oracle/box"
+printf '%s\n' '#!/bin/sh' 'echo "rev=$REV base=$BASE" >"$ROOT/old.seen"' >"$K/old/oracle/box/run.sh"
+git -C "$K/old" init -q
+git -C "$K/old" add -A
+git -C "$K/old" -c user.name=t -c user.email=t@t commit -q -m old
+git clone -q --bare "$K/old" "$K/dolos.git"
+full=$(git -C "$K/dolos.git" rev-parse HEAD)
+short=$(echo "$full" | cut -c1-8)
+# Must not fire: a REV and a BASE given as full shas reach the judged commit's run.sh as given.
+named_run "$K" "$full" "$full"
+expect named_full "$(cat "$K/old.seen")" "rev=$full base=$full"
+# Must not fire: an empty BASE stays empty, so the judged run.sh reads the last passing run's commit.
+named_run "$K" "$full" ""
+expect named_empty "$(cat "$K/old.seen")" "rev=$full base="
+# Must fire: an abbreviated REV and BASE reach the judged commit's run.sh as full shas.
+named_run "$K" "$short" "$short"
+expect named_short "$(cat "$K/old.seen")" "rev=$full base=$full"
+# Must fire: a BASE or REV naming no commit is refused before the run waits for a lock another process holds.
+rm -f "$K/run.lock"
+hold_lock "$K/run.lock"
+named_run "$K" "$full" nothing
+expect named_base_refused "$(run_out "$K")" "REFUSED BASE=nothing names no commit in $K/dolos.git run-exit=2 exit=2"
+named_run "$K" nothing "$full"
+expect named_rev_refused "$(run_out "$K")" "REFUSED REV=nothing names no commit in $K/dolos.git run-exit=2 exit=2"
+touch "$K/run.lock.go"
+wait "$holder" || true
+
 # Must fire: breaks.sh and candidate.sh, each run alone, hold the lock when they read free space, candidate.sh with a config to copy.
 lock_root lock-breaks
 tier "$K" judged breaks.sh
