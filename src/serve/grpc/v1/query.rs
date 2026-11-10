@@ -3,7 +3,7 @@ use itertools::Itertools as _;
 use pallas::interop::utxorpc::v1::spec::query::any_utxo_pattern::UtxoPattern;
 use pallas::interop::utxorpc::v1::{self as interop, spec as u5c};
 use pallas::interop::utxorpc::LedgerContext;
-use pallas::ledger::traverse::{MultiEraBlock, MultiEraOutput};
+use pallas::ledger::traverse::{MultiEraBlock, MultiEraOutput, MultiEraTx};
 use std::collections::HashSet;
 use tonic::{Request, Response, Status};
 use tracing::{info, warn};
@@ -752,6 +752,21 @@ fn map_cardano_genesis(genesis: &Genesis) -> Result<u5c::cardano::Genesis, Statu
     })
 }
 
+/// The hash of each transaction of `txs` in the order the ledger applies them,
+/// with the index of the top level transaction that lists it.
+fn applied_hashes(
+    txs: &[MultiEraTx<'_>],
+) -> Vec<(dolos_core::TxOrder, pallas::crypto::hash::Hash<32>)> {
+    let mut applied = Vec::new();
+    for (index, tx) in txs.iter().enumerate() {
+        let Ok(()) = dolos_core::for_each_applied_tx(tx, |tx| {
+            applied.push((index, tx.hash()));
+            Ok::<_, std::convert::Infallible>(())
+        });
+    }
+    applied
+}
+
 fn last_including<H: AsRef<[u8]>>(
     applied: impl DoubleEndedIterator<Item = (dolos_core::TxOrder, H)>,
     hash: &[u8],
@@ -1085,8 +1100,8 @@ where
         let tx_hash = message.hash;
 
         let query = dolos_core::AsyncQueryFacade::new(self.domain.clone());
-        let (block_bytes, _) = query
-            .block_by_tx_hash(tx_hash.to_vec())
+        let block_bytes = query
+            .block_body_by_tx_hash(tx_hash.to_vec())
             .await
             .map_err(|e| Status::internal(e.to_string()))?
             .ok_or_else(|| Status::not_found("tx hash not found"))?;
@@ -1094,12 +1109,9 @@ where
         let block = MultiEraBlock::decode(&block_bytes)
             .map_err(|e| Status::internal(format!("failed to decode block: {e}")))?;
 
-        let applied = dolos_core::applied_txs(&block)
-            .into_iter()
-            .map(|(index, tx)| (index, tx.hash()));
-
-        let tx = last_including(applied, &tx_hash)
-            .and_then(|index| block.txs().into_iter().nth(index))
+        let txs = block.txs();
+        let tx = last_including(applied_hashes(&txs).into_iter(), &tx_hash)
+            .and_then(|index| txs.get(index))
             .ok_or_else(|| Status::not_found("tx hash not found"))?;
 
         let native_bytes = tx.encode().into();
@@ -1126,8 +1138,13 @@ where
                         .unwrap_or(0),
                 }),
                 chain: Some(u5c::query::any_chain_tx::Chain::Cardano(
-                    interop::Mapper::new(BlockContext::for_tx(self.domain.clone(), &block, &tx))
-                        .map_tx(&tx),
+                    interop::Mapper::new(BlockContext::for_tx(
+                        self.domain.clone(),
+                        &block,
+                        &txs,
+                        tx,
+                    ))
+                    .map_tx(tx),
                 )),
             }),
             ledger_tip: cursor,

@@ -1016,8 +1016,8 @@ where
         let tx_hash = message.hash;
 
         let query = dolos_core::AsyncQueryFacade::new(self.domain.clone());
-        let (block_bytes, _) = query
-            .block_by_tx_hash(tx_hash.to_vec())
+        let block_bytes = query
+            .block_body_by_tx_hash(tx_hash.to_vec())
             .await
             .map_err(|e| Status::internal(e.to_string()))?
             .ok_or_else(|| Status::not_found("tx hash not found"))?;
@@ -1025,7 +1025,8 @@ where
         let block = MultiEraBlock::decode(&block_bytes)
             .map_err(|e| Status::internal(format!("failed to decode block: {e}")))?;
 
-        let (_, tx) = dolos_core::tx_by_hash(&block, &tx_hash)
+        let txs = block.txs();
+        let (_, tx) = dolos_core::tx_in(&txs, &tx_hash)
             .ok_or_else(|| Status::not_found("tx hash not found"))?;
 
         let native_bytes = tx.encode().into();
@@ -1052,8 +1053,13 @@ where
                         .unwrap_or(0),
                 }),
                 chain: Some(u5c::query::any_chain_tx::Chain::Cardano(
-                    interop::Mapper::new(BlockContext::for_tx(self.domain.clone(), &block, &tx))
-                        .map_tx(&tx),
+                    interop::Mapper::new(BlockContext::for_tx(
+                        self.domain.clone(),
+                        &block,
+                        &txs,
+                        &tx,
+                    ))
+                    .map_tx(&tx),
                 )),
             }),
             ledger_tip: cursor,

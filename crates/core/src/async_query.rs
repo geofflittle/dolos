@@ -63,9 +63,19 @@ pub fn tx_by_hash<'b>(
     block: &'b MultiEraBlock<'_>,
     hash: &[u8],
 ) -> Option<(TxOrder, MultiEraTx<'b>)> {
-    applied_txs(block)
-        .into_iter()
-        .find(|(_, tx)| tx.hash().as_slice() == hash)
+    tx_in(&block.txs(), hash)
+}
+
+/// The transaction of `txs` whose hash is the one given, a sub transaction
+/// included, with the index of the top level transaction that holds it.
+pub fn tx_in<'b>(txs: &[MultiEraTx<'b>], hash: &[u8]) -> Option<(TxOrder, MultiEraTx<'b>)> {
+    txs.iter().enumerate().find_map(|(index, tx)| {
+        let found = for_each_applied_tx(tx, |tx| match tx.hash().as_slice() == hash {
+            true => Err(tx.clone()),
+            false => Ok(()),
+        });
+        found.err().map(|tx| (index, tx))
+    })
 }
 
 /// Maximum number of metadata entries, including misses, retained between
@@ -280,22 +290,25 @@ where
             .await
     }
 
+    /// The body of the block the index records for a transaction hash.
+    pub async fn block_body_by_tx_hash(
+        &self,
+        tx_hash: Vec<u8>,
+    ) -> Result<Option<BlockBody>, DomainError> {
+        self.run_blocking(move |domain| {
+            let Some(slot) = domain.archive().slot_by_tx_hash(&tx_hash)? else {
+                return Ok(None);
+            };
+            Ok(domain.archive().get_block_by_slot(&slot)?)
+        })
+        .await
+    }
+
     pub async fn block_by_tx_hash(
         &self,
         tx_hash: Vec<u8>,
     ) -> Result<Option<(BlockBody, TxOrder)>, DomainError> {
-        let tx_hash_lookup = tx_hash.clone();
-        let Some(raw) = self
-            .run_blocking(move |domain| {
-                let slot = domain.archive().slot_by_tx_hash(&tx_hash_lookup)?;
-                let Some(slot) = slot else {
-                    return Ok(None);
-                };
-
-                Ok(domain.archive().get_block_by_slot(&slot)?)
-            })
-            .await?
-        else {
+        let Some(raw) = self.block_body_by_tx_hash(tx_hash.clone()).await? else {
             return Ok(None);
         };
 

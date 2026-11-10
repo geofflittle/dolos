@@ -242,6 +242,53 @@ async fn undecodable_requested_body_remains_an_error() {
 }
 
 #[tokio::test]
+async fn the_body_lookup_of_an_unindexed_hash_finds_nothing() {
+    let (domain, known) = domain_with_block();
+    let query = AsyncQueryFacade::new(domain);
+
+    assert!(query
+        .block_body_by_tx_hash([0xff; 32].to_vec())
+        .await
+        .unwrap()
+        .is_none());
+    assert!(query
+        .block_body_by_tx_hash(known.to_vec())
+        .await
+        .unwrap()
+        .is_some());
+}
+
+/// A body that will not decode is still returned, so the lookup decodes
+/// nothing.
+#[tokio::test]
+async fn the_body_lookup_returns_the_indexed_body_undecoded() {
+    let domain = ToyDomain::new(None, None);
+    let hash = TxHash::from([0xff; 32]);
+    let corrupt = std::sync::Arc::new(b"not a block".to_vec());
+    let writer = domain.archive().start_writer().unwrap();
+    writer
+        .apply(&ChainPoint::Specific(1, [0xff; 32].into()), &corrupt)
+        .unwrap();
+    writer
+        .apply_index(&[ArchiveIndexDelta {
+            slot: 1,
+            block_hash: vec![0xff; 32],
+            block_number: Some(1),
+            tx_hashes: vec![hash.to_vec()],
+            tags: Vec::new(),
+        }])
+        .unwrap();
+    writer.commit().unwrap();
+
+    let body = AsyncQueryFacade::new(domain)
+        .block_body_by_tx_hash(hash.to_vec())
+        .await
+        .unwrap();
+
+    assert_eq!(body, Some(corrupt.as_ref().clone()));
+}
+
+#[tokio::test]
 async fn oversized_batch_fetches_each_hash_once_and_bounds_memo() {
     let (domain, known) = domain_with_block();
     let absent = TxHash::from([0xff; 32]);
