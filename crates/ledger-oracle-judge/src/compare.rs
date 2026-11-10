@@ -120,7 +120,7 @@ impl Tally {
     pub fn report(&self, judge: Judge, entry: EntryPoint, out: &mut judgement::Tally) {
         let passed = judgement::Passed {
             judge,
-            entry,
+            entry: Some(entry),
             cells: Vec::new(),
             pass: judgement::Pass::Agree,
         };
@@ -131,82 +131,84 @@ impl Tally {
     }
 }
 
-/// The comparisons of one judge, one tally for each entry point it drove.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct ByEntry(pub BTreeMap<EntryPoint, Tally>);
-
-impl ByEntry {
-    /// The tally of `entry`.
-    pub fn at(&mut self, entry: EntryPoint) -> &mut Tally {
-        self.0.entry(entry).or_default()
-    }
-
-    /// Counts the items and keeps the disagreements of another set of tallies.
-    pub fn merge(&mut self, other: ByEntry) {
-        for (entry, tally) in other.0 {
-            self.at(entry).merge(tally);
-        }
-    }
-
-    /// The number of items compared at every entry point.
-    pub fn compared(&self) -> usize {
-        self.0.values().map(|t| t.compared).sum()
-    }
-
-    /// The findings of every entry point.
-    pub fn disagree(&self) -> impl Iterator<Item = &Finding> {
-        self.0.values().flat_map(|t| &t.disagree)
-    }
-
-    /// Adds the verdicts of each tally as the judgement of `judge` at its entry point.
-    pub fn report(&self, judge: Judge, out: &mut judgement::Tally) {
-        for (entry, tally) in &self.0 {
-            tally.report(judge, *entry, out);
-        }
-    }
-}
-
-/// The comparisons of one record that the known list settles.
-pub trait Settled: Default {
-    /// The findings of the comparisons that disagree.
-    fn findings(&self) -> Vec<&Finding>;
-
-    /// The comparisons without their findings.
-    fn counted(&self) -> Self;
-
-    /// Adds another record's comparisons to these.
-    fn merge_settled(&mut self, other: Self);
-}
-
-impl Settled for Tally {
-    fn findings(&self) -> Vec<&Finding> {
-        self.disagree.iter().collect()
-    }
-
+impl<F> Tally<F> {
+    /// The tally without its findings.
     fn counted(&self) -> Self {
         Tally {
             compared: self.compared,
             disagree: Vec::new(),
         }
     }
-
-    fn merge_settled(&mut self, other: Self) {
-        self.merge(other);
-    }
 }
 
-impl Settled for ByEntry {
-    fn findings(&self) -> Vec<&Finding> {
-        self.disagree().collect()
+/// The comparisons of one record that the known list settles.
+pub trait Settled {
+    /// The tally the comparisons of every record add to.
+    type Total;
+
+    /// Every entry point the comparisons drive.
+    fn every() -> Vec<EntryPoint>;
+
+    /// The tally of each entry point the comparisons drove.
+    fn tallies(&self) -> Vec<(EntryPoint, &Tally)>;
+
+    /// The comparisons without their findings.
+    fn counted(&self) -> Self;
+
+    /// Adds the comparisons to the tally of every record.
+    fn add_to(self, total: &mut Self::Total);
+}
+
+/// The account comparisons of one record, which ReadAccounts answers.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct AccountChecks(pub Tally);
+
+impl AccountChecks {
+    /// The entry point that answers the account comparisons.
+    pub const ENTRY: EntryPoint = EntryPoint::Instrument(Instrument::ReadAccounts);
+}
+
+impl Settled for AccountChecks {
+    type Total = Tally;
+
+    fn every() -> Vec<EntryPoint> {
+        vec![AccountChecks::ENTRY]
+    }
+
+    fn tallies(&self) -> Vec<(EntryPoint, &Tally)> {
+        vec![(AccountChecks::ENTRY, &self.0)]
     }
 
     fn counted(&self) -> Self {
-        let counted = self.0.iter().map(|(e, t)| (*e, t.counted()));
-        ByEntry(counted.collect())
+        AccountChecks(self.0.counted())
     }
 
-    fn merge_settled(&mut self, other: Self) {
-        self.merge(other);
+    fn add_to(self, total: &mut Tally) {
+        total.merge(self.0);
+    }
+}
+
+impl<R: ServedRoutes> Settled for ByRoute<R> {
+    type Total = ByRoute<R>;
+
+    fn every() -> Vec<EntryPoint> {
+        Self::routes().map(|(route, version)| route.at(version)).collect()
+    }
+
+    fn tallies(&self) -> Vec<(EntryPoint, &Tally)> {
+        self.0
+            .iter()
+            .map(|((route, version), tally)| (route.at(*version), tally))
+            .collect()
+    }
+
+    fn counted(&self) -> Self {
+        let counted = self.0.iter().map(|(at, t)| (*at, t.counted()));
+        ByRoute(counted.collect())
+    }
+
+    fn add_to(self, total: &mut ByRoute<R>) {
+        total.merge(self);
     }
 }
 
@@ -236,41 +238,128 @@ impl fmt::Display for RollFail {
     }
 }
 
-/// The routes that serve the output each input of a transaction spends.
-pub const SERVED_OUTPUTS: &[Route] = &[
-    Route::FetchBlock,
-    Route::DumpHistory,
-    Route::FollowTip,
-    Route::WatchTx,
-    Route::ReadTx,
-];
+/// The routes that serve one kind of answer a judge compares.
+pub trait ServedRoutes: Copy + Ord + fmt::Debug + 'static {
+    /// Every route that serves the answer.
+    const ALL: &'static [Self];
 
-/// The routes that serve a transaction by its hash.
-pub const SERVED_TXS: &[Route] = &[Route::ReadTx];
+    /// The spec method of the route.
+    fn route(self) -> Route;
 
-/// The routes that serve an output the UTxO holds.
-pub const SERVED_UTXOS: &[Route] = &[Route::ReadUtxos, Route::SearchUtxos];
+    /// The entry point of the route at `version`.
+    fn at(self, version: Version) -> EntryPoint {
+        EntryPoint::Route(self.route(), version)
+    }
+}
 
-/// The routes that serve the protocol parameters.
-pub const SERVED_PARAMS: &[Route] = &[Route::ReadParams];
+macro_rules! served_routes {
+    ($(#[$doc:meta])* $kind:ident { $($member:ident),* $(,)? }) => {
+        $(#[$doc])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub enum $kind {
+            $($member),*
+        }
 
-/// The routes that answer for a transaction submitted to the mempool.
-pub const SERVED_SUBMIT: &[Route] = &[Route::SubmitTx, Route::WaitForTx, Route::WatchMempool];
+        impl ServedRoutes for $kind {
+            const ALL: &'static [Self] = &[$($kind::$member),*];
 
-/// Each route at every version the spec defines it.
-pub fn at_every_version(routes: &[Route]) -> impl Iterator<Item = EntryPoint> + '_ {
-    routes.iter().flat_map(|route| {
-        let versions = Version::ALL.into_iter().filter(|v| route.at(*v));
-        versions.map(|version| EntryPoint::Route(*route, version))
-    })
+            fn route(self) -> Route {
+                match self {
+                    $($kind::$member => Route::$member),*
+                }
+            }
+        }
+    };
+}
+
+served_routes! {
+    /// A route that serves the output each input of a transaction spends.
+    OutputRoute { FetchBlock, FollowTip, DumpHistory, WatchTx, ReadTx }
+}
+
+served_routes! {
+    /// A route that serves a transaction by its hash.
+    TxRoute { ReadTx }
+}
+
+served_routes! {
+    /// A route that serves an output the UTxO holds.
+    UtxoRoute { ReadUtxos, SearchUtxos }
+}
+
+served_routes! {
+    /// A route that serves the protocol parameters.
+    ParamsRoute { ReadParams }
+}
+
+served_routes! {
+    /// A route that answers for a transaction submitted to the mempool.
+    SubmitRoute { SubmitTx, WaitForTx, WatchMempool }
+}
+
+/// The tallies of one judge, by the route and version each compared.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ByRoute<R>(pub BTreeMap<(R, Version), Tally>);
+
+impl<R> Default for ByRoute<R> {
+    fn default() -> Self {
+        ByRoute(BTreeMap::new())
+    }
+}
+
+impl<R: ServedRoutes> ByRoute<R> {
+    /// Every route at each version the spec defines it.
+    pub fn routes() -> impl Iterator<Item = (R, Version)> {
+        R::ALL.iter().flat_map(|route| {
+            let versions = Version::ALL.into_iter();
+            let versions = versions.filter(|v| route.route().at(*v));
+            versions.map(|version| (*route, version))
+        })
+    }
+
+    /// The tally of `route` at `version`.
+    pub fn at(&mut self, route: R, version: Version) -> &mut Tally {
+        self.0.entry((route, version)).or_default()
+    }
+
+    /// Counts the items and keeps the disagreements of another set of tallies.
+    pub fn merge(&mut self, other: ByRoute<R>) {
+        for ((route, version), tally) in other.0 {
+            self.at(route, version).merge(tally);
+        }
+    }
+
+    /// The number of items compared at every route.
+    pub fn compared(&self) -> usize {
+        self.0.values().map(|t| t.compared).sum()
+    }
+
+    /// The findings of every route.
+    pub fn disagree(&self) -> impl Iterator<Item = &Finding> {
+        self.0.values().flat_map(|t| &t.disagree)
+    }
+
+    /// Adds the verdicts of each route as the judgement of `judge`, and the
+    /// entry point of every route at each version as one it requires.
+    fn report(
+        &self,
+        judge: Judge,
+        out: &mut judgement::Tally,
+        required: &mut Vec<(Judge, EntryPoint)>,
+    ) {
+        for ((route, version), tally) in &self.0 {
+            tally.report(judge, route.at(*version), out);
+        }
+        required.extend(Self::routes().map(|(route, version)| (judge, route.at(version))));
+    }
 }
 
 /// The state comparisons of one arm, one tally each.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct StateTallies {
     pub roll_fail: Vec<RollFail>,
-    pub utxo: ByEntry,
-    pub as_output: ByEntry,
+    pub utxo: ByRoute<UtxoRoute>,
+    pub as_output: ByRoute<OutputRoute>,
     pub sub_only: usize,
     pub sub_unheld: usize,
     pub seeded_unjudged: usize,
@@ -278,15 +367,16 @@ pub struct StateTallies {
     pub undo: Tally,
     pub revalidate: Tally,
     pub dependents: usize,
-    pub params: ByEntry,
-    pub readtx: ByEntry,
+    pub params: ByRoute<ParamsRoute>,
+    pub readtx: ByRoute<TxRoute>,
     pub script: Tally,
-    pub datum: ByEntry,
+    pub datum: ByRoute<UtxoRoute>,
     pub plutus_data: Tally,
-    pub served_tx: ByEntry,
-    pub submit: ByEntry,
+    pub served_tx: ByRoute<TxRoute>,
+    pub submit: ByRoute<SubmitRoute>,
     pub known: Vec<String>,
     pub known_fired: KnownList,
+    pub known_verdicts: Vec<Verdict>,
     pub known_stale: Vec<Verdict>,
 }
 
@@ -314,10 +404,11 @@ impl StateTallies {
             submit: _,
             known: _,
             known_fired: _,
+            known_verdicts: _,
             known_stale: _,
         } = self;
         [
-            (Judge::Accounts, Instrument::ReadAccounts.into(), accounts),
+            (Judge::Accounts, AccountChecks::ENTRY, accounts),
             (Judge::Undo, Instrument::ApplyBlock.into(), undo),
             (Judge::Script, Instrument::ScriptByHash.into(), script),
             (
@@ -328,22 +419,9 @@ impl StateTallies {
         ]
     }
 
-    /// Each tally kept by entry point, by its judge and the routes it judges at every version.
-    fn by_entry(&self) -> [(Judge, &'static [Route], &ByEntry); 7] {
-        [
-            (Judge::ReadTx, SERVED_TXS, &self.readtx),
-            (Judge::Utxo, SERVED_UTXOS, &self.utxo),
-            (Judge::Datum, SERVED_UTXOS, &self.datum),
-            (Judge::Params, SERVED_PARAMS, &self.params),
-            (Judge::AsOutput, SERVED_OUTPUTS, &self.as_output),
-            (Judge::ServedTx, SERVED_TXS, &self.served_tx),
-            (Judge::Submit, SERVED_SUBMIT, &self.submit),
-        ]
-    }
-
     /// Adds the verdicts of every tally, each block that did not roll forward
-    /// and each stale known entry, and requires each named tally to have
-    /// compared an item.
+    /// and each known entry, and requires each named tally to have compared
+    /// an item.
     pub fn report(&self, out: &mut judgement::Tally) {
         let revalidate = Instrument::Revalidate.into();
         let revalidate = (Judge::Revalidate, revalidate, &self.revalidate);
@@ -354,19 +432,16 @@ impl StateTallies {
                 required.push((judge, entry));
             }
         }
-        for (judge, routes, tallies) in self.by_entry() {
-            tallies.report(judge, out);
-            required.extend(at_every_version(routes).map(|entry| (judge, entry)));
-        }
-        for ((locus, id), row) in &self.known_fired {
-            let (judge, entry) = locus.judge();
-            out.add(Verdict {
-                judge,
-                entry,
-                subject: judgement::Subject::Record(*id),
-                cells: vec![CellKey::new(Axis::Row, row)],
-                outcome: judgement::Outcome::Known(format!("row={row}")),
-            });
+        let routes = &mut required;
+        self.readtx.report(Judge::ReadTx, out, routes);
+        self.utxo.report(Judge::Utxo, out, routes);
+        self.datum.report(Judge::Datum, out, routes);
+        self.params.report(Judge::Params, out, routes);
+        self.as_output.report(Judge::AsOutput, out, routes);
+        self.served_tx.report(Judge::ServedTx, out, routes);
+        self.submit.report(Judge::Submit, out, routes);
+        for known in &self.known_verdicts {
+            out.add(known.clone());
         }
         for fail in &self.roll_fail {
             out.add(Verdict::disagree(
@@ -405,6 +480,7 @@ impl StateTallies {
             submit,
             known,
             known_fired,
+            known_verdicts,
             known_stale,
         } = other;
         self.roll_fail.extend(roll_fail);
@@ -426,6 +502,7 @@ impl StateTallies {
         self.submit.merge(submit);
         self.known.extend(known);
         self.known_fired.extend(known_fired);
+        self.known_verdicts.extend(known_verdicts);
         self.known_stale.extend(known_stale);
     }
 
@@ -438,7 +515,7 @@ impl StateTallies {
     pub fn settle_as_output(
         &mut self,
         kind: CorpusKind,
-        checks: BTreeMap<RecordId, ByEntry>,
+        checks: BTreeMap<RecordId, ByRoute<OutputRoute>>,
         known: &KnownList,
     ) {
         self.settle(Locus::AsOutput, |s| &mut s.as_output, kind, checks, known);
@@ -448,23 +525,25 @@ impl StateTallies {
     pub fn settle_accounts(
         &mut self,
         kind: CorpusKind,
-        checks: BTreeMap<RecordId, Tally>,
+        checks: BTreeMap<RecordId, AccountChecks>,
         known: &KnownList,
     ) {
         self.settle(Locus::Accounts, |s| &mut s.accounts, kind, checks, known);
     }
 
-    /// Adds the comparisons of each record to the tally of `locus`, passing a known record while it still disagrees.
+    /// Adds the comparisons of each record to the tally of `locus`, passing a
+    /// known record while it still disagrees, with a verdict at each entry
+    /// point the known entry names a record of.
     fn settle<T: Settled>(
         &mut self,
         locus: Locus,
-        tally_of: fn(&mut StateTallies) -> &mut T,
+        tally_of: fn(&mut StateTallies) -> &mut T::Total,
         kind: CorpusKind,
         checks: BTreeMap<RecordId, T>,
         known: &KnownList,
     ) {
-        let (judge, entry) = locus.judge();
-        let stale = |id: RecordId, row: &Row, detail: String| {
+        let judge = locus.judge();
+        let stale = |id: RecordId, entry: EntryPoint, row: &Row, detail: String| {
             let cells = vec![
                 CellKey::new(Axis::Failure, "known_stale"),
                 CellKey::new(Axis::Row, row),
@@ -472,32 +551,45 @@ impl StateTallies {
             Verdict::disagree(judge, entry, id, cells, detail)
         };
         let ids: Vec<RecordId> = checks.keys().copied().collect();
-        for (id, tally) in checks {
-            let findings = tally.findings();
-            match known.get(&(locus, id)) {
-                None => {
-                    tally_of(self).merge_settled(tally);
+        for (id, checked) in checks {
+            let Some(row) = known.get(&(locus, id)) else {
+                checked.add_to(tally_of(self));
+                continue;
+            };
+            let tallies = checked.tallies();
+            let disagree = tallies.iter().filter(|(_, t)| !t.disagree.is_empty());
+            let disagree: Vec<&(EntryPoint, &Tally)> = disagree.collect();
+            if disagree.is_empty() {
+                let detail = format!("row={row} locus={locus}");
+                let entries = tallies.iter().map(|(entry, _)| *entry);
+                let entries: Vec<EntryPoint> = entries.collect();
+                checked.add_to(tally_of(self));
+                for entry in entries {
+                    self.known_stale.push(stale(id, entry, row, detail.clone()));
                 }
-                Some(row) if findings.is_empty() => {
-                    tally_of(self).merge_settled(tally);
-                    self.known_stale
-                        .push(stale(id, row, format!("row={row} locus={locus}")));
-                }
-                Some(row) => {
-                    let lines = findings
-                        .iter()
-                        .map(|d| format!("row={row} ids={id} {locus} {}", d.detail));
-                    let lines: Vec<String> = lines.collect();
-                    tally_of(self).merge_settled(tally.counted());
-                    self.known.extend(lines);
-                    self.known_fired.insert((locus, id), *row);
-                }
+                continue;
             }
+            for (entry, tally) in &disagree {
+                let lines = tally.disagree.iter();
+                let lines = lines.map(|d| format!("row={row} ids={id} {locus} {}", d.detail));
+                self.known.extend(lines);
+                self.known_verdicts.push(Verdict {
+                    judge,
+                    entry: Some(*entry),
+                    subject: judgement::Subject::Record(id),
+                    cells: vec![CellKey::new(Axis::Row, row)],
+                    outcome: judgement::Outcome::Known(format!("row={row}")),
+                });
+            }
+            self.known_fired.insert((locus, id), *row);
+            checked.counted().add_to(tally_of(self));
         }
-        for ((entry, id), row) in known {
-            if *entry == locus && id.corpus == kind && !ids.contains(id) {
+        for ((at, id), row) in known {
+            if *at == locus && id.corpus == kind && !ids.contains(id) {
                 let detail = format!("row={row} locus={locus} not_compared");
-                self.known_stale.push(stale(*id, row, detail));
+                for entry in T::every() {
+                    self.known_stale.push(stale(*id, entry, row, detail.clone()));
+                }
             }
         }
     }
@@ -525,6 +617,7 @@ impl fmt::Display for StateTallies {
             submit,
             known,
             known_fired: _,
+            known_verdicts: _,
             known_stale: _,
         } = self;
         write!(
@@ -575,13 +668,12 @@ mod tests {
         }
     }
 
-    const FETCH_BLOCK: EntryPoint = EntryPoint::Route(Route::FetchBlock, Version::V1);
-
-    fn checks(entries: &[(u32, &[&str])]) -> BTreeMap<RecordId, ByEntry> {
+    /// Comparisons of each record at FetchBlock v1, each agreeing once and disagreeing once per line.
+    fn checks(entries: &[(u32, &[&str])]) -> BTreeMap<RecordId, ByRoute<OutputRoute>> {
         let mut checks = BTreeMap::new();
         for (n, disagree) in entries {
-            let by_entry: &mut ByEntry = checks.entry(supp(*n)).or_default();
-            let tally = by_entry.at(FETCH_BLOCK);
+            let by_route: &mut ByRoute<OutputRoute> = checks.entry(supp(*n)).or_default();
+            let tally = by_route.at(OutputRoute::FetchBlock, Version::V1);
             tally.agree();
             for d in *disagree {
                 tally.add(false, || Finding::new(supp(*n), Vec::new(), *d));
@@ -590,22 +682,22 @@ mod tests {
         checks
     }
 
-    fn account_checks(diff: &str) -> BTreeMap<RecordId, Tally> {
+    fn account_checks(diff: &str) -> BTreeMap<RecordId, AccountChecks> {
         let mut tally = Tally::default();
         tally.agree();
         tally.add(false, || Finding::new(supp(9), Vec::new(), diff));
-        BTreeMap::from([(supp(9), tally)])
+        BTreeMap::from([(supp(9), AccountChecks(tally))])
     }
 
     fn compared() -> StateTallies {
         let mut state = StateTallies {
-            utxo: agreed_at(SERVED_UTXOS),
-            params: agreed_at(SERVED_PARAMS),
-            datum: agreed_at(SERVED_UTXOS),
-            as_output: agreed_at(SERVED_OUTPUTS),
-            served_tx: agreed_at(SERVED_TXS),
-            readtx: agreed_at(SERVED_TXS),
-            submit: agreed_at(SERVED_SUBMIT),
+            utxo: agreed_at(),
+            params: agreed_at(),
+            datum: agreed_at(),
+            as_output: agreed_at(),
+            served_tx: agreed_at(),
+            readtx: agreed_at(),
+            submit: agreed_at(),
             ..Default::default()
         };
         state.accounts.agree();
@@ -617,19 +709,24 @@ mod tests {
     }
 
     /// One agreeing comparison at every route, at every version.
-    fn agreed_at(routes: &[Route]) -> ByEntry {
-        let mut agreed = ByEntry::default();
-        for entry in at_every_version(routes) {
-            agreed.at(entry).agree();
+    fn agreed_at<R: ServedRoutes>() -> ByRoute<R> {
+        let mut agreed = ByRoute::default();
+        for (route, version) in ByRoute::<R>::routes() {
+            agreed.at(route, version).agree();
         }
         agreed
+    }
+
+    /// The number of entry points the routes of `R` make.
+    fn entries<R: ServedRoutes>() -> usize {
+        ByRoute::<R>::routes().count()
     }
 
     #[test]
     fn a_served_route_judged_at_one_version_alone_fails_the_run() {
         let mut state = compared();
         assert!(passes(&state));
-        let v1beta = EntryPoint::Route(Route::FetchBlock, Version::V1beta);
+        let v1beta = (OutputRoute::FetchBlock, Version::V1beta);
         state.as_output.0.remove(&v1beta);
         let out = reported(&state);
         assert!(!passes(&state));
@@ -666,8 +763,9 @@ mod tests {
         }
     }
 
-    fn by_entry(lines: &[&str]) -> ByEntry {
-        ByEntry(BTreeMap::from([(FETCH_BLOCK, tally(lines))]))
+    /// The tally of the lines at the first route of `R`, at v1.
+    fn by_route<R: ServedRoutes>(lines: &[&str]) -> ByRoute<R> {
+        ByRoute(BTreeMap::from([((R::ALL[0], Version::V1), tally(lines))]))
     }
 
     fn stale(line: &str) -> Verdict {
@@ -695,8 +793,8 @@ mod tests {
         let lines = [line.as_str()];
         StateTallies {
             roll_fail: vec![roll_fail(n)],
-            utxo: by_entry(&lines),
-            as_output: by_entry(&lines),
+            utxo: by_route(&lines),
+            as_output: by_route(&lines),
             sub_only: 1,
             sub_unheld: 4,
             seeded_unjudged: 2,
@@ -704,15 +802,16 @@ mod tests {
             undo: tally(&lines),
             revalidate: tally(&lines),
             dependents: 3,
-            params: by_entry(&lines),
-            readtx: by_entry(&lines),
+            params: by_route(&lines),
+            readtx: by_route(&lines),
             script: tally(&lines),
-            datum: by_entry(&lines),
+            datum: by_route(&lines),
             plutus_data: tally(&lines),
-            served_tx: by_entry(&lines),
-            submit: by_entry(&lines),
+            served_tx: by_route(&lines),
+            submit: by_route(&lines),
             known: vec![line.clone()],
             known_fired: BTreeMap::from([((Locus::Accounts, supp(n)), row)]),
+            known_verdicts: vec![stale(&format!("known{n}"))],
             known_stale: vec![stale(&line)],
         }
     }
@@ -724,8 +823,8 @@ mod tests {
         let lines = ["line0", "line1"];
         let both = StateTallies {
             roll_fail: vec![roll_fail(0), roll_fail(1)],
-            utxo: by_entry(&lines),
-            as_output: by_entry(&lines),
+            utxo: by_route(&lines),
+            as_output: by_route(&lines),
             sub_only: 2,
             sub_unheld: 8,
             seeded_unjudged: 4,
@@ -733,18 +832,19 @@ mod tests {
             undo: tally(&lines),
             revalidate: tally(&lines),
             dependents: 6,
-            params: by_entry(&lines),
-            readtx: by_entry(&lines),
+            params: by_route(&lines),
+            readtx: by_route(&lines),
             script: tally(&lines),
-            datum: by_entry(&lines),
+            datum: by_route(&lines),
             plutus_data: tally(&lines),
-            served_tx: by_entry(&lines),
-            submit: by_entry(&lines),
+            served_tx: by_route(&lines),
+            submit: by_route(&lines),
             known: vec!["line0".to_string(), "line1".to_string()],
             known_fired: BTreeMap::from([
                 ((Locus::Accounts, supp(0)), Row::S1),
                 ((Locus::Accounts, supp(1)), Row::S2),
             ]),
+            known_verdicts: vec![stale("known0"), stale("known1")],
             known_stale: vec![stale("line0"), stale("line1")],
         };
         assert_eq!(merged, both);
@@ -760,25 +860,24 @@ mod tests {
     #[test]
     fn a_comparison_that_looked_at_nothing_fails() {
         let mut state = compared();
-        state.as_output.at(FETCH_BLOCK).agree();
+        state.as_output.at(OutputRoute::FetchBlock, Version::V1).agree();
         assert!(passes(&state), "{state}");
-        let entries = |routes| at_every_version(routes).count();
         type Emptied = (fn(&mut StateTallies), usize);
         let empties: [Emptied; 11] = [
-            (|s| s.utxo = ByEntry::default(), entries(SERVED_UTXOS)),
+            (|s| s.utxo = ByRoute::default(), entries::<UtxoRoute>()),
             (
-                |s| s.as_output = ByEntry::default(),
-                entries(SERVED_OUTPUTS),
+                |s| s.as_output = ByRoute::default(),
+                entries::<OutputRoute>(),
             ),
             (|s| s.accounts = Tally::default(), 1),
             (|s| s.undo = Tally::default(), 1),
-            (|s| s.params = ByEntry::default(), entries(SERVED_PARAMS)),
-            (|s| s.readtx = ByEntry::default(), entries(SERVED_TXS)),
+            (|s| s.params = ByRoute::default(), entries::<ParamsRoute>()),
+            (|s| s.readtx = ByRoute::default(), entries::<TxRoute>()),
             (|s| s.script = Tally::default(), 1),
-            (|s| s.datum = ByEntry::default(), entries(SERVED_UTXOS)),
+            (|s| s.datum = ByRoute::default(), entries::<UtxoRoute>()),
             (|s| s.plutus_data = Tally::default(), 1),
-            (|s| s.served_tx = ByEntry::default(), entries(SERVED_TXS)),
-            (|s| s.submit = ByEntry::default(), entries(SERVED_SUBMIT)),
+            (|s| s.served_tx = ByRoute::default(), entries::<TxRoute>()),
+            (|s| s.submit = ByRoute::default(), entries::<SubmitRoute>()),
         ];
         for (empty, failing) in empties {
             let mut state = state.clone();
@@ -791,10 +890,10 @@ mod tests {
         let expected = format!(
             " seeded_unjudged=0 accounts=1 undo=1 revalidate=1 of dependents=0 params={} \
              readtx={} script=1 datum={} plutus_data=1 served_tx={}",
-            entries(SERVED_PARAMS),
-            entries(SERVED_TXS),
-            entries(SERVED_UTXOS),
-            entries(SERVED_TXS)
+            entries::<ParamsRoute>(),
+            entries::<TxRoute>(),
+            entries::<UtxoRoute>(),
+            entries::<TxRoute>()
         );
         assert!(state.to_string().contains(&expected), "{state}");
     }
@@ -802,7 +901,7 @@ mod tests {
     #[test]
     fn a_corpus_with_no_dependent_passes_and_a_kept_dependent_fails() {
         let mut state = compared();
-        state.as_output.at(FETCH_BLOCK).agree();
+        state.as_output.at(OutputRoute::FetchBlock, Version::V1).agree();
         state.revalidate = Tally::default();
         assert!(passes(&state), "{state}");
         state.revalidate.agree();
@@ -826,7 +925,7 @@ mod tests {
     #[test]
     fn a_group_that_did_not_roll_prints_one_line_and_fails() {
         let mut state = compared();
-        state.as_output.at(FETCH_BLOCK).agree();
+        state.as_output.at(OutputRoute::FetchBlock, Version::V1).agree();
         assert!(passes(&state), "{state}");
         assert!(state.to_string().contains(" submit=9 rolled_failed=0"));
         assert!(reported(&state).failing.is_empty());
@@ -900,26 +999,54 @@ mod tests {
         ]);
         state.settle_as_output(CorpusKind::Supp, checks(&[(9, &[])]), &known);
         let lines: Vec<String> = state.known_stale.iter().map(Verdict::to_string).collect();
-        assert_eq!(
-            lines,
-            vec![
-                "VERDICT judge=as-output entry=fetch_block:v1 record=supp#9 \
-                 cells=failure:known_stale,row:S3 outcome=disagree row=S3 locus=as_output"
-                    .to_string(),
-                "VERDICT judge=as-output entry=fetch_block:v1 record=supp#10 \
+        let agreed = "VERDICT judge=as-output entry=fetch_block:v1 record=supp#9 \
+                      cells=failure:known_stale,row:S3 outcome=disagree row=S3 locus=as_output";
+        let unjudged = |entry: EntryPoint| {
+            format!(
+                "VERDICT judge=as-output entry={entry} record=supp#10 \
                  cells=failure:known_stale,row:S3 outcome=disagree row=S3 locus=as_output not_compared"
-                    .to_string()
-            ]
-        );
-        assert!(state.known_fired.is_empty());
+            )
+        };
+        let mut expected = vec![agreed.to_string()];
+        expected.extend(ByRoute::<OutputRoute>::every().into_iter().map(unjudged));
+        assert_eq!(lines, expected);
+        assert_eq!(lines.len(), 1 + entries::<OutputRoute>());
+        assert!(state.known_fired.is_empty() && state.known_verdicts.is_empty());
         assert!(!passes(&state));
+    }
+
+    #[test]
+    fn a_known_record_is_reported_at_each_route_that_disagrees_and_no_other() {
+        let mut state = compared();
+        let known = KnownList::from([((Locus::AsOutput, supp(9)), Row::S3)]);
+        let mut checked = ByRoute::default();
+        for (route, version) in ByRoute::<OutputRoute>::routes() {
+            checked.at(route, version).agree();
+        }
+        let diff = "ledger=ab dolos=none input=00#1 services=DumpHistory";
+        let finding = || Finding::new(supp(9), Vec::new(), diff);
+        checked
+            .at(OutputRoute::DumpHistory, Version::V1alpha)
+            .add(false, finding);
+        let checks = BTreeMap::from([(supp(9), checked)]);
+        state.settle_as_output(CorpusKind::Supp, checks, &known);
+        let out = reported(&state);
+        let reported_known: Vec<(Option<String>, usize)> = out
+            .passed(Judge::AsOutput)
+            .filter(|(passed, _)| passed.pass == judgement::Pass::Known)
+            .map(|(passed, n)| (passed.entry.map(|e| e.to_string()), n))
+            .collect();
+        let dump_history = Some("dump_history:v1alpha".to_string());
+        assert_eq!(reported_known, [(dump_history, 1)], "{state}");
+        assert_eq!(state.known_fired, known);
+        assert!(passes(&state), "{state}");
     }
 
     #[test]
     fn an_account_disagreement_off_the_known_list_fails_and_a_known_one_passes() {
         let diff = "account=keyHash-00 ledger=balance=0,pool=none,drep=none dolos=balance=0";
         let mut state = compared();
-        state.as_output.at(FETCH_BLOCK).agree();
+        state.as_output.at(OutputRoute::FetchBlock, Version::V1).agree();
         let as_output = KnownList::from([((Locus::AsOutput, supp(9)), Row::S3)]);
         state.settle_accounts(CorpusKind::Supp, account_checks(diff), &as_output);
         assert_eq!(
@@ -930,7 +1057,7 @@ mod tests {
         assert!(!passes(&state), "{state}");
 
         let mut state = compared();
-        state.as_output.at(FETCH_BLOCK).agree();
+        state.as_output.at(OutputRoute::FetchBlock, Version::V1).agree();
         let known = KnownList::from([((Locus::Accounts, supp(9)), Row::S18)]);
         state.settle_accounts(CorpusKind::Supp, account_checks(diff), &known);
         assert_eq!(

@@ -17,6 +17,7 @@ mod validate;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    convert::Infallible,
     fmt,
     sync::atomic::{AtomicBool, Ordering},
     thread,
@@ -36,12 +37,17 @@ use itertools::Itertools as _;
 use ledger_oracle_judge::{
     accounts::{self, Account, Credential, LedgerAccounts},
     cbor::{tx_inputs, Purpose, TxIn},
-    compare::{self, ByEntry, ByteVerdict, RollFail, StateTallies, Tally},
+    compare::{
+        self, AccountChecks, ByRoute, ByteVerdict, OutputRoute, ParamsRoute, RollFail,
+        ServedRoutes as _, StateTallies, Tally, TxRoute, UtxoRoute,
+    },
     context::{ContextKnown, ContextTally},
     corpus::{self, Corpus},
     cost::CostTallies,
     eval::{ledger_rows, Answer, EvalKnown, EvalTally, Layer, TxKnown},
-    judgement::{self, Axis, CellKey, EntryPoint, Finding, Instrument, Judge, Route, RunVerdict},
+    judgement::{
+        self, Axis, CellKey, Finding, Instrument, Judge, RunVerdict, Version,
+    },
     manifest::{self, Candidates, Declared, Feature, Known, KnownList, Locus},
     parallel::in_parallel,
     record::{CorpusKind, LedgerOutcome, PParams, Phase2, Record, RecordId, UtxoEntry},
@@ -70,8 +76,7 @@ use pallas::{
     },
 };
 use seed::SeedPoint;
-use serve::{Event, RouteServed};
-use served_tx::EveryVersionMaps;
+use serve::{Event, ReadTxs, RouteServed};
 use tokio::{runtime::Handle, task};
 use validate::Relay;
 
@@ -134,18 +139,20 @@ async fn compare_utxos_at_every_version<'a>(
     inputs: impl IntoIterator<Item = &'a TxIn>,
     expected: impl IntoIterator<Item = &'a UtxoEntry>,
     written: &BTreeMap<TxIn, Vec<u8>>,
-    tallies: &mut ByEntry,
+    tallies: &mut ByRoute<UtxoRoute>,
 ) {
     let (expected, keys) = utxo_keys(inputs, expected);
-    for (entry, served) in serve::read_utxos(domain, &keys).await {
-        compare_served_utxos(&served, id, &keys, &expected, written, tallies.at(entry));
+    for ((route, version), served) in serve::read_utxos(domain, &keys).await {
+        let tally = tallies.at(route, version);
+        compare_served_utxos(&served, id, &keys, &expected, written, tally);
     }
     let addresses = addresses(id, expected.values().copied());
     let addresses: Vec<&[u8]> = addresses.iter().map(Vec::as_slice).collect();
-    for (entry, served) in serve::search_utxos(domain, &addresses).await {
+    for ((route, version), served) in serve::search_utxos(domain, &addresses).await {
         let found: BTreeSet<&TxIn> = expected.keys().copied().chain(served.keys()).collect();
         let found: Vec<&TxIn> = found.into_iter().collect();
-        compare_served_utxos(&served, id, &found, &expected, written, tallies.at(entry));
+        let tally = tallies.at(route, version);
+        compare_served_utxos(&served, id, &found, &expected, written, tally);
     }
 }
 
@@ -276,21 +283,35 @@ fn judged_part(uncompared: &[&str]) -> Judged {
             tally.agree();
         }
     }
-    let by_entry = [
-        ("utxo", &mut state.utxo, compare::SERVED_UTXOS),
-        ("datum", &mut state.datum, compare::SERVED_UTXOS),
-        ("params", &mut state.params, compare::SERVED_PARAMS),
-        ("as_output", &mut state.as_output, compare::SERVED_OUTPUTS),
-        ("served_tx", &mut state.served_tx, compare::SERVED_TXS),
-        ("readtx", &mut state.readtx, compare::SERVED_TXS),
-        ("submit", &mut state.submit, compare::SERVED_SUBMIT),
-    ];
-    for (name, tallies, routes) in by_entry {
-        if !uncompared.contains(&name) {
-            compare::at_every_version(routes).for_each(|entry| tallies.at(entry).agree());
-        }
+    let compared = |name| !uncompared.contains(&name);
+    if compared("utxo") {
+        agree_at_every_route(&mut state.utxo);
+    }
+    if compared("datum") {
+        agree_at_every_route(&mut state.datum);
+    }
+    if compared("params") {
+        agree_at_every_route(&mut state.params);
+    }
+    if compared("as_output") {
+        agree_at_every_route(&mut state.as_output);
+    }
+    if compared("served_tx") {
+        agree_at_every_route(&mut state.served_tx);
+    }
+    if compared("readtx") {
+        agree_at_every_route(&mut state.readtx);
+    }
+    if compared("submit") {
+        agree_at_every_route(&mut state.submit);
     }
     judged
+}
+
+/// Counts one agreement at each route and version of a kind.
+#[cfg(test)]
+fn agree_at_every_route<R: compare::ServedRoutes>(tallies: &mut ByRoute<R>) {
+    ByRoute::<R>::routes().for_each(|(route, version)| tallies.at(route, version).agree());
 }
 
 /// The text of each disagreement.
@@ -641,6 +662,13 @@ fn judged_records<'a, 'r>(
     groups.flat_map(|(records, block)| records.iter().map(move |r| (r, block)))
 }
 
+/// The hash of each transaction and sub transaction the judged records hold.
+fn judged_hashes(blocks: &[GroupBlock<'_>]) -> BTreeSet<[u8; 32]> {
+    let records = judged_records(blocks).map(|(record, _)| record);
+    let names = records.flat_map(|record| record_txs(record).into_iter().map(|(name, _)| name));
+    names.map(TxName::hash).collect()
+}
+
 /// Submits each slot group of a run in order to a fresh mempool at the group slot, once holding accepted records pending and once marking them inflight, then rolls the block of its accepted records, compares the outputs and returns what became of each group's block with the account comparisons of each group's last accepted record.
 async fn validate_run<'r>(
     base: &DomainAdapter,
@@ -650,7 +678,7 @@ async fn validate_run<'r>(
     edits: &Edits<'_>,
     judged: &mut BTreeSet<RecordId>,
     tallies: &mut Judged,
-) -> (Vec<GroupBlock<'r>>, BTreeMap<RecordId, Tally>) {
+) -> (Vec<GroupBlock<'r>>, BTreeMap<RecordId, AccountChecks>) {
     let Judged {
         validation: tally,
         rules,
@@ -670,7 +698,7 @@ async fn validate_run<'r>(
     let by_n: BTreeMap<u32, &Record> = run.records().iter().map(|r| (r.n, r)).collect();
     let mut tip = None;
     let mut blocks = Vec::new();
-    let mut account_checks = BTreeMap::new();
+    let mut account_checks: BTreeMap<RecordId, AccountChecks> = BTreeMap::new();
     for records in run.groups() {
         let group = validate::group(base, records[0].slot, Relay::Held);
         let relayed = validate::group(base, records[0].slot, Relay::Inflight);
@@ -825,7 +853,7 @@ async fn validate_run<'r>(
         compare_datums(group.domain(), id_of(last), &made, edits, &mut state.datum).await;
         let served = dolos_accounts(group.domain());
         let checks = account_checks.entry(id_of(last)).or_default();
-        accounts::compare(id_of(last), accounts_post, &served, checks);
+        accounts::compare(id_of(last), accounts_post, &served, &mut checks.0);
     }
     (blocks, account_checks)
 }
@@ -842,7 +870,7 @@ async fn compare_datums(
     id: RecordId,
     made: &[(&UtxoEntry, &Record)],
     edits: &Edits<'_>,
-    tally: &mut ByEntry,
+    tally: &mut ByRoute<UtxoRoute>,
 ) {
     let mut expected = BTreeMap::new();
     for (entry, maker) in made {
@@ -877,8 +905,8 @@ async fn compare_datums(
     let addresses: Vec<&[u8]> = addresses.iter().map(Vec::as_slice).collect();
     let read = serve::read_utxos(domain, &inputs).await;
     let searched = serve::search_utxos(domain, &addresses).await;
-    for (entry, served) in read.into_iter().chain(searched) {
-        compare_served_datums(&served, id, &expected, tally.at(entry));
+    for ((route, version), served) in read.into_iter().chain(searched) {
+        compare_served_datums(&served, id, &expected, tally.at(route, version));
     }
 }
 
@@ -1095,6 +1123,13 @@ impl TxName {
             TxName::Sub(_) => "sub",
         }
     }
+
+    /// The hash the name holds.
+    fn hash(self) -> [u8; 32] {
+        match self {
+            TxName::Top(hash) | TxName::Sub(hash) => hash,
+        }
+    }
 }
 
 /// The transaction a record holds and each of its sub transactions, by name, none when its bytes do not decode.
@@ -1131,12 +1166,11 @@ impl fmt::Display for TxName {
 }
 
 /// Counts what ReadTx serves at every version for each transaction hash of the groups whose block rolled or was never made, against the block and transaction of the accepted record that names it, the sub transaction itself at a version that states no sub transactions, or nothing when only refused records do.
-async fn compare_read_tx(
-    domain: &DomainAdapter,
+fn compare_read_tx(
     kind: CorpusKind,
     blocks: &[GroupBlock<'_>],
-    tallies: &mut ByEntry,
-    _: &EveryVersionMaps,
+    read: &ReadTxs<Infallible>,
+    tallies: &mut ByRoute<TxRoute>,
 ) {
     let mut expected: BTreeMap<TxName, (RecordId, Option<ExpectedTx>)> = BTreeMap::new();
     for (record, block) in judged_records(blocks) {
@@ -1161,9 +1195,7 @@ async fn compare_read_tx(
         }
     }
     for (name, (id, ledger)) in expected {
-        let hash = match name {
-            TxName::Top(h) | TxName::Sub(h) => h,
-        };
+        let hash = name.hash();
         let shown = match &ledger {
             Some(e) => match e.block {
                 Some(hash) => BlockAt { slot: e.slot, hash }.to_string(),
@@ -1171,9 +1203,9 @@ async fn compare_read_tx(
             },
             None => "none".to_string(),
         };
-        for found in serve::read_tx_found(domain, &hash).await {
+        for found in read.found(&hash) {
             let (agrees, dolos) = match (&ledger, found.answer) {
-                (_, Err(status)) => (false, format!("status={:?}", status.code())),
+                (_, Err(code)) => (false, format!("status={code:?}")),
                 (None, Ok(None)) => (true, "none".to_string()),
                 (Some(_), Ok(None)) => (false, "none".to_string()),
                 (None, Ok(Some(served))) => (false, served.block.to_string()),
@@ -1204,7 +1236,7 @@ async fn compare_read_tx(
                     (same_block && differing.is_empty(), dolos)
                 }
             };
-            tallies.at(found.entry).add(agrees, || {
+            tallies.at(TxRoute::ReadTx, found.version).add(agrees, || {
                 let cells = vec![CellKey::new(Axis::Tx, name.kind())];
                 Finding::new(id, cells, format!("{name} ledger={shown} dolos={dolos}"))
             });
@@ -1467,7 +1499,7 @@ async fn serve_rolled(
     domain: &DomainAdapter,
     seed: &SeedPoint,
     rolled: &[&Rolled<'_>],
-    _: &EveryVersionMaps,
+    read: &ReadTxs<Infallible>,
 ) -> Vec<RouteServed> {
     let hashes: Vec<BlockHash> = rolled
         .iter()
@@ -1485,7 +1517,7 @@ async fn serve_rolled(
             *tx.hash()
         })
         .collect();
-    served.extend(serve::fetched(domain, &hashes, &tx_hashes).await);
+    served.extend(serve::fetched(domain, &hashes, read, &tx_hashes).await);
     served
 }
 
@@ -1541,7 +1573,7 @@ fn served_verdicts(
     sub_only: bool,
     ledger: &[u8],
     routes: &[RouteServed],
-) -> (BTreeMap<EntryPoint, Vec<String>>, usize) {
+) -> (BTreeMap<(OutputRoute, Version), Vec<String>>, usize) {
     let mut verdicts = BTreeMap::new();
     let mut unheld = 0;
     for route in routes {
@@ -1563,7 +1595,7 @@ fn served_verdicts(
                 }
             }
         };
-        verdicts.insert(route.entry, failing);
+        verdicts.insert((route.route, route.version), failing);
     }
     (verdicts, unheld)
 }
@@ -1571,7 +1603,7 @@ fn served_verdicts(
 /// The served output comparisons of the records of one block, with the inputs left uncompared because the run's seed made them, the compared inputs only sub transactions name, and the route comparisons left out because the route's version states no sub transaction.
 #[derive(Debug, Default)]
 struct ServedChecks {
-    records: BTreeMap<RecordId, ByEntry>,
+    records: BTreeMap<RecordId, ByRoute<OutputRoute>>,
     seeded: usize,
     sub_only: usize,
     sub_unheld: usize,
@@ -1605,7 +1637,7 @@ fn compare_served(
                     continue;
                 }
                 InputOrigin::AbsentFromPre => {
-                    by_entry.at(endorser::FETCH_BLOCK).add(false, || {
+                    by_entry.at(OutputRoute::FetchBlock, Version::V1).add(false, || {
                         let cells = vec![CellKey::new(Axis::Input, "absent_from_pre")];
                         Finding::new(id, cells, format!("absent_from_pre input={shown}"))
                     });
@@ -1624,9 +1656,9 @@ fn compare_served(
                 .output;
             let (verdicts, unheld) = served_verdicts(id, &hash, &input, sub, &ledger.0, routes);
             checks.sub_unheld += unheld;
-            for (entry, failing) in verdicts {
-                by_entry.at(entry).add(failing.is_empty(), || {
-                    let cells = vec![CellKey::new(Axis::Entry, entry)];
+            for ((route, version), failing) in verdicts {
+                by_entry.at(route, version).add(failing.is_empty(), || {
+                    let cells = vec![CellKey::new(Axis::Entry, route.at(version))];
                     let detail = format!("{} input={shown} {made}", failing.join(","));
                     Finding::new(id, cells, detail)
                 });
@@ -1643,7 +1675,7 @@ fn compare_as_output(
     rolled: &[&Rolled<'_>],
     routes: &[RouteServed],
     state: &mut StateTallies,
-    checks: &mut BTreeMap<RecordId, ByEntry>,
+    checks: &mut BTreeMap<RecordId, ByRoute<OutputRoute>>,
 ) {
     let makers = run.makers(kind);
     for block in rolled {
@@ -1838,8 +1870,8 @@ impl Default for Edits<'_> {
 struct RunJudged {
     judged: Judged,
     ids: BTreeSet<RecordId>,
-    as_output: BTreeMap<RecordId, ByEntry>,
-    accounts: BTreeMap<RecordId, Tally>,
+    as_output: BTreeMap<RecordId, ByRoute<OutputRoute>>,
+    accounts: BTreeMap<RecordId, AccountChecks>,
 }
 
 /// Judges one kept run of a corpus seeded from its first pre state.
@@ -1885,34 +1917,31 @@ async fn judge_run(
     .await;
     let served = dolos_accounts(&seeded.domain);
     let checks = account_checks.entry(id).or_default();
-    accounts::compare(id, &first.accounts_pre, &served, checks);
+    accounts::compare(id, &first.accounts_pre, &served, &mut checks.0);
     let expected = (edits.expected_params)(run.pparams());
     for (version, served) in serve::read_params(&seeded.domain).await {
-        let tally = judged
-            .state
-            .params
-            .at(EntryPoint::Route(Route::ReadParams, version));
+        let tally = judged.state.params.at(ParamsRoute::ReadParams, version);
         params::compare(&expected, &served, version, tally, |key, d| {
             Finding::new(id, vec![CellKey::new(Axis::Param, key)], d)
         });
     }
     let (blocks, run_accounts) =
         validate_run(&seeded.domain, kind, run, manifests, edits, ids, judged).await;
-    for (id, tally) in run_accounts {
-        account_checks.entry(id).or_default().merge(tally);
+    for (id, checks) in run_accounts {
+        account_checks.entry(id).or_default().0.merge(checks.0);
     }
     let script = &mut judged.state.script;
     compare_carried::<Script>(&seeded.domain, kind, &blocks, script).await;
     let plutus_data = &mut judged.state.plutus_data;
     compare_carried::<Datum>(&seeded.domain, kind, &blocks, plutus_data).await;
-    let served = &mut judged.state.served_tx;
-    let Some(maps) = served_tx::compare(&seeded.domain, kind, &blocks, served).await else {
+    let read = ReadTxs::read(&seeded.domain, &judged_hashes(&blocks)).await;
+    served_tx::compare(kind, &blocks, &read, &mut judged.state.served_tx);
+    let Some(read) = read.unpanicked() else {
         return part;
     };
-    let readtx = &mut judged.state.readtx;
-    compare_read_tx(&seeded.domain, kind, &blocks, readtx, &maps).await;
+    compare_read_tx(kind, &blocks, &read, &mut judged.state.readtx);
     let rolled: Vec<&Rolled> = blocks.iter().filter_map(GroupBlock::rolled).collect();
-    let routes = serve_rolled(&seeded.domain, &seeded.seed, &rolled, &maps).await;
+    let routes = serve_rolled(&seeded.domain, &seeded.seed, &rolled, &read).await;
     compare_as_output(kind, run, &rolled, &routes, &mut judged.state, as_output);
     sweep(
         &seeded.domain,
@@ -1942,16 +1971,16 @@ async fn judge(corpus: &Corpus, manifests: &Manifests, edits: &Edits<'_>) -> Jud
     });
     let mut judged = Judged::default();
     let mut judged_ids = BTreeSet::new();
-    let mut as_output: BTreeMap<RecordId, ByEntry> = BTreeMap::new();
-    let mut account_checks: BTreeMap<RecordId, Tally> = BTreeMap::new();
+    let mut as_output: BTreeMap<RecordId, ByRoute<OutputRoute>> = BTreeMap::new();
+    let mut account_checks: BTreeMap<RecordId, AccountChecks> = BTreeMap::new();
     for part in parts {
         judged.merge(part.judged);
         judged_ids.extend(part.ids);
         for (id, tally) in part.as_output {
             as_output.entry(id).or_default().merge(tally);
         }
-        for (id, tally) in part.accounts {
-            account_checks.entry(id).or_default().merge(tally);
+        for (id, checks) in part.accounts {
+            account_checks.entry(id).or_default().0.merge(checks.0);
         }
     }
     manifests.unjudged(corpus.kind, &judged_ids, &mut judged.validation);
@@ -2704,7 +2733,10 @@ async fn an_accepted_tx_left_out_of_its_block_is_not_found_by_read_tx() {
     let tallies = &intact.state.readtx.0;
     let disagree = tallies
         .iter()
-        .flat_map(|(entry, t)| t.disagree.iter().map(move |d| format!("{entry} {d}")))
+        .flat_map(|((route, version), t)| {
+            let entry = route.at(*version);
+            t.disagree.iter().map(move |d| format!("{entry} {d}"))
+        })
         .join("\n");
     assert!(disagree.is_empty(), "{disagree}");
     let left_out = corpus
@@ -2723,7 +2755,7 @@ async fn an_accepted_tx_left_out_of_its_block_is_not_found_by_read_tx() {
         .into_iter()
         .filter(|d| d.starts_with(&prefix))
         .collect();
-    let versions = compare::at_every_version(compare::SERVED_TXS).count();
+    let versions = ByRoute::<TxRoute>::routes().count();
     assert_eq!(lines.len(), versions, "{planted}");
     assert!(
         lines.iter().all(|l| l.ends_with(" dolos=none")),

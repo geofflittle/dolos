@@ -774,7 +774,7 @@ impl ContextTally {
     pub fn report(&self, out: &mut judgement::Tally) {
         let passed = |pass, cells| judgement::Passed {
             judge: Judge::Context,
-            entry: Instrument::RedeemerArguments.into(),
+            entry: Some(Instrument::RedeemerArguments.into()),
             cells,
             pass,
         };

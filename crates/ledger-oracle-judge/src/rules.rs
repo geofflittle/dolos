@@ -380,7 +380,7 @@ impl Rules {
             };
             let passed = judgement::Passed {
                 judge: Judge::Rules,
-                entry: EntryPoint::Instrument(Instrument::ReceiveTx),
+                entry: Some(EntryPoint::Instrument(Instrument::ReceiveTx)),
                 cells: sides.clone(),
                 pass,
             };

@@ -4,9 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    judgement::{
-        self, Axis, CellKey, EntryPoint, Instrument, Judge, Pass, Passed, Subject, Verdict,
-    },
+    judgement::{self, Axis, CellKey, Judge, Pass, Passed, Subject, Verdict},
     manifest::{lines, ManifestError},
 };
 
@@ -86,8 +84,8 @@ pub fn counts(tally: &judgement::Tally) -> BTreeMap<CellKey, usize> {
         .iter()
         .filter(|(p, _)| p.pass == Pass::Agree && p.judge != Judge::Coverage);
     for (passed, n) in agreeing {
-        let entry = CellKey::new(Axis::Entry, passed.entry);
-        for cell in passed.cells.iter().chain([&entry]) {
+        let entry = passed.entry.map(|entry| CellKey::new(Axis::Entry, entry));
+        for cell in passed.cells.iter().chain(&entry) {
             *counts.entry(cell.clone()).or_default() += n;
         }
     }
@@ -114,7 +112,7 @@ pub fn table(
         failed.push(cell.to_string());
         out.add(Verdict {
             judge: Judge::Coverage,
-            entry: EntryPoint::Instrument(Instrument::ReceiveTx),
+            entry: None,
             subject: Subject::Selection,
             cells: vec![cell.clone()],
             outcome: judgement::Outcome::Disagree(detail),
@@ -123,7 +121,7 @@ pub fn table(
     let pass = |cell: &CellKey, pass, out: &mut judgement::Tally| {
         let passed = Passed {
             judge: Judge::Coverage,
-            entry: EntryPoint::Instrument(Instrument::ReceiveTx),
+            entry: None,
             cells: vec![cell.clone()],
             pass,
         };
@@ -187,11 +185,13 @@ pub fn table(
         lines.push(format!(
             "COVERAGE {cell} records=0 committed={held} member=none"
         ));
-        out.add(Verdict::selection_fails(
-            Judge::Coverage,
-            EntryPoint::Instrument(Instrument::ReceiveTx),
-            format!("cell={cell} {detail}"),
-        ));
+        out.add(Verdict {
+            judge: Judge::Coverage,
+            entry: None,
+            subject: Subject::Selection,
+            cells: Vec::new(),
+            outcome: judgement::Outcome::Disagree(format!("cell={cell} {detail}")),
+        });
     }
     for (axis, [counted, gaps, excluded]) in axes {
         lines.push(format!(
@@ -209,6 +209,7 @@ pub fn table(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::judgement::{EntryPoint, Instrument};
     use crate::{
         judgement::{Outcome, RunVerdict},
         record::{CorpusKind, RecordId},
@@ -221,7 +222,7 @@ mod tests {
     fn agreeing(cells: Vec<CellKey>) -> Verdict {
         Verdict {
             judge: Judge::Validation,
-            entry: EntryPoint::Instrument(Instrument::ReceiveTx),
+            entry: Some(EntryPoint::Instrument(Instrument::ReceiveTx)),
             subject: Subject::Record(RecordId {
                 corpus: CorpusKind::Ic,
                 n: 1,
@@ -279,10 +280,20 @@ mod tests {
                 .map(Verdict::to_string)
                 .collect::<Vec<_>>(),
             [
-                "VERDICT judge=coverage entry=receive_tx record=selection cells=leaf:A \
+                "VERDICT judge=coverage entry=none record=selection cells=leaf:A \
               outcome=disagree records=0 committed=1"
             ]
         );
+    }
+
+    #[test]
+    fn the_table_verdicts_name_no_entry_point_and_count_no_entry_cell() {
+        let (_, out) = run(vec![agreeing(vec![leaf("A")])], "leaf:A 1\nleaf:B 0\n");
+        let table: Vec<_> = out.passed(Judge::Coverage).map(|(p, _)| p.entry).collect();
+        assert_eq!(table, [None, None, None]);
+        let entries = counts(&out).into_keys().filter(|c| c.axis == Axis::Entry);
+        let receive_tx = EntryPoint::Instrument(Instrument::ReceiveTx);
+        assert_eq!(entries.collect::<Vec<_>>(), [CellKey::new(Axis::Entry, receive_tx)]);
     }
 
     #[test]

@@ -10,7 +10,7 @@ use ledger_oracle_judge::{
         self, named_in_message, wire_purpose, Answer, DolosAnswer, EvalTally, Layer, Level,
         Malformed, Refusal, RowKey, RowVerdict, TxDemand, WireEval, WireFee,
     },
-    judgement::{Axis, CellKey},
+    judgement::{Axis, CellKey, Version},
     record::{LedgerOutcome, LedgerRedeemers, Phase2, Record, RecordId, Units},
 };
 use pallas::codec::minicbor;
@@ -52,8 +52,8 @@ fn unrepresentable(
         let what = match (layer, r.sub_transaction) {
             (Layer::Pallas, _) => None,
             (_, Some(sub)) => Some(format!("{redeemer} of sub transaction {sub}")),
-            (Layer::V1beta | Layer::V1alpha, None) if guarding => Some(redeemer),
-            (Layer::V1 | Layer::V1beta | Layer::V1alpha, None) => None,
+            (Layer::Eval(Version::V1beta | Version::V1alpha), None) if guarding => Some(redeemer),
+            (Layer::Eval(_), None) => None,
         };
         what.map(|what| format!("RPC {layer} cannot represent redeemer {what}"))
     })
@@ -177,9 +177,9 @@ async fn wire_evals(group: &Group, tx: &[u8]) -> [(Layer, WireEval); 3] {
         e.msg.clone()
     ));
     [
-        (Layer::V1, v1),
-        (Layer::V1beta, v1beta),
-        (Layer::V1alpha, v1alpha),
+        (Layer::Eval(Version::V1), v1),
+        (Layer::Eval(Version::V1beta), v1beta),
+        (Layer::Eval(Version::V1alpha), v1alpha),
     ]
 }
 

@@ -338,7 +338,7 @@ pub enum Pass {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Passed {
     pub judge: Judge,
-    pub entry: EntryPoint,
+    pub entry: Option<EntryPoint>,
     pub cells: Vec<CellKey>,
     pub pass: Pass,
 }
@@ -385,7 +385,8 @@ impl fmt::Display for Finding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Verdict {
     pub judge: Judge,
-    pub entry: EntryPoint,
+    /// The entry point the judge drove, none for a judge of the oracle's own tables.
+    pub entry: Option<EntryPoint>,
     pub subject: Subject,
     pub cells: Vec<CellKey>,
     pub outcome: Outcome,
@@ -403,7 +404,7 @@ impl Verdict {
     ) -> Self {
         Verdict {
             judge,
-            entry,
+            entry: Some(entry),
             subject: Subject::Record(id),
             cells,
             outcome: Outcome::Disagree(detail.into()),
@@ -414,7 +415,7 @@ impl Verdict {
     pub fn selection_fails(judge: Judge, entry: EntryPoint, detail: impl Into<String>) -> Self {
         Verdict {
             judge,
-            entry,
+            entry: Some(entry),
             subject: Subject::Selection,
             cells: Vec::new(),
             outcome: Outcome::Disagree(detail.into()),
@@ -437,6 +438,7 @@ impl fmt::Display for Verdict {
             outcome,
         } = self;
         let cells: Vec<String> = cells.iter().map(CellKey::to_string).collect();
+        let entry = entry.map_or("none".to_string(), |entry| entry.to_string());
         write!(
             f,
             "VERDICT judge={judge} entry={entry} record={subject} cells={} outcome={}",
@@ -532,7 +534,7 @@ impl Tally {
     /// run.
     pub fn require(&mut self, required: &[(Judge, EntryPoint)]) {
         for (judge, entry) in required {
-            let at = |j: Judge, e: EntryPoint| j == *judge && e == *entry;
+            let at = |j: Judge, e: Option<EntryPoint>| j == *judge && e == Some(*entry);
             let passed = self.passing.keys().any(|p| at(p.judge, p.entry));
             if !passed && !self.failing.iter().any(|v| at(v.judge, v.entry)) {
                 self.add(Verdict::selection_fails(*judge, *entry, "judged=0"));
@@ -599,7 +601,7 @@ mod tests {
     fn agree(judge: Judge) -> Verdict {
         Verdict {
             judge,
-            entry: MIN_FEE,
+            entry: Some(MIN_FEE),
             subject: Subject::Record(id(1)),
             cells: Vec::new(),
             outcome: Outcome::Agree,
@@ -640,7 +642,7 @@ mod tests {
         tally.add(spend(Judge::EvalDraft, Outcome::Agree));
         let compared = Passed {
             judge: Judge::Cost,
-            entry: MIN_FEE,
+            entry: Some(MIN_FEE),
             cells: Vec::new(),
             pass: Pass::Agree,
         };
@@ -648,7 +650,7 @@ mod tests {
         tally.pass(compared.clone(), 0);
         let passed = |pass| Passed {
             judge: Judge::EvalOracle,
-            entry: MIN_FEE,
+            entry: Some(MIN_FEE),
             cells: vec![CellKey::new(Axis::Purpose, "Spend")],
             pass,
         };
@@ -707,7 +709,7 @@ mod tests {
         let eval_tx = |version| EntryPoint::Route(Route::EvalTx, version);
         let mut tally = Tally::default();
         tally.add(Verdict {
-            entry: eval_tx(Version::V1),
+            entry: Some(eval_tx(Version::V1)),
             ..agree(Judge::Cost)
         });
         tally.require(&[(Judge::Cost, eval_tx(Version::V1))]);

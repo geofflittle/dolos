@@ -2,27 +2,27 @@
 //! Dijkstra parameter keys each ReadTx version maps for a transaction against
 //! the ledger's transaction.
 
-use std::{fmt, panic::AssertUnwindSafe};
+use std::fmt;
 
 use dolos_cardano::indexes::ScriptLanguage;
-use futures_util::FutureExt as _;
 use itertools::Itertools as _;
 use ledger_oracle_judge::{
-    compare::ByEntry,
+    compare::{ByRoute, TxRoute},
     eval::WireFee,
-    judgement::{Axis, CellKey, EntryPoint, Finding, Route, Version},
+    judgement::{Axis, CellKey, Finding, Version},
     record::{CorpusKind, LedgerOutcome, RecordId},
 };
 use pallas::{
     crypto::hash::Hasher,
     ledger::traverse::{Era, MultiEraGovActionKind, MultiEraParamUpdate, MultiEraTx},
 };
-use tonic::Request;
 
 use super::{
-    eval::wire_fee, named_txs, validate::panic_message, witness_scripts, GroupBlock, TxName,
+    eval::wire_fee,
+    named_txs,
+    serve::{ReadTxAnswer, ReadTxs},
+    witness_scripts, GroupBlock, TxName,
 };
-use crate::adapters::DomainAdapter;
 
 /// A witness script by its language, with its hash when the message carries its
 /// bytes, none for a script message with no script in it.
@@ -326,28 +326,20 @@ impl<T> Answer<T> {
     }
 }
 
-/// The ReadTx answer of one u5c version for a transaction hash against the
-/// domain, with a panic of its mapping caught.
+/// The ReadTx answer of one u5c version for a transaction hash a run read.
 macro_rules! read_tx {
-    ($version:ident, $domain:expr, $hash:expr) => {{
-        use pallas::interop::utxorpc::$version::spec::query::{
-            any_chain_tx::Chain, query_service_server::QueryService as _, ReadTxRequest,
-        };
-        let request = ReadTxRequest {
-            hash: $hash.to_vec().into(),
-            ..Default::default()
-        };
-        let service = crate::serve::grpc::$version::query::QueryServiceImpl::new($domain.clone());
-        let answer = AssertUnwindSafe(service.read_tx(Request::new(request)))
-            .catch_unwind()
-            .await;
-        match answer {
-            Err(payload) => Answer::Panicked(panic_message(payload).replace('\n', " ")),
-            Ok(Err(status)) => Answer::Status(status.code()),
-            Ok(Ok(answer)) => match answer.into_inner().tx.and_then(|tx| tx.chain) {
-                Some(Chain::Cardano(tx)) => Answer::Mapped(tx),
-                None => Answer::Absent,
-            },
+    ($version:ident, $read:expr, $hash:expr) => {{
+        use pallas::interop::utxorpc::$version::spec::query::any_chain_tx::Chain;
+        let answer = $read.$version.get(&$hash);
+        match answer.expect("ReadTx was read for every accepted transaction") {
+            ReadTxAnswer::Panicked(message) => Answer::Panicked(message.clone()),
+            ReadTxAnswer::Status(status) => Answer::Status(status.code()),
+            ReadTxAnswer::Answered(answer) => {
+                match answer.tx.as_ref().and_then(|tx| tx.chain.as_ref()) {
+                    Some(Chain::Cardano(tx)) => Answer::Mapped(tx),
+                    None => Answer::Absent,
+                }
+            }
         }
     }};
 }
@@ -434,7 +426,7 @@ fn differing(ledger: &LedgerTx, mapped: &MappedTx) -> Vec<(Field, String, String
 /// Adds the comparison of what one version answers for one transaction the
 /// ledger accepted.
 fn add(
-    tally: &mut ByEntry,
+    tally: &mut ByRoute<TxRoute>,
     id: RecordId,
     layer: Version,
     name: TxName,
@@ -473,29 +465,22 @@ fn add(
     };
     cells.insert(0, CellKey::new(Axis::Layer, layer));
     cells.insert(1, CellKey::new(Axis::Tx, name.kind()));
-    let tally = tally.at(EntryPoint::Route(Route::ReadTx, layer));
+    let tally = tally.at(TxRoute::ReadTx, layer);
     tally.add(agrees, || {
         Finding::new(id, cells, format!("{layer} {name} {dolos}"))
     });
 }
 
-/// Evidence that ReadTx at every version mapped each accepted transaction of a
-/// run without a panic, which the passes that serve the run through every
-/// version take.
-pub(super) struct EveryVersionMaps(());
-
 /// Counts what each ReadTx version maps for the accepted records of the blocks
 /// a run rolled against the ledger's transactions, v1 by each top level hash
 /// with its sub transactions and v1beta and v1alpha by each top level and sub
-/// transaction hash, with the evidence that every version mapped them when no
-/// mapping panicked.
-pub(super) async fn compare(
-    domain: &DomainAdapter,
+/// transaction hash.
+pub(super) fn compare(
     kind: CorpusKind,
     blocks: &[GroupBlock<'_>],
-    tally: &mut ByEntry,
-) -> Option<EveryVersionMaps> {
-    let mut maps = Some(EveryVersionMaps(()));
+    read: &ReadTxs<String>,
+    tally: &mut ByRoute<TxRoute>,
+) {
     let groups = blocks.iter().filter_map(GroupBlock::rolled);
     let accepted = groups
         .flat_map(|rolled| rolled.group)
@@ -513,10 +498,7 @@ pub(super) async fn compare(
             .iter()
             .map(|(name, t)| (*name, LedgerTx::of(t)))
             .collect();
-        let served = read_tx!(v1, domain, top);
-        if let Answer::Panicked(_) = served {
-            maps = None;
-        }
+        let served = read_tx!(v1, read, top);
         for (name, ledger) in &named {
             let common = served.then(|tx| match name {
                 TxName::Top(_) => {
@@ -543,22 +525,14 @@ pub(super) async fn compare(
             add(tally, id, Version::V1, *name, ledger, common);
         }
         for &(name, ref ledger) in &named {
-            let hash = match name {
-                TxName::Top(h) | TxName::Sub(h) => h,
-            };
-            let served = read_tx!(v1beta, domain, hash);
-            if let Answer::Panicked(_) = served {
-                maps = None;
-            }
+            let hash = name.hash();
+            let served = read_tx!(v1beta, read, hash);
             let answer = served.then(|tx| {
                 let fee = wire_fee!(v1beta, tx.fee.clone());
                 Answer::Mapped(mapped!(v1beta, tx, Some(fee), None))
             });
             add(tally, id, Version::V1beta, name, ledger, answer);
-            let served = read_tx!(v1alpha, domain, hash);
-            if let Answer::Panicked(_) = served {
-                maps = None;
-            }
+            let served = read_tx!(v1alpha, read, hash);
             let answer = served.then(|tx| {
                 let fee = wire_fee!(v1alpha, tx.fee.clone());
                 Answer::Mapped(mapped!(v1alpha, tx, Some(fee), None))
@@ -566,7 +540,6 @@ pub(super) async fn compare(
             add(tally, id, Version::V1alpha, name, ledger, answer);
         }
     }
-    maps
 }
 
 #[test]

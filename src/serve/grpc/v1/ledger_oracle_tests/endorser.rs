@@ -525,7 +525,7 @@ impl EndorserTally {
         for (entry, agreed) in &self.agreed {
             let passed = judgement::Passed {
                 judge: Judge::Endorser,
-                entry: *entry,
+                entry: Some(*entry),
                 cells: Vec::new(),
                 pass: judgement::Pass::Agree,
             };

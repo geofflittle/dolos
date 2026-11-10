@@ -3,8 +3,8 @@
 
 use futures_util::{FutureExt as _, Stream, StreamExt as _};
 use ledger_oracle_judge::{
-    compare::{ByEntry, Tally},
-    judgement::{Axis, CellKey, EntryPoint, Finding, Route, Version},
+    compare::{ByRoute, SubmitRoute, Tally},
+    judgement::{Axis, CellKey, Finding, Version},
     record::RecordId,
     verdict::DolosVerdict,
 };
@@ -150,13 +150,12 @@ impl Watching {
         }
     }
 
-    /// The transactions each stream holds ready, by its entry point.
-    fn ready(&mut self) -> [(EntryPoint, Vec<Watched>); 3] {
-        let at = |version| EntryPoint::Route(Route::WatchMempool, version);
+    /// The transactions each stream holds ready, by its version.
+    fn ready(&mut self) -> [(Version, Vec<Watched>); 3] {
         [
-            (at(v1::VERSION), self.v1.ready()),
-            (at(v1beta::VERSION), self.v1beta.ready()),
-            (at(v1alpha::VERSION), self.v1alpha.ready()),
+            (v1::VERSION, self.v1.ready()),
+            (v1beta::VERSION, self.v1beta.ready()),
+            (v1alpha::VERSION, self.v1alpha.ready()),
         ]
     }
 }
@@ -177,7 +176,7 @@ pub(super) async fn compare(
     tx: &[u8],
     hash: Option<[u8; 32]>,
     dolos: &DolosVerdict,
-    tallies: &mut ByEntry,
+    tallies: &mut ByRoute<SubmitRoute>,
 ) {
     let accepted = matches!(dolos, DolosVerdict::Accepted);
     let version = version_of(id);
@@ -186,7 +185,6 @@ pub(super) async fn compare(
         Version::V1beta => v1beta::submit_tx(domain, tx).await,
         Version::V1alpha => v1alpha::submit_tx(domain, tx).await,
     };
-    let submit = EntryPoint::Route(Route::SubmitTx, version);
     let answer = match &submitted {
         Ok(r) => format!("ref={}", hex::encode(r)),
         Err(message) => format!("refused {message}"),
@@ -195,7 +193,8 @@ pub(super) async fn compare(
         Ok(r) => accepted && hash.is_some_and(|h| r.as_slice() == h),
         Err(_) => !accepted,
     };
-    add(tallies.at(submit), agrees, id, "submit", dolos, answer);
+    let submit = tallies.at(SubmitRoute::SubmitTx, version);
+    add(submit, agrees, id, "submit", dolos, answer);
     if let Some(hash) = hash {
         wait_for_tx(domain, id, hash, dolos, tallies).await;
     }
@@ -205,7 +204,7 @@ pub(super) async fn compare(
         stage: MEMPOOL.to_string(),
     });
     let expected: Vec<Watched> = watched.filter(|_| accepted).into_iter().collect();
-    for (entry, ready) in watching.ready() {
+    for (version, ready) in watching.ready() {
         let answer = ready.iter().map(|w| {
             let held = if w.bytes == tx {
                 "bytes=equal"
@@ -216,7 +215,7 @@ pub(super) async fn compare(
         });
         let answer = format!("served=[{}]", answer.collect::<Vec<_>>().join(","));
         add(
-            tallies.at(entry),
+            tallies.at(SubmitRoute::WatchMempool, version),
             ready == expected,
             id,
             "watch",
@@ -233,7 +232,7 @@ async fn wait_for_tx(
     id: RecordId,
     hash: [u8; 32],
     dolos: &DolosVerdict,
-    tallies: &mut ByEntry,
+    tallies: &mut ByRoute<SubmitRoute>,
 ) {
     let accepted = matches!(dolos, DolosVerdict::Accepted);
     let expected = if accepted { MEMPOOL } else { UNSPECIFIED };
@@ -243,7 +242,6 @@ async fn wait_for_tx(
         (v1alpha::VERSION, v1alpha::wait_for_tx(domain, &hash).await),
     ];
     for (version, first) in waits {
-        let entry = EntryPoint::Route(Route::WaitForTx, version);
         let agrees = first
             .as_ref()
             .is_some_and(|(r, stage)| r.as_slice() == hash && stage == expected);
@@ -251,7 +249,8 @@ async fn wait_for_tx(
             Some((r, stage)) => format!("ref={} stage={stage}", hex::encode(r)),
             None => "none".to_string(),
         };
-        add(tallies.at(entry), agrees, id, "stage", dolos, answer);
+        let tally = tallies.at(SubmitRoute::WaitForTx, version);
+        add(tally, agrees, id, "stage", dolos, answer);
     }
 }
 

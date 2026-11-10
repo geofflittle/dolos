@@ -1,9 +1,14 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    convert::Infallible,
+    time::Duration,
+};
 
 use dolos_core::{BlockHash, ChainPoint};
 use ledger_oracle_judge::{
     cbor::TxIn,
-    judgement::{EntryPoint, Route, Version},
+    compare::{OutputRoute, UtxoRoute},
+    judgement::Version,
 };
 
 use super::output::ServedOutput;
@@ -17,7 +22,8 @@ pub(super) type Served = BTreeMap<[u8; 32], Vec<(TxIn, Option<ServedOutput>)>>;
 /// What one route at one version serves for the inputs of the transactions it serves.
 #[derive(Debug)]
 pub(super) struct RouteServed {
-    pub(super) entry: EntryPoint,
+    pub(super) route: OutputRoute,
+    pub(super) version: Version,
     /// Whether the version states the inputs only sub transactions name.
     pub(super) subs: bool,
     pub(super) served: Served,
@@ -25,10 +31,85 @@ pub(super) struct RouteServed {
 
 /// What ReadTx at one version serves for a transaction hash, nothing when it answers not found, or the status it answers with otherwise.
 pub(super) struct TxFound {
-    pub(super) entry: EntryPoint,
+    pub(super) version: Version,
     /// Whether the version states sub transactions, so answers the hash of one with the transaction that lists it.
     pub(super) subs: bool,
-    pub(super) answer: Result<Option<super::ServedTx>, tonic::Status>,
+    pub(super) answer: Result<Option<super::ServedTx>, tonic::Code>,
+}
+
+/// What ReadTx at one version answers for a transaction hash, with `P` holding a panic of the version's mapping.
+#[derive(Debug)]
+pub(super) enum ReadTxAnswer<T, P> {
+    /// The message the version answers with.
+    Answered(T),
+    /// The status the version answers in place of a message.
+    Status(tonic::Status),
+    /// A panic of the version's mapping.
+    Panicked(P),
+}
+
+impl<T> ReadTxAnswer<T, String> {
+    /// The answer, or the message of its panic.
+    fn unpanicked(self) -> Result<ReadTxAnswer<T, Infallible>, String> {
+        match self {
+            ReadTxAnswer::Answered(answer) => Ok(ReadTxAnswer::Answered(answer)),
+            ReadTxAnswer::Status(status) => Ok(ReadTxAnswer::Status(status)),
+            ReadTxAnswer::Panicked(message) => Err(message),
+        }
+    }
+}
+
+/// What ReadTx at one version answers for each transaction hash it was asked.
+pub(super) type Answers<T, P> = BTreeMap<[u8; 32], ReadTxAnswer<T, P>>;
+
+/// What ReadTx answers at every version for each transaction hash a run judges, with `P` holding a panic of a version's mapping.
+#[derive(Debug)]
+pub(super) struct ReadTxs<P> {
+    pub(super) v1: Answers<v1::Response, P>,
+    pub(super) v1beta: Answers<v1beta::Response, P>,
+    pub(super) v1alpha: Answers<v1alpha::Response, P>,
+}
+
+/// The answers of one version when its mapping panicked for no hash.
+fn unpanicked<T>(answers: Answers<T, String>) -> Option<Answers<T, Infallible>> {
+    let unpanicked = answers
+        .into_iter()
+        .map(|(hash, answer)| Some((hash, answer.unpanicked().ok()?)));
+    unpanicked.collect()
+}
+
+impl ReadTxs<String> {
+    /// What ReadTx answers at every version for each of the hashes.
+    pub(super) async fn read(
+        domain: &crate::adapters::DomainAdapter,
+        hashes: &BTreeSet<[u8; 32]>,
+    ) -> Self {
+        ReadTxs {
+            v1: v1::read_txs(domain, hashes).await,
+            v1beta: v1beta::read_txs(domain, hashes).await,
+            v1alpha: v1alpha::read_txs(domain, hashes).await,
+        }
+    }
+
+    /// The answers when no version's mapping panicked for any hash.
+    pub(super) fn unpanicked(self) -> Option<ReadTxs<Infallible>> {
+        Some(ReadTxs {
+            v1: unpanicked(self.v1)?,
+            v1beta: unpanicked(self.v1beta)?,
+            v1alpha: unpanicked(self.v1alpha)?,
+        })
+    }
+}
+
+impl ReadTxs<Infallible> {
+    /// What ReadTx serves at every version for a transaction hash.
+    pub(super) fn found(&self, hash: &[u8; 32]) -> [TxFound; 3] {
+        [
+            v1::read_tx_found(&self.v1, hash),
+            v1beta::read_tx_found(&self.v1beta, hash),
+            v1alpha::read_tx_found(&self.v1alpha, hash),
+        ]
+    }
 }
 
 /// The bytes of one output a route serves, with the fields it parses from them.
@@ -67,14 +148,17 @@ macro_rules! served_routes {
         exact_address: |$a:ident| $exact_address:expr $(,)?
     ) => {
         pub(super) mod $version {
+            use std::{collections::BTreeSet, convert::Infallible, panic::AssertUnwindSafe};
+
             use dolos_core::{BlockHash, ChainPoint};
-            use futures_util::StreamExt as _;
+            use futures_util::{FutureExt as _, StreamExt as _};
             use ledger_oracle_judge::cbor::TxIn;
             use tokio_util::sync::CancellationToken;
             use tonic::Request;
 
+            use super::super::validate::panic_message;
             use super::{hash32, Event, LatestParams, RouteServed, Served, Utxo, Utxos, NEXT};
-            use super::{EntryPoint, Route, Version};
+            use super::{Answers, OutputRoute, ReadTxAnswer, UtxoRoute, Version};
             use crate::serve::grpc::$version::{
                 query::QueryServiceImpl,
                 spec::{
@@ -91,9 +175,10 @@ macro_rules! served_routes {
             /// The version these routes answer at.
             pub(in super::super) const VERSION: Version = Version::$name;
 
-            fn route(route: Route, served: Served) -> RouteServed {
+            fn route(route: OutputRoute, served: Served) -> RouteServed {
                 RouteServed {
-                    entry: EntryPoint::Route(route, VERSION),
+                    route,
+                    version: VERSION,
                     subs: $subs,
                     served,
                 }
@@ -156,7 +241,7 @@ macro_rules! served_routes {
                     assert_eq!(fetched.len(), 1, "FetchBlock serves one block a ref names");
                     add_block(&mut served, &fetched[0]);
                 }
-                route(Route::FetchBlock, served)
+                route(OutputRoute::FetchBlock, served)
             }
 
             /// The inputs DumpHistory serves for the transactions of each block, read one block a page from it.
@@ -180,53 +265,82 @@ macro_rules! served_routes {
                     assert_eq!(page.len(), 1, "DumpHistory serves the page a token starts");
                     add_block(&mut served, &page[0]);
                 }
-                route(Route::DumpHistory, served)
+                route(OutputRoute::DumpHistory, served)
             }
 
-            /// The inputs ReadTx serves for each transaction hash it finds.
-            pub(in super::super) async fn read_tx(
+            /// The message ReadTx answers with at this version.
+            pub(in super::super) type Response = q::ReadTxResponse;
+
+            /// What ReadTx answers at this version for each of the hashes, with a panic of its mapping caught.
+            pub(in super::super) async fn read_txs(
                 domain: &DomainAdapter,
-                txs: &[[u8; 32]],
-            ) -> RouteServed {
-                let service = QueryServiceImpl::new(domain.clone());
-                let mut served = Served::new();
-                for hash in txs {
+                hashes: &BTreeSet<[u8; 32]>,
+            ) -> Answers<Response, String> {
+                let mut answers = Answers::new();
+                for hash in hashes {
                     let request = q::ReadTxRequest {
                         hash: hash.to_vec().into(),
                         ..Default::default()
                     };
-                    let Ok(response) = service.read_tx(Request::new(request)).await else {
-                        continue;
+                    let service = QueryServiceImpl::new(domain.clone());
+                    let answer = AssertUnwindSafe(service.read_tx(Request::new(request)))
+                        .catch_unwind()
+                        .await;
+                    let answer = match answer {
+                        Err(payload) => {
+                            ReadTxAnswer::Panicked(panic_message(payload).replace('\n', " "))
+                        }
+                        Ok(Err(status)) => ReadTxAnswer::Status(status),
+                        Ok(Ok(response)) => ReadTxAnswer::Answered(response.into_inner()),
                     };
-                    let tx = response.into_inner().tx.and_then(|tx| tx.chain);
+                    answers.insert(*hash, answer);
+                }
+                answers
+            }
+
+            /// The inputs ReadTx serves for each transaction hash it finds.
+            pub(in super::super) fn read_tx(
+                answers: &Answers<Response, Infallible>,
+                txs: &[[u8; 32]],
+            ) -> RouteServed {
+                let mut served = Served::new();
+                for hash in txs {
+                    let answer = answers.get(hash).expect("ReadTx was read for every rolled transaction");
+                    let response = match answer {
+                        ReadTxAnswer::Answered(response) => response,
+                        ReadTxAnswer::Status(_) => continue,
+                        ReadTxAnswer::Panicked(never) => match *never {},
+                    };
+                    let tx = response.tx.as_ref().and_then(|tx| tx.chain.as_ref());
                     if let Some(q::any_chain_tx::Chain::Cardano(tx)) = tx {
-                        add_tx(&mut served, &tx);
+                        add_tx(&mut served, tx);
                     }
                 }
-                route(Route::ReadTx, served)
+                route(OutputRoute::ReadTx, served)
             }
 
             /// What ReadTx serves for a transaction hash.
-            pub(in super::super) async fn read_tx_found(
-                domain: &DomainAdapter,
+            pub(in super::super) fn read_tx_found(
+                answers: &Answers<Response, Infallible>,
                 hash: &[u8; 32],
             ) -> super::TxFound {
                 let found = |answer| super::TxFound {
-                    entry: EntryPoint::Route(Route::ReadTx, VERSION),
+                    version: VERSION,
                     subs: $subs,
                     answer,
                 };
-                let request = q::ReadTxRequest {
-                    hash: hash.to_vec().into(),
-                    ..Default::default()
+                let answer = answers.get(hash).expect("ReadTx was read for every judged transaction");
+                let tx = match answer {
+                    ReadTxAnswer::Answered(response) => {
+                        response.tx.as_ref().expect("ReadTx answers with a transaction")
+                    }
+                    ReadTxAnswer::Status(status) if status.code() == tonic::Code::NotFound => {
+                        return found(Ok(None))
+                    }
+                    ReadTxAnswer::Status(status) => return found(Err(status.code())),
+                    ReadTxAnswer::Panicked(never) => match *never {},
                 };
-                let service = QueryServiceImpl::new(domain.clone());
-                let tx = match service.read_tx(Request::new(request)).await {
-                    Ok(answer) => answer.into_inner().tx.expect("ReadTx answers with a transaction"),
-                    Err(status) if status.code() == tonic::Code::NotFound => return found(Ok(None)),
-                    Err(status) => return found(Err(status)),
-                };
-                let block = tx.block_ref.expect("ReadTx names the block");
+                let block = tx.block_ref.as_ref().expect("ReadTx names the block");
                 let served = super::super::ServedTx {
                     block: super::super::BlockAt {
                         slot: block.slot,
@@ -241,7 +355,7 @@ macro_rules! served_routes {
             pub(in super::super) async fn read_utxos(
                 domain: &DomainAdapter,
                 inputs: &[&TxIn],
-            ) -> (EntryPoint, Utxos) {
+            ) -> ((UtxoRoute, Version), Utxos) {
                 let keys = inputs.iter().map(|i| q::TxoRef {
                     hash: i.tx.to_vec().into(),
                     index: super::super::seed::txo_ref(i).1,
@@ -253,14 +367,14 @@ macro_rules! served_routes {
                 let service = QueryServiceImpl::new(domain.clone());
                 let response = service.read_utxos(Request::new(request)).await;
                 let items = response.unwrap().into_inner().items;
-                (EntryPoint::Route(Route::ReadUtxos, VERSION), utxos(items))
+                ((UtxoRoute::ReadUtxos, VERSION), utxos(items))
             }
 
             /// The output SearchUtxos serves for each input it finds at any of the addresses, one search an address.
             pub(in super::super) async fn search_utxos(
                 domain: &DomainAdapter,
                 addresses: &[&[u8]],
-            ) -> (EntryPoint, Utxos) {
+            ) -> ((UtxoRoute, Version), Utxos) {
                 let service = QueryServiceImpl::new(domain.clone());
                 let mut served = Utxos::new();
                 for $a in addresses {
@@ -286,7 +400,7 @@ macro_rules! served_routes {
                     let response = service.search_utxos(Request::new(request)).await;
                     served.extend(utxos(response.unwrap().into_inner().items));
                 }
-                (EntryPoint::Route(Route::SearchUtxos, VERSION), served)
+                ((UtxoRoute::SearchUtxos, VERSION), served)
             }
 
             /// The served output of each item, by the input it names.
@@ -417,7 +531,7 @@ macro_rules! served_routes {
                         }
                     }
                     self.cancel.cancel();
-                    [route(Route::FollowTip, follow), route(Route::WatchTx, watch)]
+                    [route(OutputRoute::FollowTip, follow), route(OutputRoute::WatchTx, watch)]
                 }
             }
         }
@@ -532,7 +646,7 @@ impl Streams {
 pub(super) async fn read_utxos(
     domain: &crate::adapters::DomainAdapter,
     inputs: &[&TxIn],
-) -> [(EntryPoint, Utxos); 3] {
+) -> [((UtxoRoute, Version), Utxos); 3] {
     [
         v1::read_utxos(domain, inputs).await,
         v1beta::read_utxos(domain, inputs).await,
@@ -544,23 +658,11 @@ pub(super) async fn read_utxos(
 pub(super) async fn search_utxos(
     domain: &crate::adapters::DomainAdapter,
     addresses: &[&[u8]],
-) -> [(EntryPoint, Utxos); 3] {
+) -> [((UtxoRoute, Version), Utxos); 3] {
     [
         v1::search_utxos(domain, addresses).await,
         v1beta::search_utxos(domain, addresses).await,
         v1alpha::search_utxos(domain, addresses).await,
-    ]
-}
-
-/// What ReadTx serves at every version for a transaction hash.
-pub(super) async fn read_tx_found(
-    domain: &crate::adapters::DomainAdapter,
-    hash: &[u8; 32],
-) -> [TxFound; 3] {
-    [
-        v1::read_tx_found(domain, hash).await,
-        v1beta::read_tx_found(domain, hash).await,
-        v1alpha::read_tx_found(domain, hash).await,
     ]
 }
 
@@ -579,6 +681,7 @@ pub(super) async fn read_params(
 pub(super) async fn fetched(
     domain: &crate::adapters::DomainAdapter,
     blocks: &[BlockHash],
+    read: &ReadTxs<Infallible>,
     txs: &[[u8; 32]],
 ) -> Vec<RouteServed> {
     vec![
@@ -588,8 +691,34 @@ pub(super) async fn fetched(
         v1::dump_history(domain, blocks).await,
         v1beta::dump_history(domain, blocks).await,
         v1alpha::dump_history(domain, blocks).await,
-        v1::read_tx(domain, txs).await,
-        v1beta::read_tx(domain, txs).await,
-        v1alpha::read_tx(domain, txs).await,
+        v1::read_tx(&read.v1, txs),
+        v1beta::read_tx(&read.v1beta, txs),
+        v1alpha::read_tx(&read.v1alpha, txs),
     ]
+}
+
+#[test]
+fn answers_with_no_panic_are_kept_whole() {
+    let answers: Answers<u8, String> = BTreeMap::from([
+        ([1; 32], ReadTxAnswer::Answered(7)),
+        ([2; 32], ReadTxAnswer::Status(tonic::Status::not_found("none"))),
+    ]);
+    let kept = unpanicked(answers).expect("no answer panicked");
+    assert!(matches!(kept[&[1; 32]], ReadTxAnswer::Answered(7)));
+    let status = match &kept[&[2; 32]] {
+        ReadTxAnswer::Status(status) => status.code(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(status, tonic::Code::NotFound);
+    assert_eq!(kept.len(), 2);
+}
+
+#[test]
+fn one_panicked_answer_leaves_no_answers() {
+    let answers: Answers<u8, String> = BTreeMap::from([
+        ([1; 32], ReadTxAnswer::Answered(7)),
+        ([2; 32], ReadTxAnswer::Panicked("mapping".to_string())),
+        ([3; 32], ReadTxAnswer::Status(tonic::Status::not_found("none"))),
+    ]);
+    assert!(unpanicked(answers).is_none());
 }

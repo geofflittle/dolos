@@ -198,25 +198,39 @@ impl fmt::Display for DolosRow {
     }
 }
 
-judgement::named! {
-    /// A layer of Dolos that answers for the evaluation of a transaction, the evaluator first.
-    "layer" Layer {
-        Pallas = "pallas",
-        V1 = "v1",
-        V1beta = "v1beta",
-        V1alpha = "v1alpha",
-    }
+/// A layer of Dolos that answers for the evaluation of a transaction, the evaluator first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Layer {
+    Pallas,
+    Eval(Version),
 }
 
 impl Layer {
+    /// Every layer, in the order a run prints them.
+    pub const ALL: [Layer; 1 + Version::ALL.len()] = {
+        let mut all = [Layer::Pallas; 1 + Version::ALL.len()];
+        let mut i = 0;
+        while i < Version::ALL.len() {
+            all[1 + i] = Layer::Eval(Version::ALL[i]);
+            i += 1;
+        }
+        all
+    };
+
     /// The entry point that answers at the layer.
     pub fn entry(self) -> EntryPoint {
-        let eval_tx = |version| EntryPoint::Route(Route::EvalTx, version);
         match self {
             Layer::Pallas => Instrument::EstimateTxCalls.into(),
-            Layer::V1 => eval_tx(Version::V1),
-            Layer::V1beta => eval_tx(Version::V1beta),
-            Layer::V1alpha => eval_tx(Version::V1alpha),
+            Layer::Eval(version) => EntryPoint::Route(Route::EvalTx, version),
+        }
+    }
+}
+
+impl fmt::Display for Layer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Layer::Pallas => f.write_str("pallas"),
+            Layer::Eval(version) => write!(f, "{version}"),
         }
     }
 }
@@ -843,7 +857,7 @@ fn estimate(
     cells.push(CellKey::new(Axis::RequestShape, judge.shape()));
     Verdict {
         judge: judge.judge(),
-        entry: layer.entry(),
+        entry: Some(layer.entry()),
         subject: Subject::Record(id),
         cells,
         outcome,
@@ -1828,7 +1842,7 @@ mod tests {
         for layer in Layer::ALL {
             t.add_rows(layer, ic(1), &agree);
         }
-        t.add_fee(Layer::V1, ic(1), Some(7), &WireFee::Unset);
+        t.add_fee(Layer::Eval(Version::V1), ic(1), Some(7), &WireFee::Unset);
         assert!(passes(&t) && t.every_layer_judged(EvalJudge::Oracle), "{t}");
         let mut no_v1alpha = EvalTally::default();
         for layer in &Layer::ALL[..3] {
@@ -1844,7 +1858,7 @@ mod tests {
         let mut twice = t.clone();
         let ledger = BTreeMap::from([(key(Level::Top, 0, 0), ran(1, 2))]);
         let malformed = Err(Malformed::Twice(key(Level::Top, 0, 0)));
-        let verdicts = twice.add_answer(Layer::V1, ic(4), &ledger, &BTreeMap::new(), malformed);
+        let verdicts = twice.add_answer(Layer::Eval(Version::V1), ic(4), &ledger, &BTreeMap::new(), malformed);
         assert!(verdicts.is_empty());
         assert_eq!(
             lines(&failed(&twice, Judge::EvalOracle)),
@@ -1852,7 +1866,7 @@ mod tests {
         );
         assert!(!passes(&twice));
         let mut differing_fee = t.clone();
-        differing_fee.add_fee(Layer::V1, ic(1), Some(7), &WireFee::Int(8));
+        differing_fee.add_fee(Layer::Eval(Version::V1), ic(1), Some(7), &WireFee::Int(8));
         assert!(!passes(&differing_fee));
         let mut refused = t.clone();
         let row = row_verdict(Some(Answer::Failed), DolosRow::Refused(refusal("r")), None);
@@ -1864,7 +1878,7 @@ mod tests {
         );
         let mut slow = t.clone();
         let row = row_verdict(Some(ran(1, 2)), DolosRow::Answered(ran(3, 2)), None);
-        slow.add_rows(Layer::V1, ic(5), &[(key(Level::Top, 0, 0), row)]);
+        slow.add_rows(Layer::Eval(Version::V1), ic(5), &[(key(Level::Top, 0, 0), row)]);
         let cells = &failed(&slow, Judge::EvalOracle)[0].cells;
         assert!(cells.iter().any(|c| c.to_string() == "units:mem"));
         assert!(!cells.iter().any(|c| c.to_string() == "units:steps"));
@@ -1895,14 +1909,14 @@ mod tests {
             ),
             (key(Level::Top, 0, 0), RowVerdict::Agree(ran(1, 2))),
         ];
-        t.add_rows(Layer::V1, ic(1), &rows);
+        t.add_rows(Layer::Eval(Version::V1), ic(1), &rows);
         let mut other = EvalTally::default();
         other.add_rows(Layer::Pallas, ic(1), &rows[3..]);
         t.merge(other);
         let units = Units { mem: 1, steps: 2 };
         let ran = BTreeMap::from([
             ((Layer::Pallas, key(Level::Top, 0, 0)), units),
-            ((Layer::V1, key(Level::Top, 0, 0)), units),
+            ((Layer::Eval(Version::V1), key(Level::Top, 0, 0)), units),
         ]);
         assert_eq!(t.ran, BTreeMap::from([(ic(1), ran)]));
     }
@@ -1915,7 +1929,7 @@ mod tests {
             (key(Level::Sub(0), 0, 0), RowVerdict::Known(refusal("r"))),
         ];
         t.add_rows(Layer::Pallas, ic(1), &rows);
-        t.add_rows(Layer::V1, ic(1), &rows);
+        t.add_rows(Layer::Eval(Version::V1), ic(1), &rows);
         t.undecoded = 1;
         let mut merged = EvalTally::default();
         merged.merge(t.clone());
@@ -2079,7 +2093,7 @@ mod tests {
         assert!(passes(&t));
         assert!(t.every_layer_judged(EvalJudge::Tx));
         let disagree = tx_verdict(demand, &none_evaluated(), None);
-        t.add_tx(Layer::V1beta, ic(4), &disagree);
+        t.add_tx(Layer::Eval(Version::V1beta), ic(4), &disagree);
         assert!(!passes(&t));
         let mut merged = EvalTally::default();
         merged.merge(t.clone());
@@ -2170,7 +2184,7 @@ mod tests {
         assert!(t.every_layer_judged(EvalJudge::Draft));
         let rows_failed = BTreeMap::from([(key(Level::Top, 0, 0), Answer::Failed)]);
         let budget = Ok(DolosAnswer::Evaluated(rows_failed));
-        t.add_draft(Layer::V1, ic(2), &ledger, &unlisted, budget);
+        t.add_draft(Layer::Eval(Version::V1), ic(2), &ledger, &unlisted, budget);
         let witnesses = refused_for("missing key witnesses");
         t.add_draft(Layer::Pallas, ic(2), &ledger, &unlisted, witnesses);
         assert!(!passes(&t));
@@ -2207,7 +2221,7 @@ mod tests {
         assert!(t.every_layer_judged(EvalJudge::RewardOutput));
         let unsupported = refused_for("output address (requires Shelley)");
         t.add_reward_output(Layer::Pallas, ic(2), &expected, &unsupported);
-        t.add_reward_output(Layer::V1, ic(2), &expected, &none_evaluated());
+        t.add_reward_output(Layer::Eval(Version::V1), ic(2), &expected, &none_evaluated());
         assert!(!passes(&t));
         let mut merged = EvalTally::default();
         merged.merge(t.clone());
@@ -2245,5 +2259,11 @@ mod tests {
         let mut expected = vec![Instrument::EstimateTxCalls.into()];
         expected.extend(Version::ALL.map(|v| EntryPoint::Route(Route::EvalTx, v)));
         assert_eq!(entries, expected);
+    }
+
+    #[test]
+    fn a_layer_prints_the_evaluator_or_the_version_it_answers_at() {
+        let names = Layer::ALL.map(|layer| layer.to_string());
+        assert_eq!(names, ["pallas", "v1", "v1beta", "v1alpha"]);
     }
 }

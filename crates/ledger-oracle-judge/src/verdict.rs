@@ -440,7 +440,7 @@ impl ValidationTally {
     pub fn report(&self, out: &mut judgement::Tally) {
         let passed = |cells, pass| judgement::Passed {
             judge: Judge::Validation,
-            entry: EntryPoint::Instrument(Instrument::ReceiveTx),
+            entry: Some(EntryPoint::Instrument(Instrument::ReceiveTx)),
             cells,
             pass,
         };

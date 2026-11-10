@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, fmt, str::FromStr};
 use thiserror::Error;
 
 use crate::{
-    judgement::{Axis, EntryPoint, Instrument, Judge, Route, UnknownName, Version},
+    judgement::{Axis, EntryPoint, Judge, UnknownName},
     record::{CorpusKind, RecordId},
     row::{coverage, Check, Row},
 };
@@ -40,16 +40,12 @@ impl Locus {
         }
     }
 
-    /// The judge of the comparison the locus names and the entry point it
-    /// drives.
-    pub fn judge(self) -> (Judge, EntryPoint) {
+    /// The judge of the comparison the locus names.
+    pub fn judge(self) -> Judge {
         match self {
-            Locus::Validation => (Judge::Validation, Instrument::ReceiveTx.into()),
-            Locus::AsOutput => (
-                Judge::AsOutput,
-                EntryPoint::Route(Route::FetchBlock, Version::V1),
-            ),
-            Locus::Accounts => (Judge::Accounts, Instrument::ReadAccounts.into()),
+            Locus::Validation => Judge::Validation,
+            Locus::AsOutput => Judge::AsOutput,
+            Locus::Accounts => Judge::Accounts,
         }
     }
 }
@@ -388,6 +384,7 @@ pub fn catches() -> Result<Catches, ManifestError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::judgement::{Instrument, Route, Version};
 
     #[test]
     fn the_committed_manifests_parse() {
