@@ -113,7 +113,8 @@ pub fn replace_part(
         let Some(others) = held.checked_sub(added) else {
             return Err(format!("{cell} head={held} part={added}"));
         };
-        counts.insert(cell.clone(), others + kept);
+        let _ = kept;
+        counts.insert(cell.clone(), others);
     }
     Ok(counts)
 }
