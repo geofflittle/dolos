@@ -279,7 +279,7 @@ mod tests {
                 .map(Verdict::to_string)
                 .collect::<Vec<_>>(),
             [
-                "VERDICT judge=coverage entry=receive_tx record=selection cells=leaf:A \
+                "VERDICT judge=coverage entry=none record=selection cells=leaf:A \
               outcome=disagree records=0 committed=1"
             ]
         );

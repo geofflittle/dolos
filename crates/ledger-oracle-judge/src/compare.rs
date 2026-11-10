@@ -641,6 +641,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_known_record_is_reported_at_each_route_that_disagrees_and_no_other() {
+        let mut state = compared();
+        let known = KnownList::from([((Locus::AsOutput, supp(9)), Row::S3)]);
+        let mut checked = agreed_at(SERVED_OUTPUTS);
+        let diff = "ledger=ab dolos=none input=00#1 services=DumpHistory";
+        let finding = || Finding::new(supp(9), Vec::new(), diff);
+        let dump_history = EntryPoint::Route(Route::DumpHistory, Version::V1alpha);
+        checked.at(dump_history).add(false, finding);
+        let checks = BTreeMap::from([(supp(9), checked)]);
+        state.settle_as_output(CorpusKind::Supp, checks, &known);
+        let out = reported(&state);
+        let reported_known: Vec<(String, usize)> = out
+            .passed(Judge::AsOutput)
+            .filter(|(passed, _)| passed.pass == judgement::Pass::Known)
+            .map(|(passed, n)| (passed.entry.to_string(), n))
+            .collect();
+        let dump_history = "dump_history:v1alpha".to_string();
+        assert_eq!(reported_known, [(dump_history, 1)], "{state}");
+        assert_eq!(state.known_fired, known);
+        assert!(passes(&state), "{state}");
+    }
+
     /// The verdicts the state reports.
     fn reported(state: &StateTallies) -> judgement::Tally {
         let mut out = judgement::Tally::default();
