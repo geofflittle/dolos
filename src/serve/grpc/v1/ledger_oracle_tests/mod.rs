@@ -13,6 +13,7 @@ mod seed;
 mod serve;
 mod served_tx;
 mod submit;
+mod timing;
 mod validate;
 
 use std::{
@@ -77,6 +78,7 @@ use pallas::{
 };
 use seed::SeedPoint;
 use serve::{Event, ReadTxs, RouteServed};
+use timing::{Stopwatch, Timing};
 use tokio::{runtime::Handle, task};
 use validate::Relay;
 
@@ -209,8 +211,8 @@ fn show_input(input: &TxIn) -> String {
 }
 
 /// The validation outcomes, phase one rules, state comparisons, fee, redeemer
-/// evaluation and script context comparisons and manifest candidates of one
-/// corpus.
+/// evaluation and script context comparisons, manifest candidates and pass
+/// times of one corpus.
 #[derive(Debug, Default)]
 struct Judged {
     validation: ValidationTally,
@@ -220,6 +222,7 @@ struct Judged {
     eval: EvalTally,
     context: ContextTally,
     candidates: Candidates,
+    timing: Timing,
 }
 
 impl Judged {
@@ -246,8 +249,10 @@ impl Judged {
             eval,
             context,
             candidates: Candidates { declared, known },
+            timing,
         } = other;
         let Known { records, live } = known;
+        self.timing.merge(timing);
         self.validation.merge(validation);
         self.rules.merge(rules);
         self.state.merge(state);
@@ -687,7 +692,9 @@ async fn validate_run<'r>(
         eval: evaluations,
         context,
         candidates,
+        timing,
     } = tallies;
+    let mut watch = Stopwatch::start();
     let unlisted = BTreeMap::new();
     let context_unlisted = BTreeMap::new();
     let id_of = |record: &Record| RecordId {
@@ -704,6 +711,7 @@ async fn validate_run<'r>(
         let relayed = validate::group(base, records[0].slot, Relay::Inflight);
         let routed = validate::group(base, records[0].slot, Relay::Held);
         let mut watching = submit::Watching::open(routed.domain()).await;
+        watch.charge(&mut timing.groups);
         let mut given = BTreeMap::new();
         let mut dolos_accepted = BTreeSet::new();
         for record in records {
@@ -717,6 +725,7 @@ async fn validate_run<'r>(
             }
             let declared = manifests.declared.get(&id);
             let mut calls = Vec::new();
+            watch.charge(&mut timing.receive);
             if missing.failed_by.is_empty() {
                 compare_fee(&group, id, record, cost);
                 let listed = manifests.eval.get(&id).unwrap_or(&unlisted);
@@ -733,6 +742,7 @@ async fn validate_run<'r>(
                 cost.skipped_cascade += 1;
                 evaluations.skipped_cascade += 1;
             }
+            watch.charge(&mut timing.evaluate);
             let submit = |group: &validate::Group| match record.flag() {
                 Phase2::Valid => group.receive(&record.tx.0),
                 // A submitted transaction carries no flag, so one the ledger
@@ -750,7 +760,9 @@ async fn validate_run<'r>(
                 };
                 let (domain, tx) = (routed.domain(), &record.tx.0);
                 let tallies = &mut state.submit;
+                watch.charge(&mut timing.receive);
                 submit::compare(domain, &mut watching, id, tx, hash, &dolos, tallies).await;
+                watch.charge(&mut timing.submit_routes);
             }
             if matches!(dolos, DolosVerdict::Accepted) {
                 dolos_accepted.insert(record.n);
@@ -784,6 +796,7 @@ async fn validate_run<'r>(
             given.insert(id, maker(id, &dolos, &judgement));
             tally.add(id, judgement, cells);
             judged.insert(id);
+            watch.charge(&mut timing.receive);
         }
         let accepted = records.iter().filter_map(|r| match &r.outcome {
             LedgerOutcome::Accepted { accounts_post, .. } => Some((r, accounts_post)),
@@ -791,6 +804,7 @@ async fn validate_run<'r>(
         });
         let Some((last, accounts_post)) = accepted.clone().next_back() else {
             blocks.push(GroupBlock::Unmade(records));
+            watch.charge(&mut timing.roll);
             continue;
         };
         let included: Vec<(&Record, Phase2)> = accepted
@@ -818,6 +832,7 @@ async fn validate_run<'r>(
                     cause,
                 });
                 blocks.push(GroupBlock::Failed);
+                watch.charge(&mut timing.roll);
                 // A failed block leaves the tip where it was, so the next
                 // block names that parent.
                 continue;
@@ -837,6 +852,7 @@ async fn validate_run<'r>(
         let producible: Vec<TxIn> = records.iter().flat_map(producible).collect();
         let inputs = run.held_in(records).chain(&producible);
         let wrote = records.iter().flat_map(written).collect();
+        watch.charge(&mut timing.roll);
         compare_utxos_at_every_version(
             group.domain(),
             id_of(last),
@@ -846,14 +862,17 @@ async fn validate_run<'r>(
             &mut state.utxo,
         )
         .await;
+        watch.charge(&mut timing.group_state);
         let made = run
             .post(last)
             .filter_map(|e| Some((e, by_n[&makers.get(&e.input)?.n])));
         let made: Vec<(&UtxoEntry, &Record)> = made.collect();
         compare_datums(group.domain(), id_of(last), &made, edits, &mut state.datum).await;
+        watch.charge(&mut timing.datums);
         let served = dolos_accounts(group.domain());
         let checks = account_checks.entry(id_of(last)).or_default();
         accounts::compare(id_of(last), accounts_post, &served, &mut checks.0);
+        watch.charge(&mut timing.group_state);
     }
     (blocks, account_checks)
 }
@@ -1888,6 +1907,7 @@ async fn judge_run(
         as_output,
         accounts: account_checks,
     } = &mut part;
+    let mut watch = Stopwatch::start();
     let first = &run.records()[0];
     let id = RecordId {
         corpus: kind,
@@ -1918,6 +1938,7 @@ async fn judge_run(
     let served = dolos_accounts(&seeded.domain);
     let checks = account_checks.entry(id).or_default();
     accounts::compare(id, &first.accounts_pre, &served, &mut checks.0);
+    watch.charge(&mut judged.timing.seed);
     let expected = (edits.expected_params)(run.pparams());
     for (version, served) in serve::read_params(&seeded.domain).await {
         let tally = judged.state.params.at(ParamsRoute::ReadParams, version);
@@ -1925,24 +1946,33 @@ async fn judge_run(
             Finding::new(id, vec![CellKey::new(Axis::Param, key)], d)
         });
     }
+    watch.charge(&mut judged.timing.read_params);
     let (blocks, run_accounts) =
         validate_run(&seeded.domain, kind, run, manifests, edits, ids, judged).await;
+    let mut watch = Stopwatch::start();
     for (id, checks) in run_accounts {
         account_checks.entry(id).or_default().0.merge(checks.0);
     }
     let script = &mut judged.state.script;
     compare_carried::<Script>(&seeded.domain, kind, &blocks, script).await;
+    watch.charge(&mut judged.timing.scripts);
     let plutus_data = &mut judged.state.plutus_data;
     compare_carried::<Datum>(&seeded.domain, kind, &blocks, plutus_data).await;
+    watch.charge(&mut judged.timing.plutus_data);
     let read = ReadTxs::read(&seeded.domain, &judged_hashes(&blocks)).await;
+    watch.charge(&mut judged.timing.read_tx);
     served_tx::compare(kind, &blocks, &read, &mut judged.state.served_tx);
+    watch.charge(&mut judged.timing.served_tx);
     let Some(read) = read.unpanicked() else {
         return part;
     };
     compare_read_tx(kind, &blocks, &read, &mut judged.state.readtx);
+    watch.charge(&mut judged.timing.read_tx);
     let rolled: Vec<&Rolled> = blocks.iter().filter_map(GroupBlock::rolled).collect();
     let routes = serve_rolled(&seeded.domain, &seeded.seed, &rolled, &read).await;
+    watch.charge(&mut judged.timing.rolled_routes);
     compare_as_output(kind, run, &rolled, &routes, &mut judged.state, as_output);
+    watch.charge(&mut judged.timing.as_output);
     sweep(
         &seeded.domain,
         &seeded.seed,
@@ -1952,6 +1982,7 @@ async fn judge_run(
         &mut judged.state,
     )
     .await;
+    watch.charge(&mut judged.timing.sweep);
     part
 }
 
@@ -2026,6 +2057,9 @@ async fn ledger_oracle() {
         println!("{corpus}");
         let judged = judge(&corpus, &manifests, &Edits::default()).await;
         println!("{judged}");
+        for line in judged.timing.lines(kind) {
+            println!("{line}");
+        }
         let mut part = judged.report();
         part.require(&[(Judge::Cost, Instrument::MinFee.into())]);
         verdicts.merge(part);
