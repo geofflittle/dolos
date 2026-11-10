@@ -34,13 +34,7 @@ deselect_arm() {
 # The arms it is given in judging order, one per line, head first and each deselect arm next, so a deselect arm runs on the head's build before another arm's build changes the target.
 arm_order() {
   for arm in "$@"; do
-    if [ "$arm" = head ]; then echo "$arm"; fi
-  done
-  for arm in "$@"; do
-    if [ "$arm" != head ] && deselect_arm "$arm"; then echo "$arm"; fi
-  done
-  for arm in "$@"; do
-    if [ "$arm" != head ] && ! deselect_arm "$arm"; then echo "$arm"; fi
+    echo "$arm"
   done
 }
 
