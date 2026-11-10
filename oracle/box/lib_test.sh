@@ -3,8 +3,6 @@
 # Usage: lib_test.sh <empty work dir>
 set -eu
 W=$(cd "$1" && pwd)
-# Each case names its own REV and BASE, so those of the run that calls the test are dropped.
-unset REV BASE
 HERE=$(cd "$(dirname "$0")" && pwd)
 LIB=$HERE/lib.sh
 
