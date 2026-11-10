@@ -330,7 +330,7 @@ for arm in $ARMS; do
     echo "control=$control"
     verdicts="$verdicts control=$control"
   elif [ "$arm" = head ]; then
-    grep -E '^(VERDICT|VERDICTS|RESULT) ' "$OUT/$arm.log" | cut -c1-400 || true
+    grep -E '^(MUTATION|VERDICT|VERDICTS|RESULT) ' "$OUT/$arm.log" | cut -c1-400 || true
     if grep -q '^RESULT PASS' "$OUT/$arm.log" && ! grep -q '^RESULT FAIL' "$OUT/$arm.log"; then
       head_result=PASS
     else

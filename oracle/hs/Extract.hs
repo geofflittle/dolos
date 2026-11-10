@@ -29,8 +29,9 @@ import qualified Data.ByteString.Lazy.Char8 as BL8
 import qualified Data.ByteString.Short as SBS
 import Data.IORef (readIORef, writeIORef)
 import qualified Data.List.NonEmpty as NE
-import Dump (E, counter, dumpTo, evalJson, hex)
+import Dump (E, counter, evalJson, hex)
 import Lens.Micro ((^.))
+import Mutate (Mutants, capturingKeys, recordTo, withMutants)
 import qualified PlutusLedgerApi.Common as P
 import qualified PlutusLedgerApi.V3 as PV3
 import System.Environment (getArgs, withArgs)
@@ -140,27 +141,28 @@ pwcTo out _ (TRC (env, _, stAnn)) _ = liftIO $ do
 
 -- | Writes the records, or with `--pwc` the scripts with their context.
 main :: IO ()
-main = do
+main = withMutants "ic" 0 $ \mutants -> do
   args <- getArgs
   case args of
     "--pwc" : rest -> withArgs rest (corpus Scripts)
-    _ -> corpus Records
+    _ -> corpus (Records mutants)
 
 -- | What a corpus run writes for each LEDGER rule run.
-data Writes = Records | Scripts
+data Writes = Records (Maybe Mutants) | Scripts
 
 -- | Record numbers are positions in the corpus that the committed manifests name, so the inherited modules run after the Dijkstra ones.
 corpus :: Writes -> IO ()
 corpus writes =
   hspec $
     withImpInit @(LedgerSpec E) $
-      modifyImpInitProtVer @E (natVersion @12) $
-        modifyImpInitPostSubmitTxHook
-          ( \g trc res -> case writes of
-              Records -> dumpTo "/probe/out/ic.jsonl" g trc res
-              Scripts -> pwcTo "/probe/out/pwc.jsonl" g trc res
-          )
-          $ do
+      capturingKeys $
+        modifyImpInitProtVer @E (natVersion @12) $
+          modifyImpInitPostSubmitTxHook
+            ( \g trc res -> case writes of
+                Records mutants -> recordTo mutants "/probe/out/ic.jsonl" g trc res
+                Scripts -> pwcTo "/probe/out/pwc.jsonl" g trc res
+            )
+            $ do
           BBODY.spec
           LEDGER.spec
           MEMPOOL.spec
