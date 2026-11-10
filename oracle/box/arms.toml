@@ -130,6 +130,7 @@ fixes = [
   { commit = "01461888", arm = "sub-valid-always" },
   { commit = "73cef926", arm = "proposal-keys-dropped" },
   { commit = "c13da1a9", arm = "integer-bound-restored" },
+  { commit = "f5554bf5", arm = "duplicate-scripts-accepted" },
 ]
 
 [catches]
@@ -239,3 +240,4 @@ coverage-deselect = ["judge=coverage leaf:ConflictingMetadataHash"]
 v1beta-as-output-dropped = ["judge=as-output entry=fetch_block:v1beta|dump_history:v1beta|follow_tip:v1beta"]
 v1beta-submit-ref-zeroed = ["judge=submit entry=submit_tx:v1beta answer:submit"]
 watch-block-copied = ["test=serve::grpc::v1beta::watch::tests::the_transactions_of_one_block_share_its_bytes", "test=serve::grpc::v1alpha::watch::tests::the_transactions_of_one_block_share_its_bytes"]
+duplicate-scripts-accepted = ["judge=validation failure:disagree ledger:DecoderErrorDeserialiseFailure dolos:accepted"]

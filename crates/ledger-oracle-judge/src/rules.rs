@@ -240,9 +240,9 @@ enum Shown {
 }
 
 impl Rules {
-    /// The known records whose record is one of `records`.
-    pub fn within(&self, records: &BTreeSet<RecordId>) -> Self {
-        let known = self.known.iter().filter(|(id, _)| records.contains(id));
+    /// The known records whose record `keep` holds.
+    pub fn within(&self, keep: impl Fn(&RecordId) -> bool) -> Self {
+        let known = self.known.iter().filter(|(id, _)| keep(id));
         Rules {
             entries: self.entries.clone(),
             known: known.map(|(id, k)| (*id, k.clone())).collect(),
