@@ -353,6 +353,66 @@ fn a_selection_passes_when_its_corpus_parts_together_compare_each_state_tally() 
     assert!(!passes(&neither));
 }
 
+/// The judgement of one agreeing mutant whose run compared each state tally
+/// but the ones named in `uncompared`, with the mutant its run held.
+#[cfg(test)]
+fn mutant_part(uncompared: &[&str]) -> (Judged, BTreeSet<RecordId>) {
+    let mut judged = judged_part(uncompared);
+    let id = RecordId {
+        corpus: CorpusKind::Mut,
+        n: 1,
+    };
+    judged.validation.agree = BTreeMap::from([(id, Vec::new())]);
+    (judged, BTreeSet::from([id]))
+}
+
+/// The verdicts of a records run on `selection` and `mutants`.
+#[cfg(test)]
+fn records_run(selection: Judged, mutants: (Judged, BTreeSet<RecordId>)) -> judgement::Tally {
+    let mut out = judgement::Tally::default();
+    judge_selection(selection, mutants, &Manifests::committed(), &mut out);
+    out
+}
+
+#[test]
+fn a_records_run_passes_a_state_tally_its_corpora_compare_and_its_mutants_do_not() {
+    let uncompared = ["served_tx", "datum", "accounts", "as_output"];
+    let out = records_run(judged_part(&[]), mutant_part(&uncompared));
+    assert!(matches!(out.verdict(), RunVerdict::Pass { .. }), "{out}");
+}
+
+#[test]
+fn a_records_run_fails_a_state_tally_neither_its_corpora_nor_its_mutants_compare() {
+    let uncompared = ["served_tx", "datum", "accounts", "as_output"];
+    let out = records_run(judged_part(&["served_tx"]), mutant_part(&uncompared));
+    let failing: Vec<String> = out.failing.iter().map(|v| v.to_string()).collect();
+    assert_eq!(
+        failing,
+        ["VERDICT judge=served-tx entry=fetch_block record=selection cells= outcome=disagree judged=0"]
+    );
+}
+
+#[test]
+fn a_records_run_adds_a_failure_on_a_mutant_only_when_no_run_held_it() {
+    let refuse = |judged: &mut Judged, held: &BTreeSet<RecordId>| {
+        let id = *held.first().unwrap_or_else(|| panic!("a mutant"));
+        let entry = EntryPoint::SubmitTx;
+        let refused =
+            judgement::Verdict::disagree(Judge::Validation, entry, id, Vec::new(), "refused");
+        judged.validation.failing.push(refused.clone());
+        refused
+    };
+    let (mut mutants, held) = mutant_part(&[]);
+    refuse(&mut mutants, &held);
+    let out = records_run(judged_part(&[]), (mutants, held));
+    assert!(out.failing.is_empty(), "{out}");
+
+    let (mut mutants, held) = mutant_part(&[]);
+    let refused = refuse(&mut mutants, &held);
+    let out = records_run(judged_part(&[]), (mutants, BTreeSet::new()));
+    assert_eq!(out.failing, [refused]);
+}
+
 #[test]
 fn a_selection_fails_on_a_fee_disagreement_alone() {
     let mut selection = judged_part(&[]);
@@ -1960,7 +2020,10 @@ async fn ledger_oracle() {
         let corpus = corpus.without(&left_out).unwrap_or_else(|e| panic!("{e}"));
         println!("{corpus}");
         if kind == CorpusKind::Mut {
-            judge_mutants(&corpus, &changes, &manifests, &mut mutations, &mut verdicts);
+            let (judged, held) =
+                judge_mutants(&corpus, &changes, &manifests, &mut mutations, &mut verdicts);
+            MutationTally::select(judged.report(), &held, &mut verdicts);
+            print_candidates(&judged);
             continue;
         }
         let judged = judge(&corpus, &manifests, &Edits::default()).await;
@@ -1995,15 +2058,15 @@ async fn ledger_oracle() {
 }
 
 /// Judges each mutant of the mutant corpus from the verdicts on its own run,
-/// adding to `out` the mutation verdicts and the whole corpus's failures that
-/// are on no one mutant's run, and printing its manifest candidates.
+/// adding the mutation verdicts to `out`, and returns the judgement of every
+/// mutant together with the mutants a run held.
 fn judge_mutants(
     corpus: &Corpus,
     changes: &BTreeMap<u32, Mutation>,
     manifests: &Manifests,
     mutations: &mut MutationTally,
     out: &mut judgement::Tally,
-) {
+) -> (Judged, BTreeSet<RecordId>) {
     let parts = judge_runs(corpus, manifests, &Edits::default());
     let (runs, all) = settle_mutants(corpus.kind, parts, manifests);
     let held: BTreeSet<RecordId> = runs.iter().map(|(id, _)| *id).collect();
@@ -2013,15 +2076,7 @@ fn judge_mutants(
             .unwrap_or_else(|| panic!("MUTATION {id} has no change"));
         mutations.judge(id, change, verdicts, out);
     }
-    MutationTally::select(all.report(), &held, out);
-    for line in all
-        .candidates
-        .lines()
-        .into_iter()
-        .chain(all.eval.candidates())
-    {
-        println!("{line}");
-    }
+    (all, held)
 }
 
 /// The verdicts on the mutant of each run of `parts`, settled under the
@@ -2060,6 +2115,11 @@ fn print_views(all: &Judged, manifests: &Manifests, whole: bool, out: &mut judge
     }
     println!("{}", all.eval);
     println!("{}", all.context);
+    print_candidates(all);
+}
+
+/// Prints the manifest candidates of a judgement.
+fn print_candidates(all: &Judged) {
     for line in all
         .candidates
         .lines()
@@ -2108,6 +2168,7 @@ async fn ledger_oracle_records() {
     let named = named_records(&list);
     let committed = Manifests::committed();
     let mut selection = Judged::default();
+    let mut mutants = (Judged::default(), BTreeSet::new());
     let mut verdicts = judgement::Tally::default();
     for kind in CorpusKind::ALL {
         let corpus = load(kind).select(&named).unwrap_or_else(|e| panic!("{e}"));
@@ -2126,7 +2187,7 @@ async fn ledger_oracle_records() {
         if kind == CorpusKind::Mut {
             let (_, changes) = corpus::load_mutants().unwrap_or_else(|e| panic!("{e}"));
             let mut mutations = MutationTally::new(held.iter().map(|id| &changes[&id.n]));
-            judge_mutants(&corpus, &changes, &manifests, &mut mutations, &mut verdicts);
+            mutants = judge_mutants(&corpus, &changes, &manifests, &mut mutations, &mut verdicts);
             for line in mutations.report(&mut verdicts) {
                 println!("{line}");
             }
@@ -2136,9 +2197,22 @@ async fn ledger_oracle_records() {
         println!("{tallies}");
         selection.merge(tallies);
     }
-    verdicts.merge(selection.report());
-    print_views(&selection, &committed, false, &mut verdicts);
+    judge_selection(selection, mutants, &committed, &mut verdicts);
     conclude(&verdicts);
+}
+
+/// Adds to `out` the verdicts of a records run's `selection` judged together
+/// with its `mutants`, given with the mutants a run held, printing its views.
+fn judge_selection(
+    mut selection: Judged,
+    (mutants, held): (Judged, BTreeSet<RecordId>),
+    manifests: &Manifests,
+    out: &mut judgement::Tally,
+) {
+    selection.merge(mutants);
+    let mut pool = selection.report();
+    print_views(&selection, manifests, false, &mut pool);
+    MutationTally::select_pooled(pool, &held, out);
 }
 
 #[test]
