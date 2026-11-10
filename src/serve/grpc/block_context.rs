@@ -8,6 +8,10 @@ use std::{collections::HashSet, sync::Arc};
 
 use crate::serve::ChainReads;
 
+/// Probe totals for the v1 ReadTx call, by part.
+pub(crate) static READ_TX_COST: [std::sync::atomic::AtomicU64; 12] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 12];
+
 /// A ledger context that holds no outputs, for mapping values that name no inputs.
 #[derive(Clone, Default)]
 pub(super) struct NoInputs;
@@ -82,13 +86,23 @@ impl<C: ChainReads> BlockContext<C> {
         } else {
             inner.utxos(&refs)
         };
+        READ_TX_COST[10].fetch_add(
+            start.elapsed().as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         tracing::trace!(slot = block.slot(), input_count = refs.len(),
             resolved_count = resolved.as_ref().map(|x| x.len()),
             elapsed = ?start.elapsed(), "Prepared block input context");
+        let made_start = std::time::Instant::now();
+        let made = Arc::new(made_outputs(block));
+        READ_TX_COST[11].fetch_add(
+            made_start.elapsed().as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         Self {
             inner,
             resolved: resolved.map(Arc::new),
-            made: Arc::new(made_outputs(block)),
+            made,
         }
     }
 }

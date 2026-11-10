@@ -1083,6 +1083,13 @@ where
         info!("received new grpc query - read_tx");
 
         let tx_hash = message.hash;
+        use std::sync::atomic::Ordering::Relaxed;
+        let cost = &crate::serve::grpc::block_context::READ_TX_COST;
+        let lap = |slot: usize, start: std::time::Instant| {
+            cost[slot].fetch_add(start.elapsed().as_nanos() as u64, Relaxed);
+            std::time::Instant::now()
+        };
+        let t = std::time::Instant::now();
 
         let query = dolos_core::AsyncQueryFacade::new(self.domain.clone());
         let (block_bytes, _) = query
@@ -1090,9 +1097,11 @@ where
             .await
             .map_err(|e| Status::internal(e.to_string()))?
             .ok_or_else(|| Status::not_found("tx hash not found"))?;
+        let t = lap(1, t);
 
         let block = MultiEraBlock::decode(&block_bytes)
             .map_err(|e| Status::internal(format!("failed to decode block: {e}")))?;
+        let t = lap(2, t);
 
         let applied = dolos_core::applied_txs(&block)
             .into_iter()
@@ -1101,8 +1110,11 @@ where
         let tx = last_including(applied, &tx_hash)
             .and_then(|index| block.txs().into_iter().nth(index))
             .ok_or_else(|| Status::not_found("tx hash not found"))?;
+        cost[8].fetch_add(block.txs().len() as u64, Relaxed);
+        cost[9].fetch_add(block_bytes.len() as u64, Relaxed);
 
         let native_bytes = tx.encode().into();
+        let t = lap(3, t);
 
         let cursor = self
             .domain
@@ -1111,6 +1123,35 @@ where
             .map_err(|e| Status::internal(e.to_string()))?
             .as_ref()
             .map(|p| point_to_u5c(&self.domain, p));
+        let t = lap(4, t);
+        let timestamp = self
+            .domain
+            .slot_timestamp(block.slot())
+            .map(|s| s * 1000)
+            .unwrap_or(0);
+        let t = lap(5, t);
+        let context = BlockContext::for_tx(self.domain.clone(), &block, &tx);
+        let t = lap(6, t);
+        let mapped = interop::Mapper::new(context).map_tx(&tx);
+        lap(7, t);
+        let calls = cost[0].fetch_add(1, Relaxed) + 1;
+        if calls % 10000 == 0 {
+            let read: Vec<u64> = cost.iter().map(|c| c.load(Relaxed)).collect();
+            eprintln!(
+                "READTX calls={calls} lookup_ms={} decode_ms={} find_ms={} cursor_ms={} timestamp_ms={} context_ms={} map_ms={} utxos_ms={} made_ms={} block_txs={} block_bytes={}",
+                read[1] / 1_000_000,
+                read[2] / 1_000_000,
+                read[3] / 1_000_000,
+                read[4] / 1_000_000,
+                read[5] / 1_000_000,
+                read[6] / 1_000_000,
+                read[7] / 1_000_000,
+                read[10] / 1_000_000,
+                read[11] / 1_000_000,
+                read[8],
+                read[9],
+            );
+        }
 
         let mut response = u5c::query::ReadTxResponse {
             tx: Some(u5c::query::AnyChainTx {
@@ -1119,16 +1160,9 @@ where
                     slot: block.slot(),
                     hash: block.hash().to_vec().into(),
                     height: block.header().number(),
-                    timestamp: self
-                        .domain
-                        .slot_timestamp(block.slot())
-                        .map(|s| s * 1000)
-                        .unwrap_or(0),
+                    timestamp,
                 }),
-                chain: Some(u5c::query::any_chain_tx::Chain::Cardano(
-                    interop::Mapper::new(BlockContext::for_tx(self.domain.clone(), &block, &tx))
-                        .map_tx(&tx),
-                )),
+                chain: Some(u5c::query::any_chain_tx::Chain::Cardano(mapped)),
             }),
             ledger_tip: cursor,
         };
