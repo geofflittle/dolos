@@ -2228,7 +2228,7 @@ fn coverage_members(
     mutations: &MutationTally,
 ) -> Vec<ledger_oracle_judge::coverage::Member> {
     let mut members = coverage::members(&manifests.rules);
-    members.extend(mutations.members());
+    members.extend(mutations.members(|e| coverage::entry_reach(e, coverage::Records::Mutants)));
     members
 }
 

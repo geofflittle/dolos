@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Deserialize;
 
 use crate::{
-    coverage::Member,
+    coverage::{Member, Reach},
     judgement::{
         Axis, CellKey, EntryPoint, Instrument, Judge, Outcome, Pass, Subject, Tally, Verdict,
     },
@@ -179,13 +179,17 @@ impl MutationTally {
     }
 
     /// The coverage members of the mutation axis, each operator of the corpus
-    /// at each entry point.
-    pub fn members(&self) -> Vec<Member> {
+    /// at each entry point, reached as `reach` gives for that entry point.
+    pub fn members(&self, reach: impl Fn(EntryPoint) -> Reach) -> Vec<Member> {
+        let reach = &reach;
         let ops = self.counts.keys();
-        let cells = ops.flat_map(|op| EntryPoint::every().into_iter().map(move |e| cell(op, e)));
-        cells
-            .map(|cell| Member::counted(cell.axis, cell.member))
-            .collect()
+        let members = ops.flat_map(|op| {
+            EntryPoint::every().into_iter().map(move |e| Member {
+                cell: cell(op, e),
+                reach: reach(e),
+            })
+        });
+        members.collect()
     }
 }
 
@@ -514,17 +518,38 @@ mod tests {
     }
 
     #[test]
-    fn each_operator_has_a_member_at_each_entry_point() {
+    fn each_operator_has_a_member_at_each_entry_point_reached_as_given() {
         let mutations = MutationTally::new([&mutation("flip_guard"), &mutation("drop_witness")]);
-        let members: Vec<String> = mutations
-            .members()
-            .iter()
-            .map(|m| m.cell.to_string())
-            .collect();
+        let reach = |entry| match entry {
+            FETCH_BLOCK => Reach::Excluded {
+                reason: "r".into(),
+                command: "c".into(),
+            },
+            _ => Reach::Counted,
+        };
+        let members = mutations.members(reach);
         let every = EntryPoint::every().len();
         assert_eq!(members.len(), 2 * every);
-        assert_eq!(members[0], "mutation:drop_witness@receive_tx");
-        assert_eq!(members[every], "mutation:flip_guard@receive_tx");
+        assert_eq!(
+            members[0].cell.to_string(),
+            "mutation:drop_witness@receive_tx"
+        );
+        assert_eq!(
+            members[every].cell.to_string(),
+            "mutation:flip_guard@receive_tx"
+        );
+        let excluded: Vec<String> = members
+            .iter()
+            .filter(|m| m.reach != Reach::Counted)
+            .map(|m| m.cell.to_string())
+            .collect();
+        assert_eq!(
+            excluded,
+            [
+                "mutation:drop_witness@fetch_block:v1",
+                "mutation:flip_guard@fetch_block:v1"
+            ]
+        );
     }
 
     #[test]

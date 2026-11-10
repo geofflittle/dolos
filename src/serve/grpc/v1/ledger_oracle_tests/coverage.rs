@@ -434,8 +434,18 @@ pub(super) fn builtin_member(language: Language, builtin: Builtin) -> String {
     format!("{language}.{builtin:?}")
 }
 
-/// How the oracle reaches an entry point, with the reason and command for each route it does not judge.
-fn entry_reach(entry: EntryPoint) -> Reach {
+/// The records whose verdicts a coverage axis counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Records {
+    /// The records of the ledger corpora.
+    Recorded,
+    /// The mutants, each judged in a run of its own.
+    Mutants,
+}
+
+/// How `records` reach an entry point, with the reason and command for each
+/// route they do not reach.
+pub(super) fn entry_reach(entry: EntryPoint, records: Records) -> Reach {
     let excluded = |reason: &str, command: &str| Reach::Excluded {
         reason: reason.to_string(),
         command: command.to_string(),
@@ -445,6 +455,14 @@ fn entry_reach(entry: EntryPoint) -> Reach {
         EntryPoint::Route(route, _) => route,
     };
     match route {
+        Route::FetchBlock | Route::FollowTip | Route::DumpHistory | Route::WatchTx
+            if records == Records::Mutants =>
+        {
+            excluded(
+                "a block serving route is judged only on an input an earlier record of the run made, and a mutant runs alone",
+                "grep -n -e 'that an earlier record made' -e 'MUTATION a run judged' src/serve/grpc/v1/ledger_oracle_tests/mod.rs",
+            )
+        }
         Route::SubmitTx
         | Route::EvalTx
         | Route::WaitForTx
@@ -514,7 +532,7 @@ pub(super) fn members(rules: &Rules) -> Vec<Member> {
     let entries = EntryPoint::every().into_iter();
     members.extend(entries.map(|e| Member {
         cell: CellKey::new(Axis::Entry, e),
-        reach: entry_reach(e),
+        reach: entry_reach(e, Records::Recorded),
     }));
     let shapes = RequestShape::ALL.into_iter();
     members.extend(shapes.map(|s| Member::counted(Axis::RequestShape, s)));
@@ -886,6 +904,45 @@ mod tests {
             let counted = builtins.iter().filter(|m| m.reach == Reach::Counted);
             assert_eq!((builtins.len(), counted.count()), (101, 101));
         }
+    }
+
+    #[test]
+    fn mutants_reach_no_block_serving_route_and_no_route_a_recorded_record_cannot_reach() {
+        use ledger_oracle_judge::judgement::{Instrument, Version};
+        let v1 = |route| EntryPoint::Route(route, Version::V1);
+        assert_eq!(
+            entry_reach(v1(Route::FetchBlock), Records::Recorded),
+            Reach::Counted
+        );
+        assert_eq!(
+            entry_reach(v1(Route::ReadTx), Records::Mutants),
+            Reach::Counted
+        );
+        let apply = Instrument::ApplyBlock.into();
+        assert_eq!(entry_reach(apply, Records::Mutants), Reach::Counted);
+        let blocks = [
+            Route::FetchBlock,
+            Route::FollowTip,
+            Route::DumpHistory,
+            Route::WatchTx,
+        ];
+        let mut excluded = [0, 0];
+        for entry in EntryPoint::every() {
+            let recorded = entry_reach(entry, Records::Recorded);
+            let mutants = entry_reach(entry, Records::Mutants);
+            let block = matches!(entry, EntryPoint::Route(route, _) if blocks.contains(&route));
+            match (&recorded, block) {
+                (Reach::Excluded { .. }, _) => assert_eq!(mutants, recorded, "{entry}"),
+                (Reach::Counted, true) => {
+                    assert!(matches!(mutants, Reach::Excluded { .. }), "{entry}")
+                }
+                (Reach::Counted, false) => assert_eq!(mutants, Reach::Counted, "{entry}"),
+            }
+            for (n, reach) in excluded.iter_mut().zip([&recorded, &mutants]) {
+                *n += usize::from(*reach != Reach::Counted);
+            }
+        }
+        assert_eq!(excluded, [17, 29]);
     }
 
     /// The cells of each kept record of a corpus that pallas decodes.
