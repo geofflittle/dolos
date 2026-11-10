@@ -45,9 +45,7 @@ use ledger_oracle_judge::{
     corpus::{self, Corpus},
     cost::CostTallies,
     eval::{ledger_rows, Answer, EvalKnown, EvalTally, Layer, TxKnown},
-    judgement::{
-        self, Axis, CellKey, Finding, Instrument, Judge, RunVerdict, Version,
-    },
+    judgement::{self, Axis, CellKey, Finding, Instrument, Judge, RunVerdict, Version},
     manifest::{self, Candidates, Declared, Feature, Known, KnownList, Locus},
     parallel::in_parallel,
     record::{CorpusKind, LedgerOutcome, PParams, Phase2, Record, RecordId, UtxoEntry},
@@ -1637,10 +1635,12 @@ fn compare_served(
                     continue;
                 }
                 InputOrigin::AbsentFromPre => {
-                    by_entry.at(OutputRoute::FetchBlock, Version::V1).add(false, || {
-                        let cells = vec![CellKey::new(Axis::Input, "absent_from_pre")];
-                        Finding::new(id, cells, format!("absent_from_pre input={shown}"))
-                    });
+                    by_entry
+                        .at(OutputRoute::FetchBlock, Version::V1)
+                        .add(false, || {
+                            let cells = vec![CellKey::new(Axis::Input, "absent_from_pre")];
+                            Finding::new(id, cells, format!("absent_from_pre input={shown}"))
+                        });
                     continue;
                 }
                 InputOrigin::InRun { made_by } => format!("in_run made_by={made_by}"),

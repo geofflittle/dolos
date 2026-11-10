@@ -293,7 +293,10 @@ mod tests {
         assert_eq!(table, [None, None, None]);
         let entries = counts(&out).into_keys().filter(|c| c.axis == Axis::Entry);
         let receive_tx = EntryPoint::Instrument(Instrument::ReceiveTx);
-        assert_eq!(entries.collect::<Vec<_>>(), [CellKey::new(Axis::Entry, receive_tx)]);
+        assert_eq!(
+            entries.collect::<Vec<_>>(),
+            [CellKey::new(Axis::Entry, receive_tx)]
+        );
     }
 
     #[test]

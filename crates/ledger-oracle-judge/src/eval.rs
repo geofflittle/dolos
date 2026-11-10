@@ -198,7 +198,8 @@ impl fmt::Display for DolosRow {
     }
 }
 
-/// A layer of Dolos that answers for the evaluation of a transaction, the evaluator first.
+/// A layer of Dolos that answers for the evaluation of a transaction, the
+/// evaluator first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Layer {
     Pallas,
@@ -1858,7 +1859,13 @@ mod tests {
         let mut twice = t.clone();
         let ledger = BTreeMap::from([(key(Level::Top, 0, 0), ran(1, 2))]);
         let malformed = Err(Malformed::Twice(key(Level::Top, 0, 0)));
-        let verdicts = twice.add_answer(Layer::Eval(Version::V1), ic(4), &ledger, &BTreeMap::new(), malformed);
+        let verdicts = twice.add_answer(
+            Layer::Eval(Version::V1),
+            ic(4),
+            &ledger,
+            &BTreeMap::new(),
+            malformed,
+        );
         assert!(verdicts.is_empty());
         assert_eq!(
             lines(&failed(&twice, Judge::EvalOracle)),
@@ -1878,7 +1885,11 @@ mod tests {
         );
         let mut slow = t.clone();
         let row = row_verdict(Some(ran(1, 2)), DolosRow::Answered(ran(3, 2)), None);
-        slow.add_rows(Layer::Eval(Version::V1), ic(5), &[(key(Level::Top, 0, 0), row)]);
+        slow.add_rows(
+            Layer::Eval(Version::V1),
+            ic(5),
+            &[(key(Level::Top, 0, 0), row)],
+        );
         let cells = &failed(&slow, Judge::EvalOracle)[0].cells;
         assert!(cells.iter().any(|c| c.to_string() == "units:mem"));
         assert!(!cells.iter().any(|c| c.to_string() == "units:steps"));
@@ -2221,7 +2232,12 @@ mod tests {
         assert!(t.every_layer_judged(EvalJudge::RewardOutput));
         let unsupported = refused_for("output address (requires Shelley)");
         t.add_reward_output(Layer::Pallas, ic(2), &expected, &unsupported);
-        t.add_reward_output(Layer::Eval(Version::V1), ic(2), &expected, &none_evaluated());
+        t.add_reward_output(
+            Layer::Eval(Version::V1),
+            ic(2),
+            &expected,
+            &none_evaluated(),
+        );
         assert!(!passes(&t));
         let mut merged = EvalTally::default();
         merged.merge(t.clone());

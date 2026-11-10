@@ -37,7 +37,8 @@ pub(super) struct TxFound {
     pub(super) answer: Result<Option<super::ServedTx>, tonic::Code>,
 }
 
-/// What ReadTx at one version answers for a transaction hash, with `P` holding a panic of the version's mapping.
+/// What ReadTx at one version answers for a transaction hash, with `P` holding
+/// a panic of the version's mapping.
 #[derive(Debug)]
 pub(super) enum ReadTxAnswer<T, P> {
     /// The message the version answers with.
@@ -62,7 +63,8 @@ impl<T> ReadTxAnswer<T, String> {
 /// What ReadTx at one version answers for each transaction hash it was asked.
 pub(super) type Answers<T, P> = BTreeMap<[u8; 32], ReadTxAnswer<T, P>>;
 
-/// What ReadTx answers at every version for each transaction hash a run judges, with `P` holding a panic of a version's mapping.
+/// What ReadTx answers at every version for each transaction hash a run judges,
+/// with `P` holding a panic of a version's mapping.
 #[derive(Debug)]
 pub(super) struct ReadTxs<P> {
     pub(super) v1: Answers<v1::Response, P>,
@@ -701,7 +703,10 @@ pub(super) async fn fetched(
 fn answers_with_no_panic_are_kept_whole() {
     let answers: Answers<u8, String> = BTreeMap::from([
         ([1; 32], ReadTxAnswer::Answered(7)),
-        ([2; 32], ReadTxAnswer::Status(tonic::Status::not_found("none"))),
+        (
+            [2; 32],
+            ReadTxAnswer::Status(tonic::Status::not_found("none")),
+        ),
     ]);
     let kept = unpanicked(answers).expect("no answer panicked");
     assert!(matches!(kept[&[1; 32]], ReadTxAnswer::Answered(7)));
@@ -718,7 +723,10 @@ fn one_panicked_answer_leaves_no_answers() {
     let answers: Answers<u8, String> = BTreeMap::from([
         ([1; 32], ReadTxAnswer::Answered(7)),
         ([2; 32], ReadTxAnswer::Panicked("mapping".to_string())),
-        ([3; 32], ReadTxAnswer::Status(tonic::Status::not_found("none"))),
+        (
+            [3; 32],
+            ReadTxAnswer::Status(tonic::Status::not_found("none")),
+        ),
     ]);
     assert!(unpanicked(answers).is_none());
 }
