@@ -558,7 +558,8 @@ fn datum_in_block(block: &MultiEraBlock, datum_hash: Hash<32>) -> Option<PlutusD
     None
 }
 
-/// The script with this hash in the witnesses or on the outputs of a transaction of the block.
+/// The script with this hash in the witnesses or on the outputs of a
+/// transaction of the block.
 fn script_in_block(block: &MultiEraBlock, script_hash: Hash<28>) -> Option<ScriptData> {
     for tx in block.txs() {
         let searched = crate::pallas_extras::for_each_applied_tx(&tx, |tx| {
@@ -737,7 +738,9 @@ mod tests {
     use super::*;
     use crate::indexes::CardanoIndexDeltaBuilder;
 
-    /// A block whose transaction lists a sub transaction, with a native script added to the witnesses of the sub transaction and a Plutus V4 script added to the witnesses of the transaction that lists it.
+    /// A block whose transaction lists a sub transaction, with a native script
+    /// added to the witnesses of the sub transaction and a Plutus V4 script
+    /// added to the witnesses of the transaction that lists it.
     fn block_with_scripts() -> (Vec<u8>, Hash<28>, Hash<28>) {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../test_data/musashi-w36/ranking-sub-transaction.block");

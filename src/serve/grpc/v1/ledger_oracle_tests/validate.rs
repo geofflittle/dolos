@@ -81,7 +81,8 @@ thread_local! {
     static LAST_PANIC: RefCell<PanicAt> = const { RefCell::new(PanicAt::Unreported) };
 }
 
-/// Installs, once, a panic hook that records each panic's location for its thread and then runs the hook it replaces.
+/// Installs, once, a panic hook that records each panic's location for its
+/// thread and then runs the hook it replaces.
 fn record_panic_locations() {
     static INSTALLED: Once = Once::new();
     INSTALLED.call_once(|| {
@@ -194,13 +195,15 @@ pub(super) enum Relay {
     Inflight,
 }
 
-/// A domain over the seeded stores with a mempool of its own and its cursor at one slot.
+/// A domain over the seeded stores with a mempool of its own and its cursor at
+/// one slot.
 pub(super) struct Group {
     domain: DomainAdapter,
     relay: Relay,
 }
 
-/// The group for the records at one slot, whose mempool starts empty and whose cursor keeps the hash of the last applied block.
+/// The group for the records at one slot, whose mempool starts empty and whose
+/// cursor keeps the hash of the last applied block.
 pub(super) fn group(base: &DomainAdapter, slot: u64, relay: Relay) -> Group {
     let hash = base
         .state()
@@ -217,7 +220,8 @@ pub(super) fn group(base: &DomainAdapter, slot: u64, relay: Relay) -> Group {
 }
 
 impl Group {
-    /// Submits one transaction to the group mempool and leaves it in the group's relay state.
+    /// Submits one transaction to the group mempool and leaves it in the
+    /// group's relay state.
     pub(super) fn receive(&self, tx: &[u8]) -> Result<TxHash, DomainError> {
         let chain = self.domain.read_chain();
         let hash = self.domain.receive_tx("ledger-oracle", &chain, tx)?;
@@ -235,7 +239,8 @@ impl Group {
         self.domain.validate_tx(&chain, tx).map(|tx| tx.hash())
     }
 
-    /// The redeemer evaluations Dolos estimates for one transaction against the group's stores and mempool, with the builtins each called.
+    /// The redeemer evaluations Dolos estimates for one transaction against the
+    /// group's stores and mempool, with the builtins each called.
     pub(super) fn estimate(
         &self,
         tx: &[u8],
@@ -243,12 +248,14 @@ impl Group {
         dolos_cardano::validate::estimate_tx_calls(tx, &self.utxos(), &self.domain.genesis)
     }
 
-    /// The arguments the evaluator applies each redeemer's script of one transaction to, against the group's stores and mempool.
+    /// The arguments the evaluator applies each redeemer's script of one
+    /// transaction to, against the group's stores and mempool.
     pub(super) fn arguments(&self, tx: &[u8]) -> Result<Vec<RedeemerArguments>, ChainError> {
         dolos_cardano::validate::redeemer_arguments(tx, &self.utxos(), &self.domain.genesis)
     }
 
-    /// The minimum fee Dolos computes for one transaction against the group's stores and mempool.
+    /// The minimum fee Dolos computes for one transaction against the group's
+    /// stores and mempool.
     pub(super) fn min_fee(&self, tx: &[u8]) -> Result<Option<u64>, ChainError> {
         dolos_cardano::validate::min_fee(tx, &self.utxos())
     }
@@ -276,7 +283,8 @@ impl Group {
         writer.commit().unwrap();
     }
 
-    /// Applies one block through the live sync path, reopening the chain logic from the state after a panic.
+    /// Applies one block through the live sync path, reopening the chain logic
+    /// from the state after a panic.
     pub(super) fn roll(&self, block: RawBlock) -> Result<BlockSlot, RollFailure> {
         record_panic_locations();
         LAST_PANIC.with(|last| *last.borrow_mut() = PanicAt::Unreported);
@@ -307,7 +315,8 @@ impl Group {
         &self.domain
     }
 
-    /// Whether the group reads an output at the reference, from the stores or its mempool.
+    /// Whether the group reads an output at the reference, from the stores or
+    /// its mempool.
     pub(super) fn sees(&self, txo: TxoRef) -> bool {
         !self.utxos().get_utxos([txo].into()).unwrap().is_empty()
     }
@@ -455,7 +464,8 @@ fn validation_class(v: &ValidationError) -> DolosClass {
     DolosClass::Rule(class)
 }
 
-/// The rule a validation error names, with the label of a labelled variant and without the values of any other.
+/// The rule a validation error names, with the label of a labelled variant and
+/// without the values of any other.
 fn rule(v: &ValidationError) -> String {
     use ValidationError as V;
     match v {
@@ -571,7 +581,9 @@ mod tests {
         }
     }
 
-    /// The answer of each rule the Dijkstra validator refuses a transaction by, from each label of a labelled variant, each other Dijkstra variant, each post Alonzo variant the Dijkstra path raises and each decoding failure.
+    /// The answer of each rule the Dijkstra validator refuses a transaction by,
+    /// from each label of a labelled variant, each other Dijkstra variant, each
+    /// post Alonzo variant the Dijkstra path raises and each decoding failure.
     fn phase_one_answers() -> BTreeSet<String> {
         use pallas::ledger::{
             traverse,

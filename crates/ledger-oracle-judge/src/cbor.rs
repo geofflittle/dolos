@@ -295,7 +295,8 @@ impl<'b> Reader<'b> {
     }
 }
 
-/// A Plutus data value, without the encoding choices of the bytes it was read from.
+/// A Plutus data value, without the encoding choices of the bytes it was read
+/// from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Data {
     Constr(u64, Vec<Data>),
@@ -305,7 +306,8 @@ pub enum Data {
     Bytes(Vec<u8>),
 }
 
-/// An integer as a sign and a big endian magnitude with no leading zero byte, a negative one being minus one minus the magnitude.
+/// An integer as a sign and a big endian magnitude with no leading zero byte, a
+/// negative one being minus one minus the magnitude.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Int {
     pub negative: bool,
@@ -398,7 +400,8 @@ pub struct NodeEra {
 }
 
 impl Reader<'_> {
-    /// Reads an array, calling `f` with each item's index, and returns the item count.
+    /// Reads an array, calling `f` with each item's index, and returns the item
+    /// count.
     fn items(&mut self, mut f: impl FnMut(&mut Self, u64) -> Result<()>) -> Result<u64> {
         let len = self.array()?;
         let mut n = 0;
@@ -484,7 +487,8 @@ pub struct TxInputs {
 }
 
 impl TxInputs {
-    /// The sub transaction spend inputs that the top level body does not also spend.
+    /// The sub transaction spend inputs that the top level body does not also
+    /// spend.
     pub fn child_only(&self) -> impl Iterator<Item = &TxIn> {
         self.subs
             .iter()
@@ -492,7 +496,8 @@ impl TxInputs {
             .filter(|i| !self.spend.contains(i))
     }
 
-    /// The inputs the sub transactions name that the top level body names in none of its input sets.
+    /// The inputs the sub transactions name that the top level body names in
+    /// none of its input sets.
     pub fn sub_only(&self) -> BTreeSet<&TxIn> {
         let top: BTreeSet<&TxIn> = self
             .spend
@@ -546,7 +551,8 @@ pub enum Level {
     Sub,
 }
 
-/// A part of a transaction level, a body or witness set entry by its key or the auxiliary data.
+/// A part of a transaction level, a body or witness set entry by its key or the
+/// auxiliary data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Part {
     Body(u64),
@@ -554,7 +560,8 @@ pub enum Part {
     Aux,
 }
 
-/// A part of a transaction at one level, written as `top.k7`, `sub.w5` or `top.aux`.
+/// A part of a transaction at one level, written as `top.k7`, `sub.w5` or
+/// `top.aux`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Field {
     pub level: Level,
@@ -607,7 +614,8 @@ pub fn tx_fields(raw: &[u8]) -> Result<BTreeSet<Field>> {
     Ok(out)
 }
 
-/// Reads one level's body, witness set and its last item, the auxiliary data, recording each part it holds.
+/// Reads one level's body, witness set and its last item, the auxiliary data,
+/// recording each part it holds.
 fn level_fields(r: &mut Reader, level: Level, out: &mut BTreeSet<Field>) -> Result<()> {
     let mut add = |part| {
         out.insert(Field { level, part });

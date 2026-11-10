@@ -699,9 +699,9 @@ where
         observer,
     )?;
 
-    // Only here: the stele is sealed, so the note about what was uploaded on the
-    // way to it has nothing left to say. Before the seal it would be a record
-    // that outlived neither the run nor its usefulness.
+    // Only here: the stele is sealed, so the note about what was uploaded on
+    // the way to it has nothing left to say. Before the seal it would be a
+    // record that outlived neither the run nor its usefulness.
     previous.forget_record()?;
 
     let identity = inscription.digest()?;

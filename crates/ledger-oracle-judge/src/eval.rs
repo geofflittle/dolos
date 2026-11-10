@@ -1,4 +1,5 @@
-//! Judges each redeemer Dolos evaluates against the ledger's evaluation, by level, purpose and answer.
+//! Judges each redeemer Dolos evaluates against the ledger's evaluation, by
+//! level, purpose and answer.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -25,7 +26,8 @@ const TAG_NAMES: [&str; 7] = [
     "Spend", "Mint", "Cert", "Reward", "Vote", "Propose", "Guarding",
 ];
 
-/// The level of a transaction a redeemer is in, the top level or a sub transaction by position.
+/// The level of a transaction a redeemer is in, the top level or a sub
+/// transaction by position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Level {
     Top,
@@ -152,7 +154,8 @@ impl fmt::Display for Answer {
     }
 }
 
-/// Why a layer of Dolos evaluated no redeemer of a transaction, in the words the known list uses, on one line.
+/// Why a layer of Dolos evaluated no redeemer of a transaction, in the words
+/// the known list uses, on one line.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Refusal(String);
 
@@ -174,7 +177,8 @@ impl fmt::Display for Refusal {
 pub enum DolosAnswer {
     Evaluated(BTreeMap<RowKey, Answer>),
     Refused(Refusal),
-    /// The layer's message cannot carry a redeemer the evaluator answered, and the layer says so.
+    /// The layer's message cannot carry a redeemer the evaluator answered, and
+    /// the layer says so.
     Unrepresentable(String),
 }
 
@@ -198,7 +202,8 @@ impl fmt::Display for DolosRow {
     }
 }
 
-/// A layer of Dolos that answers for the evaluation of a transaction, the evaluator first.
+/// A layer of Dolos that answers for the evaluation of a transaction, the
+/// evaluator first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Layer {
     Pallas,
@@ -235,7 +240,8 @@ impl fmt::Display for Layer {
     }
 }
 
-/// The answers of a row that make no pass: the ledger's, the layer's and the refusal the known list gives it.
+/// The answers of a row that make no pass: the ledger's, the layer's and the
+/// refusal the known list gives it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Disagreement {
     pub ledger: Option<Answer>,
@@ -244,7 +250,8 @@ pub struct Disagreement {
 }
 
 impl Disagreement {
-    /// The answer cells of each side, with the units that differ when both ran, the layer's refusal and the listed one.
+    /// The answer cells of each side, with the units that differ when both ran,
+    /// the layer's refusal and the listed one.
     pub fn cells(&self) -> Vec<CellKey> {
         let dolos = match &self.dolos {
             DolosRow::Answered(answer) => answer.kind(),
@@ -291,7 +298,8 @@ impl fmt::Display for Disagreement {
     }
 }
 
-/// The verdict of one row, a pass with its evidence or the answers that disagree.
+/// The verdict of one row, a pass with its evidence or the answers that
+/// disagree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RowVerdict {
     /// Both sides ran the redeemer in these units, or both failed it.
@@ -303,7 +311,8 @@ pub enum RowVerdict {
     Disagree(Disagreement),
 }
 
-/// The verdict of a row from the ledger's answer, the layer's answer and the refusal the known list gives it.
+/// The verdict of a row from the ledger's answer, the layer's answer and the
+/// refusal the known list gives it.
 pub fn row_verdict(
     ledger: Option<Answer>,
     dolos: DolosRow,
@@ -323,7 +332,8 @@ pub fn row_verdict(
     }
 }
 
-/// Each row's verdict for one transaction, for every row the ledger, the layer or the known list names.
+/// Each row's verdict for one transaction, for every row the ledger, the layer
+/// or the known list names.
 pub fn judge_tx(
     ledger: &BTreeMap<RowKey, Answer>,
     dolos: &DolosAnswer,
@@ -354,7 +364,8 @@ pub fn judge_tx(
         .collect()
 }
 
-/// What an evaluation of a transaction the ledger refused under one failure leaf answers.
+/// What an evaluation of a transaction the ledger refused under one failure
+/// leaf answers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LeafEval {
     /// A refusal naming a missing script or redeemer.
@@ -365,14 +376,16 @@ pub enum LeafEval {
     Undecided,
 }
 
-/// What every layer must answer for a transaction whose redeemers the ledger evaluated none of.
+/// What every layer must answer for a transaction whose redeemers the ledger
+/// evaluated none of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TxDemand {
     /// A refusal, for the script or redeemer leaf named.
     Refuse(LedgerLeaf),
     /// An evaluation of no redeemer.
     EvaluateNone,
-    /// Nothing, the ledger's leaves naming no rule the judgement holds Dolos to.
+    /// Nothing, the ledger's leaves naming no rule the judgement holds Dolos
+    /// to.
     Undecided,
 }
 
@@ -386,7 +399,8 @@ impl TxDemand {
         }
     }
 
-    /// The demand of the ledger's outcome, a refusal when any leaf demands one and an evaluation when the ledger accepted or every leaf demands one.
+    /// The demand of the ledger's outcome, a refusal when any leaf demands one
+    /// and an evaluation when the ledger accepted or every leaf demands one.
     pub fn of(outcome: &LedgerOutcome) -> Self {
         let LedgerOutcome::Refused { failure_names, .. } = outcome else {
             return TxDemand::EvaluateNone;
@@ -412,7 +426,8 @@ impl fmt::Display for TxDemand {
     }
 }
 
-/// The verdict of one layer's answer for a transaction whose redeemers the ledger evaluated none of.
+/// The verdict of one layer's answer for a transaction whose redeemers the
+/// ledger evaluated none of.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TxVerdict {
     /// The layer refused for the leaf, naming a script or redeemer.
@@ -423,7 +438,8 @@ pub enum TxVerdict {
     Undecided,
     /// The layer gave the answer the known list gives the record.
     Known { demand: TxDemand, dolos: String },
-    /// The layer's answer, which the demand refuses, with the answer the known list gives the record.
+    /// The layer's answer, which the demand refuses, with the answer the known
+    /// list gives the record.
     Disagree {
         demand: TxDemand,
         dolos: String,
@@ -457,7 +473,9 @@ fn answer_kind(answer: &Result<DolosAnswer, Malformed>) -> &'static str {
     }
 }
 
-/// The verdict of one layer's answer against the demand of a transaction whose redeemers the ledger evaluated none of and the answer the known list gives it.
+/// The verdict of one layer's answer against the demand of a transaction whose
+/// redeemers the ledger evaluated none of and the answer the known list gives
+/// it.
 pub fn tx_verdict(
     demand: TxDemand,
     answer: &Result<DolosAnswer, Malformed>,
@@ -488,7 +506,9 @@ pub fn tx_verdict(
     }
 }
 
-/// The ledger's answer for each redeemer of a record, at its top level and in each sub transaction, none for a record whose bytes the ledger's decoder refused.
+/// The ledger's answer for each redeemer of a record, at its top level and in
+/// each sub transaction, none for a record whose bytes the ledger's decoder
+/// refused.
 pub fn ledger_rows(record: &Record) -> BTreeMap<RowKey, Answer> {
     let LedgerRedeemers::Read(redeemers) = &record.redeemers else {
         return BTreeMap::new();
@@ -523,7 +543,8 @@ pub fn evaluated(
     Ok(by_key)
 }
 
-/// The number of purposes a transaction's rows name at more than one level, which a message keyed by purpose alone cannot tell apart.
+/// The number of purposes a transaction's rows name at more than one level,
+/// which a message keyed by purpose alone cannot tell apart.
 pub fn collisions(rows: &BTreeMap<RowKey, Answer>) -> usize {
     let mut levels: BTreeMap<Purpose, usize> = BTreeMap::new();
     for key in rows.keys() {
@@ -532,7 +553,9 @@ pub fn collisions(rows: &BTreeMap<RowKey, Answer>) -> usize {
     levels.values().filter(|n| **n > 1).count()
 }
 
-/// The purpose of a u5c redeemer purpose number and index, the u5c number less one being the ledger's tag and a number below one naming the tag no ledger row has.
+/// The purpose of a u5c redeemer purpose number and index, the u5c number less
+/// one being the ledger's tag and a number below one naming the tag no ledger
+/// row has.
 pub fn wire_purpose(purpose: i32, index: u32) -> Purpose {
     let tag = u64::try_from(i64::from(purpose) - 1).unwrap_or(u64::MAX);
     Purpose {
@@ -602,7 +625,10 @@ pub struct WireEval {
 }
 
 impl WireEval {
-    /// The answer the response gives, a refusal when it carries no redeemer and no total, named as the evaluator's refusal when its message is the one that refusal renders to and as unrepresentable when it is the message that says so.
+    /// The answer the response gives, a refusal when it carries no redeemer and
+    /// no total, named as the evaluator's refusal when its message is the one
+    /// that refusal renders to and as unrepresentable when it is the message
+    /// that says so.
     pub fn answer(
         &self,
         refusal: Option<(&str, &Refusal)>,
@@ -638,12 +664,14 @@ impl WireEval {
         evaluated(rows).map(DolosAnswer::Evaluated)
     }
 
-    /// Whether the response carries no redeemer and no total, the shape of a refusal.
+    /// Whether the response carries no redeemer and no total, the shape of a
+    /// refusal.
     fn refuses(&self) -> bool {
         self.redeemers.is_empty() && self.total.is_none()
     }
 
-    /// Whether the total equals the sum of the redeemers' units, none for a response that carries neither.
+    /// Whether the total equals the sum of the redeemers' units, none for a
+    /// response that carries neither.
     pub fn total_agrees(&self) -> Option<bool> {
         if self.refuses() {
             return None;
@@ -659,7 +687,8 @@ impl WireEval {
         Some(sum.is_some() && total == sum)
     }
 
-    /// The errors of a response that evaluated the transaction that name none of its redeemers.
+    /// The errors of a response that evaluated the transaction that name none
+    /// of its redeemers.
     pub fn unnamed(&self) -> Vec<&str> {
         if self.refuses() {
             return Vec::new();
@@ -674,7 +703,8 @@ impl WireEval {
 /// The refusal each listed row of each record is known to draw.
 pub type EvalKnown = BTreeMap<RecordId, BTreeMap<RowKey, Refusal>>;
 
-/// Reads the evaluation known list, one `<record> <level> <tag>#<index> <refusal>` per line.
+/// Reads the evaluation known list, one `<record> <level> <tag>#<index>
+/// <refusal>` per line.
 pub fn parse_eval_known(file: &'static str, text: &str) -> Result<EvalKnown, ManifestError> {
     let mut known = EvalKnown::new();
     let lines = text.lines().enumerate().map(|(i, l)| (i + 1, l.trim()));
@@ -694,7 +724,8 @@ pub fn parse_eval_known(file: &'static str, text: &str) -> Result<EvalKnown, Man
     Ok(known)
 }
 
-/// Writes an evaluation known list as `parse_eval_known` reads it, in record and row order.
+/// Writes an evaluation known list as `parse_eval_known` reads it, in record
+/// and row order.
 pub fn render_eval_known(known: &EvalKnown) -> String {
     let rows = known.iter().flat_map(|(id, rows)| {
         rows.iter()
@@ -708,7 +739,8 @@ pub fn eval_known() -> Result<EvalKnown, ManifestError> {
     parse_eval_known("eval-known.txt", EVAL_KNOWN)
 }
 
-/// The answer every layer is known to give each listed record whose redeemers the ledger evaluated none of.
+/// The answer every layer is known to give each listed record whose redeemers
+/// the ledger evaluated none of.
 pub type TxKnown = BTreeMap<RecordId, String>;
 
 /// Reads the transaction known list, one `<record> <answer>` per line.
@@ -831,7 +863,9 @@ impl EvalJudge {
     }
 }
 
-/// The members of the answer axis that name the evaluation judges' verdicts on one row, on one part of a whole answer, or on a record or row the judge did not reach.
+/// The members of the answer axis that name the evaluation judges' verdicts on
+/// one row, on one part of a whole answer, or on a record or row the judge did
+/// not reach.
 mod part {
     pub const ROW: &str = "row";
     pub const TOTAL: &str = "total";
@@ -843,10 +877,12 @@ mod part {
     pub const KNOWN: &str = "known";
 }
 
-/// The member of the draft axis on the verdict of a record whose bytes derive no draft.
+/// The member of the draft axis on the verdict of a record whose bytes derive
+/// no draft.
 const UNDERIVED: &str = "underived";
 
-/// The verdict of `judge` at layer `layer` on record `id`, which touches the shape of the judge's requests.
+/// The verdict of `judge` at layer `layer` on record `id`, which touches the
+/// shape of the judge's requests.
 fn estimate(
     judge: EvalJudge,
     layer: Layer,
@@ -900,7 +936,8 @@ fn on_a_row(cells: &[CellKey]) -> bool {
     member(cells, Axis::Answer) == Some(part::ROW)
 }
 
-/// The counts of the row verdicts of `judge` in `tally` under the key `group` gives each verdict's cells.
+/// The counts of the row verdicts of `judge` in `tally` under the key `group`
+/// gives each verdict's cells.
 fn row_counts<K: Ord>(
     tally: &judgement::Tally,
     judge: Judge,
@@ -920,7 +957,8 @@ fn row_counts<K: Ord>(
     counts
 }
 
-/// The passing and the failing verdicts of `judge` in `tally` that name `part` on the answer axis.
+/// The passing and the failing verdicts of `judge` in `tally` that name `part`
+/// on the answer axis.
 fn part_counts(tally: &judgement::Tally, judge: Judge, part: &str) -> (usize, usize) {
     let named = |cells: &[CellKey]| member(cells, Axis::Answer) == Some(part);
     let passed = tally.passed(judge).filter(|(p, _)| named(&p.cells));
@@ -928,7 +966,8 @@ fn part_counts(tally: &judgement::Tally, judge: Judge, part: &str) -> (usize, us
     (passed.map(|(_, n)| n).sum(), failed.count())
 }
 
-/// The verdicts of the evaluation judges of one or more corpora, with the units, refusals and counts no verdict holds.
+/// The verdicts of the evaluation judges of one or more corpora, with the
+/// units, refusals and counts no verdict holds.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct EvalTally {
     /// The verdicts of each layer.
@@ -939,19 +978,23 @@ pub struct EvalTally {
     pub fee_undecoded: usize,
     pub collisions: usize,
     pub skipped_cascade: usize,
-    /// The records whose bytes the ledger's decoder refused, for which the ledger evaluated no redeemer.
+    /// The records whose bytes the ledger's decoder refused, for which the
+    /// ledger evaluated no redeemer.
     pub undecoded: usize,
-    /// The rows the evaluator refused, with its refusal, the candidates for the known list.
+    /// The rows the evaluator refused, with its refusal, the candidates for the
+    /// known list.
     pub refused: EvalKnown,
     pub judged: BTreeSet<RecordId>,
-    /// The answers of each layer for records whose ledger leaves hold the layer to no answer.
+    /// The answers of each layer for records whose ledger leaves hold the layer
+    /// to no answer.
     pub undecided: BTreeMap<Layer, usize>,
     /// The records the transaction judge judged.
     pub tx_judged: BTreeSet<RecordId>,
 }
 
 impl EvalTally {
-    /// Judges one layer's answer for one record and returns its row verdicts, a malformed answer disagreeing whole.
+    /// Judges one layer's answer for one record and returns its row verdicts, a
+    /// malformed answer disagreeing whole.
     pub fn add_answer(
         &mut self,
         layer: Layer,
@@ -1068,7 +1111,8 @@ impl EvalTally {
         }
     }
 
-    /// Judges one layer's transaction verdict for one record whose redeemers the ledger evaluated none of.
+    /// Judges one layer's transaction verdict for one record whose redeemers
+    /// the ledger evaluated none of.
     pub fn add_tx(&mut self, layer: Layer, id: RecordId, verdict: &TxVerdict) {
         self.tx_judged.insert(id);
         let answer = |part| vec![CellKey::new(Axis::Answer, part)];
@@ -1101,7 +1145,8 @@ impl EvalTally {
         self.add(EvalJudge::Tx, layer, id, cells, outcome);
     }
 
-    /// Fails each record of the corpus the transaction known list gives that the transaction judge did not judge.
+    /// Fails each record of the corpus the transaction known list gives that
+    /// the transaction judge did not judge.
     pub fn tx_unjudged(&mut self, known: &TxKnown, corpus: crate::record::CorpusKind) {
         let missed: Vec<_> = known
             .iter()
@@ -1114,7 +1159,8 @@ impl EvalTally {
         }
     }
 
-    /// Judges one layer's answer for the draft of one record against the signed record's ledger rows.
+    /// Judges one layer's answer for the draft of one record against the signed
+    /// record's ledger rows.
     pub fn add_draft(
         &mut self,
         layer: Layer,
@@ -1144,7 +1190,8 @@ impl EvalTally {
         self.add(EvalJudge::Draft, Layer::Pallas, signed, cells, outcome);
     }
 
-    /// Judges one layer's answer for a draft that pays a reward account against the refusal `expected`.
+    /// Judges one layer's answer for a draft that pays a reward account against
+    /// the refusal `expected`.
     pub fn add_reward_output(
         &mut self,
         layer: Layer,
@@ -1168,7 +1215,8 @@ impl EvalTally {
         self.add(EvalJudge::RewardOutput, layer, signed, cells, outcome);
     }
 
-    /// Fails each listed row of a record of the corpus the judgement did not reach.
+    /// Fails each listed row of a record of the corpus the judgement did not
+    /// reach.
     pub fn unjudged(&mut self, known: &EvalKnown, corpus: crate::record::CorpusKind) {
         let missed: Vec<_> = known
             .iter()
@@ -1275,7 +1323,10 @@ impl EvalTally {
         layers
     }
 
-    /// Whether `judge` judged at `layer` what shows the layer was reached: an agreeing row for the row judges, a refusal and an empty evaluation for the transaction judge, and the expected refusal for the reward output judge.
+    /// Whether `judge` judged at `layer` what shows the layer was reached: an
+    /// agreeing row for the row judges, a refusal and an empty evaluation for
+    /// the transaction judge, and the expected refusal for the reward output
+    /// judge.
     pub fn judged_at(&self, judge: EvalJudge, layer: Layer) -> bool {
         match judge {
             EvalJudge::Oracle | EvalJudge::Draft => {
@@ -1319,7 +1370,8 @@ impl EvalTally {
         failing
     }
 
-    /// The known list lines of the rows the evaluator refused, each after `CANDIDATE eval-known.txt`.
+    /// The known list lines of the rows the evaluator refused, each after
+    /// `CANDIDATE eval-known.txt`.
     pub fn candidates(&self) -> Vec<String> {
         let text = render_eval_known(&self.refused);
         let lines = text
@@ -1858,7 +1910,13 @@ mod tests {
         let mut twice = t.clone();
         let ledger = BTreeMap::from([(key(Level::Top, 0, 0), ran(1, 2))]);
         let malformed = Err(Malformed::Twice(key(Level::Top, 0, 0)));
-        let verdicts = twice.add_answer(Layer::Eval(Version::V1), ic(4), &ledger, &BTreeMap::new(), malformed);
+        let verdicts = twice.add_answer(
+            Layer::Eval(Version::V1),
+            ic(4),
+            &ledger,
+            &BTreeMap::new(),
+            malformed,
+        );
         assert!(verdicts.is_empty());
         assert_eq!(
             lines(&failed(&twice, Judge::EvalOracle)),
@@ -1878,7 +1936,11 @@ mod tests {
         );
         let mut slow = t.clone();
         let row = row_verdict(Some(ran(1, 2)), DolosRow::Answered(ran(3, 2)), None);
-        slow.add_rows(Layer::Eval(Version::V1), ic(5), &[(key(Level::Top, 0, 0), row)]);
+        slow.add_rows(
+            Layer::Eval(Version::V1),
+            ic(5),
+            &[(key(Level::Top, 0, 0), row)],
+        );
         let cells = &failed(&slow, Judge::EvalOracle)[0].cells;
         assert!(cells.iter().any(|c| c.to_string() == "units:mem"));
         assert!(!cells.iter().any(|c| c.to_string() == "units:steps"));
@@ -2221,7 +2283,12 @@ mod tests {
         assert!(t.every_layer_judged(EvalJudge::RewardOutput));
         let unsupported = refused_for("output address (requires Shelley)");
         t.add_reward_output(Layer::Pallas, ic(2), &expected, &unsupported);
-        t.add_reward_output(Layer::Eval(Version::V1), ic(2), &expected, &none_evaluated());
+        t.add_reward_output(
+            Layer::Eval(Version::V1),
+            ic(2),
+            &expected,
+            &none_evaluated(),
+        );
         assert!(!passes(&t));
         let mut merged = EvalTally::default();
         merged.merge(t.clone());

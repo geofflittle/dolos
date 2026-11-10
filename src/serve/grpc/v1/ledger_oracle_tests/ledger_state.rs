@@ -1,4 +1,5 @@
-//! Writes the pools, DReps, committee and proposals the ledger ran a record from into Dolos state.
+//! Writes the pools, DReps, committee and proposals the ledger ran a record
+//! from into Dolos state.
 
 use std::collections::BTreeMap;
 
@@ -262,7 +263,8 @@ fn proposal_states(gov: &Gov, slot: u64) -> Vec<(EntityKey, ProposalState)> {
         .collect()
 }
 
-/// The governance singleton with the ledger's committee, constitution, authorizations, roots and dormant epochs.
+/// The governance singleton with the ledger's committee, constitution,
+/// authorizations, roots and dormant epochs.
 fn gov_state(mut current: GovState, certs: &Certs, gov: &Gov, slot: u64) -> GovState {
     current.committee = gov.committee.as_ref().map(|c| Committee {
         members: c
@@ -304,7 +306,8 @@ fn gov_state(mut current: GovState, certs: &Certs, gov: &Gov, slot: u64) -> GovS
     current
 }
 
-/// Writes the ledger's pools, DReps, committee, constitution and proposals at the slot of the epoch.
+/// Writes the ledger's pools, DReps, committee, constitution and proposals at
+/// the slot of the epoch.
 pub(super) fn seed(
     domain: &DomainAdapter,
     network: Network,

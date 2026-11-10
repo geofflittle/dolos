@@ -89,7 +89,8 @@ pub trait SubmitExt: Domain {
         Ok(hash)
     }
 
-    /// Validates each pending transaction again, in queue order, and drops those the ledger now refuses.
+    /// Validates each pending transaction again, in queue order, and drops
+    /// those the ledger now refuses.
     fn revalidate_pending(&self, chain: &Self::Chain) -> Result<Vec<TxHash>, DomainError> {
         if !self.mempool().has_pending() {
             return Ok(vec![]);
@@ -105,7 +106,8 @@ pub trait SubmitExt: Domain {
         let mut kept = Vec::new();
         let mut refused = Vec::new();
 
-        // Each transaction is judged after the pending transactions kept before it.
+        // Each transaction is judged after the pending transactions kept before
+        // it.
         for tx in self.mempool().peek_pending() {
             let utxos = MempoolAwareUtxoStore::<'_, Self>::with_pending(
                 self.state(),

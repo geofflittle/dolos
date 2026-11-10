@@ -176,8 +176,9 @@ fn apply_txs_lenient(
                     stats.recreated_outputs += 1;
                 }
 
-                // Creating it again un-spends it, which is exactly what the node
-                // does and the reason a later block can spend it a second time.
+                // Creating it again un-spends it, which is exactly what the
+                // node does and the reason a later block can
+                // spend it a second time.
                 spent_here.remove(&utxo_ref);
                 delta.consumed_utxo.remove(&utxo_ref);
 
@@ -1469,8 +1470,8 @@ mod tests {
     }
 
     /// A sub transaction is applied under the verdict on the transaction that
-    /// lists it, so when that transaction is phase 2 invalid no walk creates the
-    /// sub transaction's outputs or spends its input.
+    /// lists it, so when that transaction is phase 2 invalid no walk creates
+    /// the sub transaction's outputs or spends its input.
     #[test]
     fn a_sub_transaction_of_an_invalid_transaction_is_not_applied() {
         for (name, _, _, _, spent, parent, made) in SUB_TRANSACTION_CASES {

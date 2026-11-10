@@ -66,7 +66,8 @@ fn parse_drep_id(drep_id: &str) -> Result<(String, Vec<u8>, bool, bool), StatusC
                 ("drep", 29) => {
                     let header_byte = *payload.first().ok_or(StatusCode::BAD_REQUEST)?;
 
-                    // A CIP-129 DRep header is the key prefix or the script prefix.
+                    // A CIP-129 DRep header is the key prefix or the script
+                    // prefix.
                     if header_byte != pallas_extras::DREP_KEY_PREFIX
                         && header_byte != pallas_extras::DREP_SCRIPT_PREFIX
                     {
@@ -1414,8 +1415,8 @@ mod tests {
             serde_json::from_slice(&body).expect("failed to parse drep metadata");
 
         assert_eq!(&model.drep_id, drep);
-        // the drep id in the vectors is the 29-byte CIP-129 form, so the hex keeps the
-        // header
+        // the drep id in the vectors is the 29-byte CIP-129 form, so the hex
+        // keeps the header
         assert_eq!(model.hex, hex::encode([vec![0x22], vec![7u8; 28]].concat()));
         assert_eq!(model.url, "https://example.invalid/drep");
         assert_eq!(model.hash, hex::encode([9u8; 32]));
@@ -1445,7 +1446,8 @@ mod tests {
 
     #[test]
     fn parse_drep_id_rejects_invalid_cip129_header() {
-        // 0x20 has the DRep high nibble. 0x20 is not a DRep key or script header.
+        // 0x20 has the DRep high nibble. 0x20 is not a DRep key or script
+        // header.
         let mut payload = vec![0x20u8];
         payload.extend_from_slice(&[7u8; 28]);
 
@@ -2899,8 +2901,8 @@ mod tests {
 
     #[test]
     fn committee_credential_ids_follow_cip0129() {
-        // For a cold key, the high nibble is 0x1 (cold), and the low nibble is 0x2
-        // (key).
+        // For a cold key, the high nibble is 0x1 (cold), and the low nibble is
+        // 0x2 (key).
         let cold =
             bech32_committee_cold(&cc_cold_key(1)).expect("The encoder cannot encode the cold ID.");
         let (hrp, payload) = bech32::decode(&cold).expect("The decoder cannot decode the cold ID.");
@@ -2915,7 +2917,8 @@ mod tests {
             bech32::decode(&cold_script).expect("The decoder cannot decode the cold-script ID.");
         assert_eq!(payload[0], 0x13);
 
-        // For a hot key, the high nibble is 0x0 (hot), and the low nibble is 0x2 (key).
+        // For a hot key, the high nibble is 0x0 (hot), and the low nibble is
+        // 0x2 (key).
         let hot =
             bech32_committee_hot(&cc_cold_key(11)).expect("The encoder cannot encode the hot ID.");
         let (hrp, payload) = bech32::decode(&hot).expect("The decoder cannot decode the hot ID.");
@@ -3080,8 +3083,9 @@ mod tests {
 
     #[tokio::test]
     async fn governance_committee_no_confidence_is_dissolved() {
-        // A NoConfidence enactment clears the committee and writes the committee
-        // lineage root. These two changes are the evidence of a dissolution.
+        // A NoConfidence enactment clears the committee and writes the
+        // committee lineage root. These two changes are the evidence of
+        // a dissolution.
         let app =
             TestApp::new_with_cfg_and_setup(SyntheticBlockConfig::default(), |domain, _vectors| {
                 let action = GovActionId {

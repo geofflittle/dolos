@@ -1,5 +1,6 @@
 //! Guard execution through Dolos admission, evaluation, estimation and RPC v1.
-//! Corpus bytes are unchanged; mutations and evidence limits: test_data/musashi-guard-callers/.
+//! Corpus bytes are unchanged; mutations and evidence limits:
+//! test_data/musashi-guard-callers/.
 use super::*;
 use dolos_core::{ChainError, MempoolAwareUtxoStore};
 use pallas::interop::utxorpc::v1::spec as rpc;
@@ -217,7 +218,8 @@ async fn original_bad_guard_datum_is_rejected() {
         format!("{result:?}").contains("DijkstraMalformedGuardDatum"),
         "{result:?}"
     );
-    // Context evaluation and phase-one datum-shape checks have different responsibilities.
+    // Context evaluation and phase-one datum-shape checks have different
+    // responsibilities.
     assert_guard(&reports(&f, &f.tx).0.unwrap(), f.expected.unwrap());
 }
 
@@ -260,7 +262,8 @@ async fn reference_input_provides_guard_code() {
     );
     tx.transaction_witness_set.plutus_v4_script = None;
     let raw = minicbor::to_vec(tx).unwrap();
-    // Body/UTxO mutation is synthetic and unsigned; this proves evaluation, not admission.
+    // Body/UTxO mutation is synthetic and unsigned; this proves evaluation, not
+    // admission.
     let (evaluated, estimated) = reports(&f, &raw);
     let evaluated = evaluated.unwrap();
     let estimated = estimated.unwrap();
@@ -282,7 +285,8 @@ async fn reference_input_provides_guard_code() {
 async fn failing_guard_is_reported_by_rpc() {
     let f = fixture(900);
     let raw = mutation(&f, |tx| {
-        // Known synthetic explicit-error V4 program; no signing or admission claim.
+        // Known synthetic explicit-error V4 program; no signing or admission
+        // claim.
         let script = n::PlutusScript::<4>(hex::decode("450101002601").unwrap().into());
         tx.transaction_body.guards = Some(n::Guards::Credentials(
             vec![n::StakeCredential::ScriptHash(script.compute_hash())]
@@ -330,11 +334,13 @@ async fn nonzero_guard_index_is_preserved() {
             .into(),
         );
     });
-    // Synthetic extra key credential; evaluation only, no signature/admission claim.
+    // Synthetic extra key credential; evaluation only, no signature/admission
+    // claim.
     let (evaluated, estimated) = reports(&f, &raw);
     let evaluated = evaluated.unwrap();
     let estimated = estimated.unwrap();
-    // Adding a credential changes context cost; the original exact budget need not suffice.
+    // Adding a credential changes context cost; the original exact budget need
+    // not suffice.
     assert!(estimated[0].success, "{estimated:?}");
     assert_eq!(
         (estimated[0].tag, estimated[0].index),
@@ -381,7 +387,8 @@ async fn missing_child_guard_redeemer_is_not_silent() {
         tx.transaction_body.sub_transactions = Some(vec![sub].try_into().unwrap());
         tx.transaction_witness_set.redeemer = None;
     });
-    // Synthetic child body: evaluation only. The guard script remains in the parent witness set.
+    // Synthetic child body: evaluation only. The guard script remains in the
+    // parent witness set.
     let (evaluated, estimated) = reports(&f, &raw);
     let calls = f.group.estimate(&raw);
     let wire = rpc(&f, &raw).await;
@@ -417,7 +424,8 @@ async fn missing_guard_script_and_redeemer_are_reported() {
 
 #[tokio::test]
 async fn native_and_key_only_transactions_need_no_plutus_redeemers() {
-    // Original accepted corpus records: native guards, a required native guard with null data, and a key-only transaction.
+    // Original accepted corpus records: native guards, a required native guard
+    // with null data, and a key-only transaction.
     for number in [855, 869, 899] {
         let f = fixture(number);
         let (evaluated, estimated) = reports(&f, &f.tx);

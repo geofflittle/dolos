@@ -1,4 +1,5 @@
-//! Refusals of corpus transactions that lack a script or redeemer one of their credentials needs.
+//! Refusals of corpus transactions that lack a script or redeemer one of their
+//! credentials needs.
 use super::guarding::{fixture, reports, rpc};
 
 async fn assert_refused_naming(number: u32, reason: &str) {

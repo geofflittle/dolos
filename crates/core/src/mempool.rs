@@ -283,10 +283,10 @@ pub trait MempoolStore: Clone + Send + Sync + 'static {
 
     /// Called after each chain-sync event.
     ///
-    /// For `seen_txs`, inflight or pending: transitions to `Confirmed` and increments the
-    /// confirmation counter. For `unseen_txs` (rollback): moves the
-    /// transaction back to the pending queue, at the place it was first
-    /// admitted, so it can be re-submitted.
+    /// For `seen_txs`, inflight or pending: transitions to `Confirmed` and
+    /// increments the confirmation counter. For `unseen_txs` (rollback):
+    /// moves the transaction back to the pending queue, at the place it was
+    /// first admitted, so it can be re-submitted.
     /// Hashes not currently tracked are silently ignored.
     ///
     /// `point` is the block's chain point. On first confirmation, it is
@@ -310,7 +310,8 @@ pub trait MempoolStore: Clone + Send + Sync + 'static {
     /// confirmation count, and the chain point where it was first confirmed.
     fn check_status(&self, tx_hash: &TxHash) -> TxStatus;
 
-    /// Moves matching pending transactions to the finalized log as `Dropped`, ignoring hashes not pending.
+    /// Moves matching pending transactions to the finalized log as `Dropped`,
+    /// ignoring hashes not pending.
     fn drop_pending(&self, hashes: &[TxHash]) -> Result<(), MempoolError>;
 
     /// Paginate through finalized transactions.
@@ -711,7 +712,8 @@ mod tests {
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
 
-        // Should skip both non-matching items and return Pending from the inner stream.
+        // Should skip both non-matching items and return Pending from the inner
+        // stream.
         let result = poll_once(&mut filter, &mut cx);
         assert!(result.is_pending());
     }
@@ -866,7 +868,8 @@ mod tests {
         MempoolTx::new(tx.hash(), EraCbor(tx.era().into(), tx.encode()), vec![])
     }
 
-    /// The output reference one past the last output of the listing transaction.
+    /// The output reference one past the last output of the listing
+    /// transaction.
     fn past_parent_outputs(mtx: &MempoolTx) -> TxoRef {
         let tx = MultiEraTx::try_from(&mtx.payload).unwrap();
         txo(PARENT, tx.outputs().len() as u32)

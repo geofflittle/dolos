@@ -404,9 +404,10 @@ impl<'a> DeltaBuilder<'a> {
 
                     // Under the lenient rule the utxo walk has already decided
                     // which inputs were available at their own transaction's
-                    // position. An input it did not consume was not consumed by the
-                    // ledger either, so showing it here would report a spend the
-                    // network did not make.
+                    // position. An input it did not consume was not consumed by
+                    // the ledger either, so showing it here
+                    // would report a spend the network did
+                    // not make.
                     if let Some(consumed) = &self.consumed {
                         if !consumed.contains(&txoref) {
                             continue;
@@ -467,13 +468,15 @@ impl<'a> DeltaBuilder<'a> {
                     )?;
                 }
 
-                // The Conway LEDGER rule runs CERTS, GOV, the withdrawal drain and
-                // the PPUP/update registration only under `IsValid True`; a
-                // phase-2-invalid tx moves collateral and nothing else. Two
-                // carve-outs stay outside this guard: the input/output fan-outs,
-                // where pallas already resolves `consumes()`/`produces()` to the
-                // collateral pair, and `visit_tx`, which every visitor still sees
-                // so fees and collateral can be priced.
+                // The Conway LEDGER rule runs CERTS, GOV, the withdrawal drain
+                // and the PPUP/update registration only under
+                // `IsValid True`; a phase-2-invalid tx moves
+                // collateral and nothing else. Two carve-outs
+                // stay outside this guard: the input/output fan-outs,
+                // where pallas already resolves `consumes()`/`produces()` to
+                // the collateral pair, and `visit_tx`, which
+                // every visitor still sees so fees and
+                // collateral can be priced.
                 if tx.is_valid() {
                     for mint in tx.mints() {
                         self.account_state
@@ -851,8 +854,8 @@ pub(crate) fn compute_delta<D: Domain>(
 
         dormancy = builder.take_dormancy();
 
-        // TODO: we treat the UTxO set differently due to tech-debt. We should migrate
-        // this into the entity system. (#1042)
+        // TODO: we treat the UTxO set differently due to tech-debt. We should
+        // migrate this into the entity system. (#1042)
         let utxos = match lenient_delta {
             Some(delta) => delta,
             None => {

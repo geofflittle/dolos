@@ -53,10 +53,11 @@ pub struct PeerConfig {
     /// ranking blocks certify endorser blocks.
     ///
     /// On such a chain most transactions are never in a ranking block, so a
-    /// client that follows only chainsync and blockfetch builds a ledger that is
-    /// silently short. Set this and the pull stage fetches every certified
-    /// endorser block over leios-fetch and resolves the certifying block against
-    /// it. Leave it unset and the chain is followed as an ordinary Praos chain.
+    /// client that follows only chainsync and blockfetch builds a ledger that
+    /// is silently short. Set this and the pull stage fetches every
+    /// certified endorser block over leios-fetch and resolves the
+    /// certifying block against it. Leave it unset and the chain is
+    /// followed as an ordinary Praos chain.
     ///
     /// It is a separate address because leios-fetch lives in the newer
     /// networking stack, so it cannot ride the chainsync connection.
@@ -99,10 +100,11 @@ pub struct SyncConfig {
     /// any specification. On the Musashi Leios devnet a certified endorser
     /// block's transactions are applied by the producing node with validation
     /// switched off, and the chain that follows depends on what that does. A
-    /// transaction whose input does not exist consumes nothing and still creates
-    /// its outputs, and a transaction carried a second time re-creates outputs
-    /// that were spent in between. A follower applying the ledger rules strictly
-    /// computes a different UTxO set and stops on an input the network holds.
+    /// transaction whose input does not exist consumes nothing and still
+    /// creates its outputs, and a transaction carried a second time
+    /// re-creates outputs that were spent in between. A follower applying
+    /// the ledger rules strictly computes a different UTxO set and stops on
+    /// an input the network holds.
     ///
     /// With this on, every transaction of every block is applied in wire order,
     /// an input that is not there is left unconsumed and counted rather than

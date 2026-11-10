@@ -1,4 +1,5 @@
-//! Judges the arguments the evaluator applies each redeemer's script to against the ledger's, by level, purpose and value.
+//! Judges the arguments the evaluator applies each redeemer's script to against
+//! the ledger's, by level, purpose and value.
 
 use std::{
     collections::{btree_map::Entry, BTreeMap, BTreeSet},
@@ -136,14 +137,16 @@ impl Language {
     }
 }
 
-/// What the ledger built for one redeemer, the arguments of its context or why it built none.
+/// What the ledger built for one redeemer, the arguments of its context or why
+/// it built none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LedgerContext {
     Built(Vec<Argument>),
     NotBuilt(Refusal),
 }
 
-/// The context the ledger built or refused for each redeemer of a record, or that its decoder refused the record's bytes.
+/// The context the ledger built or refused for each redeemer of a record, or
+/// that its decoder refused the record's bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LedgerContexts {
     Read(BTreeMap<RowKey, LedgerContext>),
@@ -158,7 +161,8 @@ pub fn ledger_contexts(record: &Record) -> LedgerContexts {
     }
 }
 
-/// The context the ledger built or refused for each redeemer, at its top level and in each sub transaction.
+/// The context the ledger built or refused for each redeemer, at its top level
+/// and in each sub transaction.
 fn redeemer_contexts(redeemers: &Redeemers) -> BTreeMap<RowKey, LedgerContext> {
     let top = redeemers.top.iter().map(|r| (Level::Top, r));
     let subs = redeemers
@@ -182,14 +186,16 @@ fn redeemer_contexts(redeemers: &Redeemers) -> BTreeMap<RowKey, LedgerContext> {
         .collect()
 }
 
-/// The arguments the evaluator applies one redeemer's script to, as bytes, with the script's language.
+/// The arguments the evaluator applies one redeemer's script to, as bytes, with
+/// the script's language.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PallasContext {
     pub language: Language,
     pub args: Vec<Vec<u8>>,
 }
 
-/// What the evaluator built for the redeemers of one transaction, or why it built none.
+/// What the evaluator built for the redeemers of one transaction, or why it
+/// built none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PallasContexts {
     Built(BTreeMap<RowKey, PallasContext>),
@@ -209,7 +215,8 @@ impl PallasContexts {
     }
 }
 
-/// What the known list gives a row: the differences it is known to show, or the ledger's refusal of a context only the evaluator builds.
+/// What the known list gives a row: the differences it is known to show, or the
+/// ledger's refusal of a context only the evaluator builds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Listing {
     Differences(BTreeSet<String>),
@@ -226,28 +233,35 @@ impl Listing {
     }
 }
 
-/// The verdict of one row from the ledger's context, the evaluator's and the known list's listing.
+/// The verdict of one row from the ledger's context, the evaluator's and the
+/// known list's listing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextVerdict {
-    /// Both sides built arguments of equal value, with whether their bytes are equal too.
+    /// Both sides built arguments of equal value, with whether their bytes are
+    /// equal too.
     Agree { bytes_equal: bool },
     /// The row shows exactly what the known list gives it.
     Known,
-    /// The ledger built a context and the evaluator refused the transaction for this reason.
+    /// The ledger built a context and the evaluator refused the transaction for
+    /// this reason.
     Unbuilt(Refusal),
-    /// The ledger built no context, and the evaluator built none or the ledger's decoder refused the transaction's bytes.
+    /// The ledger built no context, and the evaluator built none or the
+    /// ledger's decoder refused the transaction's bytes.
     NoLedgerContext,
-    /// The arguments differ at each of these places, and from the listing when there is one.
+    /// The arguments differ at each of these places, and from the listing when
+    /// there is one.
     Differ {
         differences: Vec<Difference>,
         listed: Option<Listing>,
     },
-    /// The evaluator built a context the ledger refused for this reason, and the listing when there is one.
+    /// The evaluator built a context the ledger refused for this reason, and
+    /// the listing when there is one.
     PallasOnly {
         ledger: Refusal,
         listed: Option<Listing>,
     },
-    /// The row is listed and shows neither a difference nor a context only the evaluator builds.
+    /// The row is listed and shows neither a difference nor a context only the
+    /// evaluator builds.
     Stale(Listing),
 }
 
@@ -259,7 +273,8 @@ enum PallasRow<'a> {
     Refused(&'a Refusal),
 }
 
-/// Each row's verdict for one transaction, with the language of the evaluator's context, for every row the ledger, the evaluator or the known list names.
+/// Each row's verdict for one transaction, with the language of the evaluator's
+/// context, for every row the ledger, the evaluator or the known list names.
 pub fn judge_tx(
     ledger: &LedgerContexts,
     pallas: &PallasContexts,
@@ -298,7 +313,8 @@ pub fn judge_tx(
         .collect()
 }
 
-/// The verdict of one row of a transaction whose bytes the ledger's decoder refused, for which the ledger built no context.
+/// The verdict of one row of a transaction whose bytes the ledger's decoder
+/// refused, for which the ledger built no context.
 fn undecoded_verdict(listed: Option<&Listing>) -> ContextVerdict {
     match listed {
         None => ContextVerdict::NoLedgerContext,
@@ -306,7 +322,8 @@ fn undecoded_verdict(listed: Option<&Listing>) -> ContextVerdict {
     }
 }
 
-/// The verdict of one row from the ledger's context, what the evaluator built and the row's listing.
+/// The verdict of one row from the ledger's context, what the evaluator built
+/// and the row's listing.
 fn row_verdict(
     ledger: Option<&LedgerContext>,
     pallas: PallasRow,
@@ -351,7 +368,8 @@ fn row_verdict(
     }
 }
 
-/// The verdict of a row both sides built a context for, from the places its arguments differ and its listing.
+/// The verdict of a row both sides built a context for, from the places its
+/// arguments differ and its listing.
 fn by_differences(
     differences: Vec<Difference>,
     bytes_equal: bool,
@@ -381,7 +399,8 @@ fn role(arg: usize, args: usize) -> String {
     }
 }
 
-/// The field a path names in an argument, the ScriptContext and TxInfo fields of a context by the language's declaration order.
+/// The field a path names in an argument, the ScriptContext and TxInfo fields
+/// of a context by the language's declaration order.
 fn field(language: Language, role: &str, path: &[String]) -> Vec<String> {
     let mut names = vec![role.to_string()];
     if role == "context" {
@@ -398,12 +417,14 @@ fn field(language: Language, role: &str, path: &[String]) -> Vec<String> {
 /// One way the evaluator's arguments differ from the ledger's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Difference {
-    /// The two sides hold a different number of arguments, the evaluator none when it built no context.
+    /// The two sides hold a different number of arguments, the evaluator none
+    /// when it built no context.
     Count {
         ledger: usize,
         pallas: Option<usize>,
     },
-    /// The arguments differ in value at a path into argument `arg`, which names `field`.
+    /// The arguments differ in value at a path into argument `arg`, which names
+    /// `field`.
     Place {
         language: Language,
         arg: usize,
@@ -487,7 +508,8 @@ fn differences(args: &[Argument], context: &PallasContext) -> Vec<Difference> {
 /// A path into an argument with the ledger's and the evaluator's value there.
 type Place = (Vec<String>, String, String);
 
-/// Adds each place under `path` where the two values differ, a constructor, list or map of the same shape by its items and anything else whole.
+/// Adds each place under `path` where the two values differ, a constructor,
+/// list or map of the same shape by its items and anything else whole.
 fn walk(ledger: &Data, pallas: &Data, path: &mut Vec<String>, out: &mut Vec<Place>) {
     match (ledger, pallas) {
         (Data::Constr(l, lf), Data::Constr(p, pf)) if l == p => items(lf, pf, path, out),
@@ -519,7 +541,8 @@ fn walk(ledger: &Data, pallas: &Data, path: &mut Vec<String>, out: &mut Vec<Plac
     }
 }
 
-/// Adds each place under `path` where two item lists differ, an item one side lacks as `none`.
+/// Adds each place under `path` where two item lists differ, an item one side
+/// lacks as `none`.
 fn items(ledger: &[Data], pallas: &[Data], path: &mut Vec<String>, out: &mut Vec<Place>) {
     for i in 0..ledger.len().max(pallas.len()) {
         path.push(i.to_string());
@@ -537,7 +560,9 @@ fn items(ledger: &[Data], pallas: &[Data], path: &mut Vec<String>, out: &mut Vec
 /// The listing each listed row of each record is known to show.
 pub type ContextKnown = BTreeMap<RecordId, BTreeMap<RowKey, Listing>>;
 
-/// Reads the context known list, one `<record> <level> <tag>#<index> <difference>` or `<record> <level> <tag>#<index> refused <ledger refusal>` per line.
+/// Reads the context known list, one `<record> <level> <tag>#<index>
+/// <difference>` or `<record> <level> <tag>#<index> refused <ledger refusal>`
+/// per line.
 pub fn parse_context_known(file: &'static str, text: &str) -> Result<ContextKnown, ManifestError> {
     let mut known = ContextKnown::new();
     let lines = text.lines().enumerate().map(|(i, l)| (i + 1, l.trim()));
@@ -613,7 +638,8 @@ impl fmt::Display for Counts {
     }
 }
 
-/// The row verdicts of the context judgement of one or more corpora, with each line that fails it.
+/// The row verdicts of the context judgement of one or more corpora, with each
+/// line that fails it.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ContextTally {
     pub agree: usize,
@@ -665,7 +691,8 @@ impl ContextTally {
         }
     }
 
-    /// Counts each row verdict of one record, keeping a failing verdict for each line that fails.
+    /// Counts each row verdict of one record, keeping a failing verdict for
+    /// each line that fails.
     pub fn add(&mut self, id: RecordId, verdicts: &[(RowKey, Option<Language>, ContextVerdict)]) {
         self.judged.insert(id);
         for (key, language, verdict) in verdicts {
@@ -722,7 +749,8 @@ impl ContextTally {
         }
     }
 
-    /// Fails each listed row of a record of the corpus the judgement did not reach.
+    /// Fails each listed row of a record of the corpus the judgement did not
+    /// reach.
     pub fn unjudged(&mut self, known: &ContextKnown, corpus: CorpusKind) {
         let missed = known
             .iter()
@@ -770,7 +798,8 @@ impl ContextTally {
         self.judged.extend(judged);
     }
 
-    /// Adds the passing counts, the agreeing ones by language, and the failing verdicts to `out`.
+    /// Adds the passing counts, the agreeing ones by language, and the failing
+    /// verdicts to `out`.
     pub fn report(&self, out: &mut judgement::Tally) {
         let passed = |pass, cells| judgement::Passed {
             judge: Judge::Context,
@@ -790,7 +819,8 @@ impl ContextTally {
     }
 }
 
-/// The members of the coverage table on the language axis, one for each Plutus language.
+/// The members of the coverage table on the language axis, one for each Plutus
+/// language.
 pub fn language_members() -> Vec<Member> {
     let member = |language: &Language| Member {
         cell: CellKey::new(Axis::Language, language),
@@ -890,7 +920,8 @@ mod tests {
         PallasContexts::Built(BTreeMap::from([(key(Level::Top, 0, 0), row)]))
     }
 
-    /// A V3 context whose TxInfo has sixteen fields, the fee the fourth, with the fee given.
+    /// A V3 context whose TxInfo has sixteen fields, the fee the fourth, with
+    /// the fee given.
     fn v3_context(fee: u8, indefinite: bool) -> String {
         let fields = format!("80808018{fee:02x}a080a0d8798080a0a041aba080d87a80d87a80");
         let info = match indefinite {

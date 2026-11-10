@@ -161,8 +161,8 @@ fn param_update_to_pparamset(update: &MultiEraParamUpdate) -> Result<PParamsSet,
         drep_inactivity_period => DrepInactivityPeriod
     };
 
-    // TODO: these are special cases where we don't have automatic type mappings. We
-    // should fix this at the Pallas level.
+    // TODO: these are special cases where we don't have automatic type
+    // mappings. We should fix this at the Pallas level.
 
     if let Some(updated) = update.max_tx_ex_units() {
         let value = PParamValue::MaxTxExUnits(pallas::ledger::primitives::ExUnits {
@@ -743,7 +743,8 @@ mod dijkstra_governance_tests {
     /// A proposal of a shared key and a Dijkstra key records both.
     #[test]
     fn a_shared_key_and_a_dijkstra_key_are_recorded_together() {
-        // Key 0 reading minfee_a 500 and key 46 reading max_endorser_block_txs_size 1500000.
+        // Key 0 reading minfee_a 500 and key 46 reading
+        // max_endorser_block_txs_size 1500000.
         let mut bytes = vec![0xa2];
         bytes.extend(minicbor::to_vec(0u64).unwrap());
         bytes.extend(minicbor::to_vec(500u64).unwrap());

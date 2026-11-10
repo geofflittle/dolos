@@ -19,7 +19,8 @@ pub enum ByteVerdict {
 }
 
 impl ByteVerdict {
-    /// Compares the ledger's bytes with the node's, either side possibly absent.
+    /// Compares the ledger's bytes with the node's, either side possibly
+    /// absent.
     pub fn of(ledger: Option<&[u8]>, node: Option<&[u8]>) -> Option<Self> {
         match (ledger, node) {
             (None, None) => None,
@@ -192,7 +193,9 @@ impl<R: ServedRoutes> Settled for ByRoute<R> {
     type Total = ByRoute<R>;
 
     fn every() -> Vec<EntryPoint> {
-        Self::routes().map(|(route, version)| route.at(version)).collect()
+        Self::routes()
+            .map(|(route, version)| route.at(version))
+            .collect()
     }
 
     fn tallies(&self) -> Vec<(EntryPoint, &Tally)> {
@@ -511,7 +514,8 @@ impl StateTallies {
         self.roll_fail.iter().map(|r| r.records).sum()
     }
 
-    /// Adds the served output comparisons of each record, passing a known record while it still disagrees.
+    /// Adds the served output comparisons of each record, passing a known
+    /// record while it still disagrees.
     pub fn settle_as_output(
         &mut self,
         kind: CorpusKind,
@@ -521,7 +525,8 @@ impl StateTallies {
         self.settle(Locus::AsOutput, |s| &mut s.as_output, kind, checks, known);
     }
 
-    /// Adds the account comparisons of each record, passing a known record while it still disagrees.
+    /// Adds the account comparisons of each record, passing a known record
+    /// while it still disagrees.
     pub fn settle_accounts(
         &mut self,
         kind: CorpusKind,
@@ -588,7 +593,8 @@ impl StateTallies {
             if *at == locus && id.corpus == kind && !ids.contains(id) {
                 let detail = format!("row={row} locus={locus} not_compared");
                 for entry in T::every() {
-                    self.known_stale.push(stale(*id, entry, row, detail.clone()));
+                    self.known_stale
+                        .push(stale(*id, entry, row, detail.clone()));
                 }
             }
         }
@@ -668,7 +674,8 @@ mod tests {
         }
     }
 
-    /// Comparisons of each record at FetchBlock v1, each agreeing once and disagreeing once per line.
+    /// Comparisons of each record at FetchBlock v1, each agreeing once and
+    /// disagreeing once per line.
     fn checks(entries: &[(u32, &[&str])]) -> BTreeMap<RecordId, ByRoute<OutputRoute>> {
         let mut checks = BTreeMap::new();
         for (n, disagree) in entries {
@@ -860,7 +867,10 @@ mod tests {
     #[test]
     fn a_comparison_that_looked_at_nothing_fails() {
         let mut state = compared();
-        state.as_output.at(OutputRoute::FetchBlock, Version::V1).agree();
+        state
+            .as_output
+            .at(OutputRoute::FetchBlock, Version::V1)
+            .agree();
         assert!(passes(&state), "{state}");
         type Emptied = (fn(&mut StateTallies), usize);
         let empties: [Emptied; 11] = [
@@ -901,7 +911,10 @@ mod tests {
     #[test]
     fn a_corpus_with_no_dependent_passes_and_a_kept_dependent_fails() {
         let mut state = compared();
-        state.as_output.at(OutputRoute::FetchBlock, Version::V1).agree();
+        state
+            .as_output
+            .at(OutputRoute::FetchBlock, Version::V1)
+            .agree();
         state.revalidate = Tally::default();
         assert!(passes(&state), "{state}");
         state.revalidate.agree();
@@ -925,7 +938,10 @@ mod tests {
     #[test]
     fn a_group_that_did_not_roll_prints_one_line_and_fails() {
         let mut state = compared();
-        state.as_output.at(OutputRoute::FetchBlock, Version::V1).agree();
+        state
+            .as_output
+            .at(OutputRoute::FetchBlock, Version::V1)
+            .agree();
         assert!(passes(&state), "{state}");
         assert!(state.to_string().contains(" submit=9 rolled_failed=0"));
         assert!(reported(&state).failing.is_empty());
@@ -1046,7 +1062,10 @@ mod tests {
     fn an_account_disagreement_off_the_known_list_fails_and_a_known_one_passes() {
         let diff = "account=keyHash-00 ledger=balance=0,pool=none,drep=none dolos=balance=0";
         let mut state = compared();
-        state.as_output.at(OutputRoute::FetchBlock, Version::V1).agree();
+        state
+            .as_output
+            .at(OutputRoute::FetchBlock, Version::V1)
+            .agree();
         let as_output = KnownList::from([((Locus::AsOutput, supp(9)), Row::S3)]);
         state.settle_accounts(CorpusKind::Supp, account_checks(diff), &as_output);
         assert_eq!(
@@ -1057,7 +1076,10 @@ mod tests {
         assert!(!passes(&state), "{state}");
 
         let mut state = compared();
-        state.as_output.at(OutputRoute::FetchBlock, Version::V1).agree();
+        state
+            .as_output
+            .at(OutputRoute::FetchBlock, Version::V1)
+            .agree();
         let known = KnownList::from([((Locus::Accounts, supp(9)), Row::S18)]);
         state.settle_accounts(CorpusKind::Supp, account_checks(diff), &known);
         assert_eq!(

@@ -45,9 +45,7 @@ use ledger_oracle_judge::{
     corpus::{self, Corpus},
     cost::CostTallies,
     eval::{ledger_rows, Answer, EvalKnown, EvalTally, Layer, TxKnown},
-    judgement::{
-        self, Axis, CellKey, Finding, Instrument, Judge, RunVerdict, Version,
-    },
+    judgement::{self, Axis, CellKey, Finding, Instrument, Judge, RunVerdict, Version},
     manifest::{self, Candidates, Declared, Feature, Known, KnownList, Locus},
     parallel::in_parallel,
     record::{CorpusKind, LedgerOutcome, PParams, Phase2, Record, RecordId, UtxoEntry},
@@ -99,7 +97,8 @@ fn parsed_differing(
     }
 }
 
-/// The ledger bytes of each expected entry, and every input to read, those named and those expected.
+/// The ledger bytes of each expected entry, and every input to read, those
+/// named and those expected.
 fn utxo_keys<'a>(
     inputs: impl IntoIterator<Item = &'a TxIn>,
     expected: impl IntoIterator<Item = &'a UtxoEntry>,
@@ -266,7 +265,8 @@ impl fmt::Display for Judged {
     }
 }
 
-/// One agreeing record whose corpus compared each state tally but the ones named in `uncompared`.
+/// One agreeing record whose corpus compared each state tally but the ones
+/// named in `uncompared`.
 #[cfg(test)]
 fn judged_part(uncompared: &[&str]) -> Judged {
     let mut judged = Judged::default();
@@ -482,7 +482,8 @@ impl Manifests {
         }
     }
 
-    /// Fails each declared or validation known entry for the corpus that names a record the judgement did not reach.
+    /// Fails each declared or validation known entry for the corpus that names
+    /// a record the judgement did not reach.
     fn unjudged(&self, kind: CorpusKind, judged: &BTreeSet<RecordId>, tally: &mut ValidationTally) {
         let missed = |id: &RecordId| id.corpus == kind && !judged.contains(id);
         for (id, feature) in self.declared.iter().filter(|(id, _)| missed(id)) {
@@ -518,9 +519,9 @@ fn named_inputs(id: RecordId, record: &Record) -> BTreeSet<TxIn> {
         .collect()
 }
 
-/// The coverage cells of a record Dolos agreed on, the request shapes its bytes show when
-/// they decode, the transaction cells and the cells of the calls `calls` when the ledger
-/// accepted it, its leaves when the ledger refused it.
+/// The coverage cells of a record Dolos agreed on, the request shapes its bytes
+/// show when they decode, the transaction cells and the cells of the calls
+/// `calls` when the ledger accepted it, its leaves when the ledger refused it.
 fn agreeing_cells(id: RecordId, record: &Record, calls: &[AgreedCall]) -> Vec<CellKey> {
     let shapes = coverage::shape_cells(&record.tx.0).unwrap_or_default();
     let mut cells = agreeing_outcome_cells(id, record, calls);
@@ -528,7 +529,8 @@ fn agreeing_cells(id: RecordId, record: &Record, calls: &[AgreedCall]) -> Vec<Ce
     cells
 }
 
-/// The coverage cells of a record Dolos agreed on that its ledger outcome decides.
+/// The coverage cells of a record Dolos agreed on that its ledger outcome
+/// decides.
 fn agreeing_outcome_cells(id: RecordId, record: &Record, calls: &[AgreedCall]) -> Vec<CellKey> {
     match &record.outcome {
         LedgerOutcome::Accepted { .. } => {
@@ -546,7 +548,9 @@ fn agreeing_outcome_cells(id: RecordId, record: &Record, calls: &[AgreedCall]) -
     }
 }
 
-/// Every output reference a record's transaction and sub transactions could produce, each output index and the index after them that a collateral return takes.
+/// Every output reference a record's transaction and sub transactions could
+/// produce, each output index and the index after them that a collateral return
+/// takes.
 fn producible(record: &Record) -> Vec<TxIn> {
     let refs = record_txs(record).into_iter().flat_map(|(_, t)| {
         let hash = *t.hash();
@@ -576,14 +580,16 @@ fn written(record: &Record) -> BTreeMap<TxIn, Vec<u8>> {
     outputs.collect()
 }
 
-/// The inputs of a record that Dolos misses because a maker in its group was not taken, by what that maker gives them.
+/// The inputs of a record that Dolos misses because a maker in its group was
+/// not taken, by what that maker gives them.
 struct Missing<'r> {
     seeded: Vec<&'r UtxoEntry>,
     seeded_by: BTreeSet<RecordId>,
     failed_by: BTreeSet<FailingMaker>,
 }
 
-/// The inputs of a record that Dolos misses because a maker in its group was not taken.
+/// The inputs of a record that Dolos misses because a maker in its group was
+/// not taken.
 fn missing_from_makers<'r>(
     group: &validate::Group,
     run: &'r KeptRun,
@@ -634,7 +640,8 @@ struct Rolled<'r> {
     requeued: Option<&'r Record>,
 }
 
-/// What became of the block of one slot group, unmade when the group holds no accepted record.
+/// What became of the block of one slot group, unmade when the group holds no
+/// accepted record.
 enum GroupBlock<'r> {
     Unmade(&'r [Record]),
     Rolled(Rolled<'r>),
@@ -650,7 +657,8 @@ impl<'r> GroupBlock<'r> {
     }
 }
 
-/// Each record of the groups whose block rolled or was never made, with the hash of its block when one rolled.
+/// Each record of the groups whose block rolled or was never made, with the
+/// hash of its block when one rolled.
 fn judged_records<'a, 'r>(
     blocks: &'a [GroupBlock<'r>],
 ) -> impl Iterator<Item = (&'r Record, Option<[u8; 32]>)> + 'a {
@@ -669,7 +677,11 @@ fn judged_hashes(blocks: &[GroupBlock<'_>]) -> BTreeSet<[u8; 32]> {
     names.map(TxName::hash).collect()
 }
 
-/// Submits each slot group of a run in order to a fresh mempool at the group slot, once holding accepted records pending and once marking them inflight, then rolls the block of its accepted records, compares the outputs and returns what became of each group's block with the account comparisons of each group's last accepted record.
+/// Submits each slot group of a run in order to a fresh mempool at the group
+/// slot, once holding accepted records pending and once marking them inflight,
+/// then rolls the block of its accepted records, compares the outputs and
+/// returns what became of each group's block with the account comparisons of
+/// each group's last accepted record.
 async fn validate_run<'r>(
     base: &DomainAdapter,
     kind: CorpusKind,
@@ -858,13 +870,16 @@ async fn validate_run<'r>(
     (blocks, account_checks)
 }
 
-/// The datum ReadUtxos serves for an output with a datum hash, by whether the transaction that made the output witnesses that datum.
+/// The datum ReadUtxos serves for an output with a datum hash, by whether the
+/// transaction that made the output witnesses that datum.
 enum ExpectedDatum {
     Witnessed(Vec<u8>),
     Unwitnessed,
 }
 
-/// Counts the datum ReadUtxos and SearchUtxos serve for each ledger output with a datum hash against the datum its making transaction witnesses, or against the hash when it witnesses none.
+/// Counts the datum ReadUtxos and SearchUtxos serve for each ledger output with
+/// a datum hash against the datum its making transaction witnesses, or against
+/// the hash when it witnesses none.
 async fn compare_datums(
     domain: &DomainAdapter,
     id: RecordId,
@@ -910,7 +925,8 @@ async fn compare_datums(
     }
 }
 
-/// Counts the datum one route serves for each ledger output with a datum hash against the expected datum.
+/// Counts the datum one route serves for each ledger output with a datum hash
+/// against the expected datum.
 fn compare_served_datums(
     served: &serve::Utxos,
     id: RecordId,
@@ -973,7 +989,8 @@ fn dolos_accounts(domain: &DomainAdapter) -> BTreeMap<Credential, Account> {
         .collect()
 }
 
-/// The block and transaction bytes Dolos serves through ReadTx for a transaction hash.
+/// The block and transaction bytes Dolos serves through ReadTx for a
+/// transaction hash.
 struct ServedTx {
     block: BlockAt,
     bytes: Vec<u8>,
@@ -997,7 +1014,9 @@ impl fmt::Display for BlockAt {
     }
 }
 
-/// The raw body, witness set and auxiliary data of a Dijkstra transaction, with whether the block producer marks it successful when the transaction is not a sub transaction.
+/// The raw body, witness set and auxiliary data of a Dijkstra transaction, with
+/// whether the block producer marks it successful when the transaction is not a
+/// sub transaction.
 #[derive(Debug, PartialEq, Eq)]
 struct TxParts {
     body: Vec<u8>,
@@ -1014,7 +1033,8 @@ fn raw_auxiliary(aux: &Nullable<KeepRaw<'_, dijkstra::AuxiliaryData>>) -> Option
 }
 
 impl TxParts {
-    /// The parts of a ledger transaction, marked successful when the ledger ran its scripts to success.
+    /// The parts of a ledger transaction, marked successful when the ledger ran
+    /// its scripts to success.
     fn ledger(bytes: &[u8], phase2: Phase2) -> Result<Self, String> {
         let tx: dijkstra::MempoolTransaction =
             minicbor::decode(bytes).map_err(|e| e.to_string())?;
@@ -1026,7 +1046,8 @@ impl TxParts {
         })
     }
 
-    /// The parts of the sub transaction with the hash that a ledger transaction lists, none when it lists no such sub transaction.
+    /// The parts of the sub transaction with the hash that a ledger transaction
+    /// lists, none when it lists no such sub transaction.
     fn ledger_sub(bytes: &[u8], hash: &[u8; 32]) -> Result<Option<Self>, String> {
         let tx: dijkstra::MempoolTransaction =
             minicbor::decode(bytes).map_err(|e| e.to_string())?;
@@ -1079,7 +1100,8 @@ impl TxParts {
     }
 }
 
-/// A part of a transaction compared between the ledger's records and what ReadTx serves.
+/// A part of a transaction compared between the ledger's records and what
+/// ReadTx serves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TxPart {
     Body,
@@ -1099,7 +1121,8 @@ impl fmt::Display for TxPart {
     }
 }
 
-/// The block and transaction the ledger's records say ReadTx answers a hash with.
+/// The block and transaction the ledger's records say ReadTx answers a hash
+/// with.
 #[derive(Clone, Copy)]
 struct ExpectedTx<'r> {
     slot: u64,
@@ -1132,7 +1155,8 @@ impl TxName {
     }
 }
 
-/// The transaction a record holds and each of its sub transactions, by name, none when its bytes do not decode.
+/// The transaction a record holds and each of its sub transactions, by name,
+/// none when its bytes do not decode.
 fn record_txs(record: &Record) -> Vec<(TxName, MultiEraTx<'_>)> {
     match MultiEraTx::decode_for_era(Era::Dijkstra, &record.tx.0) {
         Ok(tx) => named_txs(tx),
@@ -1165,7 +1189,11 @@ impl fmt::Display for TxName {
     }
 }
 
-/// Counts what ReadTx serves at every version for each transaction hash of the groups whose block rolled or was never made, against the block and transaction of the accepted record that names it, the sub transaction itself at a version that states no sub transactions, or nothing when only refused records do.
+/// Counts what ReadTx serves at every version for each transaction hash of the
+/// groups whose block rolled or was never made, against the block and
+/// transaction of the accepted record that names it, the sub transaction itself
+/// at a version that states no sub transactions, or nothing when only refused
+/// records do.
 fn compare_read_tx(
     kind: CorpusKind,
     blocks: &[GroupBlock<'_>],
@@ -1244,7 +1272,8 @@ fn compare_read_tx(
     }
 }
 
-/// Where a script or datum appears, in the witnesses of a transaction or on an output.
+/// Where a script or datum appears, in the witnesses of a transaction or on an
+/// output.
 #[derive(Debug, Clone, Copy)]
 enum CarriedAt {
     Witness(TxName),
@@ -1281,7 +1310,8 @@ fn output_script(output: &MultiEraOutput<'_>) -> Option<([u8; 28], ScriptLanguag
     Some((*script.hash(), script.language()))
 }
 
-/// A kind of item a transaction witnesses or an output carries, named by its hash and served by a lookup.
+/// A kind of item a transaction witnesses or an output carries, named by its
+/// hash and served by a lookup.
 trait Carried {
     /// The hash that names an item.
     type Hash: Ord + Copy + AsRef<[u8]>;
@@ -1293,7 +1323,8 @@ trait Carried {
     const KEY: &'static str;
     /// The hash and held part of each item the transaction witnesses.
     fn witnessed(tx: &MultiEraTx<'_>) -> Vec<(Self::Hash, Self::Held)>;
-    /// The hash of the item the output names, whether or not the output holds it.
+    /// The hash of the item the output names, whether or not the output holds
+    /// it.
     fn named(output: &MultiEraOutput<'_>) -> Option<Self::Hash>;
     /// The hash and held part of the item the output holds.
     fn held(output: &MultiEraOutput<'_>) -> Option<(Self::Hash, Self::Held)>;
@@ -1304,9 +1335,11 @@ trait Carried {
     ) -> Result<Option<Self::Served>, DomainError>;
     /// The ledger side of a finding line for a held item at its place.
     fn shown(held: &Self::Held, at: CarriedAt) -> String;
-    /// The Dolos side of a finding line for a served item the ledger does not hold.
+    /// The Dolos side of a finding line for a served item the ledger does not
+    /// hold.
     fn unheld(served: &Self::Served) -> String;
-    /// Whether the served item is the held one, with the Dolos side of its finding line.
+    /// Whether the served item is the held one, with the Dolos side of its
+    /// finding line.
     fn judged(
         id: RecordId,
         hash: Self::Hash,
@@ -1315,11 +1348,14 @@ trait Carried {
     ) -> (bool, String);
 }
 
-/// The record that first names each item hash, with the held item and its place once a record holds it.
+/// The record that first names each item hash, with the held item and its place
+/// once a record holds it.
 type Expected<C> =
     BTreeMap<<C as Carried>::Hash, (RecordId, Option<(<C as Carried>::Held, CarriedAt)>)>;
 
-/// Counts each item hash of the groups whose block rolled or was never made against what the lookup serves for it, the item in the witnesses or on the produced outputs of an accepted record, or nothing otherwise.
+/// Counts each item hash of the groups whose block rolled or was never made
+/// against what the lookup serves for it, the item in the witnesses or on the
+/// produced outputs of an accepted record, or nothing otherwise.
 async fn compare_carried<C: Carried>(
     domain: &DomainAdapter,
     kind: CorpusKind,
@@ -1494,7 +1530,8 @@ impl Carried for Datum {
     }
 }
 
-/// What every served route at every version serves for the inputs of the blocks a run rolled.
+/// What every served route at every version serves for the inputs of the blocks
+/// a run rolled.
 async fn serve_rolled(
     domain: &DomainAdapter,
     seed: &SeedPoint,
@@ -1521,7 +1558,8 @@ async fn serve_rolled(
     served
 }
 
-/// The verdict on one served output against the ledger's output bytes, none when its bytes and parsed fields agree.
+/// The verdict on one served output against the ledger's output bytes, none
+/// when its bytes and parsed fields agree.
 fn served_verdict(
     id: RecordId,
     ledger: &[u8],
@@ -1565,7 +1603,9 @@ fn a_served_output_stating_no_bytes_disagrees_and_one_stating_the_ledger_bytes_a
     assert_eq!((stated, unstated), (None, Some(absent)));
 }
 
-/// The disagreeing verdicts on what each route serves for one input against the ledger's output bytes, by the route's entry point, with the routes left uncompared because their version states no sub transaction.
+/// The disagreeing verdicts on what each route serves for one input against the
+/// ledger's output bytes, by the route's entry point, with the routes left
+/// uncompared because their version states no sub transaction.
 fn served_verdicts(
     id: RecordId,
     tx: &[u8; 32],
@@ -1600,7 +1640,10 @@ fn served_verdicts(
     (verdicts, unheld)
 }
 
-/// The served output comparisons of the records of one block, with the inputs left uncompared because the run's seed made them, the compared inputs only sub transactions name, and the route comparisons left out because the route's version states no sub transaction.
+/// The served output comparisons of the records of one block, with the inputs
+/// left uncompared because the run's seed made them, the compared inputs only
+/// sub transactions name, and the route comparisons left out because the
+/// route's version states no sub transaction.
 #[derive(Debug, Default)]
 struct ServedChecks {
     records: BTreeMap<RecordId, ByRoute<OutputRoute>>,
@@ -1609,7 +1652,8 @@ struct ServedChecks {
     sub_unheld: usize,
 }
 
-/// Counts each input a record of the block names that an earlier record made, against what every route serves for it.
+/// Counts each input a record of the block names that an earlier record made,
+/// against what every route serves for it.
 fn compare_served(
     kind: CorpusKind,
     run: &KeptRun,
@@ -1637,10 +1681,12 @@ fn compare_served(
                     continue;
                 }
                 InputOrigin::AbsentFromPre => {
-                    by_entry.at(OutputRoute::FetchBlock, Version::V1).add(false, || {
-                        let cells = vec![CellKey::new(Axis::Input, "absent_from_pre")];
-                        Finding::new(id, cells, format!("absent_from_pre input={shown}"))
-                    });
+                    by_entry
+                        .at(OutputRoute::FetchBlock, Version::V1)
+                        .add(false, || {
+                            let cells = vec![CellKey::new(Axis::Input, "absent_from_pre")];
+                            Finding::new(id, cells, format!("absent_from_pre input={shown}"))
+                        });
                     continue;
                 }
                 InputOrigin::InRun { made_by } => format!("in_run made_by={made_by}"),
@@ -1668,7 +1714,8 @@ fn compare_served(
     checks
 }
 
-/// Counts the served outputs of every rolled block into the per record as_output checks.
+/// Counts the served outputs of every rolled block into the per record
+/// as_output checks.
 fn compare_as_output(
     kind: CorpusKind,
     run: &KeptRun,
@@ -1689,7 +1736,8 @@ fn compare_as_output(
     }
 }
 
-/// Receives as pending each transaction of a block after block `i` that names an output block `i` made, returning those the mempool took.
+/// Receives as pending each transaction of a block after block `i` that names
+/// an output block `i` made, returning those the mempool took.
 fn hold_dependents(
     domain: &DomainAdapter,
     kind: CorpusKind,
@@ -1841,7 +1889,8 @@ async fn sweep(
 /// The pre state a planted check seeds for a record in place of its own.
 type PreEdit<'a> = Box<dyn Fn(RecordId, &[UtxoEntry]) -> Vec<UtxoEntry> + Sync + 'a>;
 
-/// What a planted check changes in the seed, the expected parameters and the blocks of one judgement.
+/// What a planted check changes in the seed, the expected parameters and the
+/// blocks of one judgement.
 struct Edits<'a> {
     pre: PreEdit<'a>,
     accounts_pre: Box<dyn Fn(&LedgerAccounts) -> LedgerAccounts + Sync + 'a>,
@@ -2763,7 +2812,8 @@ async fn an_accepted_tx_left_out_of_its_block_is_not_found_by_read_tx() {
     );
 }
 
-/// The hash of the first reference script on an output of a sub transaction of the record.
+/// The hash of the first reference script on an output of a sub transaction of
+/// the record.
 fn sub_output_script(record: &Record) -> Option<[u8; 28]> {
     let tx = MultiEraTx::decode_for_era(Era::Dijkstra, &record.tx.0).ok()?;
     for sub in tx.sub_transactions() {
@@ -2813,7 +2863,8 @@ async fn a_reference_script_on_a_sub_transaction_output_is_served() {
     assert!(planted_lines[0].ends_with(" dolos=none"), "{planted}");
 }
 
-/// The first output of a sub transaction of the record with a datum hash its sub transaction witnesses, and the length of that datum.
+/// The first output of a sub transaction of the record with a datum hash its
+/// sub transaction witnesses, and the length of that datum.
 fn sub_witnessed_datum(record: &Record) -> Option<(TxIn, usize)> {
     let tx = MultiEraTx::decode_for_era(Era::Dijkstra, &record.tx.0).ok()?;
     for sub in tx.sub_transactions() {

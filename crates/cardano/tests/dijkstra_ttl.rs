@@ -1,5 +1,6 @@
 //! Offline replay through actual Dolos admission, evaluation and estimation.
-//! Includes the successfully executed Musashi spend; see test_data/musashi-ttl/README.md.
+//! Includes the successfully executed Musashi spend; see
+//! test_data/musashi-ttl/README.md.
 use dolos_cardano::{
     model::{EpochState, PParamValue as P},
     SingletonEntity,

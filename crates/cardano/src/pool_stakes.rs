@@ -8,7 +8,8 @@ use pallas::{
 
 use crate::{AccountState, EraProtocol, FixedNamespace as _, PoolHash, PoolState};
 
-/// The stake delegated to one pool in the snapshot taken at the end of an epoch.
+/// The stake delegated to one pool in the snapshot taken at the end of an
+/// epoch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PoolStake {
     pub stake: u64,
@@ -24,7 +25,8 @@ pub struct PoolStakes {
 }
 
 impl PoolStakes {
-    /// Lists every pool not retired at the end of `epoch`, each with no stake yet.
+    /// Lists every pool not retired at the end of `epoch`, each with no stake
+    /// yet.
     pub fn new<'a>(pools: impl IntoIterator<Item = &'a PoolState>, epoch: Epoch) -> Self {
         let pools = pools
             .into_iter()
@@ -42,7 +44,8 @@ impl PoolStakes {
         Self { pools, total: 0 }
     }
 
-    /// Adds the stake an account delegated at the end of `epoch` to a listed pool.
+    /// Adds the stake an account delegated at the end of `epoch` to a listed
+    /// pool.
     pub fn add_account(&mut self, account: &AccountState, epoch: Epoch, protocol: EraProtocol) {
         let Some(pool) = account
             .delegated_pool_at(epoch)
@@ -62,7 +65,8 @@ impl PoolStakes {
     }
 }
 
-/// Loads the stake of every pool active in the snapshot taken at the end of `epoch`.
+/// Loads the stake of every pool active in the snapshot taken at the end of
+/// `epoch`.
 pub fn load_pool_stakes<D: Domain>(
     state: &D::State,
     epoch: Epoch,

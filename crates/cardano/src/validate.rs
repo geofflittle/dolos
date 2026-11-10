@@ -114,7 +114,8 @@ pub fn validate_tx<D: Domain>(
     Ok(tx)
 }
 
-/// The outputs the inputs of a transaction name, from the state and the mempool.
+/// The outputs the inputs of a transaction name, from the state and the
+/// mempool.
 pub fn required_utxos<D: Domain>(
     tx: &MultiEraTx<'_>,
     utxos: &MempoolAwareUtxoStore<D>,
@@ -155,10 +156,11 @@ pub fn evaluate_tx<D: Domain>(
     evaluate_decoded::<D>(&tx, utxos, genesis, &pparams, false, None)
 }
 
-/// Estimate native script costs independently of signatures and declared budgets.
-/// Earlier eras retain their existing phase-two evaluation behavior. Successful
-/// per-script estimates may sum above the transaction limit; admission still
-/// requires phase one and budget-enforcing phase two through `validate_tx`.
+/// Estimate native script costs independently of signatures and declared
+/// budgets. Earlier eras retain their existing phase-two evaluation behavior.
+/// Successful per-script estimates may sum above the transaction limit;
+/// admission still requires phase one and budget-enforcing phase two through
+/// `validate_tx`.
 pub fn estimate_tx<D: Domain>(
     cbor: &[u8],
     utxos: &MempoolAwareUtxoStore<D>,
@@ -170,7 +172,8 @@ pub fn estimate_tx<D: Domain>(
     evaluate_decoded::<D>(&tx, utxos, genesis, &pparams, true, None)
 }
 
-/// [`estimate_tx`] of a Dijkstra transaction, with the builtins each redeemer's evaluation called in order of first call.
+/// [`estimate_tx`] of a Dijkstra transaction, with the builtins each redeemer's
+/// evaluation called in order of first call.
 pub fn estimate_tx_calls<D: Domain>(
     cbor: &[u8],
     utxos: &MempoolAwareUtxoStore<D>,
@@ -182,7 +185,8 @@ pub fn estimate_tx_calls<D: Domain>(
     estimate_decoded::<D>(&tx, utxos, genesis, &pparams, None)
 }
 
-/// The arguments each redeemer's script of a Dijkstra transaction is applied to, with the script's language.
+/// The arguments each redeemer's script of a Dijkstra transaction is applied
+/// to, with the script's language.
 pub fn redeemer_arguments<D: Domain>(
     cbor: &[u8],
     utxos: &MempoolAwareUtxoStore<D>,
@@ -257,7 +261,8 @@ fn estimate_decoded<D: Domain>(
     .map_err(evaluation_error)
 }
 
-/// The resolved inputs and historical time mappings a phase two evaluation reads.
+/// The resolved inputs and historical time mappings a phase two evaluation
+/// reads.
 fn evaluation_inputs<D: Domain>(
     tx: &MultiEraTx<'_>,
     utxos: &MempoolAwareUtxoStore<D>,
@@ -332,7 +337,8 @@ pub fn submission_era(protocol: (u64, u64)) -> Result<Era, ChainError> {
     }
 }
 
-/// The era whose major protocol versions, by the ledger's bounds, include `major`.
+/// The era whose major protocol versions, by the ledger's bounds, include
+/// `major`.
 pub fn protocol_era(major: u64) -> Option<Era> {
     match major {
         0..=1 => Some(Era::Byron),
@@ -537,7 +543,8 @@ pub fn validation_parameters(
     }))
 }
 
-/// The ledger state `stored` holds once each of `unconfirmed` the state still admits applies in order.
+/// The ledger state `stored` holds once each of `unconfirmed` the state still
+/// admits applies in order.
 fn with_unconfirmed<'a, S: DijkstraLedgerState + ?Sized>(
     stored: &'a S,
     unconfirmed: &[MultiEraTx<'_>],
@@ -626,12 +633,15 @@ mod pending_tests {
         StakeCredential::AddrKeyhash(Hash::new([byte; 28]))
     }
 
-    /// A Dijkstra transaction in mempool form whose body carries these certificates.
+    /// A Dijkstra transaction in mempool form whose body carries these
+    /// certificates.
     fn tx_with(certs: Vec<dijkstra::Certificate>) -> Vec<u8> {
         tx_moving(certs, &[], &[])
     }
 
-    /// A Dijkstra transaction in mempool form with these certificates, withdrawals and direct deposits, each account named by its credential byte.
+    /// A Dijkstra transaction in mempool form with these certificates,
+    /// withdrawals and direct deposits, each account named by its credential
+    /// byte.
     fn tx_moving(
         certs: Vec<dijkstra::Certificate>,
         withdrawals: &[(u8, u64)],
@@ -683,7 +693,8 @@ mod pending_tests {
         dijkstra::Certificate::UnReg(credential(byte), 2_000_000)
     }
 
-    /// A stored state at epoch 7 in which account 1 holds 5 lovelace, account 2 holds none and accounts 3 and 4 are unregistered.
+    /// A stored state at epoch 7 in which account 1 holds 5 lovelace, account 2
+    /// holds none and accounts 3 and 4 are unregistered.
     fn stored() -> DijkstraLedgerSnapshot {
         let mut state = DijkstraLedgerSnapshot {
             epoch: 7,
@@ -710,7 +721,8 @@ mod pending_tests {
         pp
     }
 
-    /// The account of `credential(byte)` once `txs` apply to the stored state in order.
+    /// The account of `credential(byte)` once `txs` apply to the stored state
+    /// in order.
     fn account_after(txs: &[Vec<u8>], byte: u8) -> Option<DijkstraAccount> {
         let txs: Vec<_> = txs
             .iter()
@@ -777,7 +789,8 @@ mod pending_tests {
         assert_eq!(account_after(&txs, 1), holding(9));
     }
 
-    /// A synced account registered in epoch 7 with 5 lovelace of rewards and none withdrawn.
+    /// A synced account registered in epoch 7 with 5 lovelace of rewards and
+    /// none withdrawn.
     fn registered(byte: u8) -> crate::model::AccountState {
         use crate::model::{EpochValue, Stake};
         crate::model::AccountState {

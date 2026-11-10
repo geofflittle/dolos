@@ -1,4 +1,5 @@
-//! The phase one rule table: the ledger failures each rule Dolos refuses by may answer, and which of its sides the corpora judge.
+//! The phase one rule table: the ledger failures each rule Dolos refuses by may
+//! answer, and which of its sides the corpora judge.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -15,7 +16,9 @@ use crate::{
 const FILE: &str = "phase1-rules.txt";
 const TABLE: &str = include_str!("../../../test_data/ledger-oracle/phase1-rules.txt");
 
-/// A side of a rule a judged record holds: a ledger refusal Dolos refused by it, a ledger acceptance Dolos accepted that holds a field it reads, or a refusal by a rule with no ledger counterpart.
+/// A side of a rule a judged record holds: a ledger refusal Dolos refused by
+/// it, a ledger acceptance Dolos accepted that holds a field it reads, or a
+/// refusal by a rule with no ledger counterpart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Side {
     Refused,
@@ -24,7 +27,8 @@ enum Side {
 }
 
 impl Side {
-    /// The coverage cell of the side of the rule Dolos answers with as `answer`.
+    /// The coverage cell of the side of the rule Dolos answers with as
+    /// `answer`.
     fn cell(self, answer: &str) -> CellKey {
         let side = match self {
             Side::Refused => "refused",
@@ -42,7 +46,8 @@ pub enum Reads {
     Holding(BTreeSet<Field>),
 }
 
-/// What the table says of one rule, with how the oracle reaches the side Dolos refuses by it.
+/// What the table says of one rule, with how the oracle reaches the side Dolos
+/// refuses by it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Entry {
     Ruled {
@@ -56,21 +61,24 @@ pub enum Entry {
     },
 }
 
-/// A record whose rule names no ledger failure of it, by the rule and the ledger's answer.
+/// A record whose rule names no ledger failure of it, by the rule and the
+/// ledger's answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KnownRule {
     pub dolos: String,
     pub ledger: String,
 }
 
-/// The committed rule table, by Dolos's answer as it prints, and its known records.
+/// The committed rule table, by Dolos's answer as it prints, and its known
+/// records.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Rules {
     pub entries: BTreeMap<String, Entry>,
     pub known: BTreeMap<RecordId, KnownRule>,
 }
 
-/// The ledger's answer for a record as a rule row writes it, its failure leaves in name order.
+/// The ledger's answer for a record as a rule row writes it, its failure leaves
+/// in name order.
 pub fn ledger_answer(outcome: &LedgerOutcome) -> String {
     match outcome {
         LedgerOutcome::Accepted { .. } => "accepted".to_string(),
@@ -84,7 +92,8 @@ pub fn ledger_answer(outcome: &LedgerOutcome) -> String {
     }
 }
 
-/// Reads the reason after `because` that a row lacking a ledger counterpart gives.
+/// Reads the reason after `because` that a row lacking a ledger counterpart
+/// gives.
 fn reason(words: &str) -> Result<(&str, String), String> {
     let (before, why) = words
         .split_once(" because ")
@@ -95,7 +104,8 @@ fn reason(words: &str) -> Result<(&str, String), String> {
     }
 }
 
-/// Reads the exclusion that ends a row whose refusal no record can reach, `<reason> command: <command>`.
+/// Reads the exclusion that ends a row whose refusal no record can reach,
+/// `<reason> command: <command>`.
 fn exclusion(cell: &str) -> Result<Reach, String> {
     let (reason, command) = cell
         .split_once(" command: ")
@@ -109,7 +119,8 @@ fn exclusion(cell: &str) -> Result<Reach, String> {
     }
 }
 
-/// Reads one rule row after its answer, whose refused side the oracle reaches by `reach`.
+/// Reads one rule row after its answer, whose refused side the oracle reaches
+/// by `reach`.
 fn entry(cells: &[&str], reach: Reach) -> Result<Entry, String> {
     match cells {
         [unrepresentable] => match reason(unrepresentable)? {
@@ -144,7 +155,11 @@ fn entry(cells: &[&str], reach: Reach) -> Result<Entry, String> {
     }
 }
 
-/// Reads the rule table, one `<answer> | leaves <L,...> | reads <every or fields>` row, `<answer> | unrepresentable because <why>` row or `known <record> | <answer> | <ledger answer>` row per line, a rule row ending `| excluded <reason> command: <command>` when no record can reach its refused side.
+/// Reads the rule table, one `<answer> | leaves <L,...> | reads <every or
+/// fields>` row, `<answer> | unrepresentable because <why>` row or `known
+/// <record> | <answer> | <ledger answer>` row per line, a rule row ending `|
+/// excluded <reason> command: <command>` when no record can reach its refused
+/// side.
 pub fn parse(file: &'static str, text: &str) -> Result<Rules, ManifestError> {
     let mut rules = Rules::default();
     let lines = text.lines().enumerate().map(|(i, l)| (i + 1, l.trim()));
@@ -186,7 +201,8 @@ pub fn committed() -> Result<Rules, ManifestError> {
     parse(FILE, TABLE)
 }
 
-/// The rule sides each judged record holds, the records that fail the table and the known records with their lines.
+/// The rule sides each judged record holds, the records that fail the table and
+/// the known records with their lines.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RuleTally {
     judged: BTreeMap<RecordId, Vec<CellKey>>,
@@ -229,11 +245,14 @@ impl RuleTally {
 
 /// What one record shows of the rule Dolos answered with.
 enum Shown {
-    /// The rule names a ledger failure of the record, or both accepted the transaction.
+    /// The rule names a ledger failure of the record, or both accepted the
+    /// transaction.
     Agrees,
-    /// Dolos answered by a rule the table marks as having no ledger counterpart.
+    /// Dolos answered by a rule the table marks as having no ledger
+    /// counterpart.
     Unrepresentable,
-    /// Dolos accepted a transaction the ledger refused or rejected its scripts, which the validation tally judges.
+    /// Dolos accepted a transaction the ledger refused or rejected its scripts,
+    /// which the validation tally judges.
     Unjudged,
     Mismatch,
     Unmapped,
@@ -249,7 +268,9 @@ impl Rules {
         }
     }
 
-    /// Judges one record by the rule Dolos answered with against the ledger's failures, or by the fields of its transaction `tx` when both accepted it.
+    /// Judges one record by the rule Dolos answered with against the ledger's
+    /// failures, or by the fields of its transaction `tx` when both accepted
+    /// it.
     pub fn judge(
         &self,
         id: RecordId,
@@ -354,7 +375,9 @@ impl Rules {
         members
     }
 
-    /// The line of each known record, adding a verdict for each judged record to `out`, and a failing one for each known record the tally did not judge when `whole` says it covers every corpus.
+    /// The line of each known record, adding a verdict for each judged record
+    /// to `out`, and a failing one for each known record the tally did not
+    /// judge when `whole` says it covers every corpus.
     pub fn report(
         &self,
         tally: &RuleTally,
@@ -455,7 +478,8 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         }
     }
 
-    /// A transaction holding a top level body with inputs and certificates and no auxiliary data, `[{0: [], 4: []}, {}, true, null]`.
+    /// A transaction holding a top level body with inputs and certificates and
+    /// no auxiliary data, `[{0: [], 4: []}, {}, true, null]`.
     const TX: [u8; 9] = [0x84, 0xa2, 0x00, 0x80, 0x04, 0x80, 0xa0, 0xf5, 0xf6];
 
     fn judge(
@@ -471,7 +495,8 @@ unsupported[witness fields] | unrepresentable because the native validator does 
     const REFUND: &str = "DijkstraInvalidCertificate(\"refund\")";
     const DEPOSIT: &str = "DijkstraInvalidCertificate(\"registration deposit\")";
 
-    /// Judges the records of the full table, each rule on the sides it declares.
+    /// Judges the records of the full table, each rule on the sides it
+    /// declares.
     fn every_side(rules: &Rules) -> RuleTally {
         let mut tally = RuleTally::default();
         let fee = dolos("PostAlonzo(FeeBelowMin)");
@@ -504,7 +529,8 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         (lines, out.failing.iter().map(Verdict::to_string).collect())
     }
 
-    /// The coverage lines of the table's members over `tally`, each counted side committed at `count`.
+    /// The coverage lines of the table's members over `tally`, each counted
+    /// side committed at `count`.
     fn covered(rules: &Rules, tally: &RuleTally, count: usize) -> Vec<String> {
         let mut out = judgement::Tally::default();
         rules.report(tally, true, &mut out);

@@ -9,7 +9,8 @@ use pallas::crypto::hash::Hash;
 use pallas::ledger::primitives::dijkstra;
 use pallas::ledger::traverse::{MultiEraHeader, OriginalHash};
 
-/// Why an endorser block body, one of its transactions, or a certificate was refused.
+/// Why an endorser block body, one of its transactions, or a certificate was
+/// refused.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("invalid endorser block body: {0}")]
@@ -160,7 +161,8 @@ mod tests {
         announced_as_itself(&body()).unwrap()[..].to_vec()
     }
 
-    /// The entries as a definite length map with each size in its shortest form.
+    /// The entries as a definite length map with each size in its shortest
+    /// form.
     fn encode_entries(entries: &[(Hash<32>, u32)]) -> Vec<u8> {
         let mut e = minicbor::Encoder::new(Vec::new());
         e.map(entries.len() as u64).unwrap();
@@ -170,8 +172,8 @@ mod tests {
         e.into_writer()
     }
 
-    /// The fixture's entries in two encodings other than the announced one: each
-    /// size written in four bytes, and a map of indefinite length.
+    /// The fixture's entries in two encodings other than the announced one:
+    /// each size written in four bytes, and a map of indefinite length.
     fn other_forms_of_the_body() -> [(&'static str, Vec<u8>); 2] {
         let entries = entries();
         assert_eq!(encode_entries(&entries), body(), "fixture precondition");

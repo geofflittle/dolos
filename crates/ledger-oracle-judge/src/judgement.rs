@@ -334,7 +334,8 @@ pub enum Pass {
     Excluded,
 }
 
-/// A passing verdict without its record and text, the key a tally counts passing verdicts under.
+/// A passing verdict without its record and text, the key a tally counts
+/// passing verdicts under.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Passed {
     pub judge: Judge,
@@ -385,7 +386,8 @@ impl fmt::Display for Finding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Verdict {
     pub judge: Judge,
-    /// The entry point the judge drove, none for a judge of the oracle's own tables.
+    /// The entry point the judge drove, none for a judge of the oracle's own
+    /// tables.
     pub entry: Option<EntryPoint>,
     pub subject: Subject,
     pub cells: Vec<CellKey>,

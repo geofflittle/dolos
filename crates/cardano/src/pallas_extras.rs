@@ -445,7 +445,8 @@ pub fn script_ref_hash(script_ref: &MultiEraScriptRef) -> Hash<28> {
     script_ref.hash()
 }
 
-/// The scripts of one transaction's witness set and of its outputs' references, sub transactions excluded.
+/// The scripts of one transaction's witness set and of its outputs' references,
+/// sub transactions excluded.
 pub fn tx_scripts(tx: &MultiEraTx<'_>) -> Vec<ScriptRefParts> {
     use pallas::ledger::traverse::ComputeHash as _;
 

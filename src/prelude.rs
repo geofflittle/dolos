@@ -45,7 +45,8 @@ pub enum Error {
         guide: &'static str,
     },
 
-    /// The state store holds a cursor at an older revision than this binary reads.
+    /// The state store holds a cursor at an older revision than this binary
+    /// reads.
     #[error(
         "the state store holds chain data at state revision {} and this dolos reads revision \
          {required} or later. Reseed it with `dolos bootstrap --force`, which clears the stores \

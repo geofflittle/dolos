@@ -8,7 +8,8 @@ use std::{collections::HashSet, sync::Arc};
 
 use crate::serve::ChainReads;
 
-/// A ledger context that holds no outputs, for mapping values that name no inputs.
+/// A ledger context that holds no outputs, for mapping values that name no
+/// inputs.
 #[derive(Clone, Default)]
 pub(super) struct NoInputs;
 
@@ -28,7 +29,8 @@ pub(super) struct BlockContext<C: ChainReads> {
     made: Arc<UtxoMap>,
 }
 
-/// The outputs each transaction of the block produces, sub transactions included.
+/// The outputs each transaction of the block produces, sub transactions
+/// included.
 fn made_outputs(block: &MultiEraBlock<'_>) -> UtxoMap {
     dolos_core::applied_txs(block)
         .into_iter()
@@ -57,7 +59,8 @@ impl<C: ChainReads> BlockContext<C> {
         Self::resolving(inner, block, &block.txs())
     }
 
-    /// A context for mapping one transaction of a block, resolving only the inputs that transaction names.
+    /// A context for mapping one transaction of a block, resolving only the
+    /// inputs that transaction names.
     pub(super) fn for_tx(inner: C, block: &MultiEraBlock<'_>, tx: &MultiEraTx<'_>) -> Self {
         Self::resolving(inner, block, std::slice::from_ref(tx))
     }
@@ -142,7 +145,8 @@ mod made_in_block_tests {
         }
     }
 
-    /// A block whose sub transaction carrier also spends the first output of its first sub transaction.
+    /// A block whose sub transaction carrier also spends the first output of
+    /// its first sub transaction.
     fn spends_its_own_sub_output() -> (Vec<u8>, TxoRef) {
         let text = include_str!("../../../test_data/musashi-w36/ranking-sub-transaction.block");
         let cbor = hex::decode(text.trim()).unwrap();
@@ -170,7 +174,8 @@ mod made_in_block_tests {
         (minicbor::to_vec((era, block)).unwrap(), (made, 0))
     }
 
-    /// The output the v1 mapper serves for each input of the block's top level transactions.
+    /// The output the v1 mapper serves for each input of the block's top level
+    /// transactions.
     fn served(
         block: &MultiEraBlock<'_>,
         context: Known,

@@ -16,10 +16,12 @@ use super::output::ServedOutput;
 /// How long a stream read waits for its next response.
 pub(super) const NEXT: Duration = Duration::from_secs(10);
 
-/// The output one route serves for each input a transaction names, by transaction hash.
+/// The output one route serves for each input a transaction names, by
+/// transaction hash.
 pub(super) type Served = BTreeMap<[u8; 32], Vec<(TxIn, Option<ServedOutput>)>>;
 
-/// What one route at one version serves for the inputs of the transactions it serves.
+/// What one route at one version serves for the inputs of the transactions it
+/// serves.
 #[derive(Debug)]
 pub(super) struct RouteServed {
     pub(super) route: OutputRoute,
@@ -29,15 +31,18 @@ pub(super) struct RouteServed {
     pub(super) served: Served,
 }
 
-/// What ReadTx at one version serves for a transaction hash, nothing when it answers not found, or the status it answers with otherwise.
+/// What ReadTx at one version serves for a transaction hash, nothing when it
+/// answers not found, or the status it answers with otherwise.
 pub(super) struct TxFound {
     pub(super) version: Version,
-    /// Whether the version states sub transactions, so answers the hash of one with the transaction that lists it.
+    /// Whether the version states sub transactions, so answers the hash of one
+    /// with the transaction that lists it.
     pub(super) subs: bool,
     pub(super) answer: Result<Option<super::ServedTx>, tonic::Code>,
 }
 
-/// What ReadTx at one version answers for a transaction hash, with `P` holding a panic of the version's mapping.
+/// What ReadTx at one version answers for a transaction hash, with `P` holding
+/// a panic of the version's mapping.
 #[derive(Debug)]
 pub(super) enum ReadTxAnswer<T, P> {
     /// The message the version answers with.
@@ -62,7 +67,8 @@ impl<T> ReadTxAnswer<T, String> {
 /// What ReadTx at one version answers for each transaction hash it was asked.
 pub(super) type Answers<T, P> = BTreeMap<[u8; 32], ReadTxAnswer<T, P>>;
 
-/// What ReadTx answers at every version for each transaction hash a run judges, with `P` holding a panic of a version's mapping.
+/// What ReadTx answers at every version for each transaction hash a run judges,
+/// with `P` holding a panic of a version's mapping.
 #[derive(Debug)]
 pub(super) struct ReadTxs<P> {
     pub(super) v1: Answers<v1::Response, P>,
@@ -632,7 +638,8 @@ impl Streams {
         ])
     }
 
-    /// The inputs every stream serves for the next blocks and transactions of the event.
+    /// The inputs every stream serves for the next blocks and transactions of
+    /// the event.
     pub(super) async fn read(self, event: Event, blocks: usize, txs: usize) -> Vec<RouteServed> {
         let mut served = Vec::new();
         for streams in self.0 {
@@ -654,7 +661,8 @@ pub(super) async fn read_utxos(
     ]
 }
 
-/// The output SearchUtxos serves at every version for each input it finds at any of the addresses.
+/// The output SearchUtxos serves at every version for each input it finds at
+/// any of the addresses.
 pub(super) async fn search_utxos(
     domain: &crate::adapters::DomainAdapter,
     addresses: &[&[u8]],
@@ -677,7 +685,8 @@ pub(super) async fn read_params(
     ]
 }
 
-/// What FetchBlock, DumpHistory and ReadTx serve at every version for the blocks and transactions.
+/// What FetchBlock, DumpHistory and ReadTx serve at every version for the
+/// blocks and transactions.
 pub(super) async fn fetched(
     domain: &crate::adapters::DomainAdapter,
     blocks: &[BlockHash],
@@ -701,7 +710,10 @@ pub(super) async fn fetched(
 fn answers_with_no_panic_are_kept_whole() {
     let answers: Answers<u8, String> = BTreeMap::from([
         ([1; 32], ReadTxAnswer::Answered(7)),
-        ([2; 32], ReadTxAnswer::Status(tonic::Status::not_found("none"))),
+        (
+            [2; 32],
+            ReadTxAnswer::Status(tonic::Status::not_found("none")),
+        ),
     ]);
     let kept = unpanicked(answers).expect("no answer panicked");
     assert!(matches!(kept[&[1; 32]], ReadTxAnswer::Answered(7)));
@@ -718,7 +730,10 @@ fn one_panicked_answer_leaves_no_answers() {
     let answers: Answers<u8, String> = BTreeMap::from([
         ([1; 32], ReadTxAnswer::Answered(7)),
         ([2; 32], ReadTxAnswer::Panicked("mapping".to_string())),
-        ([3; 32], ReadTxAnswer::Status(tonic::Status::not_found("none"))),
+        (
+            [3; 32],
+            ReadTxAnswer::Status(tonic::Status::not_found("none")),
+        ),
     ]);
     assert!(unpanicked(answers).is_none());
 }

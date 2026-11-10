@@ -1,4 +1,5 @@
-//! Synthetic admission regressions; these do not assert upstream node acceptance.
+//! Synthetic admission regressions; these do not assert upstream node
+//! acceptance.
 use super::*;
 use pallas::{
     codec::utils::MaybeIndefArray,

@@ -81,7 +81,8 @@ fn lives(seed: &[UtxoEntry], records: &[Record]) -> BTreeMap<TxIn, Life> {
     lives
 }
 
-/// A run of records in one epoch under one parameter set and one era time map, each starting from the state the previous left.
+/// A run of records in one epoch under one parameter set and one era time map,
+/// each starting from the state the previous left.
 #[derive(Debug, Clone)]
 pub struct KeptRun {
     epoch: Option<u64>,
@@ -104,7 +105,8 @@ impl KeptRun {
         life.held(record.n, record.n).then_some(&life.entry)
     }
 
-    /// Every input the UTxO holds when some record of a group of the run starts.
+    /// Every input the UTxO holds when some record of a group of the run
+    /// starts.
     pub fn held_in(&self, group: &[Record]) -> impl Iterator<Item = &TxIn> {
         let (first, last) = (group[0].n, group[group.len() - 1].n);
         let lives = self.lives.values();
@@ -139,7 +141,8 @@ impl KeptRun {
         &self.records
     }
 
-    /// The run from the same seed without the records whose numbers `left_out` holds, none when it holds them all.
+    /// The run from the same seed without the records whose numbers `left_out`
+    /// holds, none when it holds them all.
     pub fn without(&self, left_out: &BTreeSet<u32>) -> Option<KeptRun> {
         let records: Vec<Record> = self
             .records
@@ -165,7 +168,8 @@ impl KeptRun {
         self.records.chunk_by(|a, b| a.slot == b.slot)
     }
 
-    /// The record whose ledger run made each output that a later record of the run can spend.
+    /// The record whose ledger run made each output that a later record of the
+    /// run can spend.
     pub fn makers(&self, kind: CorpusKind) -> BTreeMap<TxIn, RecordId> {
         let made = self
             .lives
@@ -216,7 +220,8 @@ fn accounts_left(record: &Record) -> &LedgerAccounts {
     }
 }
 
-/// Whether a record starts from the epoch, parameters, era time map and accounts the previous record left.
+/// Whether a record starts from the epoch, parameters, era time map and
+/// accounts the previous record left.
 fn continues(prev: &Record, next: &Record) -> bool {
     next.epoch == prev.epoch
         && next.pparams == prev.pparams
@@ -224,7 +229,9 @@ fn continues(prev: &Record, next: &Record) -> bool {
         && next.time.era == prev.time.era
 }
 
-/// Cuts records that share one UTxO history into runs at each record that does not continue the previous, each run seeded with the UTxO its first record starts from.
+/// Cuts records that share one UTxO history into runs at each record that does
+/// not continue the previous, each run seeded with the UTxO its first record
+/// starts from.
 fn cut(records: Vec<Record>) -> Vec<KeptRun> {
     let first = &records[0];
     let Pre::Fresh(seed) = &first.pre else {
@@ -256,7 +263,8 @@ fn cut(records: Vec<Record>) -> Vec<KeptRun> {
         .collect()
 }
 
-/// Splits records into runs, each in one epoch under one parameter set and each record starting from the state the previous left.
+/// Splits records into runs, each in one epoch under one parameter set and each
+/// record starting from the state the previous left.
 pub fn split(records: Vec<Record>) -> Vec<KeptRun> {
     let mut histories: Vec<Vec<Record>> = Vec::new();
     for record in records {

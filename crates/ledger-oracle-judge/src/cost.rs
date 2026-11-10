@@ -12,7 +12,8 @@ pub struct CostTallies {
     pub fee: Tally,
     pub fee_unresolved_refused: usize,
     pub fee_undecoded: usize,
-    /// The records whose makers Dolos refused, so Dolos resolves their inputs to other outputs than the ledger.
+    /// The records whose makers Dolos refused, so Dolos resolves their inputs
+    /// to other outputs than the ledger.
     pub skipped_cascade: usize,
 }
 

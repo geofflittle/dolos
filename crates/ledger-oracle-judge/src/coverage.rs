@@ -1,5 +1,6 @@
-//! The coverage table: every member of each axis the oracle judges, the number of agreeing
-//! verdicts that touch it, and the gate that holds each number at its committed value.
+//! The coverage table: every member of each axis the oracle judges, the number
+//! of agreeing verdicts that touch it, and the gate that holds each number at
+//! its committed value.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -14,7 +15,8 @@ const COMMITTED: &str = include_str!("../../../test_data/ledger-oracle/coverage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reach {
     Counted,
-    /// No record of the corpora can touch the member, for `reason`, which `command` shows.
+    /// No record of the corpora can touch the member, for `reason`, which
+    /// `command` shows.
     Excluded {
         reason: String,
         command: String,
@@ -37,7 +39,8 @@ impl Member {
         }
     }
 
-    /// The member `member` of `axis`, which no record can touch for `reason`, shown by `command`.
+    /// The member `member` of `axis`, which no record can touch for `reason`,
+    /// shown by `command`.
     pub fn excluded(
         axis: Axis,
         member: impl std::fmt::Display,
@@ -75,8 +78,9 @@ pub fn committed() -> Result<BTreeMap<String, usize>, ManifestError> {
     parse("coverage.txt", COMMITTED)
 }
 
-/// The number of agreeing verdicts of `tally` that touch each cell, a verdict touching the cells
-/// it names and the entry cell of its entry point, the table's own verdicts aside.
+/// The number of agreeing verdicts of `tally` that touch each cell, a verdict
+/// touching the cells it names and the entry cell of its entry point, the
+/// table's own verdicts aside.
 pub fn counts(tally: &judgement::Tally) -> BTreeMap<CellKey, usize> {
     let mut counts = BTreeMap::new();
     let agreeing = tally
@@ -92,11 +96,12 @@ pub fn counts(tally: &judgement::Tally) -> BTreeMap<CellKey, usize> {
     counts
 }
 
-/// The coverage lines of `members` against the counts of `out` and the `committed` counts, with
-/// the candidate line of each counted member's count, adding a verdict per member to `out`, which
-/// fails for a counted member below its committed count, an excluded member some verdict touches,
-/// a member listed twice, a count on an axis of the members that names no member, and a committed
-/// count of no counted member.
+/// The coverage lines of `members` against the counts of `out` and the
+/// `committed` counts, with the candidate line of each counted member's count,
+/// adding a verdict per member to `out`, which fails for a counted member below
+/// its committed count, an excluded member some verdict touches,
+/// a member listed twice, a count on an axis of the members that names no
+/// member, and a committed count of no counted member.
 pub fn table(
     members: &[Member],
     committed: &BTreeMap<String, usize>,
@@ -293,7 +298,10 @@ mod tests {
         assert_eq!(table, [None, None, None]);
         let entries = counts(&out).into_keys().filter(|c| c.axis == Axis::Entry);
         let receive_tx = EntryPoint::Instrument(Instrument::ReceiveTx);
-        assert_eq!(entries.collect::<Vec<_>>(), [CellKey::new(Axis::Entry, receive_tx)]);
+        assert_eq!(
+            entries.collect::<Vec<_>>(),
+            [CellKey::new(Axis::Entry, receive_tx)]
+        );
     }
 
     #[test]
