@@ -26,6 +26,7 @@ tokio-stream.workspace = true
 pallas.workspace = true
 hex.workspace = true
 regex.workspace = true
+self_cell = "1.2.0"
 serde_with = "3.16.0"
 
 [dev-dependencies]

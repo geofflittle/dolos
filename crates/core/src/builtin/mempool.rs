@@ -21,33 +21,27 @@ use crate::{
 type Seq = u64;
 
 mod live {
-    use std::collections::HashMap;
-
     use super::Seq;
-    use crate::{MempoolTx, TxHash, UnconfirmedIndex};
+    use crate::{MempoolTx, TxHash, UnconfirmedIndex, UnconfirmedTxs};
 
     /// Each transaction not yet finalized or dropped, with its admission
     /// position, and the index of their effects.
     #[derive(Default)]
     pub(super) struct LiveTxs {
-        txs: HashMap<TxHash, (Seq, MempoolTx)>,
-        index: UnconfirmedIndex,
+        txs: UnconfirmedTxs<Seq>,
         next_seq: Seq,
     }
 
     impl LiveTxs {
         /// Admits `tx` behind every transaction admitted before it.
         pub(super) fn insert(&mut self, tx: MempoolTx) {
-            self.index.insert(&tx);
-            self.txs.insert(tx.hash(), (self.next_seq, tx));
+            self.txs.insert(self.next_seq, tx);
             self.next_seq += 1;
         }
 
         /// Takes the transaction out, with its effects.
         pub(super) fn remove(&mut self, hash: &TxHash) -> Option<MempoolTx> {
-            let (_, tx) = self.txs.remove(hash)?;
-            self.index.remove(&tx);
-            Some(tx)
+            self.txs.remove(hash).map(|(_, tx)| tx)
         }
 
         pub(super) fn get(&self, hash: &TxHash) -> Option<&MempoolTx> {
@@ -56,11 +50,11 @@ mod live {
 
         /// The transaction, for a change of stage or counters.
         pub(super) fn get_mut(&mut self, hash: &TxHash) -> Option<&mut MempoolTx> {
-            self.txs.get_mut(hash).map(|(_, tx)| tx)
+            self.txs.get_mut(hash)
         }
 
         pub(super) fn contains(&self, hash: &TxHash) -> bool {
-            self.txs.contains_key(hash)
+            self.txs.contains(hash)
         }
 
         pub(super) fn values(&self) -> impl Iterator<Item = &MempoolTx> {
@@ -73,7 +67,7 @@ mod live {
 
         /// The effects of every live transaction.
         pub(super) fn index(&self) -> &UnconfirmedIndex {
-            &self.index
+            self.txs.index()
         }
 
         /// The hashes of the live transactions the filter admits, in admission

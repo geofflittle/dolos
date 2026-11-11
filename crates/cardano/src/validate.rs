@@ -67,11 +67,7 @@ pub fn validate_tx<D: Domain>(
                 .to_pallas_time_context(env.block_slot, crate::utils::stability_window(genesis))?;
             let stored = ledger::StoredLedger::<D>::new(utxos.state())?;
             let unconfirmed = unconfirmed_txs(utxos);
-            let unconfirmed = unconfirmed
-                .iter()
-                .map(|entry| MultiEraTx::try_from(entry.payload()))
-                .collect::<Result<Vec<_>, _>>()?;
-            let state = with_unconfirmed(&stored, &unconfirmed, pp, env.network_id);
+            let state = with_unconfirmed(&stored, &unconfirmed, pp, env.network_id)?;
             validate_dijkstra_tx_with_time(
                 native,
                 &pallas_utxos,
@@ -540,23 +536,33 @@ pub fn validation_parameters(
 /// The ledger state `stored` holds once each of `unconfirmed` the state still admits applies in order.
 fn with_unconfirmed<'a, S: DijkstraLedgerState + ?Sized>(
     stored: &'a S,
-    unconfirmed: &[MultiEraTx<'_>],
+    unconfirmed: &[MempoolTx],
     pp: &DijkstraProtParams,
     network_id: u8,
-) -> DijkstraLedgerOverlay<'a, S> {
+) -> Result<DijkstraLedgerOverlay<'a, S>, pallas::codec::minicbor::decode::Error> {
     let mut state = DijkstraLedgerOverlay::new(stored);
-    for tx in unconfirmed {
-        let Some(native) = tx.as_dijkstra() else {
-            continue;
-        };
-        match dijkstra_ledger_effects(native, pp, network_id, &state) {
-            Ok(delta) => state.delta.extend(delta),
-            Err(error) => {
-                debug!(tx = %tx.hash(), ?error, "unconfirmed tx left out of the ledger state")
-            }
+    for entry in unconfirmed {
+        entry.with_tx(|tx| tx.map(|tx| admit_unconfirmed(&mut state, tx, pp, network_id)))?;
+    }
+    Ok(state)
+}
+
+/// Applies the effects of `tx` to `state` when the state admits it.
+fn admit_unconfirmed<S: DijkstraLedgerState + ?Sized>(
+    state: &mut DijkstraLedgerOverlay<'_, S>,
+    tx: &MultiEraTx<'_>,
+    pp: &DijkstraProtParams,
+    network_id: u8,
+) {
+    let Some(native) = tx.as_dijkstra() else {
+        return;
+    };
+    match dijkstra_ledger_effects(native, pp, network_id, state) {
+        Ok(delta) => state.delta.extend(delta),
+        Err(error) => {
+            debug!(tx = %tx.hash(), ?error, "unconfirmed tx left out of the ledger state")
         }
     }
-    state
 }
 
 /// The mempool transactions, inflight before pending, each once.
@@ -714,10 +720,16 @@ mod pending_tests {
     fn account_after(txs: &[Vec<u8>], byte: u8) -> Option<DijkstraAccount> {
         let txs: Vec<_> = txs
             .iter()
-            .map(|cbor| MultiEraTx::decode_for_era(Era::Dijkstra, cbor).unwrap())
+            .map(|cbor| {
+                let hash = MultiEraTx::decode_for_era(Era::Dijkstra, cbor)
+                    .unwrap()
+                    .hash();
+                let payload = dolos_core::EraCbor(Era::Dijkstra.into(), cbor.clone());
+                MempoolTx::new(hash, payload, vec![])
+            })
             .collect();
         let stored = stored();
-        let state = with_unconfirmed(&stored, &txs, &params(), 0);
+        let state = with_unconfirmed(&stored, &txs, &params(), 0).unwrap();
         state.account(&credential(byte)).unwrap()
     }
 

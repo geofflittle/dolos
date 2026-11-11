@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use pallas::codec::minicbor::{self, Decode, Encode};
 use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
@@ -10,7 +10,7 @@ use tracing::{debug, warn};
 
 use dolos_core::{
     config::RedbMempoolConfig, ChainPoint, EraCbor, MempoolError, MempoolEvent, MempoolPage,
-    MempoolStore, MempoolTx, MempoolTxStage, TxHash, TxStatus, UnconfirmedIndex,
+    MempoolStore, MempoolTx, MempoolTxStage, TxHash, TxStatus, UnconfirmedIndex, UnconfirmedTxs,
 };
 
 // ── Error newtype (mirrors wal/mod.rs pattern) ──────────────────────────
@@ -683,6 +683,9 @@ impl FinalizedTable {
 #[derive(Clone)]
 pub struct RedbMempool {
     db: Arc<redb::Database>,
+    /// The transactions the pending and inflight tables hold, for their
+    /// decodes and the index of their effects.
+    unconfirmed: Arc<RwLock<UnconfirmedTxs<()>>>,
     updates: broadcast::Sender<MempoolEvent>,
     submit: Arc<std::sync::Mutex<()>>,
 }
@@ -742,11 +745,13 @@ impl RedbMempool {
 
         let out = Self {
             db: Arc::new(db),
+            unconfirmed: Arc::default(),
             updates,
             submit: Arc::default(),
         };
 
         out.ensure_initialized()?;
+        out.load_unconfirmed()?;
         Ok(out)
     }
 
@@ -759,19 +764,62 @@ impl RedbMempool {
         Ok(())
     }
 
+    /// Holds every transaction the pending and inflight tables hold.
+    fn load_unconfirmed(&self) -> Result<(), RedbMempoolError> {
+        let rx = self.db.begin_read()?;
+        let mut unconfirmed = self.unconfirmed.write().unwrap();
+        for tx in PendingTable::peek(&rx)?
+            .into_iter()
+            .chain(InflightTable::peek(&rx)?)
+        {
+            unconfirmed.insert((), tx);
+        }
+        Ok(())
+    }
+
+    /// Each of `txs` with the payload and decode of the transaction held under
+    /// its hash.
+    fn sharing_decodes(&self, txs: Vec<MempoolTx>) -> Vec<MempoolTx> {
+        let unconfirmed = self.unconfirmed.read().unwrap();
+        txs.into_iter()
+            .map(|tx| match unconfirmed.get(&tx.hash()) {
+                Some((_, held)) => {
+                    let mut shared = held.clone();
+                    shared.stage = tx.stage;
+                    shared.confirmations = tx.confirmations;
+                    shared.non_confirmations = tx.non_confirmations;
+                    shared.confirmed_at = tx.confirmed_at;
+                    shared
+                }
+                None => tx,
+            })
+            .collect()
+    }
+
     fn notify(&self, tx: MempoolTx) {
         if self.updates.send(MempoolEvent { tx }).is_err() {
             debug!("no mempool update receivers");
         }
     }
 
+    /// Commits `f` and stops holding each transaction it finalized or dropped.
     fn with_write_tx<F>(&self, f: F) -> Result<(), RedbMempoolError>
     where
         F: FnOnce(&redb::WriteTransaction) -> Result<Vec<MempoolTx>, RedbMempoolError>,
     {
+        let mut unconfirmed = self.unconfirmed.write().unwrap();
         let wx = self.db.begin_write()?;
         let events = f(&wx)?;
         wx.commit()?;
+        for tx in &events {
+            if matches!(
+                tx.stage,
+                MempoolTxStage::Finalized | MempoolTxStage::Dropped
+            ) {
+                unconfirmed.remove(&tx.hash());
+            }
+        }
+        drop(unconfirmed);
 
         for tx in events {
             self.notify(tx);
@@ -781,6 +829,7 @@ impl RedbMempool {
     }
 
     fn receive_inner(&self, tx: MempoolTx) -> Result<(), RedbMempoolError> {
+        let mut unconfirmed = self.unconfirmed.write().unwrap();
         let wx = self.db.begin_write()?;
         if PendingTable::contains(&wx, &tx.hash())? {
             return Err(MempoolError::DuplicateTx.into());
@@ -791,6 +840,8 @@ impl RedbMempool {
         let seq = PendingTable::next_seq(&wx)?;
         PendingTable::insert(&wx, seq, &tx.hash(), tx.payload())?;
         wx.commit()?;
+        unconfirmed.insert((), tx.clone());
+        drop(unconfirmed);
         self.notify(tx);
         Ok(())
     }
@@ -818,7 +869,7 @@ impl MempoolStore for RedbMempool {
             Ok(rx) => rx,
             Err(_) => return vec![],
         };
-        PendingTable::peek(&rx).unwrap_or_default()
+        self.sharing_decodes(PendingTable::peek(&rx).unwrap_or_default())
     }
 
     fn mark_inflight(&self, hashes: &[TxHash]) -> Result<(), MempoolError> {
@@ -862,7 +913,8 @@ impl MempoolStore for RedbMempool {
     fn find_inflight(&self, tx_hash: &TxHash) -> Option<MempoolTx> {
         let rx = self.db.begin_read().ok()?;
         let record = InflightTable::get(&rx, tx_hash).ok()??;
-        Some(record.to_mempool_tx(*tx_hash))
+        self.sharing_decodes(vec![record.to_mempool_tx(*tx_hash)])
+            .pop()
     }
 
     fn peek_inflight(&self) -> Vec<MempoolTx> {
@@ -870,7 +922,7 @@ impl MempoolStore for RedbMempool {
             Ok(rx) => rx,
             Err(_) => return vec![],
         };
-        InflightTable::peek(&rx).unwrap_or_default()
+        self.sharing_decodes(InflightTable::peek(&rx).unwrap_or_default())
     }
 
     fn confirm(
@@ -1033,10 +1085,7 @@ impl MempoolStore for RedbMempool {
     }
 
     fn read_unconfirmed<R>(&self, f: impl FnOnce(&UnconfirmedIndex) -> R) -> R {
-        let inflight = self.peek_inflight();
-        f(&UnconfirmedIndex::of(
-            self.peek_pending().iter().chain(&inflight),
-        ))
+        f(self.unconfirmed.read().unwrap().index())
     }
 
     fn submit_lock(&self) -> &std::sync::Mutex<()> {
@@ -1355,5 +1404,129 @@ mod tests {
         let listing = store.peek_inflight();
         assert_eq!(listing.len(), 2);
         assert!(!listing.iter().any(|tx| tx.hash() == h2));
+    }
+
+    /// Every transaction of the fixture block that lists a sub transaction.
+    fn block_txs() -> Vec<MempoolTx> {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test_data/musashi-w36/ranking-sub-transaction.block");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let cbor = hex::decode(text.trim()).unwrap();
+        let block = pallas::ledger::traverse::MultiEraBlock::decode(&cbor).unwrap();
+        block
+            .txs()
+            .iter()
+            .map(|tx| MempoolTx::new(tx.hash(), EraCbor(tx.era().into(), tx.encode()), vec![]))
+            .collect()
+    }
+
+    /// The index of the transactions the store lists as pending or inflight.
+    fn walked(store: &RedbMempool) -> UnconfirmedIndex {
+        let inflight = store.peek_inflight();
+        UnconfirmedIndex::of(store.peek_pending().iter().chain(&inflight))
+    }
+
+    fn index(store: &RedbMempool) -> UnconfirmedIndex {
+        store.read_unconfirmed(|index| index.clone())
+    }
+
+    #[test]
+    fn the_unconfirmed_index_counts_each_live_transaction_through_every_stage() {
+        let store = test_store();
+        let txs = block_txs();
+        let hashes: Vec<TxHash> = txs.iter().map(MempoolTx::hash).collect();
+        assert!(hashes.len() >= 4, "fixture transactions: {}", hashes.len());
+        for tx in &txs {
+            store.receive(tx.clone()).unwrap();
+        }
+        assert_ne!(index(&store), UnconfirmedIndex::default());
+        assert_eq!(index(&store), walked(&store));
+
+        store.mark_inflight(&hashes[..3]).unwrap();
+        store.mark_acknowledged(&hashes[..1]).unwrap();
+        store.drop_pending(&hashes[3..4]).unwrap();
+        assert_eq!(index(&store), walked(&store));
+
+        store
+            .confirm(&test_point(), &hashes[..1], &hashes[1..2], 2, 1)
+            .unwrap();
+        assert_eq!(index(&store), walked(&store));
+
+        store.confirm(&test_point_2(), &[], &[], 2, 1).unwrap();
+        assert_eq!(index(&store), walked(&store));
+        assert_eq!(
+            store.check_status(&hashes[0]).stage,
+            MempoolTxStage::Unknown
+        );
+    }
+
+    #[test]
+    fn a_reopened_store_indexes_the_transactions_it_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mempool");
+        let config = RedbMempoolConfig::default();
+        let txs = block_txs();
+        let hashes: Vec<TxHash> = txs.iter().map(MempoolTx::hash).collect();
+        {
+            let store = RedbMempool::open(&path, &config).unwrap();
+            for tx in &txs {
+                store.receive(tx.clone()).unwrap();
+            }
+            store.mark_inflight(&hashes[..2]).unwrap();
+            store.drop_pending(&hashes[2..3]).unwrap();
+        }
+
+        let store = RedbMempool::open(&path, &config).unwrap();
+
+        assert_ne!(index(&store), UnconfirmedIndex::default());
+        assert_eq!(index(&store), walked(&store));
+    }
+
+    #[test]
+    fn a_lookup_reads_the_index_the_store_holds() {
+        let store = test_store();
+        for tx in block_txs() {
+            store.receive(tx).unwrap();
+        }
+        let made =
+            |store: &RedbMempool| store.read_unconfirmed(|index| index.scan_produced(|_| true));
+        let refs = made(&store);
+        assert!(!refs.is_empty());
+        let outputs = |store: &RedbMempool| {
+            store.read_unconfirmed(|index| index.take_produced(&mut refs.clone()))
+        };
+
+        let first = outputs(&store);
+        let again = outputs(&store);
+
+        for txoref in &refs {
+            assert!(
+                Arc::ptr_eq(&first[txoref], &again[txoref]),
+                "the lookup built the index again"
+            );
+        }
+    }
+
+    #[test]
+    fn a_peek_reads_the_decode_of_the_transaction_the_store_holds() {
+        let store = test_store();
+        let txs = block_txs();
+        let hashes: Vec<TxHash> = txs.iter().map(MempoolTx::hash).collect();
+        for tx in txs {
+            store.receive(tx).unwrap();
+        }
+        store.mark_inflight(&hashes[..1]).unwrap();
+
+        let decodes = |txs: &[MempoolTx]| {
+            txs.iter()
+                .map(|tx| tx.with_tx(|tx| std::ptr::from_ref(tx.unwrap()) as usize))
+                .collect::<Vec<_>>()
+        };
+        let pending = (store.peek_pending(), store.peek_pending());
+        let inflight = (store.peek_inflight(), store.peek_inflight());
+
+        assert!(!pending.0.is_empty() && !inflight.0.is_empty());
+        assert_eq!(decodes(&pending.0), decodes(&pending.1));
+        assert_eq!(decodes(&inflight.0), decodes(&inflight.1));
     }
 }

@@ -1884,6 +1884,7 @@ dependencies = [
  "proptest",
  "rayon",
  "regex",
+ "self_cell",
  "serde",
  "serde_json",
  "serde_with 3.21.0",

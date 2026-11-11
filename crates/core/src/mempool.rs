@@ -4,15 +4,32 @@ use crate::TagDimension;
 pub use pallas::ledger::validate::phase2::MultiEraEvalReport;
 
 use futures_core::Stream;
+use pallas::codec::minicbor::decode;
+use self_cell::self_cell;
 use std::convert::Infallible;
 use std::pin::Pin;
 use std::sync::OnceLock;
 use tracing::warn;
 
+/// A transaction decoded from a payload, none when the payload does not decode.
+type TxDecode<'a> = Option<MultiEraTx<'a>>;
+
+self_cell!(
+    /// A payload and its decode.
+    struct DecodedTx {
+        owner: Arc<EraCbor>,
+
+        #[not_covariant]
+        dependent: TxDecode,
+    }
+
+    impl {Debug}
+);
+
 #[derive(Debug)]
 pub struct MempoolTx {
     hash: TxHash,
-    payload: EraCbor,
+    payload: Arc<EraCbor>,
     pub stage: MempoolTxStage,
     pub confirmations: u32,
     pub non_confirmations: u32,
@@ -20,6 +37,10 @@ pub struct MempoolTx {
 
     // this might be empty if the tx is cloned
     pub report: Option<MultiEraEvalReport>,
+
+    /// The decode of the payload, made at the first read and shared by every
+    /// clone.
+    decoded: Arc<OnceLock<DecodedTx>>,
 
     /// The effects of the payload, decoded at the first read and shared by
     /// every clone.
@@ -35,11 +56,10 @@ pub struct TxEffects {
 }
 
 impl TxEffects {
-    /// The effects of an encoded transaction, none when it does not decode.
-    fn of(payload: &EraCbor) -> Option<Self> {
-        let top = MultiEraTx::try_from(payload).ok()?;
+    /// The effects of a transaction.
+    fn of(top: &MultiEraTx<'_>) -> Self {
         let mut effects = Self::default();
-        let Ok(()) = for_each_applied_tx(&top, |tx| {
+        let Ok(()) = for_each_applied_tx(top, |tx| {
             let hash = tx.hash();
             for (idx, output) in tx.produces() {
                 let txoref = TxoRef::from((hash, idx as u32));
@@ -50,7 +70,7 @@ impl TxEffects {
                 .extend(tx.consumes().iter().map(TxoRef::from));
             Ok::<_, Infallible>(())
         });
-        Some(effects)
+        effects
     }
 }
 
@@ -72,6 +92,7 @@ impl Clone for MempoolTx {
             non_confirmations: self.non_confirmations,
             confirmed_at: self.confirmed_at.clone(),
             report: None,
+            decoded: self.decoded.clone(),
             effects: self.effects.clone(),
         }
     }
@@ -81,12 +102,13 @@ impl MempoolTx {
     pub fn new(hash: TxHash, payload: EraCbor, report: MultiEraEvalReport) -> Self {
         Self {
             hash,
-            payload,
+            payload: Arc::new(payload),
             stage: MempoolTxStage::Pending,
             confirmations: 0,
             non_confirmations: 0,
             confirmed_at: None,
             report: Some(report),
+            decoded: Arc::default(),
             effects: Arc::default(),
         }
     }
@@ -103,12 +125,13 @@ impl MempoolTx {
     ) -> Self {
         Self {
             hash,
-            payload,
+            payload: Arc::new(payload),
             stage,
             confirmations,
             non_confirmations,
             confirmed_at,
             report: None,
+            decoded: Arc::default(),
             effects: Arc::default(),
         }
     }
@@ -125,14 +148,37 @@ impl MempoolTx {
 
     /// The encoded transaction, taken from the entry.
     pub fn into_payload(self) -> EraCbor {
-        self.payload
+        Arc::unwrap_or_clone(self.payload)
+    }
+
+    /// The result of `f` on the decoded transaction, decoded at the first read
+    /// and shared by every clone.
+    pub fn with_tx<R>(
+        &self,
+        f: impl for<'a> FnOnce(Result<&MultiEraTx<'a>, decode::Error>) -> R,
+    ) -> R {
+        self.decoded
+            .get_or_init(|| {
+                DecodedTx::new(self.payload.clone(), |payload| {
+                    MultiEraTx::try_from(&**payload).ok()
+                })
+            })
+            .with_dependent(|_, decoded| match decoded {
+                Some(tx) => f(Ok(tx)),
+                // A payload that does not decode keeps no decode, so its error
+                // is read from the payload again.
+                None => match MultiEraTx::try_from(&*self.payload) {
+                    Ok(tx) => f(Ok(&tx)),
+                    Err(error) => f(Err(error)),
+                },
+            })
     }
 
     /// The outputs the transaction makes and the inputs it spends, none when
     /// the payload does not decode.
     pub fn effects(&self) -> Option<&TxEffects> {
         self.effects
-            .get_or_init(|| TxEffects::of(&self.payload))
+            .get_or_init(|| self.with_tx(|tx| tx.ok().map(TxEffects::of)))
             .as_ref()
     }
 
@@ -491,6 +537,69 @@ impl UnconfirmedIndex {
             })
             .map(|(txoref, _)| txoref.clone())
             .collect()
+    }
+}
+
+/// The transactions a mempool holds pending or inflight, each with a value the
+/// store keeps beside it, and the index of their effects.
+pub struct UnconfirmedTxs<T> {
+    txs: HashMap<TxHash, (T, MempoolTx)>,
+    index: UnconfirmedIndex,
+}
+
+impl<T> Default for UnconfirmedTxs<T> {
+    fn default() -> Self {
+        Self {
+            txs: HashMap::new(),
+            index: UnconfirmedIndex::default(),
+        }
+    }
+}
+
+impl<T> UnconfirmedTxs<T> {
+    /// Holds `tx` with `value`, replacing any transaction held under its hash.
+    pub fn insert(&mut self, value: T, tx: MempoolTx) {
+        self.index.insert(&tx);
+        if let Some((_, replaced)) = self.txs.insert(tx.hash(), (value, tx)) {
+            self.index.remove(&replaced);
+        }
+    }
+
+    /// Takes the transaction out, with its effects.
+    pub fn remove(&mut self, hash: &TxHash) -> Option<(T, MempoolTx)> {
+        let (value, tx) = self.txs.remove(hash)?;
+        self.index.remove(&tx);
+        Some((value, tx))
+    }
+
+    pub fn get(&self, hash: &TxHash) -> Option<&(T, MempoolTx)> {
+        self.txs.get(hash)
+    }
+
+    /// The transaction, for a change of stage or counters.
+    pub fn get_mut(&mut self, hash: &TxHash) -> Option<&mut MempoolTx> {
+        self.txs.get_mut(hash).map(|(_, tx)| tx)
+    }
+
+    pub fn contains(&self, hash: &TxHash) -> bool {
+        self.txs.contains_key(hash)
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &(T, MempoolTx)> {
+        self.txs.values()
+    }
+
+    pub fn len(&self) -> usize {
+        self.txs.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.txs.is_empty()
+    }
+
+    /// The effects of every transaction held.
+    pub fn index(&self) -> &UnconfirmedIndex {
+        &self.index
     }
 }
 
@@ -924,7 +1033,7 @@ mod tests {
 
     /// The output reference one past the last output of the listing transaction.
     fn past_parent_outputs(mtx: &MempoolTx) -> TxoRef {
-        let tx = MultiEraTx::try_from(&mtx.payload).unwrap();
+        let tx = MultiEraTx::try_from(mtx.payload()).unwrap();
         txo(PARENT, tx.outputs().len() as u32)
     }
 
@@ -1010,7 +1119,7 @@ mod tests {
         UnconfirmedIndex::of([&stored.clone()]).take_produced(&mut first);
         // These bytes do not decode, so a read that still finds the output
         // answers from the effects of the first read.
-        stored.payload = undecodable();
+        stored.payload = Arc::new(undecodable());
         let mut refs = HashSet::from([txo(SUB, 0), txo(SUB_SPENDS, 0)]);
 
         let index = UnconfirmedIndex::of([&stored]);
@@ -1034,6 +1143,40 @@ mod tests {
         assert_eq!(index, UnconfirmedIndex::of([&mtx]));
         index.remove(&mtx);
         assert_eq!(index, UnconfirmedIndex::default());
+    }
+
+    #[test]
+    fn a_payload_that_does_not_decode_reads_as_its_decode_error() {
+        let mtx = MempoolTx::new(PARENT.parse().unwrap(), undecodable(), vec![]);
+        let direct = MultiEraTx::try_from(&undecodable()).unwrap_err();
+
+        let read = mtx.clone().with_tx(|tx| tx.map(|_| ()).unwrap_err());
+
+        assert_eq!(read.to_string(), direct.to_string());
+        assert_eq!(
+            mtx.with_tx(|tx| tx.map(|_| ()).unwrap_err()).to_string(),
+            direct.to_string()
+        );
+    }
+
+    /// The address of the decode a transaction reads.
+    fn decode_address(mtx: &MempoolTx) -> usize {
+        mtx.with_tx(|tx| std::ptr::from_ref(tx.unwrap()) as usize)
+    }
+
+    #[test]
+    fn a_clone_reads_the_decode_its_original_made() {
+        let admitted = pending_with_sub();
+        let read = admitted.clone();
+
+        let first = decode_address(&admitted);
+        let again = decode_address(&read);
+
+        assert_eq!(
+            admitted.with_tx(|tx| tx.unwrap().hash()),
+            PARENT.parse::<TxHash>().unwrap()
+        );
+        assert_eq!(first, again, "the clone decoded the payload again");
     }
 
     /// A mempool that counts the transactions its peeks hand out.
