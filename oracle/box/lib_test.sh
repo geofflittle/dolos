@@ -588,9 +588,9 @@ lock_root() {
   mkdir -p "$K"
 }
 
-# Holds the lock $1 in the background, recording its pid there, until $1.go exists, then empties the record and exits.
+# Holds the lock $1 in the background, recording its pid there, until $1.go exists, then empties the record and exits after $2 more seconds, or at once.
 hold_lock() {
-  sh -c 'exec 9>>"$1"; flock -n 9 || exit 1; echo $$ >"$1"; until [ -e "$1.go" ]; do sleep 0.2; done; : >"$1"' sh "$1" &
+  sh -c 'exec 9>>"$1"; flock -n 9 || exit 1; echo $$ >"$1"; until [ -e "$1.go" ]; do sleep 0.2; done; : >"$1"; sleep "$2"' sh "$1" "${2:-0}" &
   holder=$!
   until [ -s "$1" ] || ! kill -0 "$holder" 2>/dev/null; do sleep 0.1; done
 }
@@ -624,6 +624,17 @@ wait "$runner" || true
 expect lock_goes_on "$(run_out "$K")" "WAITING lock_pid=$holder REFUSED free run-exit=2 exit=2"
 expect lock_taken "$(paste -sd ' ' - <"$K/df.seen")" lock=held
 expect lock_held_released "$(record_left "$K")" released
+
+# Must not fire: a holder that empties its record and keeps the lock over the run's next polls adds no WAITING line.
+lock_root lock-emptied
+hold_lock "$K/run.lock" 3
+tier "$K" &
+runner=$!
+await_waiting "$K"
+touch "$K/run.lock.go"
+wait "$holder" || true
+wait "$runner" || true
+expect lock_emptied "$(run_out "$K")" "WAITING lock_pid=$holder REFUSED free run-exit=2 exit=2"
 
 # Must fire: a holder killed while the run waits leaves its record, and the run reports it and goes on.
 lock_root lock-killed

@@ -360,7 +360,7 @@ take_lock() {
           ;;
       esac
       holder=$(cat "$RUN_LOCK")
-      if [ "$holder" != "$waited" ]; then
+      if [ -n "$holder" ] && [ "$holder" != "$waited" ]; then
         echo "WAITING lock_pid=$holder"
         waited=$holder
       fi
