@@ -334,7 +334,7 @@ index 08356a15d..617d8f882 100644
          .concat(),
      )
 diff --git a/pallas-validate/src/phase1/dijkstra.rs b/pallas-validate/src/phase1/dijkstra.rs
-index 418871e31..7dc94889f 100644
+index 7c94770bc..b1b1daf84 100644
 --- a/pallas-validate/src/phase1/dijkstra.rs
 +++ b/pallas-validate/src/phase1/dijkstra.rs
 @@ -98,7 +98,7 @@ pub(super) fn validate_dijkstra_tx_inner<S: DijkstraLedgerState + ?Sized>(
@@ -468,7 +468,25 @@ index 418871e31..7dc94889f 100644
              return Err(DijkstraMalformed(MalformedField::BootstrapWitness));
          }
          if !roots.insert(super::conway::bootstrap_wit_root(x)) {
-@@ -729,6 +776,17 @@ fn check_witness_fields(w: &KeepRaw<'_, WitnessSet<'_>>) -> ValidationResult {
+@@ -712,11 +759,12 @@ fn check_witness_fields(w: &KeepRaw<'_, WitnessSet<'_>>) -> ValidationResult {
+     let v2 = w.plutus_v2_script.iter().flat_map(|x| x.iter());
+     let v3 = w.plutus_v3_script.iter().flat_map(|x| x.iter());
+     let v4 = w.plutus_v4_script.iter().flat_map(|x| x.iter());
+-    if repeats(native.map(|x| x.raw_cbor()))
+-        || repeats(v1.map(|x| x.as_ref()))
+-        || repeats(v2.map(|x| x.as_ref()))
+-        || repeats(v3.map(|x| x.as_ref()))
+-        || repeats(v4.map(|x| x.as_ref()))
++    if !pallas_crypto::oracle_plant("duplicate-scripts-accepted")
++        && (repeats(native.map(|x| x.raw_cbor()))
++            || repeats(v1.map(|x| x.as_ref()))
++            || repeats(v2.map(|x| x.as_ref()))
++            || repeats(v3.map(|x| x.as_ref()))
++            || repeats(v4.map(|x| x.as_ref())))
+     {
+         return Err(DijkstraMalformed(MalformedField::DuplicateScripts));
+     }
+@@ -744,6 +792,17 @@ fn repeats<'a>(mut items: impl Iterator<Item = &'a [u8]>) -> bool {
  }
  fn check_sub_supported(tx: &SubTransaction<'_>) -> ValidationResult {
      let b = &tx.sub_transaction_body;
@@ -486,7 +504,7 @@ index 418871e31..7dc94889f 100644
      let raw = encode(b)?;
      let mut allowed = vec![0, 1, 3, 8, 15];
      for (key, present) in [
-@@ -772,7 +830,9 @@ fn check_sub_supported(tx: &SubTransaction<'_>) -> ValidationResult {
+@@ -787,7 +846,9 @@ fn check_sub_supported(tx: &SubTransaction<'_>) -> ValidationResult {
              ));
          }
      }
@@ -497,7 +515,7 @@ index 418871e31..7dc94889f 100644
      check_guards(b.guards.as_ref())?;
      check_witness_fields(&tx.transaction_witness_set)
  }
-@@ -786,6 +846,9 @@ fn check_withdrawal_accounts(raw: &[u8]) -> ValidationResult {
+@@ -801,6 +862,9 @@ fn check_withdrawal_accounts(raw: &[u8]) -> ValidationResult {
          .all(|(account, _)| seen.insert(account.to_vec()))
      {
          true => Ok(()),
@@ -507,7 +525,7 @@ index 418871e31..7dc94889f 100644
          false => Err(DijkstraMalformed(
              MalformedField::DuplicateWithdrawalAccounts,
          )),
-@@ -1107,6 +1170,14 @@ fn check_scripts(
+@@ -1122,6 +1186,14 @@ fn check_scripts(
      let redeemers = levels
          .into_iter()
          .any(|w| w.redeemer.as_ref().is_some_and(|x| !x.is_empty()));
@@ -522,7 +540,7 @@ index 418871e31..7dc94889f 100644
      check_collateral(b, utxos, pp, keys, network, redeemers)?;
      Ok(Provided {
          languages,
-@@ -1142,6 +1213,9 @@ fn check_collateral(
+@@ -1157,6 +1229,9 @@ fn check_collateral(
          let output = utxos
              .get(&MultiEraInput::from_alonzo_compatible(input))
              .ok_or(PostAlonzo(CollateralNotInUTxO))?;
@@ -532,7 +550,7 @@ index 418871e31..7dc94889f 100644
          match spender(output)? {
              Spender::Key(key) => {
                  keys.insert(key);
-@@ -1161,6 +1235,7 @@ fn check_collateral(
+@@ -1176,6 +1251,7 @@ fn check_collateral(
      if let Some(output) = &b.collateral_return
          && let Ok(Address::Shelley(address)) = MultiEraOutput::from_dijkstra(output).address()
          && matches!(address.delegation(), ShelleyDelegationPart::Pointer(_))
@@ -540,7 +558,7 @@ index 418871e31..7dc94889f 100644
      {
          return Err(DijkstraPointerInCollateralReturn);
      }
-@@ -1177,6 +1252,9 @@ fn check_collateral(
+@@ -1192,6 +1268,9 @@ fn check_collateral(
      if collateral_assets.values().any(|x| *x != 0) {
          return Err(PostAlonzo(NonLovelaceCollateral));
      }
@@ -550,7 +568,7 @@ index 418871e31..7dc94889f 100644
      let paid = i128::from(total) - i128::from(returned);
      if b.total_collateral.is_some_and(|x| i128::from(x) != paid) {
          return Err(PostAlonzo(CollateralAnnotation));
-@@ -1247,7 +1325,9 @@ fn check_level(
+@@ -1262,7 +1341,9 @@ fn check_level(
              return Err(PostAlonzo(UnneededRedeemer));
          }
          // An empty redeemer map and language view still participate when datums exist.
@@ -561,7 +579,7 @@ index 418871e31..7dc94889f 100644
          return Ok(languages);
      }
      let models = &pp.cost_models_for_script_languages;
-@@ -1265,6 +1345,22 @@ fn check_level(
+@@ -1280,6 +1361,22 @@ fn check_level(
          views.insert(key, model);
      }
      let redeemers = w.redeemer.as_ref().ok_or(PostAlonzo(RedeemerMissing))?;
@@ -584,7 +602,7 @@ index 418871e31..7dc94889f 100644
      for index in scripts.keys() {
          if !redeemers.contains_key(index) {
              return Err(PostAlonzo(RedeemerMissing));
-@@ -1273,7 +1369,9 @@ fn check_level(
+@@ -1288,7 +1385,9 @@ fn check_level(
      if redeemers.iter().any(|(key, _)| !scripts.contains_key(key)) {
          return Err(PostAlonzo(UnneededRedeemer));
      }
@@ -595,7 +613,7 @@ index 418871e31..7dc94889f 100644
      Ok(languages)
  }
  
-@@ -1354,6 +1452,21 @@ fn reference_fee(mut bytes: u64, p: &DijkstraProtParams) -> Result<u64, Validati
+@@ -1369,6 +1468,21 @@ fn reference_fee(mut bytes: u64, p: &DijkstraProtParams) -> Result<u64, Validati
      u64::try_from(total.0 / total.1).map_err(|_| PostAlonzo(NegativeValue))
  }
  
@@ -617,7 +635,7 @@ index 418871e31..7dc94889f 100644
  fn check_auxiliary(
      hash: Option<Hash<32>>,
      auxiliary: &Nullable<KeepRaw<'_, AuxiliaryData>>,
-@@ -1618,6 +1731,11 @@ fn check_new_script(script: &MultiEraScriptRef<'_>) -> ValidationResult {
+@@ -1633,6 +1747,11 @@ fn check_new_script(script: &MultiEraScriptRef<'_>) -> ValidationResult {
      match script {
          MultiEraScriptRef::Dijkstra(s) => match s.as_ref() {
              ScriptRef::NativeScript(_) => Ok(()),
@@ -1326,7 +1344,7 @@ index 0507ea76c..607fcc5e4 100644
      }
  
 diff --git a/pallas-validate/src/utils/validation.rs b/pallas-validate/src/utils/validation.rs
-index c41c1cc12..0382acb8c 100644
+index 9d4c09951..ca56fa98c 100644
 --- a/pallas-validate/src/utils/validation.rs
 +++ b/pallas-validate/src/utils/validation.rs
 @@ -113,16 +113,22 @@ labels! {

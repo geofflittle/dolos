@@ -15,11 +15,17 @@ pub enum CorpusKind {
     Ic,
     Supp,
     P1,
+    Mut,
 }
 
 impl CorpusKind {
     /// Every corpus, in the order a run judges them.
-    pub const ALL: [CorpusKind; 3] = [CorpusKind::Ic, CorpusKind::Supp, CorpusKind::P1];
+    pub const ALL: [CorpusKind; 4] = [
+        CorpusKind::Ic,
+        CorpusKind::Supp,
+        CorpusKind::P1,
+        CorpusKind::Mut,
+    ];
 
     /// The short name used in record ids and printed lines.
     pub fn name(self) -> &'static str {
@@ -27,6 +33,7 @@ impl CorpusKind {
             CorpusKind::Ic => "ic",
             CorpusKind::Supp => "supp",
             CorpusKind::P1 => "p1",
+            CorpusKind::Mut => "mut",
         }
     }
 }
@@ -41,6 +48,59 @@ pub struct RecordId {
 impl fmt::Display for RecordId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}#{}", self.corpus.name(), self.n)
+    }
+}
+
+/// A corpus of transactions a chain recorded, every corpus but the mutants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RecordedKind {
+    Ic,
+    Supp,
+    P1,
+}
+
+impl From<RecordedKind> for CorpusKind {
+    fn from(kind: RecordedKind) -> Self {
+        match kind {
+            RecordedKind::Ic => CorpusKind::Ic,
+            RecordedKind::Supp => CorpusKind::Supp,
+            RecordedKind::P1 => CorpusKind::P1,
+        }
+    }
+}
+
+impl TryFrom<CorpusKind> for RecordedKind {
+    type Error = CorpusKind;
+
+    fn try_from(kind: CorpusKind) -> Result<Self, CorpusKind> {
+        match kind {
+            CorpusKind::Ic => Ok(RecordedKind::Ic),
+            CorpusKind::Supp => Ok(RecordedKind::Supp),
+            CorpusKind::P1 => Ok(RecordedKind::P1),
+            CorpusKind::Mut => Err(kind),
+        }
+    }
+}
+
+/// One record of a recorded corpus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RecordedId {
+    pub corpus: RecordedKind,
+    pub n: u32,
+}
+
+impl From<RecordedId> for RecordId {
+    fn from(id: RecordedId) -> Self {
+        RecordId {
+            corpus: id.corpus.into(),
+            n: id.n,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RecordId {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        String::deserialize(d)?.parse().map_err(D::Error::custom)
     }
 }
 
@@ -108,7 +168,8 @@ impl fmt::Display for Evaluation {
     }
 }
 
-/// One data argument a script is applied to, as its bytes and the value they decode to.
+/// One data argument a script is applied to, as its bytes and the value they
+/// decode to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Argument {
     pub bytes: Vec<u8>,
@@ -132,7 +193,8 @@ fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Optio
 #[serde(deny_unknown_fields)]
 pub struct LedgerRedeemer {
     pub purpose: Purpose,
-    /// The arguments of the script context the ledger built for the redeemer, none when it built none.
+    /// The arguments of the script context the ledger built for the redeemer,
+    /// none when it built none.
     #[serde(deserialize_with = "present")]
     pub args: Option<Vec<Argument>>,
     pub evaluation: Evaluation,
@@ -210,7 +272,8 @@ pub enum Phase2 {
     Invalid,
 }
 
-/// The scripts' declared result, with the ledger's answer for the same transaction under a true flag when it declares they fail.
+/// The scripts' declared result, with the ledger's answer for the same
+/// transaction under a true flag when it declares they fail.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Declared {
@@ -281,7 +344,8 @@ pub struct EraTime {
     pub active_slot_coeff: (u64, NonZeroU64),
 }
 
-/// The time the ledger read a record under, with the first slot it could not translate when one was within two epochs past the stability window.
+/// The time the ledger read a record under, with the first slot it could not
+/// translate when one was within two epochs past the stability window.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Time {
@@ -289,14 +353,16 @@ pub struct Time {
     pub horizon_slot: Option<u64>,
 }
 
-/// The redeemers the ledger evaluated at a transaction's top level and in each of its sub transactions.
+/// The redeemers the ledger evaluated at a transaction's top level and in each
+/// of its sub transactions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Redeemers {
     pub top: Vec<LedgerRedeemer>,
     pub subs: Vec<Vec<LedgerRedeemer>>,
 }
 
-/// The redeemers the ledger evaluated for a record, or that its decoder refused the record's bytes.
+/// The redeemers the ledger evaluated for a record, or that its decoder refused
+/// the record's bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LedgerRedeemers {
     Read(Redeemers),
@@ -410,7 +476,8 @@ impl Record {
         }
     }
 
-    /// The ledger's answer for the transaction as a node receives it, under a true flag.
+    /// The ledger's answer for the transaction as a node receives it, under a
+    /// true flag.
     pub fn submitted(&self) -> &LedgerOutcome {
         match &self.phase2 {
             Declared::Valid => &self.outcome,

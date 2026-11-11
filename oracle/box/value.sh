@@ -7,8 +7,6 @@ VALUE_SEED=${VALUE_SEED:-1}
 VALUE_GEN_DIR=${VALUE_GEN_DIR:-$ROOT/value-gen}
 VALUE_HARNESS_URL=${VALUE_HARNESS_URL:-https://github.com/geofflittle/pallas.git}
 LAST_VALUE=${LAST_VALUE:-$ROOT/runs/last-value}
-# The Dolos files whose change puts the value leg in the quick tier, beside the pallas pin files.
-VALUE_FILES="oracle/box/value.sh oracle/box/value oracle/box/overlay/pallas.diff oracle/box/amaru.sh oracle/box/amaru"
 # The arms of the value leg, each a switch of value/pallas.diff or of overlay/pallas.diff.
 VALUE_ARMS="emptyguards value-guards-top value-guards-sub value-spend-redeemer value-withdrawal-order"
 
@@ -40,9 +38,16 @@ value_key() {
   esac
 }
 
-# The inputs of the value and amaru legs on the pallas pin $1: the pin and the hash of their box files.
+# The corpora of the scratch tree the value leg hands the harness tier, one path per line.
+value_corpora() {
+  for corpus in ic supp; do
+    echo "$ROOT/$SCRATCH/test_data/ledger-oracle/$corpus.jsonl.gz"
+  done
+}
+
+# The inputs of the value and amaru legs on the pallas pin $1: the pin, the value count and seed, and the hash of their box files and corpora.
 value_inputs() {
-  echo "pin=$1 box=$(cat "$HERE/value.sh" "$HERE/value/harness.rev" "$HERE/value/pallas.diff" "$HERE/overlay/pallas.diff" "$HERE/amaru.sh" "$HERE"/amaru/*.diff | sha256sum | cut -c1-12)"
+  echo "pin=$1 n=$VALUE_N seed=$VALUE_SEED files=$(cat "$HERE/value.sh" "$HERE/value/harness.rev" "$HERE/value/pallas.diff" "$HERE/overlay/pallas.diff" "$HERE/amaru.sh" "$HERE"/amaru/*.diff $(value_corpora) | sha256sum | cut -c1-12)"
 }
 
 # Whether the value and amaru legs on the pallas pin $1 are due: their inputs differ from those of the last run in which both passed, or none did.
@@ -97,12 +102,11 @@ value_tier() {
   dir=$2
   pairs=$3
   from=${4:-}
-  data=$ROOT/$SCRATCH/test_data/ledger-oracle
   fixtures=$ROOT/$PALLAS/test_data
   (
     cd "$ROOT/value/gen" &&
       PROBE=$OUT/value/bin/$probe GEN_FROM=$from PAIRS=$pairs \
-        TX_FILES="$data/ic.jsonl.gz $data/supp.jsonl.gz $(ls "$fixtures"/dijkstra-*.tx | tr '\n' ' ')" \
+        TX_FILES="$(value_corpora | tr '\n' ' ')$(ls "$fixtures"/dijkstra-*.tx | tr '\n' ' ')" \
         BLOCK_FILES="$(ls "$fixtures"/dijkstra*.block | tr '\n' ' ')" \
         EB_FILES="$(ls "$fixtures"/*.ebbody | tr '\n' ' ')" \
         sh tier.sh "$dir" "$VALUE_N" "$VALUE_SEED"

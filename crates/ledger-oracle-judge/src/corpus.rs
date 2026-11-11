@@ -4,10 +4,12 @@ use std::{
     io::Read,
 };
 
+use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
+    mutation::{MutantLine, Mutation},
     record::{CorpusKind, Record, RecordId},
     run::{self, KeptRun},
 };
@@ -16,14 +18,18 @@ use crate::{
 pub const IC_SHA256: &str = "38eb868092373a3d10f9f0da913216115b5ce00459993b435768b2e6274575d6";
 
 /// The sha256 of the decompressed supplement corpus.
-pub const SUPP_SHA256: &str = "35b4b7df6a4a2f2723738f910679fe810796fa2b1cf66808352589bd0ebb21c7";
+pub const SUPP_SHA256: &str = "9b2c7e5715c7c633bd394c3b29aa76704f226d76bdee225d610bd9e893af4dd3";
 
 /// The sha256 of the decompressed phase one corpus.
 pub const P1_SHA256: &str = "861611cc08a7ff09d45e1bdfda556ab8c8a0bed534df8a16ed228a74481539a2";
 
+/// The sha256 of the decompressed mutant corpus.
+pub const MUT_SHA256: &str = "c1bc44e941219581185bf6e2010ba4b83dad021e14d2050eda4566e84cf6e80c";
+
 const IC_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/ic.jsonl.gz");
 const SUPP_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/supp.jsonl.gz");
 const P1_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/p1.jsonl.gz");
+const MUT_GZ: &[u8] = include_bytes!("../../../test_data/ledger-oracle/mut.jsonl.gz");
 
 impl CorpusKind {
     /// The committed sha256 of this corpus.
@@ -32,6 +38,7 @@ impl CorpusKind {
             CorpusKind::Ic => IC_SHA256,
             CorpusKind::Supp => SUPP_SHA256,
             CorpusKind::P1 => P1_SHA256,
+            CorpusKind::Mut => MUT_SHA256,
         }
     }
 
@@ -40,6 +47,7 @@ impl CorpusKind {
             CorpusKind::Ic => IC_GZ,
             CorpusKind::Supp => SUPP_GZ,
             CorpusKind::P1 => P1_GZ,
+            CorpusKind::Mut => MUT_GZ,
         }
     }
 }
@@ -104,13 +112,26 @@ impl std::error::Error for LoadErrors {}
 
 /// Parses every line of verified corpus bytes into a record.
 pub fn records(v: Verified) -> Result<Vec<Record>, LoadErrors> {
+    match v.kind {
+        CorpusKind::Ic | CorpusKind::Supp | CorpusKind::P1 => parse_lines(v),
+        CorpusKind::Mut => Ok(mutants(v)?.into_iter().map(|m| m.record).collect()),
+    }
+}
+
+/// Parses every line of verified mutant corpus bytes into a mutant.
+pub fn mutants(v: Verified) -> Result<Vec<MutantLine>, LoadErrors> {
+    parse_lines(v)
+}
+
+/// Parses every line of verified corpus bytes.
+fn parse_lines<T: DeserializeOwned>(v: Verified) -> Result<Vec<T>, LoadErrors> {
     let mut out = Vec::new();
     let mut reasons: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     for (i, line) in v.bytes.split(|b| *b == b'\n').enumerate() {
         if line.is_empty() {
             continue;
         }
-        match serde_json::from_slice::<Record>(line) {
+        match serde_json::from_slice::<T>(line) {
             Ok(record) => out.push(record),
             Err(e) => {
                 let text = e.to_string();
@@ -257,6 +278,19 @@ pub fn load(kind: CorpusKind) -> Result<Corpus, LoadError> {
     Ok(Corpus::new(v, records))
 }
 
+/// Loads the committed mutant corpus after checking its sha256, with the change
+/// that made each mutant by its record number.
+pub fn load_mutants() -> Result<(Corpus, BTreeMap<u32, Mutation>), LoadError> {
+    let kind = CorpusKind::Mut;
+    let bytes = gunzip(kind.gz())?;
+    let v = verify(kind, &bytes, kind.sha256())?;
+    let lines = mutants(v)?;
+    let changes = lines.iter().map(|l| (l.record.n, l.mutation.clone()));
+    let changes = changes.collect();
+    let records = lines.into_iter().map(|l| l.record).collect();
+    Ok((Corpus::new(v, records), changes))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,11 +330,15 @@ mod tests {
         );
         assert_eq!(
             load(CorpusKind::Supp).unwrap().to_string(),
-            "CORPUS supp sha=35b4b7df6a4a2f27 records=2192 runs=722 kept_records=2192"
+            "CORPUS supp sha=9b2c7e5715c7c633 records=2197 runs=724 kept_records=2197"
         );
         assert_eq!(
             load(CorpusKind::P1).unwrap().to_string(),
             "CORPUS p1 sha=861611cc08a7ff09 records=65 runs=22 kept_records=65"
+        );
+        assert_eq!(
+            load(CorpusKind::Mut).unwrap().to_string(),
+            "CORPUS mut sha=c1bc44e941219581 records=1392 runs=1392 kept_records=1392"
         );
     }
 
@@ -362,7 +400,7 @@ mod tests {
                 .count()
         };
         assert_eq!(undecoded(CorpusKind::Ic), 1);
-        assert_eq!(undecoded(CorpusKind::Supp), 43);
+        assert_eq!(undecoded(CorpusKind::Supp), 45);
     }
 
     #[test]
@@ -582,7 +620,7 @@ mod tests {
         );
         assert_eq!(
             input_totals(CorpusKind::Supp),
-            [2856, 666, 15, 35, 38, 7, 38]
+            [2863, 667, 15, 35, 38, 7, 38]
         );
     }
 }

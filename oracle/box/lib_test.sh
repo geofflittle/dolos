@@ -3,6 +3,8 @@
 # Usage: lib_test.sh <empty work dir>
 set -eu
 W=$(cd "$1" && pwd)
+# Each case names its own REV and BASE, so those of the run that calls the test are dropped.
+unset REV BASE
 HERE=$(cd "$(dirname "$0")" && pwd)
 LIB=$HERE/lib.sh
 
@@ -233,6 +235,12 @@ expect deselect_arm "$(
   . "$LIB"
   echo "$PLANTED_ARMS|$(deselect_arm k && echo k)|$(deselect_arm d || echo not-d)|$(plant_files k)"
 )" "cost-models d e g h k|k|not-d|"
+# Must not move an arm of a list with no deselect arm, and must move k after head and before control.
+expect arm_order "$(
+  HERE=$A/box
+  . "$LIB"
+  echo "$(arm_order head control d e | paste -sd ' ' -)|$(arm_order head control d k e | paste -sd ' ' -)"
+)" "head control d e|head k control d e"
 
 # A head control log, the same log with another run time, and the same log with one record judged differently.
 L=$W/logs
@@ -611,6 +619,42 @@ expect lock_old "$(cat "$K/old.seen")" "lock=held pid=$(cat "$K/run.lock")"
 # Must not fire: the entry run.sh prints no exit line of its own when it hands the run to the judged commit's run.sh.
 expect lock_old_exit "$(run_out "$K")" "exit=0"
 
+# Runs the entry run.sh on the build root $1, whose judged commit's run.sh records the REV and BASE it receives in $1/old.seen, with REV $2 and BASE $3.
+named_run() {
+  (
+    REV=$2 BASE=$3
+    export REV BASE
+    tier "$1" entry
+  )
+}
+lock_root named
+mkdir -p "$K/old/oracle/box"
+printf '%s\n' '#!/bin/sh' 'echo "rev=$REV base=$BASE" >"$ROOT/old.seen"' >"$K/old/oracle/box/run.sh"
+git -C "$K/old" init -q
+git -C "$K/old" add -A
+git -C "$K/old" -c user.name=t -c user.email=t@t commit -q -m old
+git clone -q --bare "$K/old" "$K/dolos.git"
+full=$(git -C "$K/dolos.git" rev-parse HEAD)
+short=$(echo "$full" | cut -c1-8)
+# Must not fire: a REV and a BASE given as full shas reach the judged commit's run.sh as given.
+named_run "$K" "$full" "$full"
+expect named_full "$(cat "$K/old.seen")" "rev=$full base=$full"
+# Must not fire: an empty BASE stays empty, so the judged run.sh reads the last passing run's commit.
+named_run "$K" "$full" ""
+expect named_empty "$(cat "$K/old.seen")" "rev=$full base="
+# Must fire: an abbreviated REV and BASE reach the judged commit's run.sh as full shas.
+named_run "$K" "$short" "$short"
+expect named_short "$(cat "$K/old.seen")" "rev=$full base=$full"
+# Must fire: a BASE or REV naming no commit is refused before the run waits for a lock another process holds.
+rm -f "$K/run.lock"
+hold_lock "$K/run.lock"
+named_run "$K" "$full" nothing
+expect named_base_refused "$(run_out "$K")" "REFUSED BASE=nothing names no commit in $K/dolos.git run-exit=2 exit=2"
+named_run "$K" nothing "$full"
+expect named_rev_refused "$(run_out "$K")" "REFUSED REV=nothing names no commit in $K/dolos.git run-exit=2 exit=2"
+touch "$K/run.lock.go"
+wait "$holder" || true
+
 # Must fire: breaks.sh and candidate.sh, each run alone, hold the lock when they read free space, candidate.sh with a config to copy.
 lock_root lock-breaks
 tier "$K" judged breaks.sh
@@ -667,30 +711,32 @@ src=$(git -C "$P" rev-parse HEAD)
 expect tree_absent "$(tree_of "$P" 0000000000000000000000000000000000000001)" refused
 expect tree_fetch "$(tree_of "$P" "$src")" "$src"
 
-# A box dir with the value leg's files, and the verdicts of value_due before a pass, after one, after a changed pin and after a changed plant.
+# A box dir with the value leg's files and a scratch tree with its corpora, and the verdicts of value_due before a pass, after one, after a changed pin, plant, corpus or seed.
 V=$W/value
 rm -rf "$V"
-mkdir -p "$V/box/value" "$V/box/overlay" "$V/box/amaru" "$V/runs"
+mkdir -p "$V/box/value" "$V/box/overlay" "$V/box/amaru" "$V/runs" "$V/scratch/dolos/test_data/ledger-oracle"
 cp "$HERE/value.sh" "$HERE/amaru.sh" "$V/box/"
 echo r1 >"$V/box/value/harness.rev"
 echo p1 >"$V/box/value/pallas.diff"
 echo o1 >"$V/box/overlay/pallas.diff"
 echo a1 >"$V/box/amaru/a.diff"
+echo i1 >"$V/scratch/dolos/test_data/ledger-oracle/ic.jsonl.gz"
+echo s1 >"$V/scratch/dolos/test_data/ledger-oracle/supp.jsonl.gz"
 due() {
   (
-    ROOT=$V HERE=$V/box
+    ROOT=$V HERE=$V/box SCRATCH=scratch/dolos
     . "$V/box/value.sh"
     if value_due "$1"; then echo due; else echo passed; fi
   )
 }
 record_value() {
   (
-    ROOT=$V HERE=$V/box
+    ROOT=$V HERE=$V/box SCRATCH=scratch/dolos
     . "$V/box/value.sh"
     value_inputs "$1" >"$LAST_VALUE"
   )
 }
-# Must fire with no passing leg, must not on the inputs that passed, and must fire on another pin, another value plant or another amaru plant.
+# Must fire with no passing leg, must not on the inputs that passed, and must fire on another pin, another value plant, another amaru plant, another corpus or another seed.
 expect value_due_none "$(due aaa)" due
 record_value aaa
 expect value_due_same "$(due aaa)" passed
@@ -700,6 +746,43 @@ expect value_due_plant "$(due aaa)" due
 record_value aaa
 echo a2 >"$V/box/amaru/a.diff"
 expect value_due_amaru_plant "$(due aaa)" due
+record_value aaa
+echo s2 >"$V/scratch/dolos/test_data/ledger-oracle/supp.jsonl.gz"
+expect value_due_corpus "$(due aaa)" due
+record_value aaa
+expect value_due_seed "$(VALUE_SEED=2 due aaa)" due
+
+# A build root whose branch pins pallas and holds the corpora, and a copy of this box dir whose arms, tests and legs are stubs that count each leg run.
+Q=$W/quick
+rm -rf "$Q" "$W/quick-src" "$W/quick-box"
+mkdir -p "$Q/runs" "$W/quick-src/test_data/ledger-oracle"
+git init -q --bare "$Q/dolos.git"
+git -C "$W/quick-src" init -q
+echo 'pallas-validate = { git = "https://github.com/a/pallas", rev = "abc" }' >"$W/quick-src/Cargo.toml"
+echo i >"$W/quick-src/test_data/ledger-oracle/ic.jsonl.gz"
+echo s >"$W/quick-src/test_data/ledger-oracle/supp.jsonl.gz"
+git -C "$W/quick-src" add -A
+git -C "$W/quick-src" -c user.name=t -c user.email=t@t commit -q -m t
+git -C "$W/quick-src" push -q "$Q/dolos.git" HEAD:refs/heads/b
+qrev=$(git -C "$W/quick-src" rev-parse HEAD)
+cp -R "$HERE" "$W/quick-box"
+echo 'echo "ARMS head=PASS control=CLEAN logs=x"' >"$W/quick-box/breaks.sh"
+echo 'exit 0' >"$W/quick-box/lib_test.sh"
+echo 'exit 0' >"$W/quick-box/fields_test.sh"
+echo 'value_leg() { echo ran >>"$ROOT/legs"; echo "VALUE value-head=PASS value-control=CLEAN pin=x"; }' >>"$W/quick-box/value.sh"
+echo 'amaru_leg() { echo "AMARU amaru-head=PASS rev=x"; }' >>"$W/quick-box/amaru.sh"
+# The number of leg runs after a quick run on the build root Q with BASE the judged commit.
+quick_legs() {
+  (
+    ROOT=$Q OUT=$Q/runs/q$1 JUDGED=t REV=$qrev BASE=$qrev MIN_FREE_G=0 RUN_LOCK=$Q/run.lock
+    export ROOT OUT JUDGED REV BASE MIN_FREE_G RUN_LOCK
+    timeout 30 sh "$W/quick-box/run.sh" quick >"$Q/q$1.out" 2>&1 || true
+  )
+  cat "$Q/legs" 2>/dev/null | grep -c . || true
+}
+# Must run the legs on an unchanged pin when no leg has passed on these inputs, and must not run them again once they have.
+expect quick_value_unpassed "$(quick_legs 1)" 1
+expect quick_value_passed "$(quick_legs 2)" 1
 
 # An arm's run dir with the reached line $2 and the disagreement class $3, and value_caught's verdict for the arm a with the class c.
 caught_of() {
@@ -887,6 +970,51 @@ expect fixes_base_absent "$(
     fix_arms "$F" dolos HEAD | paste -sd '|' -
   )
 )" "FIX-ARM repo=dolos base=0000000000000000000000000000000000000001 not-found|FIX-ARMS repo=dolos fixes=0 armed=0 excluded=0 unarmed=0 failing=1"
+
+# A pool of the width $1 over eight items, each line the item, whether four items had started within five seconds of its start, and whether at most four ran half a second later.
+pool_of() {
+  P=$W/pool-$1
+  rm -rf "$P"
+  mkdir -p "$P/started" "$P/running"
+  (
+    ROOT=$W OUT=$P
+    . "$LIB"
+    seen() {
+      touch "$P/started/$1" "$P/running/$1"
+      t=0
+      while [ "$(ls "$P/started" | wc -l)" -lt 4 ] && [ "$t" -lt 50 ]; do
+        sleep 0.1
+        t=$((t + 1))
+      done
+      barrier=met
+      if [ "$(ls "$P/started" | wc -l)" -lt 4 ]; then barrier=unmet; fi
+      sleep 0.5
+      bound=ok
+      if [ "$(ls "$P/running" | wc -l)" -gt 4 ]; then bound=over; fi
+      rm "$P/running/$1"
+      echo "$1:$barrier:$bound"
+    }
+    pool "$1" seen a b c d e f g h | paste -sd ' ' -
+  )
+}
+# Must run four at a time on a width of four and print in argument order, and must not run more than four at once.
+expect pool_four "$(pool_of 4)" "a:met:ok b:met:ok c:met:ok d:met:ok e:met:ok f:met:ok g:met:ok h:met:ok"
+
+# The crate test arms, the judge's added packages and the test targets of the arms given, and the executables a message file of two test binaries names.
+crate_of() {
+  (
+    ROOT=$W
+    . "$LIB"
+    printf '%s\n' '{"reason":"compiler-artifact","target":{"kind":["lib"],"name":"dolos","src_path":"a"},"executable":"/w/target/release/deps/dolos-1"}' \
+      '{"reason":"compiler-artifact","target":{"kind":["lib"],"name":"dolos_cardano","src_path":"b"},"executable":"/w/target/release/deps/dolos_cardano-2"}' \
+      '{"reason":"compiler-artifact","target":{"kind":["lib"],"name":"hex","src_path":"c"},"executable":null}' >"$W/two.build"
+    echo "arms=[$(crate_arms "$@")] joint=[$(joint_packages "$@")] targets=[$(for a in $(crate_arms "$@"); do crate_test_target "$a"; done | paste -sd ' ' -)] dolos=$(executable "$W/two.build" dolos) cardano=$(executable "$W/two.build" dolos_cardano) last=$(executable "$W/two.build")"
+  )
+}
+# Must name no crate test and add no package for arms the judge runs, must add dolos-cardano alone for the non-strict lib tests, and must pick each executable by its target.
+expect crate_none "$(crate_of head control coin)" "arms=[] joint=[] targets=[] dolos=/w/target/release/deps/dolos-1 cardano=/w/target/release/deps/dolos_cardano-2 last=/w/target/release/deps/dolos_cardano-2"
+expect crate_all "$(crate_of head cost-models endorser-tx-dropped unsupported-untyped watch-block-copied)" "arms=[cost-models endorser-tx-dropped unsupported-untyped watch-block-copied] joint=[-p dolos-cardano] targets=[musashi_cost_models dolos dolos_cardano dolos] dolos=/w/target/release/deps/dolos-1 cardano=/w/target/release/deps/dolos_cardano-2 last=/w/target/release/deps/dolos_cardano-2"
+expect crate_strict "$(crate_of cost-models endorser-tx-dropped | sed 's/ dolos=.*//')" "arms=[cost-models endorser-tx-dropped] joint=[] targets=[musashi_cost_models dolos]"
 
 # Must keep a value switch's name and prefix an overlay switch's.
 expect value_key "$(

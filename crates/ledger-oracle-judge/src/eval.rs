@@ -746,7 +746,7 @@ impl Counts {
         match pass {
             Pass::Agree => self.agree += n,
             Pass::Known => self.known += n,
-            Pass::Excluded => self.unrepresentable += n,
+            Pass::Unrepresentable | Pass::Excluded => self.unrepresentable += n,
         }
     }
 
@@ -886,7 +886,7 @@ fn row_judgement(key: &RowKey, verdict: &RowVerdict) -> (Vec<CellKey>, Outcome) 
         }
         RowVerdict::Unrepresentable(why) => {
             cells.push(CellKey::new(Axis::Dolos, "unrepresentable"));
-            Outcome::Excluded(why.clone())
+            Outcome::Unrepresentable(why.clone())
         }
         RowVerdict::Disagree(d) => {
             cells.extend(d.cells());

@@ -240,9 +240,9 @@ enum Shown {
 }
 
 impl Rules {
-    /// The known records whose record is one of `records`.
-    pub fn within(&self, records: &BTreeSet<RecordId>) -> Self {
-        let known = self.known.iter().filter(|(id, _)| records.contains(id));
+    /// The known records whose record `keep` holds.
+    pub fn within(&self, keep: impl Fn(&RecordId) -> bool) -> Self {
+        let known = self.known.iter().filter(|(id, _)| keep(id));
         Rules {
             entries: self.entries.clone(),
             known: known.map(|(id, k)| (*id, k.clone())).collect(),
@@ -511,7 +511,8 @@ unsupported[witness fields] | unrepresentable because the native validator does 
         let members = rules.members();
         let counted = members.iter().filter(|m| m.reach == Reach::Counted);
         let committed = counted.map(|m| (m.cell.to_string(), count));
-        coverage::table(&members, &committed.collect(), &mut out)
+        let counts = coverage::counts(&out);
+        coverage::table(&members, &committed.collect(), &counts, &mut out)
     }
 
     #[test]

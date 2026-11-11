@@ -11,6 +11,7 @@ pub mod eval;
 pub mod judgement;
 pub mod live;
 pub mod manifest;
+pub mod mutation;
 pub mod parallel;
 pub mod params;
 pub mod record;

@@ -1,3 +1,33 @@
+mut#7187 sub0 Spend#0 couldn't evaluate phase-2 script: missing and/or unexpected validator(s) and/or redeemer(s) Missing Spend[0] Unexpected ø
+mut#7202 top Guarding#0 couldn't evaluate phase-2 script: extraneous redeemer
+mut#16680 top Spend#0 couldn't evaluate phase-2 script: missing required script Script 4079ed7d23b11ec61227dcd394d07c6c5df56237bab871022d9c0abc
+mut#16987 top Spend#0 couldn't evaluate phase-2 script: missing and/or unexpected validator(s) and/or redeemer(s) Missing Cert[0] Unexpected ø
+mut#17099 top Spend#0 couldn't evaluate phase-2 script: missing and/or unexpected validator(s) and/or redeemer(s) Missing Cert[0] Unexpected ø
+mut#60968 top Propose#0 couldn't evaluate phase-2 script: missing required script Script fa24fb305126805cf2164c161d852a0e7330cf988f1fe558cf7d4a64
+mut#61123 top Propose#1 couldn't evaluate phase-2 script: missing and/or unexpected validator(s) and/or redeemer(s) Missing Propose[0] Unexpected ø
+mut#61123 top Propose#2 couldn't evaluate phase-2 script: missing and/or unexpected validator(s) and/or redeemer(s) Missing Propose[0] Unexpected ø
+mut#77584 top Propose#0 couldn't evaluate phase-2 script: missing required script Script fa24fb305126805cf2164c161d852a0e7330cf988f1fe558cf7d4a64
+mut#1001040 top Spend#0 couldn't evaluate phase-2 script: missing required script Script 8731b2640d6af7e7931548aeb59fd3cddcd544234eaefbe6e110e62e
+mut#1001346 top Spend#0 couldn't evaluate phase-2 script: missing required script Script 2090a1afc08a9c4abc6035064edf1b1b2c96d099aac7dfecdf79aede
+mut#1002002 top Guarding#0 couldn't evaluate phase-2 script: extraneous redeemer
+mut#1002292 sub0 Cert#0 couldn't evaluate phase-2 script: extraneous redeemer
+mut#1002340 sub0 Reward#0 couldn't evaluate phase-2 script: extraneous redeemer
+mut#1002380 sub0 Propose#0 couldn't evaluate phase-2 script: missing required script Script df3c23786bd8473dcf099b4b34b9d04944701b65d369a53052a2819c
+mut#1002410 sub0 Guarding#0 couldn't evaluate phase-2 script: extraneous redeemer
+mut#1002412 sub0 Guarding#0 couldn't evaluate phase-2 script: extraneous redeemer
+mut#1003176 top Spend#0 couldn't evaluate phase-2 script: missing required script Script b7859255cd1e51cb55b497da479a19e58e90ee0521b2e23d6ef449b5
+mut#1003200 top Spend#1 couldn't evaluate phase-2 script: missing required script Script 86ebeb7ef6406c0e01fe55beba3e779718c085bca2afb45653742b1a
+mut#1004280 top Spend#1 couldn't evaluate phase-2 script: missing required datum Datum 03170a2e7597b7b7e3d84c05391d139a62b157e78786d8c082f29dcf4c111314
+mut#1005792 top Spend#0 couldn't evaluate phase-2 script: missing required datum Datum 03170a2e7597b7b7e3d84c05391d139a62b157e78786d8c082f29dcf4c111314
+mut#1007856 top Spend#1 couldn't evaluate phase-2 script: missing required datum Datum 03170a2e7597b7b7e3d84c05391d139a62b157e78786d8c082f29dcf4c111314
+mut#1009896 top Spend#1 couldn't evaluate phase-2 script: missing required script Script def0a838c9d3b90e8153bf3c661509983558b475d01868092a2a395a
+mut#1012872 top Spend#0 couldn't evaluate phase-2 script: missing required script Script 4b5d9f484db3d06adf9f449381b6191b6eb79167aee90dc6af6eb539
+mut#1013208 top Spend#1 couldn't evaluate phase-2 script: missing required datum Datum 03170a2e7597b7b7e3d84c05391d139a62b157e78786d8c082f29dcf4c111314
+mut#1014408 top Spend#0 couldn't evaluate phase-2 script: missing required datum Datum 03170a2e7597b7b7e3d84c05391d139a62b157e78786d8c082f29dcf4c111314
+mut#1015584 top Spend#0 couldn't evaluate phase-2 script: missing required script Script 4dbe894d7d067bddb8e51305ce44f0fd430687d23bf701381494d473
+mut#1016400 top Spend#1 couldn't evaluate phase-2 script: missing required datum Datum 03170a2e7597b7b7e3d84c05391d139a62b157e78786d8c082f29dcf4c111314
+mut#1017168 top Spend#0 couldn't evaluate phase-2 script: missing required script Script b3f60cb3e3b44634066499efbfb84c52f4d510efdf979d3eef62e3d4
+mut#2000456 top Spend#1 couldn't evaluate phase-2 script: missing required script Script 09cd96d4d6876e85be1fb9cdbc96de3ab6f052bac8acf130b8ffc347
 ic#888 top Spend#1 couldn't evaluate phase-2 script: extraneous redeemer
 ic#888 top Cert#0 couldn't evaluate phase-2 script: extraneous redeemer
 ic#1260 top Spend#1 couldn't evaluate phase-2 script: resolved Input not found

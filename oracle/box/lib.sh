@@ -26,9 +26,22 @@ PLANTED_ARMS=$({
   done
 } | sort -u | paste -sd ' ' -)
 
-# Whether an arm leaves the records plants/<arm>.deselect names out of the whole run of the head.
+# Whether an arm leaves the records plants/<arm>.deselect names out of the head's coverage counts.
 deselect_arm() {
   [ -f "$HERE/plants/$1.deselect" ]
+}
+
+# The arms it is given in judging order, one per line, head first and each deselect arm next, so a deselect arm runs on the head's build before another arm's build changes the target.
+arm_order() {
+  for arm in "$@"; do
+    if [ "$arm" = head ]; then echo "$arm"; fi
+  done
+  for arm in "$@"; do
+    if [ "$arm" != head ] && deselect_arm "$arm"; then echo "$arm"; fi
+  done
+  for arm in "$@"; do
+    if [ "$arm" != head ] && ! deselect_arm "$arm"; then echo "$arm"; fi
+  done
 }
 
 # Whether an arm is a switch of the overlay, judged on the one overlay build with ORACLE_PLANT naming it.
@@ -85,6 +98,43 @@ crate_test_passed() {
       *) grep -q -x -F "test $name ... ok" "$2" || return 1 ;;
     esac
   done
+}
+
+# The arms among those given that run a crate test, on one line.
+crate_arms() {
+  for arm in "$@"; do
+    if crate_test "$arm" >/dev/null; then echo "$arm"; fi
+  done | paste -sd ' ' -
+}
+
+# Whether an arm's crate test is the lib test of a package with no feature of its own, which builds in the judge's cargo invocation.
+joint_crate_test() {
+  case $(crate_test "$1" 2>/dev/null) in
+    "-p "*" --lib") ;;
+    *) return 1 ;;
+  esac
+}
+
+# The cargo arguments that add to the judge's build the joint crate tests of the arms given, beside the judge's own package.
+joint_packages() {
+  for arm in "$@"; do
+    if joint_crate_test "$arm"; then crate_test "$arm" | cut -d' ' -f2; fi
+  done | sort -u | grep -v -x dolos | sed 's/^/-p /' | paste -sd ' ' -
+}
+
+# The cargo target name of the binary an arm's crate test runs.
+crate_test_target() {
+  args=$(crate_test "$1") || return
+  set -- $args
+  target=
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -p) target=$(echo "$2" | tr - _) ;;
+      --test) target=$2 ;;
+    esac
+    shift
+  done
+  echo "$target"
 }
 
 # The Dolos files that name the pallas commit Dolos builds against.
@@ -229,6 +279,14 @@ require_free() {
   free=$(free_g "$ROOT")
   if [ "$free" -lt "$MIN_FREE_G" ]; then
     echo "REFUSED free=${free}G below ${MIN_FREE_G}G at $ROOT"
+    exit 2
+  fi
+}
+
+# Prints the full sha of the commit the ref $2 names in $ROOT/dolos.git, or exits 2 with a REFUSED line naming the variable $1 when it names none.
+full_commit() {
+  if ! git -C "$ROOT/dolos.git" rev-parse --verify --quiet "$2^{commit}"; then
+    echo "REFUSED $1=$2 names no commit in $ROOT/dolos.git" >&2
     exit 2
   fi
 }
@@ -619,6 +677,31 @@ reset_scratch() {
   git -C "$ROOT/$SCRATCH" clean -q -fdx
 }
 
+# Runs the function $2 on each later argument, $1 at a time with the arguments dealt to $1 workers in turn, then prints each run's output in argument order.
+pool() {
+  pool_width=$1
+  pool_fn=$2
+  shift 2
+  mkdir -p "$OUT/pool"
+  pool_worker=0
+  while [ "$pool_worker" -lt "$pool_width" ]; do
+    (
+      pool_i=0
+      for pool_item; do
+        if [ $((pool_i % pool_width)) -eq "$pool_worker" ]; then
+          "$pool_fn" "$pool_item" >"$OUT/pool/$pool_item" 2>&1 || true
+        fi
+        pool_i=$((pool_i + 1))
+      done
+    ) &
+    pool_worker=$((pool_worker + 1))
+  done
+  wait
+  for pool_item; do
+    cat "$OUT/pool/$pool_item"
+  done
+}
+
 # The tree id of a work tree's files, staged in an index of its own, or none when the tree is absent.
 tree_of() {
   if [ ! -d "$1/.git" ]; then
@@ -747,7 +830,11 @@ build_judge() {
   build_checked "$json" test --release -p dolos --lib --no-run "$@"
 }
 
-# The executable cargo built that a message file names, the test binary of a no run test build or the binary of a build.
+# The executable cargo built that a message file names, the test binary of a no run test build or the binary of a build, of the target $2 when it is given.
 executable() {
-  sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' "$1" | tail -1
+  if [ -n "${2:-}" ]; then
+    grep -F "\"name\":\"$2\"" "$1"
+  else
+    cat "$1"
+  fi | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' | tail -1
 }
