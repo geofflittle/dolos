@@ -322,7 +322,7 @@ index 38d80bab..f867d209 100644
                  if let Some(output) = outputs.get(&(r.1 as usize)) {
                      result.insert(r, (block.era(), output.encode()));
 diff --git a/src/serve/grpc/block_context.rs b/src/serve/grpc/block_context.rs
-index 4a7761f3..3e569cf3 100644
+index 4a7761f3..afa846e3 100644
 --- a/src/serve/grpc/block_context.rs
 +++ b/src/serve/grpc/block_context.rs
 @@ -37,10 +37,15 @@ fn made_among(
@@ -343,19 +343,18 @@ index 4a7761f3..3e569cf3 100644
                  for (i, output) in tx.produces() {
                      let made_ref = (hash, i as u32);
                      if named.contains(&made_ref) {
-@@ -95,8 +100,10 @@ impl<C: ChainReads> BlockContext<C> {
-                 // The v1 mapper resolves every child separately. Its inputs
-                 // need not also occur in the parent's reference inputs.
-                 let mut refs = named_inputs(tx);
--                for sub in tx.sub_transactions() {
--                    refs.extend(named_inputs(&sub));
-+                if !pallas::crypto::oracle_plant("rodrigo-reverted") {
-+                    for sub in tx.sub_transactions() {
-+                        refs.extend(named_inputs(&sub));
-+                    }
-                 }
-                 refs
+@@ -102,9 +107,11 @@ impl<C: ChainReads> BlockContext<C> {
              })
+             .collect();
+         let made = made_among(block, txs, &named);
++        let top: HashSet<TxoRef> = mapped.iter().flat_map(named_inputs).collect();
+         let refs: Vec<_> = named
+             .into_iter()
+             .filter(|r| !made.contains_key(r))
++            .filter(|r| !pallas::crypto::oracle_plant("rodrigo-reverted") || top.contains(r))
+             .collect();
+         let resolved = if refs.is_empty() {
+             Some(UtxoMap::new())
 diff --git a/src/serve/grpc/v1/query.rs b/src/serve/grpc/v1/query.rs
 index 3db11ef0..034d25e5 100644
 --- a/src/serve/grpc/v1/query.rs
