@@ -9,7 +9,10 @@ use itertools::Itertools as _;
 
 use tokio::sync::Semaphore;
 
-use pallas::ledger::traverse::{MultiEraBlock, MultiEraTx};
+use pallas::{
+    codec::minicbor,
+    ledger::traverse::{MultiEraBlock, MultiEraHeader, MultiEraTx},
+};
 
 use crate::{
     archive::ArchiveStore, ArchiveError, BlockBody, BlockHash, BlockHeight, BlockSlot, ChainError,
@@ -63,9 +66,19 @@ pub fn tx_by_hash<'b>(
     block: &'b MultiEraBlock<'_>,
     hash: &[u8],
 ) -> Option<(TxOrder, MultiEraTx<'b>)> {
-    applied_txs(block)
-        .into_iter()
-        .find(|(_, tx)| tx.hash().as_slice() == hash)
+    tx_in(&block.txs(), hash)
+}
+
+/// The transaction of `txs` whose hash is the one given, a sub transaction
+/// included, with the index of the top level transaction that holds it.
+pub fn tx_in<'b>(txs: &[MultiEraTx<'b>], hash: &[u8]) -> Option<(TxOrder, MultiEraTx<'b>)> {
+    txs.iter().enumerate().find_map(|(index, tx)| {
+        let found = for_each_applied_tx(tx, |tx| match tx.hash().as_slice() == hash {
+            true => Err(tx.clone()),
+            false => Ok(()),
+        });
+        found.err().map(|tx| (index, tx))
+    })
 }
 
 /// Maximum number of metadata entries, including misses, retained between
@@ -193,6 +206,120 @@ fn pick_by_hash(candidates: Vec<BlockBody>, hash: &[u8]) -> Option<BlockBody> {
     })
 }
 
+/// The slot, hash and height of a block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockPoint {
+    pub slot: BlockSlot,
+    pub hash: BlockHash,
+    pub height: BlockHeight,
+}
+
+/// The hashes indexed at one slot and what that slot's blocks answer for them,
+/// with the number of bodies read.
+pub type SlotAnswer<T> = (
+    Vec<TxHash>,
+    Result<(HashMap<TxHash, T>, usize), DomainError>,
+);
+
+/// The header of a block, decoded from the block's bytes without its body.
+fn header_of(raw: &[u8]) -> Result<MultiEraHeader<'_>, DomainError> {
+    let cbor = |error| DomainError::ChainError(ChainError::CborDecodingError(error));
+    let mut decoder = minicbor::Decoder::new(raw);
+    decoder.array().map_err(cbor)?;
+    let wrapper = decoder.u8().map_err(cbor)?;
+    decoder.array().map_err(cbor)?;
+    let start = decoder.position();
+    decoder.skip().map_err(cbor)?;
+
+    // The block wrapper tag counts Byron twice, once for its boundary blocks,
+    // so from Shelley on the header tag is one lower.
+    let (tag, subtag) = match wrapper {
+        0 => (0, Some(0)),
+        1 => (0, Some(1)),
+        wrapper => (wrapper - 1, None),
+    };
+
+    MultiEraHeader::decode(tag, subtag, &raw[start..decoder.position()])
+        .map_err(|error| DomainError::ChainError(ChainError::DecodingError(error)))
+}
+
+/// The metadata of each requested transaction among the blocks recorded at
+/// one slot.
+fn metas_among(
+    raws: Vec<BlockBody>,
+    requested: &HashSet<TxHash>,
+) -> Result<HashMap<TxHash, BlockRefMeta>, DomainError> {
+    let mut positions = HashMap::new();
+    let mut decode_error = None;
+
+    for raw in raws {
+        let block = match MultiEraBlock::decode(raw.as_slice()) {
+            Ok(block) => block,
+            Err(error) => {
+                decode_error.get_or_insert_with(|| {
+                    DomainError::ChainError(ChainError::DecodingError(error))
+                });
+                continue;
+            }
+        };
+        for (tx_index, tx) in applied_txs(&block) {
+            let tx_hash = tx.hash();
+            if requested.contains(&tx_hash) {
+                positions.entry(tx_hash).or_insert_with(|| BlockRefMeta {
+                    slot: block.slot(),
+                    hash: block.hash(),
+                    height: block.number(),
+                    tx_hash,
+                    tx_index,
+                });
+            }
+        }
+    }
+
+    // A corrupt sibling cannot hide metadata found in a valid body, but an
+    // unresolved hash must not turn that corruption into a cached miss.
+    if positions.len() != requested.len() {
+        if let Some(error) = decode_error {
+            return Err(error);
+        }
+    }
+
+    Ok(positions)
+}
+
+/// The point of the block that holds each requested transaction among the
+/// blocks recorded at one slot.
+///
+/// A slot that holds one block answers every hash the index gives for it from
+/// that block's header.
+fn points_among(
+    raws: Vec<BlockBody>,
+    requested: &HashSet<TxHash>,
+) -> Result<HashMap<TxHash, BlockPoint>, DomainError> {
+    if raws.len() == 1 {
+        let header = header_of(&raws[0])?;
+        let point = BlockPoint {
+            slot: header.slot(),
+            hash: header.hash(),
+            height: header.number(),
+        };
+        return Ok(requested.iter().map(|tx_hash| (*tx_hash, point)).collect());
+    }
+
+    let metas = metas_among(raws, requested)?;
+    Ok(metas
+        .into_iter()
+        .map(|(tx_hash, meta)| {
+            let point = BlockPoint {
+                slot: meta.slot,
+                hash: meta.hash,
+                height: meta.height,
+            };
+            (tx_hash, point)
+        })
+        .collect())
+}
+
 #[derive(Clone)]
 pub struct AsyncQueryFacade<D: Domain> {
     inner: D,
@@ -280,22 +407,25 @@ where
             .await
     }
 
+    /// The body of the block the index records for a transaction hash.
+    pub async fn block_body_by_tx_hash(
+        &self,
+        tx_hash: Vec<u8>,
+    ) -> Result<Option<BlockBody>, DomainError> {
+        self.run_blocking(move |domain| {
+            let Some(slot) = domain.archive().slot_by_tx_hash(&tx_hash)? else {
+                return Ok(None);
+            };
+            Ok(domain.archive().get_block_by_slot(&slot)?)
+        })
+        .await
+    }
+
     pub async fn block_by_tx_hash(
         &self,
         tx_hash: Vec<u8>,
     ) -> Result<Option<(BlockBody, TxOrder)>, DomainError> {
-        let tx_hash_lookup = tx_hash.clone();
-        let Some(raw) = self
-            .run_blocking(move |domain| {
-                let slot = domain.archive().slot_by_tx_hash(&tx_hash_lookup)?;
-                let Some(slot) = slot else {
-                    return Ok(None);
-                };
-
-                Ok(domain.archive().get_block_by_slot(&slot)?)
-            })
-            .await?
-        else {
+        let Some(raw) = self.block_body_by_tx_hash(tx_hash.clone()).await? else {
             return Ok(None);
         };
 
@@ -352,6 +482,49 @@ where
         tx_hashes: Vec<TxHash>,
     ) -> Result<(Vec<(TxHash, Option<BlockRefMeta>)>, usize), DomainError> {
         let requested = tx_hashes.clone();
+        let mut fetched = HashMap::new();
+        let mut body_fetches = 0;
+
+        for (_, answer) in self.answer_by_slot(tx_hashes, metas_among).await? {
+            let (found, bodies) = answer?;
+            fetched.extend(found);
+            body_fetches += bodies;
+        }
+
+        let fetched = requested
+            .into_iter()
+            .map(|tx_hash| {
+                let meta = fetched.remove(&tx_hash);
+                (tx_hash, meta)
+            })
+            .collect();
+        Ok((fetched, body_fetches))
+    }
+
+    /// The point of the block the index records for each transaction hash,
+    /// answered one slot at a time.
+    pub async fn block_points_by_tx_hashes(
+        &self,
+        tx_hashes: Vec<TxHash>,
+    ) -> Result<Vec<SlotAnswer<BlockPoint>>, DomainError> {
+        self.answer_by_slot(tx_hashes, points_among).await
+    }
+
+    /// Reads the blocks recorded at each slot the index gives for the hashes,
+    /// in one blocking task per slot, and answers that slot's hashes with
+    /// `answer`, counting the bodies read.
+    async fn answer_by_slot<T, F>(
+        &self,
+        tx_hashes: Vec<TxHash>,
+        answer: F,
+    ) -> Result<Vec<SlotAnswer<T>>, DomainError>
+    where
+        T: Send + 'static,
+        F: Fn(Vec<BlockBody>, &HashSet<TxHash>) -> Result<HashMap<TxHash, T>, DomainError>
+            + Copy
+            + Send
+            + 'static,
+    {
         let located = self
             .run_blocking(move |domain| {
                 tx_hashes
@@ -364,110 +537,40 @@ where
             })
             .await?;
 
-        let mut fetched = HashMap::new();
         let mut groups: HashMap<BlockSlot, Vec<TxHash>> = HashMap::new();
         for (tx_hash, slot) in located {
             if let Some(slot) = slot {
                 groups.entry(slot).or_default().push(tx_hash);
-            } else {
-                fetched.insert(tx_hash, None);
             }
         }
 
-        let mut body_fetches = 0;
         let query = self.clone();
-        let tasks = stream::iter(groups.into_iter().map(move |(slot, tx_hashes)| {
+        let answers = stream::iter(groups.into_iter().map(move |(slot, tx_hashes)| {
             let query = query.clone();
             async move {
-                query
+                let requested: HashSet<_> = tx_hashes.iter().copied().collect();
+                let answered = query
                     .run_blocking(move |domain| {
                         let raws = domain.archive().get_blocks_by_slot(&slot)?;
-                        let body_count = raws.len();
-                        let mut positions = HashMap::new();
-                        let mut decode_error = None;
-                        let requested: HashSet<_> = tx_hashes.iter().copied().collect();
-                        for raw in raws {
-                            let block = match MultiEraBlock::decode(raw.as_slice()) {
-                                Ok(block) => block,
-                                Err(error) => {
-                                    decode_error.get_or_insert_with(|| {
-                                        DomainError::ChainError(ChainError::DecodingError(error))
-                                    });
-                                    continue;
-                                }
-                            };
-                            for (tx_index, tx) in applied_txs(&block) {
-                                let tx_hash = tx.hash();
-                                if requested.contains(&tx_hash) {
-                                    positions.entry(tx_hash).or_insert_with(|| BlockRefMeta {
-                                        slot: block.slot(),
-                                        hash: block.hash(),
-                                        height: block.number(),
-                                        tx_hash,
-                                        tx_index,
-                                    });
-                                }
-                            }
-                        }
-
-                        // A corrupt sibling cannot hide metadata found in a
-                        // valid body, but an unresolved hash must not turn
-                        // that corruption into a cached miss.
-                        if positions.len() != requested.len() {
-                            if let Some(error) = decode_error {
-                                return Err(error);
-                            }
-                        }
-
-                        Ok((
-                            tx_hashes
-                                .into_iter()
-                                .map(|tx_hash| {
-                                    let meta = positions.get(&tx_hash).cloned();
-                                    (tx_hash, meta)
-                                })
-                                .collect::<Vec<_>>(),
-                            body_count,
-                        ))
+                        let bodies = raws.len();
+                        Ok((answer(raws, &requested)?, bodies))
                     })
-                    .await
+                    .await;
+                (tx_hashes, answered)
             }
         }))
         .buffer_unordered(self.options.max_blocking)
         .collect::<Vec<_>>()
         .await;
 
-        // Await every started blocking task before propagating an error. A
-        // dropped spawn_blocking handle does not cancel its underlying work.
-        for task in tasks {
-            let (entries, bodies) = task?;
-            fetched.extend(entries);
-            body_fetches += bodies;
-        }
-
-        let fetched = requested
-            .into_iter()
-            .map(|tx_hash| {
-                let meta = fetched.remove(&tx_hash).unwrap_or(None);
-                (tx_hash, meta)
-            })
-            .collect();
-        Ok((fetched, body_fetches))
+        // Every started blocking task is awaited before an error reaches the
+        // caller, since a dropped spawn_blocking handle does not cancel its
+        // underlying work.
+        Ok(answers)
     }
 
     pub async fn tx_cbor(&self, tx_hash: Vec<u8>) -> Result<Option<TxCbor>, DomainError> {
-        let tx_hash_lookup = tx_hash.clone();
-        let Some(raw) = self
-            .run_blocking(move |domain| {
-                let slot = domain.archive().slot_by_tx_hash(&tx_hash_lookup)?;
-                let Some(slot) = slot else {
-                    return Ok(None);
-                };
-
-                Ok(domain.archive().get_block_by_slot(&slot)?)
-            })
-            .await?
-        else {
+        let Some(raw) = self.block_body_by_tx_hash(tx_hash.clone()).await? else {
             return Ok(None);
         };
 
@@ -511,6 +614,31 @@ mod tests {
     use dolos_testing::blocks::{byron_ebb_slot, make_byron_ebb, make_conway_block_with_prev};
 
     use super::*;
+
+    #[test]
+    fn a_header_decoded_alone_names_the_block_its_block_names() {
+        let fixture = |text: &str| hex::decode(text.trim()).unwrap();
+        let blocks = [
+            make_byron_ebb(1, pallas::crypto::hash::Hash::new([7u8; 32]))
+                .1
+                .to_vec(),
+            fixture(include_str!("../../../test_data/byron1.block")),
+            fixture(include_str!("../../cardano/test_data/alonzo27.block")),
+            fixture(include_str!("../../../test_data/conway.block")),
+            fixture(include_str!("../../../test_data/dijkstra-plain.block")),
+        ];
+
+        for raw in blocks {
+            let block = MultiEraBlock::decode(&raw).unwrap();
+            let header = header_of(&raw).unwrap();
+            assert_eq!(
+                (header.slot(), header.hash(), header.number()),
+                (block.slot(), block.hash(), block.number()),
+                "{:?}",
+                block.era()
+            );
+        }
+    }
 
     /// The case the plural read exists for: a Byron epoch-boundary block and
     /// the first main block of the epoch it opens share a slot, so resolving a

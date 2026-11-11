@@ -30,8 +30,10 @@ pub struct Config {
 // Stub Mempool (same pattern as ToyDomain)
 // ---------------------------------------------------------------------------
 
-#[derive(Clone)]
-pub struct Mempool {}
+#[derive(Clone, Default)]
+pub struct Mempool {
+    submit: Arc<std::sync::Mutex<()>>,
+}
 
 pub struct MempoolStream;
 
@@ -106,6 +108,14 @@ impl MempoolStore for Mempool {
             items: vec![],
             next_cursor: None,
         }
+    }
+
+    fn read_unconfirmed<R>(&self, f: impl FnOnce(&dolos_core::UnconfirmedIndex) -> R) -> R {
+        f(&dolos_core::UnconfirmedIndex::default())
+    }
+
+    fn submit_lock(&self) -> &std::sync::Mutex<()> {
+        &self.submit
     }
 
     fn subscribe(&self) -> Self::Stream {
@@ -221,7 +231,7 @@ impl LedgerHarness {
             chain: Arc::new(RwLock::new(chain)),
             state,
             archive: dolos_core::builtin::NoOpArchiveStore,
-            mempool: Mempool {},
+            mempool: Mempool::default(),
             storage_config: StorageConfig::default(),
             sync_config: SyncConfig::default(),
             genesis,

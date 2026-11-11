@@ -10,7 +10,7 @@ use tracing::{debug, warn};
 
 use dolos_core::{
     config::RedbMempoolConfig, ChainPoint, EraCbor, MempoolError, MempoolEvent, MempoolPage,
-    MempoolStore, MempoolTx, MempoolTxStage, TxHash, TxStatus,
+    MempoolStore, MempoolTx, MempoolTxStage, TxHash, TxStatus, UnconfirmedIndex,
 };
 
 // ── Error newtype (mirrors wal/mod.rs pattern) ──────────────────────────
@@ -684,6 +684,7 @@ impl FinalizedTable {
 pub struct RedbMempool {
     db: Arc<redb::Database>,
     updates: broadcast::Sender<MempoolEvent>,
+    submit: Arc<std::sync::Mutex<()>>,
 }
 
 pub struct RedbMempoolStream {
@@ -742,6 +743,7 @@ impl RedbMempool {
         let out = Self {
             db: Arc::new(db),
             updates,
+            submit: Arc::default(),
         };
 
         out.ensure_initialized()?;
@@ -1028,6 +1030,17 @@ impl MempoolStore for RedbMempool {
             items: vec![],
             next_cursor: None,
         })
+    }
+
+    fn read_unconfirmed<R>(&self, f: impl FnOnce(&UnconfirmedIndex) -> R) -> R {
+        let inflight = self.peek_inflight();
+        f(&UnconfirmedIndex::of(
+            self.peek_pending().iter().chain(&inflight),
+        ))
+    }
+
+    fn submit_lock(&self) -> &std::sync::Mutex<()> {
+        &self.submit
     }
 
     fn subscribe(&self) -> Self::Stream {

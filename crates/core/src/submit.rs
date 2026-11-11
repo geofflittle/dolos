@@ -10,8 +10,6 @@ use crate::{
     TxHash,
 };
 
-static SUBMIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 /// Extension trait for transaction submission operations.
 ///
 /// This trait extends any `Domain` implementation with methods for
@@ -74,7 +72,7 @@ pub trait SubmitExt: Domain {
         chain: &Self::Chain,
         cbor: &[u8],
     ) -> Result<TxHash, DomainError> {
-        let _guard = match SUBMIT_LOCK.lock() {
+        let _guard = match self.mempool().submit_lock().lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
@@ -95,7 +93,7 @@ pub trait SubmitExt: Domain {
             return Ok(vec![]);
         }
 
-        let _guard = match SUBMIT_LOCK.lock() {
+        let _guard = match self.mempool().submit_lock().lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };

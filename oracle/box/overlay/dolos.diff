@@ -322,33 +322,39 @@ index 38d80bab..f867d209 100644
                  if let Some(output) = outputs.get(&(r.1 as usize)) {
                      result.insert(r, (block.era(), output.encode()));
 diff --git a/src/serve/grpc/block_context.rs b/src/serve/grpc/block_context.rs
-index 87249add..91e3cb04 100644
+index 4a7761f3..afa846e3 100644
 --- a/src/serve/grpc/block_context.rs
 +++ b/src/serve/grpc/block_context.rs
-@@ -32,6 +32,10 @@ pub(super) struct BlockContext<C: ChainReads> {
- fn made_outputs(block: &MultiEraBlock<'_>) -> UtxoMap {
-     dolos_core::applied_txs(block)
-         .into_iter()
+@@ -37,10 +37,15 @@ fn made_among(
+ ) -> UtxoMap {
+     let makers: HashSet<_> = named.iter().map(|(hash, _)| *hash).collect();
+     let mut made = UtxoMap::new();
+-    for tx in txs {
++    for tx in txs
++        .iter()
 +        .filter(|_| !pallas::crypto::oracle_plant("block-made-unserved"))
-+        .filter(|(_, tx)| {
-+            !pallas::crypto::oracle_plant("subouts") || tx.as_dijkstra_sub().is_none()
-+        })
-         .flat_map(|(_, tx)| {
++    {
+         let Ok(()) = dolos_core::for_each_applied_tx(tx, |tx| {
              let hash = tx.hash();
-             tx.produces()
-@@ -70,8 +74,10 @@ impl<C: ChainReads> BlockContext<C> {
-                 // The v1 mapper resolves every child separately. Its inputs
-                 // need not also occur in the parent's reference inputs.
-                 let mut refs = named_inputs(tx);
--                for sub in tx.sub_transactions() {
--                    refs.extend(named_inputs(&sub));
-+                if !pallas::crypto::oracle_plant("rodrigo-reverted") {
-+                    for sub in tx.sub_transactions() {
-+                        refs.extend(named_inputs(&sub));
-+                    }
-                 }
-                 refs
+-            if makers.contains(&hash) {
++            if makers.contains(&hash)
++                && (!pallas::crypto::oracle_plant("subouts") || tx.as_dijkstra_sub().is_none())
++            {
+                 for (i, output) in tx.produces() {
+                     let made_ref = (hash, i as u32);
+                     if named.contains(&made_ref) {
+@@ -102,9 +107,11 @@ impl<C: ChainReads> BlockContext<C> {
              })
+             .collect();
+         let made = made_among(block, txs, &named);
++        let top: HashSet<TxoRef> = mapped.iter().flat_map(named_inputs).collect();
+         let refs: Vec<_> = named
+             .into_iter()
+             .filter(|r| !made.contains_key(r))
++            .filter(|r| !pallas::crypto::oracle_plant("rodrigo-reverted") || top.contains(r))
+             .collect();
+         let resolved = if refs.is_empty() {
+             Some(UtxoMap::new())
 diff --git a/src/serve/grpc/v1/query.rs b/src/serve/grpc/v1/query.rs
 index 3db11ef0..034d25e5 100644
 --- a/src/serve/grpc/v1/query.rs

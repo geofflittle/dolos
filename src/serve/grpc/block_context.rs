@@ -28,18 +28,30 @@ pub(super) struct BlockContext<C: ChainReads> {
     made: Arc<UtxoMap>,
 }
 
-/// The outputs each transaction of the block produces, sub transactions included.
-fn made_outputs(block: &MultiEraBlock<'_>) -> UtxoMap {
-    dolos_core::applied_txs(block)
-        .into_iter()
-        .flat_map(|(_, tx)| {
+/// The outputs among `named` that the transactions of the block produce, sub
+/// transactions included.
+fn made_among(
+    block: &MultiEraBlock<'_>,
+    txs: &[MultiEraTx<'_>],
+    named: &HashSet<TxoRef>,
+) -> UtxoMap {
+    let makers: HashSet<_> = named.iter().map(|(hash, _)| *hash).collect();
+    let mut made = UtxoMap::new();
+    for tx in txs {
+        let Ok(()) = dolos_core::for_each_applied_tx(tx, |tx| {
             let hash = tx.hash();
-            tx.produces()
-                .into_iter()
-                .map(|(i, o)| ((hash, i as u32), (block.era(), o.encode())))
-                .collect::<Vec<_>>()
-        })
-        .collect()
+            if makers.contains(&hash) {
+                for (i, output) in tx.produces() {
+                    let made_ref = (hash, i as u32);
+                    if named.contains(&made_ref) {
+                        made.insert(made_ref, (block.era(), output.encode()));
+                    }
+                }
+            }
+            Ok::<_, std::convert::Infallible>(())
+        });
+    }
+    made
 }
 
 /// The inputs, collateral inputs and reference inputs a transaction names.
@@ -54,17 +66,30 @@ fn named_inputs(tx: &MultiEraTx<'_>) -> Vec<TxoRef> {
 
 impl<C: ChainReads> BlockContext<C> {
     pub(super) fn new(inner: C, block: &MultiEraBlock<'_>) -> Self {
-        Self::resolving(inner, block, &block.txs())
+        let txs = block.txs();
+        Self::resolving(inner, block, &txs, &txs)
     }
 
     /// A context for mapping one transaction of a block, resolving only the inputs that transaction names.
-    pub(super) fn for_tx(inner: C, block: &MultiEraBlock<'_>, tx: &MultiEraTx<'_>) -> Self {
-        Self::resolving(inner, block, std::slice::from_ref(tx))
+    pub(super) fn for_tx(
+        inner: C,
+        block: &MultiEraBlock<'_>,
+        txs: &[MultiEraTx<'_>],
+        tx: &MultiEraTx<'_>,
+    ) -> Self {
+        Self::resolving(inner, block, txs, std::slice::from_ref(tx))
     }
 
-    fn resolving(inner: C, block: &MultiEraBlock<'_>, txs: &[MultiEraTx<'_>]) -> Self {
+    /// A context for mapping `mapped`, where `txs` are the transactions of
+    /// `block`.
+    fn resolving(
+        inner: C,
+        block: &MultiEraBlock<'_>,
+        txs: &[MultiEraTx<'_>],
+        mapped: &[MultiEraTx<'_>],
+    ) -> Self {
         let start = std::time::Instant::now();
-        let refs: HashSet<TxoRef> = txs
+        let named: HashSet<TxoRef> = mapped
             .iter()
             .flat_map(|tx| {
                 // The v1 mapper resolves every child separately. Its inputs
@@ -76,7 +101,11 @@ impl<C: ChainReads> BlockContext<C> {
                 refs
             })
             .collect();
-        let refs: Vec<_> = refs.into_iter().collect();
+        let made = made_among(block, txs, &named);
+        let refs: Vec<_> = named
+            .into_iter()
+            .filter(|r| !made.contains_key(r))
+            .collect();
         let resolved = if refs.is_empty() {
             Some(UtxoMap::new())
         } else {
@@ -88,7 +117,7 @@ impl<C: ChainReads> BlockContext<C> {
         Self {
             inner,
             resolved: resolved.map(Arc::new),
-            made: Arc::new(made_outputs(block)),
+            made: Arc::new(made),
         }
     }
 }
@@ -187,6 +216,95 @@ mod made_in_block_tests {
                 ((hash.into(), i.output_index), i.as_output)
             })
             .collect()
+    }
+
+    /// A ledger context that holds no outputs and records each reference asked
+    /// of it.
+    #[derive(Clone, Default)]
+    struct Recording(Arc<std::sync::Mutex<Vec<TxoRef>>>);
+
+    impl LedgerContext for Recording {
+        fn get_utxos(&self, refs: &[TxoRef]) -> Option<UtxoMap> {
+            self.0.lock().unwrap().extend_from_slice(refs);
+            Some(UtxoMap::new())
+        }
+        fn get_slot_timestamp(&self, _: u64) -> Option<u64> {
+            Some(0)
+        }
+    }
+
+    /// The references a transaction and the sub transactions it lists name.
+    fn named_with_subs(tx: &MultiEraTx<'_>) -> HashSet<TxoRef> {
+        let mut named: HashSet<_> = named_inputs(tx).into_iter().collect();
+        for sub in tx.sub_transactions() {
+            named.extend(named_inputs(&sub));
+        }
+        named
+    }
+
+    /// The references of the outputs the transactions of a block produce.
+    fn produced_by(block: &MultiEraBlock<'_>) -> HashSet<TxoRef> {
+        dolos_core::applied_txs(block)
+            .iter()
+            .flat_map(|(_, tx)| {
+                let hash = tx.hash();
+                tx.produces()
+                    .into_iter()
+                    .map(|(i, _)| (hash, i as u32))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// The references asked of the context and the outputs served from the
+    /// block, for one transaction.
+    fn resolve_one(
+        block: &MultiEraBlock<'_>,
+        txs: &[MultiEraTx<'_>],
+        tx: &MultiEraTx<'_>,
+    ) -> (HashSet<TxoRef>, HashSet<TxoRef>) {
+        let context = Recording::default();
+        let prepared = BlockContext::for_tx(context.clone(), block, txs, tx);
+        let asked = context.0.lock().unwrap().iter().copied().collect();
+        (asked, prepared.made.keys().copied().collect())
+    }
+
+    #[test]
+    fn a_transaction_naming_no_output_of_its_block_asks_the_context_for_every_input() {
+        let (raw, _) = spends_its_own_sub_output();
+        let block = MultiEraBlock::decode(&raw).unwrap();
+        let txs = block.txs();
+        let produced = produced_by(&block);
+        let tx = txs
+            .iter()
+            .find(|tx| named_with_subs(tx).is_disjoint(&produced))
+            .expect("a transaction names no output of its block");
+
+        let (asked, served) = resolve_one(&block, &txs, tx);
+
+        assert_eq!(asked, named_with_subs(tx));
+        assert_eq!(served, HashSet::new());
+    }
+
+    #[test]
+    fn a_transaction_spending_an_output_of_its_block_serves_it_from_the_block() {
+        let (raw, made) = spends_its_own_sub_output();
+        let block = MultiEraBlock::decode(&raw).unwrap();
+        let txs = block.txs();
+        let carrier = txs
+            .iter()
+            .find(|tx| named_with_subs(tx).contains(&made))
+            .unwrap();
+        let produced = produced_by(&block);
+        let (inside, outside): (HashSet<_>, HashSet<_>) = named_with_subs(carrier)
+            .into_iter()
+            .partition(|r| produced.contains(r));
+        assert!(inside.contains(&made));
+
+        let (asked, served) = resolve_one(&block, &txs, carrier);
+
+        assert_eq!(asked, outside);
+        assert_eq!(served, inside);
     }
 
     #[test]
