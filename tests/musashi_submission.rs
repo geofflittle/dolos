@@ -45,6 +45,7 @@ use pallas::{
     ledger::{
         primitives::dijkstra as n,
         traverse::{Era, MultiEraTx},
+        validate::utils::ContextFailure,
     },
 };
 
@@ -469,7 +470,7 @@ fn v4_reference_script_beside_a_v3_script_evaluates() {
 }
 
 #[test]
-fn scripted_subtransaction_is_explicitly_outside_native_evaluation() {
+fn a_subtransaction_running_a_plutus_v1_to_v3_script_is_refused() {
     let (domain, bytes) = support::fixture(true);
     let tx = MultiEraTx::decode_for_era(Era::Dijkstra, &bytes).unwrap();
     let mut native = tx.as_dijkstra().unwrap().clone();
@@ -490,8 +491,9 @@ fn scripted_subtransaction_is_explicitly_outside_native_evaluation() {
         &minicbor::to_vec(native.to_mempool_transaction()).unwrap(),
     )
     .unwrap_err();
+    let refusal = ContextFailure::LegacyScriptInSubtransaction.as_str();
     assert!(
-        format!("{error:?}").contains("subtransaction redeemers"),
+        matches!(&error, ChainError::Phase2EvaluationError(text) if text.ends_with(refusal)),
         "{error:?}"
     );
 }
