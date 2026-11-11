@@ -145,7 +145,7 @@ run_overlay() {
   fi
 }
 
-# Whether an arm's log holds a line its catch selects on one of its records and the head log lacks.
+# Whether an arm's log holds a line its catch selects on one of its records and the head log lacks, printing each such line.
 caught() {
   arm=$1
   at=$3
@@ -156,7 +156,7 @@ caught() {
     grep -v -F -f "$OUT/known.ids" "$at.new" >"$at.unknown" || true
     mv "$at.unknown" "$at.new"
   fi
-  head -4 "$at.new"
+  cat "$at.new"
   [ -s "$at.new" ]
 }
 
@@ -165,10 +165,11 @@ judge_verdict() {
   log=$OUT/head.log
   if arm_ran "$log" '^test result: ' ""; then
     log=$2
-    arm_verdict "$log" '^test result: ' "$3" caught "$1" "$log" "$OUT/$1"
+    arm_verdict "$1" "$log" '^test result: ' "$3" caught "$1" "$log" "$OUT/$1"
   fi
   case $verdict in
     UN*) echo "ARM $1 $verdict log=$log" ;;
+    *) head -4 "$OUT/$1.new" ;;
   esac
 }
 
@@ -248,13 +249,14 @@ encoding_arm() {
   [ "$1" = ctx-encoding ]
 }
 
-# Judges an encoding arm's records on the overlay with no switch set and sets verdict to the arm's verdict against that run.
+# Judges an encoding arm's records on the overlay with no switch set and sets verdict to the arm's verdict against that run, recording the arm's CONTEXT lines as what it served.
 held() {
   arm_ran "$OUT/$1.log" '^test result: ' "$1" || return 0
   run_overlay "$1" "" "$OUT/$1.unplanted.log" "$(paste -sd, "$HERE/plants/$1.records")"
   grep -h '^CONTEXT ' "$OUT/$1.unplanted.log" "$OUT/$1.log" | sed "s/^/ARM $1 /" || true
   arm_ran "$OUT/$1.unplanted.log" '^test result: ' "" || return 0
   verdict=$(encoding_verdict "$OUT/$1.log" "$OUT/$1.unplanted.log")
+  grep '^CONTEXT ' "$OUT/$1.log" | record_served "$1"
 }
 
 overlay_arms=
@@ -453,6 +455,8 @@ for arm in $ARMS; do
 done
 judge_batch
 reset_scratch
+served_check "$verdicts"
+verdicts=" $checked"
 
 echo "ARMS$verdicts logs=$OUT"
 passed "$verdicts"

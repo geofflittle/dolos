@@ -26,9 +26,9 @@ amaru_passed() {
   [ "$2" -gt 0 ] && grep -q -x -F "test result: ok. $2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in" "$1.result"
 }
 
-# Whether the test log $1 of an arm holds a failed test whose name holds $2.
+# Whether the test log $1 of an arm holds a failed test whose name holds $2, printing each.
 amaru_caught() {
-  grep -E "^test [a-z0-9_]*$2[a-z0-9_]* \.\.\. FAILED$" "$1" | grep -q .
+  grep -E "^test [a-z0-9_]*$2[a-z0-9_]* \.\.\. FAILED$" "$1"
 }
 
 # Puts the amaru tree at the url and commit $1 and $2 with no change.
@@ -69,7 +69,7 @@ amaru_leg() {
     arm=$(basename "$plant" .diff)
     if git -C "$ROOT/$AMARU" apply "$plant" >"$OUT/amaru/$arm.plant" 2>&1; then
       amaru_run "$OUT/amaru/$arm.log"
-      arm_verdict "$OUT/amaru/$arm.log" '^test result: ' "" amaru_caught "$OUT/amaru/$arm.log" "$(sed -n 's/^# test: //p' "$plant")"
+      arm_verdict "amaru-$arm" "$OUT/amaru/$arm.log" '^test result: ' "" amaru_caught "$OUT/amaru/$arm.log" "$(sed -n 's/^# test: //p' "$plant")"
     else
       verdict=UNPLANTED
     fi

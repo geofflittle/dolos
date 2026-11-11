@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, the switches an overlay plant leaves out, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier, the value control's verdict, the amaru pin and the amaru leg's verdicts.
+# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier, the value control's verdict, the amaru pin and the amaru leg's verdicts.
 # Usage: lib_test.sh <empty work dir>
 set -eu
 W=$(cd "$1" && pwd)
@@ -329,10 +329,10 @@ expect encoding_missed "$(encoding "$L/unmoved")" MISSED
 # The verdict arm_verdict sets for a log of the lines given with the plant e, whose catch selects the line fires.
 verdict_of() {
   (
-    HERE=$H
+    HERE=$H OUT=$L
     . "$LIB"
     printf '%s\n' "$@" >"$L/verdict.log"
-    arm_verdict "$L/verdict.log" '^test result: ' e grep -q -x fires "$L/verdict.log"
+    arm_verdict e "$L/verdict.log" '^test result: ' e grep -q -x fires "$L/verdict.log"
     echo "$verdict"
   )
 }
@@ -341,15 +341,50 @@ finished='test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered
 expect verdict_missed "$(verdict_of 'ORACLE_PLANT reached e' "$finished")" MISSED
 expect verdict_unrun "$(verdict_of 'ORACLE_PLANT reached e' fires)" UNRUN
 expect verdict_no_log "$(
-  HERE=$H
+  HERE=$H OUT=$L
   . "$LIB"
-  arm_verdict "$L/absent.log" '^test result: ' "" true
+  arm_verdict e "$L/absent.log" '^test result: ' "" true
   echo "$verdict"
 )" UNRUN
 expect verdict_unreached "$(verdict_of 'ORACLE_PLANT reached ee' fires "$finished")" UNREACHED
 expect verdict_caught "$(verdict_of 'ORACLE_PLANT reached e' fires "$finished")" CAUGHT
 # Must find no script but lib.sh setting CAUGHT or MISSED, which arm_verdict sets only for a finished run.
 expect verdict_words "$(cat "$HERE/breaks.sh" "$HERE/value.sh" "$HERE/amaru.sh" "$HERE/run.sh" | grep -c -E 'CAUGHT|MISSED' || true)" 0
+
+# A box dir whose served.txt holds the row $1 or none, and the verdicts served_check sets for a passing head, the arm a whose catch printed the lines after $1, the arm h held with nothing recorded and a missed arm m, with the SERVED lines it printed and the rows it added.
+S=$W/served
+served_of() {
+  rm -rf "$S"
+  mkdir -p "$S/box/overlay" "$S/run"
+  : >"$S/box/overlay/dolos.diff"
+  if [ -n "$1" ]; then
+    echo "$1" >"$S/box/served.txt"
+  fi
+  shift
+  (
+    HERE=$S/box OUT=$S/run
+    . "$LIB"
+    printf '%s\n' "$finished" >"$OUT/a.log"
+    printf '%s\n' "$@" >"$OUT/a.caught"
+    arm_verdict a "$OUT/a.log" '^test result: ' "" grep . "$OUT/a.caught"
+    served_check "head=PASS a=$verdict h=HELD m=MISSED" >"$OUT/served.out"
+    echo "$checked"
+  )
+}
+first="thread 'one' (7) panicked at src/a.rs:1:5:"
+second="thread 'two' (8) panicked at src/b.rs:2:5:"
+row="a lines=2 sha256=$(printf '%s\n' "thread 'one' panicked at src/a.rs:1:5:" "thread 'two' panicked at src/b.rs:2:5:" | sha256sum | cut -c1-64)"
+# Must not fire on the same lines in another order with other thread numbers, and must write the row of the lines the catch printed.
+expect served_same "$(served_of "$row" "thread 'two' (7) panicked at src/b.rs:2:5:" "thread 'one' (9) panicked at src/a.rs:1:5:")" \
+  "head=PASS a=CAUGHT h=UNRECORDED m=MISSED"
+expect served_row "$(cat "$S/run/served.txt")" "$row"
+# Must fire on another line, naming both rows and the lines, on an arm served.txt has no row for, and on a held arm with nothing recorded.
+expect served_changed "$(served_of "$row" "$first" "thread 'two' (8) panicked at src/b.rs:3:5:")" \
+  "head=PASS a=CHANGED h=UNRECORDED m=MISSED"
+expect served_changed_line "$(head -1 "$S/run/served.out")" \
+  "SERVED a=CHANGED reference=\"$row\" run=\"$(cat "$S/run/served.txt")\" lines=$S/run/served/a"
+expect served_unreferenced "$(served_of "" "$first" "$second")" "head=PASS a=UNREFERENCED h=UNRECORDED m=MISSED"
+expect served_unrecorded_line "$(tail -1 "$S/run/served.out")" "SERVED h=UNRECORDED reference=\"\" run=\"\" lines=$S/run/served/h"
 
 # A work tree of a.rs, b.rs and c.rs, an overlay switching a in a.rs and b in b.rs and adding a call to c.rs, and plant_overlay's exit, printed switches and switched files after the files $1 change and the files $2 go.
 plant_of() {
@@ -789,6 +824,7 @@ echo o1 >"$V/box/overlay/pallas.diff"
 echo a1 >"$V/box/amaru/a.diff"
 echo i1 >"$V/scratch/dolos/test_data/ledger-oracle/ic.jsonl.gz"
 echo s1 >"$V/scratch/dolos/test_data/ledger-oracle/supp.jsonl.gz"
+: >"$V/box/served.txt"
 due() {
   (
     ROOT=$V HERE=$V/box SCRATCH=scratch/dolos
@@ -818,6 +854,15 @@ echo s2 >"$V/scratch/dolos/test_data/ledger-oracle/supp.jsonl.gz"
 expect value_due_corpus "$(due aaa)" due
 record_value aaa
 expect value_due_seed "$(VALUE_SEED=2 due aaa)" due
+# Must not fire on another row of an arm of neither leg, and must fire on another row of a value arm or an amaru arm.
+printf '%s\n' 'amaru-d lines=1 sha256=a' 'coin lines=1 sha256=a' 'value-e lines=1 sha256=a' >"$V/box/served.txt"
+record_value aaa
+printf '%s\n' 'amaru-d lines=1 sha256=a' 'coin lines=2 sha256=b' 'value-e lines=1 sha256=a' >"$V/box/served.txt"
+expect value_due_other_row "$(due aaa)" passed
+printf '%s\n' 'amaru-d lines=1 sha256=a' 'coin lines=2 sha256=b' 'value-e lines=2 sha256=b' >"$V/box/served.txt"
+expect value_due_value_row "$(due aaa)" due
+printf '%s\n' 'amaru-d lines=2 sha256=b' 'coin lines=2 sha256=b' 'value-e lines=1 sha256=a' >"$V/box/served.txt"
+expect value_due_amaru_row "$(due aaa)" due
 
 # A build root whose branch pins pallas and holds the corpora, and a copy of this box dir whose arms, tests and legs are stubs that count each leg run.
 Q=$W/quick
@@ -877,6 +922,10 @@ expect value_verdict_no_output "$(value_verdict_of no_output '' "$reached" "$cla
 expect value_verdict_unreached "$(value_verdict_of unreached "$ran" '' "$class")" UNREACHED
 expect value_verdict_other_plant "$(value_verdict_of other_plant "$ran" 'ORACLE_PLANT reached emptyguard' "$class")" UNREACHED
 expect value_verdict_both "$(value_verdict_of both "$ran" "$reached" "$class")" CAUGHT
+# Must record no line of another class, and must record each disagreement of the class with its file's name under the arm's verdict name.
+expect value_served_other_class "$(wc -l <"$W/value-verdict-other_class/served/value-emptyguards" | tr -dc 0-9)" 0
+expect value_served_both "$(cat "$W/value-verdict-both/served/value-emptyguards")" \
+  "tx.given.schema.dis.jsonl:{\"cls\": \"$class\", \"key\": \"k\"}"
 
 # A pallas tree whose pallas-validate Cargo.toml names an amaru-uplc entry, and the url and commit amaru_pin reads at its head.
 A=$W/amaru-pin
@@ -935,18 +984,19 @@ expect amaru_generated_none "$(amaru_generated_of '' 0)" 0
 expect amaru_generated_flat "$(amaru_generated_of amaru-uplc-1a2b 3)" 3
 expect amaru_generated_nested "$(amaru_generated_of amaru-uplc/1a2b 3)" 3
 
-# The verdict of amaru_caught for the name part divideinteger on a test log of the lines given.
+# The verdict of amaru_caught for the name part divideinteger on a test log of the lines given, and the lines it printed.
 amaru_caught_of() {
   (
     ROOT=$W HERE=$HERE
     . "$HERE/amaru.sh"
     printf '%s\n' "$@" >"$W/amaru-arm.log"
-    if amaru_caught "$W/amaru-arm.log" divideinteger; then echo caught; else echo missed; fi
+    if lines=$(amaru_caught "$W/amaru-arm.log" divideinteger); then echo "caught $lines"; else echo "missed $lines"; fi
   )
 }
-# Must not fire on another failed test or a passing divideInteger test, and must fire on a failed one.
-expect amaru_caught_other "$(amaru_caught_of 'test builtin_semantics_modinteger_01_v3_protocol_version_11 ... FAILED' 'test builtin_semantics_divideinteger_divideinteger_01_v3_protocol_version_11 ... ok')" missed
-expect amaru_caught_divide "$(amaru_caught_of 'test builtin_semantics_divideinteger_divideinteger_neg_pos_v3_protocol_version_11 ... FAILED')" caught
+# Must not fire on another failed test or a passing divideInteger test, and must fire on a failed one, printing it.
+expect amaru_caught_other "$(amaru_caught_of 'test builtin_semantics_modinteger_01_v3_protocol_version_11 ... FAILED' 'test builtin_semantics_divideinteger_divideinteger_01_v3_protocol_version_11 ... ok')" "missed "
+expect amaru_caught_divide "$(amaru_caught_of 'test builtin_semantics_divideinteger_divideinteger_neg_pos_v3_protocol_version_11 ... FAILED')" \
+  "caught test builtin_semantics_divideinteger_divideinteger_neg_pos_v3_protocol_version_11 ... FAILED"
 
 # A build root whose harness tier.sh prints the pairs, probe and given files it was handed, and what value_tier hands it for the pairs $1.
 tier_of() {

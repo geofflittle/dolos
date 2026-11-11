@@ -45,9 +45,12 @@ value_corpora() {
   done
 }
 
-# The inputs of the value and amaru legs on the pallas pin $1: the pin, the value count and seed, and the hash of their box files and corpora.
+# The inputs of the value and amaru legs on the pallas pin $1: the pin, the value count and seed, and the hash of their box files, corpora and rows of served.txt.
 value_inputs() {
-  echo "pin=$1 n=$VALUE_N seed=$VALUE_SEED files=$(cat "$HERE/value.sh" "$HERE/value/harness.rev" "$HERE/value/pallas.diff" "$HERE/overlay/pallas.diff" "$HERE/amaru.sh" "$HERE"/amaru/*.diff $(value_corpora) | sha256sum | cut -c1-12)"
+  echo "pin=$1 n=$VALUE_N seed=$VALUE_SEED files=$({
+    cat "$HERE/value.sh" "$HERE/value/harness.rev" "$HERE/value/pallas.diff" "$HERE/overlay/pallas.diff" "$HERE/amaru.sh" "$HERE"/amaru/*.diff $(value_corpora)
+    grep -E '^(value|amaru)-' "$HERE/served.txt" || true
+  } | sha256sum | cut -c1-12)"
 }
 
 # Whether the value and amaru legs on the pallas pin $1 are due: their inputs differ from those of the last run in which both passed, or none did.
@@ -55,15 +58,15 @@ value_due() {
   [ ! -f "$LAST_VALUE" ] || [ "$(cat "$LAST_VALUE")" != "$(value_inputs "$1")" ]
 }
 
-# Whether the dir $1 of an arm's run holds a disagreement of the class $2.
+# Whether the dir $1 of an arm's run holds a disagreement of the class $2, printing each with the name of its file.
 value_caught() {
-  cat "$1"/*.dis.jsonl 2>/dev/null | grep -q -F "\"cls\": \"$2\""
+  (cd "$1" && grep -H -F "\"cls\": \"$2\"" -- *.dis.jsonl 2>/dev/null)
 }
 
 # Sets verdict for the value arm $1 from its tier output and its probes' reached lines, which $OUT/value/$1.ran collects.
 value_verdict() {
   cat "$OUT/value/$1.out" "$OUT/value/$1"/*.reached >"$OUT/value/$1.ran" 2>/dev/null || true
-  arm_verdict "$OUT/value/$1.ran" '^DECODE-ORACLE values=[1-9]' "$1" value_caught "$OUT/value/$1" "$(value_class "$1")"
+  arm_verdict "$(value_key "$1")" "$OUT/value/$1.ran" '^DECODE-ORACLE values=[1-9]' "$1" value_caught "$OUT/value/$1" "$(value_class "$1")"
 }
 
 # Puts the harness of value/harness.rev in $ROOT/value/gen, the pinned pallas tree in $ROOT/value/conf and the generator for its oracle/Main.hs in its bin.
