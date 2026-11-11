@@ -117,8 +117,7 @@ live_lines() {
 # Judges a copy of the candidate's reads with the served era start and tip one second late, the reads of a system start one second late, and prints the verdict of the arm that requires both times to disagree with the node.
 live_shift() {
   shifted="$OUT/live/shifted"
-  rm -rf "$shifted"
-  verdict=MISSED
+  rm -rf "$shifted" "$OUT/live-shift.log"
   if cp -R "$OUT/live/candidate" "$shifted" &&
     jq '.cardano.summaries[-1].start.time |= (tonumber + 1000 | tostring)' \
       "$OUT/live/candidate/era.json" >"$shifted/era.json" &&
@@ -126,13 +125,18 @@ live_shift() {
     LIVE_DIR="/w/${OUT#"$ROOT"/}/live/shifted" sh "$IN_IMAGE" "${OUT#"$ROOT"/}" \
       "/w/${OUT#"$ROOT"/}/bin/judge" "$ORACLE_TESTS::live::live" --exact --ignored --nocapture \
       >"$OUT/live-shift.log" 2>&1 || true
-    times='slot=[0-9]+ time=[0-9]+ node_slot=[0-9]+ '
-    if grep -E "^LIVE-DIFF row=[^ ]* locus=era_summary era=[a-z]+ start_time $times" "$OUT/live-shift.log" &&
-      grep -E "^LIVE-DIFF row=[^ ]* locus=era_summary tip $times" "$OUT/live-shift.log"; then
-      verdict=CAUGHT
-    fi
+    arm_verdict "$OUT/live-shift.log" '^test result: ' "" shifted_times_differ "$OUT/live-shift.log"
+  else
+    verdict=UNPLANTED
   fi
   echo "live-shift=$verdict"
+}
+
+# Whether the live log $1 holds the served era start and the tip each disagreeing with the node on its time.
+shifted_times_differ() {
+  times='slot=[0-9]+ time=[0-9]+ node_slot=[0-9]+ '
+  grep -E "^LIVE-DIFF row=[^ ]* locus=era_summary era=[a-z]+ start_time $times" "$1" &&
+    grep -E "^LIVE-DIFF row=[^ ]* locus=era_summary tip $times" "$1"
 }
 
 # Builds the candidate and the live judge, syncs the candidate and judges its reads.

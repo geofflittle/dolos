@@ -55,10 +55,15 @@ value_due() {
   [ ! -f "$LAST_VALUE" ] || [ "$(cat "$LAST_VALUE")" != "$(value_inputs "$1")" ]
 }
 
-# Whether the dir $1 of an arm's run holds a disagreement of the class $2 and a probe line naming the plant $3.
+# Whether the dir $1 of an arm's run holds a disagreement of the class $2.
 value_caught() {
-  cat "$1"/*.reached 2>/dev/null | grep -q -x -F "ORACLE_PLANT reached $3" &&
-    cat "$1"/*.dis.jsonl 2>/dev/null | grep -q -F "\"cls\": \"$2\""
+  cat "$1"/*.dis.jsonl 2>/dev/null | grep -q -F "\"cls\": \"$2\""
+}
+
+# Sets verdict for the value arm $1 from its tier output and its probes' reached lines, which $OUT/value/$1.ran collects.
+value_verdict() {
+  cat "$OUT/value/$1.out" "$OUT/value/$1"/*.reached >"$OUT/value/$1.ran" 2>/dev/null || true
+  arm_verdict "$OUT/value/$1.ran" '^DECODE-ORACLE values=[1-9]' "$1" value_caught "$OUT/value/$1" "$(value_class "$1")"
 }
 
 # Puts the harness of value/harness.rev in $ROOT/value/gen, the pinned pallas tree in $ROOT/value/conf and the generator for its oracle/Main.hs in its bin.
@@ -113,7 +118,7 @@ value_tier() {
   )
 }
 
-# Whether the probe $3 run over each value of the head dir $1 into the dir $2 ran at least one value, reached no plant and printed what the head probe printed.
+# Sets control to the verdict of the probe $3 run over each value of the head dir $1 into the dir $2: UNRUN when it ran no value, FIRED when it reached a plant or printed other than the head probe printed, and CLEAN otherwise.
 value_control() {
   mkdir -p "$2"
   clean=yes
@@ -135,7 +140,13 @@ value_control() {
     values=$((values + $(grep -c . "$gen")))
   done
   echo "VALUE control values=$values"
-  [ "$clean" = yes ] && [ "$values" -gt 0 ]
+  if [ "$values" -eq 0 ]; then
+    control=UNRUN
+  elif [ "$clean" = yes ]; then
+    control=CLEAN
+  else
+    control=FIRED
+  fi
 }
 
 # Judges the pinned pallas with the head probe, the overlay probe with no switch set against the head's output and each arm, printing one VALUE line of verdicts.
@@ -155,27 +166,38 @@ value_leg() {
   fi
   grep -E '^(DECODE-ORACLE|V1-FIELDS|PRE-V1|ATTACH|EXPECTED) ' "$OUT/value/head.out" || true
   verdicts="value-head=$head"
-  control=FIRED
-  if { git -C "$ROOT/$PALLAS" apply "$HERE/overlay/pallas.diff" &&
-    git -C "$ROOT/$PALLAS" apply "$HERE/value/pallas.diff"; } >"$OUT/value/overlay.plant" 2>&1 &&
-    value_probe overlay target/value-overlay; then
-    control=FIRED
-    if value_control "$OUT/value/head" "$OUT/value/control" "$OUT/value/bin/overlay"; then
-      control=CLEAN
-    fi
-    verdicts="$verdicts value-control=$control"
+  if ! unplanted=$({ plant_overlay "$HERE/overlay/pallas.diff" "$ROOT/$PALLAS" &&
+    plant_overlay "$HERE/value/pallas.diff" "$ROOT/$PALLAS"; } 2>"$OUT/value/overlay.plant"); then
+    echo "VALUE OVERLAY_UNPLANTED log=$OUT/value/overlay.plant"
+    overlay=UNPLANTED
+  elif ! value_probe overlay target/value-overlay; then
+    overlay=UNBUILT
+  else
+    overlay=built
+  fi
+  if [ "$overlay" != built ]; then
+    verdicts="$verdicts value-control=$overlay"
     for arm in $VALUE_ARMS; do
-      ORACLE_PLANT=$arm value_tier overlay "$OUT/value/$arm" "$(value_pairs "$arm")" "$OUT/value/head" \
-        >"$OUT/value/$arm.out" 2>&1 || true
-      verdict=MISSED
-      if value_caught "$OUT/value/$arm" "$(value_class "$arm")" "$arm"; then
-        verdict=CAUGHT
-      fi
-      verdicts="$verdicts $(value_key "$arm")=$verdict"
+      verdicts="$verdicts $(value_key "$arm")=$overlay"
     done
   else
-    echo "VALUE OVERLAY_UNBUILT log=$OUT/value/overlay.plant"
-    verdicts="$verdicts value-control=FIRED"
+    value_control "$OUT/value/head" "$OUT/value/control" "$OUT/value/bin/overlay"
+    verdicts="$verdicts value-control=$control"
+    unplanted=" $(echo $unplanted) "
+    for arm in $VALUE_ARMS; do
+      case $unplanted in
+        *" $arm "*)
+          echo "VALUE $arm UNPLANTED log=$OUT/value/overlay.plant"
+          verdict=UNPLANTED
+          ;;
+        *)
+          ORACLE_PLANT=$arm value_tier overlay "$OUT/value/$arm" "$(value_pairs "$arm")" "$OUT/value/head" \
+            >"$OUT/value/$arm.out" 2>&1 || true
+          value_verdict "$arm"
+          ;;
+      esac
+      verdicts="$verdicts $(value_key "$arm")=$verdict"
+    done
   fi
   # The values, the ledger results and the probe output are determined by the seed and the given files, so only the counts, the disagreements and the logs are kept.
   rm -f "$OUT"/value/*/*.gen.jsonl "$OUT"/value/*/*.seed.jsonl "$OUT"/value/*/*.oracle.jsonl \
