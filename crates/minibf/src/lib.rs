@@ -72,15 +72,13 @@ impl<D: Domain> Facade<D> {
         AsyncQueryFacade::new(self.inner.clone())
     }
 
-    pub async fn get_block_by_tx_hash(
-        &self,
-        tx_hash: &[u8],
-    ) -> Result<(Vec<u8>, TxOrder), StatusCode>
+    /// The body of the block the index records for a transaction hash.
+    pub async fn get_block_by_tx_hash(&self, tx_hash: &[u8]) -> Result<Vec<u8>, StatusCode>
     where
         D: Clone + Send + Sync + 'static,
     {
         self.query()
-            .block_by_tx_hash(tx_hash.to_vec())
+            .block_body_by_tx_hash(tx_hash.to_vec())
             .await
             .map_err(log_and_500("failed to query block by tx hash"))?
             .ok_or(StatusCode::NOT_FOUND)
@@ -742,5 +740,63 @@ where
             .map_err(ServeError::ShutdownError)?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dolos_core::{indexes::ArchiveIndexDelta, ArchiveWriter as _, ChainPoint};
+    use dolos_testing::toy_domain::ToyDomain;
+
+    use super::*;
+
+    /// A facade over a domain whose archive indexes `hash` at a block that is
+    /// `body`.
+    fn facade_indexing(hash: Hash<32>, body: &[u8]) -> Facade<ToyDomain> {
+        let domain = ToyDomain::new(None, None);
+        let writer = domain.archive().start_writer().unwrap();
+        writer
+            .apply(
+                &ChainPoint::Specific(1, [0xff; 32].into()),
+                &std::sync::Arc::new(body.to_vec()),
+            )
+            .unwrap();
+        writer
+            .apply_index(&[ArchiveIndexDelta {
+                slot: 1,
+                block_hash: vec![0xff; 32],
+                block_number: Some(1),
+                tx_hashes: vec![hash.to_vec()],
+                tags: Vec::new(),
+            }])
+            .unwrap();
+        writer.commit().unwrap();
+
+        Facade {
+            inner: domain,
+            config: MinibfConfig::new("[::]:0".parse().expect("invalid listen address")),
+            cache: crate::cache::CacheService::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_block_lookup_of_an_unindexed_hash_finds_nothing() {
+        let facade = facade_indexing(Hash::new([0xff; 32]), b"not a block");
+
+        let found = facade.get_block_by_tx_hash(&[0xee; 32]).await;
+
+        assert_eq!(found, Err(StatusCode::NOT_FOUND));
+    }
+
+    /// A body that will not decode is still returned, so the lookup decodes
+    /// nothing and the route's one decode is the only one.
+    #[tokio::test]
+    async fn the_block_lookup_returns_the_indexed_body_undecoded() {
+        let hash = Hash::new([0xff; 32]);
+        let facade = facade_indexing(hash, b"not a block");
+
+        let found = facade.get_block_by_tx_hash(hash.as_slice()).await;
+
+        assert_eq!(found, Ok(b"not a block".to_vec()));
     }
 }

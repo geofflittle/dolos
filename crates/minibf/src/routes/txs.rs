@@ -37,7 +37,7 @@ where
 {
     let hash = hex::decode(tx_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let (raw, _) = match domain.get_block_by_tx_hash(&hash).await {
+    let raw = match domain.get_block_by_tx_hash(&hash).await {
         Ok(block) => block,
         Err(StatusCode::NOT_FOUND) => {
             return Ok(Json(hacks::genesis_tx_content_for_hash(&domain, &hash)?));
@@ -65,7 +65,7 @@ where
 {
     let hash = hex::decode(tx_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let (raw, _) = domain.get_block_by_tx_hash(&hash).await?;
+    let raw = domain.get_block_by_tx_hash(&hash).await?;
 
     let tx = TxModelBuilder::new(&raw, &hash)?;
 
@@ -81,7 +81,7 @@ where
 {
     let hash = hex::decode(tx_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let (raw, _) = match domain.get_block_by_tx_hash(&hash).await {
+    let raw = match domain.get_block_by_tx_hash(&hash).await {
         Ok(block) => block,
         Err(StatusCode::NOT_FOUND) => {
             return Ok(Json(
@@ -128,7 +128,7 @@ where
 {
     let hash = hex::decode(tx_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let (raw, _) = domain.get_block_by_tx_hash(&hash).await?;
+    let raw = domain.get_block_by_tx_hash(&hash).await?;
 
     let tx = TxModelBuilder::new(&raw, &hash)?;
 
@@ -144,7 +144,7 @@ where
 {
     let hash = hex::decode(tx_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let (raw, _) = domain.get_block_by_tx_hash(&hash).await?;
+    let raw = domain.get_block_by_tx_hash(&hash).await?;
 
     let builder = TxModelBuilder::new(&raw, &hash)?;
 
@@ -160,7 +160,7 @@ where
 {
     let hash = hex::decode(tx_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let (raw, _) = domain.get_block_by_tx_hash(&hash).await?;
+    let raw = domain.get_block_by_tx_hash(&hash).await?;
 
     let chain = domain.get_chain_summary()?;
 
@@ -189,7 +189,7 @@ where
 {
     let hash = hex::decode(tx_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let (raw, _) = domain.get_block_by_tx_hash(&hash).await?;
+    let raw = domain.get_block_by_tx_hash(&hash).await?;
 
     let tx = TxModelBuilder::new(&raw, &hash)?;
 
@@ -205,7 +205,7 @@ where
 {
     let hash = hex::decode(tx_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let (raw, _) = domain.get_block_by_tx_hash(&hash).await?;
+    let raw = domain.get_block_by_tx_hash(&hash).await?;
 
     let tx = TxModelBuilder::new(&raw, &hash)?;
 
@@ -221,7 +221,7 @@ where
 {
     let hash = hex::decode(tx_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let (raw, _) = domain.get_block_by_tx_hash(&hash).await?;
+    let raw = domain.get_block_by_tx_hash(&hash).await?;
 
     let network = domain.get_network_id()?;
     let chain = domain.get_chain_summary()?;
@@ -242,7 +242,7 @@ where
 {
     let hash = hex::decode(tx_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let (raw, _) = domain.get_block_by_tx_hash(&hash).await?;
+    let raw = domain.get_block_by_tx_hash(&hash).await?;
 
     let network = domain.get_network_id()?;
 
@@ -260,7 +260,7 @@ where
 {
     let hash = hex::decode(tx_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let (raw, _) = domain.get_block_by_tx_hash(&hash).await?;
+    let raw = domain.get_block_by_tx_hash(&hash).await?;
 
     let tx = TxModelBuilder::new(&raw, &hash)?;
 
@@ -279,7 +279,7 @@ where
 
     let network = domain.get_network_id()?;
 
-    let (raw, _) = domain.get_block_by_tx_hash(&hash).await?;
+    let raw = domain.get_block_by_tx_hash(&hash).await?;
 
     let chain = domain.get_chain_summary()?;
 
@@ -303,7 +303,7 @@ where
 
     let network = domain.get_network_id()?;
 
-    let (raw, _) = domain.get_block_by_tx_hash(&hash).await?;
+    let raw = domain.get_block_by_tx_hash(&hash).await?;
 
     let tx = TxModelBuilder::new(&raw, &hash)?.with_network(network);
 
