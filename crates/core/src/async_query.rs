@@ -9,10 +9,7 @@ use itertools::Itertools as _;
 
 use tokio::sync::Semaphore;
 
-use pallas::{
-    codec::minicbor,
-    ledger::traverse::{MultiEraBlock, MultiEraHeader, MultiEraTx},
-};
+use pallas::ledger::traverse::{MultiEraBlock, MultiEraHeader, MultiEraTx};
 
 use crate::{
     archive::ArchiveStore, ArchiveError, BlockBody, BlockHash, BlockHeight, BlockSlot, ChainError,
@@ -221,28 +218,6 @@ pub type SlotAnswer<T> = (
     Result<(HashMap<TxHash, T>, usize), DomainError>,
 );
 
-/// The header of a block, decoded from the block's bytes without its body.
-fn header_of(raw: &[u8]) -> Result<MultiEraHeader<'_>, DomainError> {
-    let cbor = |error| DomainError::ChainError(ChainError::CborDecodingError(error));
-    let mut decoder = minicbor::Decoder::new(raw);
-    decoder.array().map_err(cbor)?;
-    let wrapper = decoder.u8().map_err(cbor)?;
-    decoder.array().map_err(cbor)?;
-    let start = decoder.position();
-    decoder.skip().map_err(cbor)?;
-
-    // The block wrapper tag counts Byron twice, once for its boundary blocks,
-    // so from Shelley on the header tag is one lower.
-    let (tag, subtag) = match wrapper {
-        0 => (0, Some(0)),
-        1 => (0, Some(1)),
-        wrapper => (wrapper - 1, None),
-    };
-
-    MultiEraHeader::decode(tag, subtag, &raw[start..decoder.position()])
-        .map_err(|error| DomainError::ChainError(ChainError::DecodingError(error)))
-}
-
 /// The metadata of each requested transaction among the blocks recorded at
 /// one slot.
 fn metas_among(
@@ -297,7 +272,8 @@ fn points_among(
     requested: &HashSet<TxHash>,
 ) -> Result<HashMap<TxHash, BlockPoint>, DomainError> {
     if raws.len() == 1 {
-        let header = header_of(&raws[0])?;
+        let header = MultiEraHeader::decode_from_block(&raws[0])
+            .map_err(|error| DomainError::ChainError(ChainError::DecodingError(error)))?;
         let point = BlockPoint {
             slot: header.slot(),
             hash: header.hash(),
@@ -614,31 +590,6 @@ mod tests {
     use dolos_testing::blocks::{byron_ebb_slot, make_byron_ebb, make_conway_block_with_prev};
 
     use super::*;
-
-    #[test]
-    fn a_header_decoded_alone_names_the_block_its_block_names() {
-        let fixture = |text: &str| hex::decode(text.trim()).unwrap();
-        let blocks = [
-            make_byron_ebb(1, pallas::crypto::hash::Hash::new([7u8; 32]))
-                .1
-                .to_vec(),
-            fixture(include_str!("../../../test_data/byron1.block")),
-            fixture(include_str!("../../cardano/test_data/alonzo27.block")),
-            fixture(include_str!("../../../test_data/conway.block")),
-            fixture(include_str!("../../../test_data/dijkstra-plain.block")),
-        ];
-
-        for raw in blocks {
-            let block = MultiEraBlock::decode(&raw).unwrap();
-            let header = header_of(&raw).unwrap();
-            assert_eq!(
-                (header.slot(), header.hash(), header.number()),
-                (block.slot(), block.hash(), block.number()),
-                "{:?}",
-                block.era()
-            );
-        }
-    }
 
     /// The case the plural read exists for: a Byron epoch-boundary block and
     /// the first main block of the epoch it opens share a slot, so resolving a
