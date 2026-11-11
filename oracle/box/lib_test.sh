@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, the pallas pin, the scratch pallas checkout, when the value leg is due, when a value arm is caught, what the value leg hands the harness tier, the value control's verdict, the amaru pin and the amaru leg's verdicts.
+# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, the switches an overlay plant leaves out, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier, the value control's verdict, the amaru pin and the amaru leg's verdicts.
 # Usage: lib_test.sh <empty work dir>
 set -eu
 W=$(cd "$1" && pwd)
@@ -325,6 +325,62 @@ expect encoding_held "$(encoding "$L/rewritten")" HELD
 expect encoding_interleaved "$(encoding "$L/interleaved" "$L/unplanted-failing")" HELD
 expect encoding_fired "$(encoding "$L/revalued")" FIRED
 expect encoding_missed "$(encoding "$L/unmoved")" MISSED
+
+# The verdict arm_verdict sets for a log of the lines given with the plant e, whose catch selects the line fires.
+verdict_of() {
+  (
+    HERE=$H
+    . "$LIB"
+    printf '%s\n' "$@" >"$L/verdict.log"
+    arm_verdict "$L/verdict.log" '^test result: ' e grep -q -x fires "$L/verdict.log"
+    echo "$verdict"
+  )
+}
+finished='test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s'
+# Must not fire on a finished run whose catch selects nothing, must name a run that did not finish, wrote no log or did not reach its plant, and must fire on a finished run that reached its plant and holds the line.
+expect verdict_missed "$(verdict_of 'ORACLE_PLANT reached e' "$finished")" MISSED
+expect verdict_unrun "$(verdict_of 'ORACLE_PLANT reached e' fires)" UNRUN
+expect verdict_no_log "$(
+  HERE=$H
+  . "$LIB"
+  arm_verdict "$L/absent.log" '^test result: ' "" true
+  echo "$verdict"
+)" UNRUN
+expect verdict_unreached "$(verdict_of 'ORACLE_PLANT reached ee' fires "$finished")" UNREACHED
+expect verdict_caught "$(verdict_of 'ORACLE_PLANT reached e' fires "$finished")" CAUGHT
+# Must find no script but lib.sh setting CAUGHT or MISSED, which arm_verdict sets only for a finished run.
+expect verdict_words "$(cat "$HERE/breaks.sh" "$HERE/value.sh" "$HERE/amaru.sh" "$HERE/run.sh" | grep -c -E 'CAUGHT|MISSED' || true)" 0
+
+# A work tree of a.rs, b.rs and c.rs, an overlay switching a in a.rs and b in b.rs and adding a call to c.rs, and plant_overlay's exit, printed switches and switched files after the files $1 change and the files $2 go.
+plant_of() {
+  P=$W/plant
+  rm -rf "$P"
+  git init -q "$P"
+  for f in a b c; do printf '%s\n' "fn $f() {" '}' >"$P/$f.rs"; done
+  git -C "$P" add -A
+  git -C "$P" -c user.name=t -c user.email=t@t commit -q -m t
+  printf '%s\n' 'fn a() {' '    oracle_plant("a");' '}' >"$P/a.rs"
+  printf '%s\n' 'fn b() {' '    pallas::crypto::oracle_plant("b");' '}' >"$P/b.rs"
+  printf '%s\n' 'fn c() {' '    shared();' '}' >"$P/c.rs"
+  git -C "$P" diff >"$W/plant.diff"
+  git -C "$P" checkout -q -- .
+  for f in $1; do printf '%s\n' 'fn moved() {' '}' >"$P/$f"; done
+  for f in ${2:-}; do rm "$P/$f"; done
+  (
+    HERE=$H
+    . "$LIB"
+    status=0
+    out=$(plant_overlay "$W/plant.diff" "$P" 2>/dev/null) || status=$?
+    echo "exit=$status $(echo $out) switched=$(cd "$P" && grep -l oracle_plant a.rs b.rs 2>/dev/null | paste -sd, -)"
+  )
+}
+# Must not name a switch when every hunk applies, must name each switch whose hunk does not apply while planting the others, and must fail when a hunk with no switch does not apply or a file it changes is gone.
+expect plant_clean "$(plant_of '')" "exit=0  switched=a.rs,b.rs"
+expect plant_switch "$(plant_of a.rs)" "exit=0 a switched=b.rs"
+expect plant_switches "$(plant_of 'a.rs b.rs')" "exit=0 a b switched="
+expect plant_shared "$(plant_of c.rs)" "exit=1  switched=a.rs,b.rs"
+expect plant_gone "$(plant_of '' a.rs)" "exit=1  switched=b.rs"
+expect plant_gone_beside_switch "$(plant_of b.rs c.rs)" "exit=1 b switched=a.rs"
 
 # The free gibibytes of a filesystem holding $1 bytes free and require_free's verdict with a floor of $2, with a df that answers -B1 in bytes and -BG in gibibytes rounded up.
 free_of() {
@@ -784,24 +840,32 @@ quick_legs() {
 expect quick_value_unpassed "$(quick_legs 1)" 1
 expect quick_value_passed "$(quick_legs 2)" 1
 
-# An arm's run dir with the reached line $2 and the disagreement class $3, and value_caught's verdict for the arm a with the class c.
-caught_of() {
-  C=$W/caught-$1
-  rm -rf "$C"
-  mkdir -p "$C"
-  echo "$2" >"$C/tx.given.reached"
-  printf '{"cls": "%s", "key": "k"}\n' "$3" >"$C/tx.given.schema.dis.jsonl"
+# The run of the value arm emptyguards with the tier output $2, the reached line $3 and the disagreement class $4, and value_verdict's verdict for it.
+value_verdict_of() {
+  V=$W/value-verdict-$1
+  rm -rf "$V"
+  mkdir -p "$V/value/emptyguards"
+  echo "$2" >"$V/value/emptyguards.out"
+  echo "$3" >"$V/value/emptyguards/tx.given.reached"
+  printf '{"cls": "%s", "key": "k"}\n' "$4" >"$V/value/emptyguards/tx.given.schema.dis.jsonl"
   (
-    ROOT=$W HERE=$HERE
+    ROOT=$W HERE=$HERE OUT=$V
+    . "$LIB"
     . "$HERE/value.sh"
-    if value_caught "$C" c a; then echo caught; else echo missed; fi
+    value_verdict emptyguards
+    echo "$verdict"
   )
 }
-# Must not fire with the plant unreached, another plant reached or another class, and must fire with both.
-expect value_caught_unreached "$(caught_of unreached '' c)" missed
-expect value_caught_other_plant "$(caught_of other_plant 'ORACLE_PLANT reached ab' c)" missed
-expect value_caught_other_class "$(caught_of other_class 'ORACLE_PLANT reached a' cc)" missed
-expect value_caught_both "$(caught_of both 'ORACLE_PLANT reached a' c)" caught
+ran='DECODE-ORACLE values=4 ledger_accepts=4'
+reached='ORACLE_PLANT reached emptyguards'
+class='pallas refuses ledger-valid input'
+# Must not fire with another class, must name a tier that judged no value or a plant unreached or another plant reached, and must fire with both.
+expect value_verdict_other_class "$(value_verdict_of other_class "$ran" "$reached" other)" MISSED
+expect value_verdict_unrun "$(value_verdict_of unrun 'DECODE-ORACLE values=0 ledger_accepts=0' "$reached" "$class")" UNRUN
+expect value_verdict_no_output "$(value_verdict_of no_output '' "$reached" "$class")" UNRUN
+expect value_verdict_unreached "$(value_verdict_of unreached "$ran" '' "$class")" UNREACHED
+expect value_verdict_other_plant "$(value_verdict_of other_plant "$ran" 'ORACLE_PLANT reached emptyguard' "$class")" UNREACHED
+expect value_verdict_both "$(value_verdict_of both "$ran" "$reached" "$class")" CAUGHT
 
 # A pallas tree whose pallas-validate Cargo.toml names an amaru-uplc entry, and the url and commit amaru_pin reads at its head.
 A=$W/amaru-pin
@@ -904,14 +968,15 @@ control_of() {
   (
     ROOT=$W HERE=$HERE
     . "$HERE/value.sh"
-    if value_control "$R/head" "$R/control" "$R/probe" >/dev/null 2>&1; then echo clean; else echo fired; fi
+    value_control "$R/head" "$R/control" "$R/probe" >/dev/null 2>&1
+    echo "$control"
   )
 }
-# Must not fire on equal output, and must fire on no values, other output and a reached plant.
-expect control_same "$(control_of same v 'out' 'out')" clean
-expect control_none "$(control_of none '' '' 'out')" fired
-expect control_differs "$(control_of differs v 'out' 'other')" fired
-expect control_reached "$(control_of reached v 'ORACLE_PLANT reached x' 'ORACLE_PLANT reached x')" fired
+# Must not fire on equal output, must name a control that ran no value, and must fire on other output and a reached plant.
+expect control_same "$(control_of same v 'out' 'out')" CLEAN
+expect control_none "$(control_of none '' '' 'out')" UNRUN
+expect control_differs "$(control_of differs v 'out' 'other')" FIRED
+expect control_reached "$(control_of reached v 'ORACLE_PLANT reached x' 'ORACLE_PLANT reached x')" FIRED
 
 # A repository with a base commit, a feature commit and the fix commits named in $1, a manifest arms.toml whose dolos rows are the remaining arguments, and the exit and lines of fix_arms over it.
 fixes_of() {

@@ -67,12 +67,11 @@ amaru_leg() {
   fi
   for plant in "$HERE"/amaru/*.diff; do
     arm=$(basename "$plant" .diff)
-    verdict=MISSED
     if git -C "$ROOT/$AMARU" apply "$plant" >"$OUT/amaru/$arm.plant" 2>&1; then
       amaru_run "$OUT/amaru/$arm.log"
-      if amaru_caught "$OUT/amaru/$arm.log" "$(sed -n 's/^# test: //p' "$plant")"; then
-        verdict=CAUGHT
-      fi
+      arm_verdict "$OUT/amaru/$arm.log" '^test result: ' "" amaru_caught "$OUT/amaru/$arm.log" "$(sed -n 's/^# test: //p' "$plant")"
+    else
+      verdict=UNPLANTED
     fi
     git -C "$ROOT/$AMARU" checkout -q -f --detach "$2"
     verdicts="$verdicts amaru-$arm=$verdict"

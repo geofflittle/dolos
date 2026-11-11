@@ -240,6 +240,54 @@ encoding_verdict() {
   fi
 }
 
+# Sets verdict to UNRUN and fails when no line of the output $1 holds the pattern $2 that a finished run prints, and to UNREACHED when $3 names a plant and no line of the output is its reached line.
+arm_ran() {
+  if ! grep -q -e "$2" "$1" 2>/dev/null; then
+    verdict=UNRUN
+    return 1
+  fi
+  if [ -n "$3" ] && ! grep -q -x -F "ORACLE_PLANT reached $3" "$1"; then
+    verdict=UNREACHED
+    return 1
+  fi
+}
+
+# Sets verdict for an arm whose run wrote the output $1 to what arm_ran sets when the output lacks the pattern $2 or the plant $3, else to CAUGHT when the command after $3 succeeds and MISSED when it fails.
+arm_verdict() {
+  arm_ran "$1" "$2" "$3" || return 0
+  shift 3
+  if "$@"; then
+    verdict=CAUGHT
+  else
+    verdict=MISSED
+  fi
+}
+
+# Applies the overlay diff $1 over the work tree $2, keeping each hunk that applies, prints the switch each rejected hunk adds, and fails when a rejected hunk adds no switch or a file of the diff did not apply hunk by hunk.
+plant_overlay() {
+  status=0
+  applied=$(git -C "$2" apply -v --reject "$1" 2>&1) || status=1
+  echo "$applied" >&2
+  if [ "$status" -eq 0 ]; then
+    return 0
+  fi
+  rejected=0
+  for file in $(sed -n 's#^diff --git a/.* b/##p' "$1"); do
+    if echo "$applied" | grep -q -x -F "Applied patch $file cleanly."; then
+      continue
+    elif [ -f "$2/$file.rej" ]; then
+      rejected=$((rejected + 1))
+      awk '
+        /^@@/ { if (hunks && !named) shared = 1; hunks++; named = 0; next }
+        /^\+/ && match($0, /oracle_plant\("[a-z0-9-]*"\)/) { print substr($0, RSTART + 14, RLENGTH - 16); named = 1 }
+        END { if (hunks && !named) shared = 1; exit shared }' "$2/$file.rej" || status=2
+    else
+      status=2
+    fi
+  done
+  [ "$rejected" -gt 0 ] && [ "$status" -eq 1 ]
+}
+
 # Whether a verdict list holds a passing head and every verdict in it names a passing word.
 passed() {
   case " $1 " in

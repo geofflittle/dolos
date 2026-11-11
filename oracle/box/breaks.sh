@@ -61,13 +61,13 @@ plant_dolos() {
   git -C "$ROOT/$SCRATCH" apply "$HERE/plants/$1.diff"
 }
 
-# Runs the crate test of an arm with the executable $3, or one it builds over the scratch trees as they stand, its output in $2.
+# Runs the crate test of an arm with the executable $3, or one it builds over the scratch trees as they stand, its output in $2, failing when cargo refused the build.
 run_crate_test() {
   test_bin=${3:-}
   if [ -z "$test_bin" ]; then
     if ! built=$(build_checked "$2.build" test --release $(crate_test "$1") --no-run $locked); then
       echo "BUILD_REFUSED $built" >"$2"
-      return
+      return 1
     fi
     test_bin=$(executable "$2.build" "$(crate_test_target "$1")")
   fi
@@ -81,24 +81,32 @@ plant_pallas() {
 }
 
 overlay=
-# Builds the judge and each switched crate test ARMS selects once, the joint crate tests in the judge's cargo invocation, from the scratch tree and the pinned pallas with overlay/ applied, and copies them to $OUT/bin, since a later arm's build of the same units writes the same target files.
+# The switches of overlay/ whose hunks did not apply.
+overlay_unplanted=
+# Builds the judge and each switched crate test ARMS selects once, the joint crate tests in the judge's cargo invocation, from the scratch tree and the pinned pallas with overlay/ applied, and copies them to $OUT/bin, since a later arm's build of the same units writes the same target files, setting overlay to built or to the verdict of every switched arm when it fails.
 build_overlay() {
   case $overlay in
     built) return 0 ;;
-    failed) return 1 ;;
+    UNPLANTED | UNBUILT) return 1 ;;
   esac
-  overlay=failed
+  overlay=UNPLANTED
   mkdir -p "$OUT/bin"
-  if ! { pallas_tree "$pin" && git -C "$ROOT/$PALLAS" apply "$HERE/overlay/pallas.diff" &&
-    git -C "$ROOT/$SCRATCH" apply "$HERE/overlay/dolos.diff"; } >"$OUT/overlay.plant" 2>&1; then
+  if ! pallas_tree "$pin" >"$OUT/overlay.plant" 2>&1 ||
+    ! unplanted=$({ plant_overlay "$HERE/overlay/pallas.diff" "$ROOT/$PALLAS" &&
+      plant_overlay "$HERE/overlay/dolos.diff" "$ROOT/$SCRATCH"; } 2>>"$OUT/overlay.plant"); then
     echo "OVERLAY PLANT_FAILED log=$OUT/overlay.plant"
     return 1
+  fi
+  overlay_unplanted=$(echo $unplanted)
+  if [ -n "$overlay_unplanted" ]; then
+    echo "OVERLAY UNPLANTED switches=\"$overlay_unplanted\" log=$OUT/overlay.plant"
   fi
   source=$(pallas_source)
   if [ "$source" != "/w/$PALLAS/pallas-validate" ]; then
     echo "OVERLAY REFUSED pallas_source=$source"
     return 1
   fi
+  overlay=UNBUILT
   overlay_started=$(date +%s)
   if ! built=$(build_judge "$OUT/overlay.build" $(joint_packages $CRATE_ARMS)); then
     echo "OVERLAY BUILD_REFUSED $built"
@@ -140,10 +148,6 @@ run_overlay() {
 # Whether an arm's log holds a line its catch selects on one of its records and the head log lacks.
 caught() {
   arm=$1
-  if [ ! -f "$OUT/head.log" ]; then
-    echo "ARM $arm NO_HEAD_LOG"
-    return 1
-  fi
   at=$3
   verdict_catch "$arm" "$2" "$HERE/plants/$arm.records" "$OUT/head.log" >"$at.new" || return 1
   # The subouts arm counts only records that no known row names.
@@ -154,6 +158,18 @@ caught() {
   fi
   head -4 "$at.new"
   [ -s "$at.new" ]
+}
+
+# Sets verdict for the arm $1 from its log $2 against the head's log, requiring the reached line of the plant $3 when it is given.
+judge_verdict() {
+  log=$OUT/head.log
+  if arm_ran "$log" '^test result: ' ""; then
+    log=$2
+    arm_verdict "$log" '^test result: ' "$3" caught "$1" "$log" "$OUT/$1"
+  fi
+  case $verdict in
+    UN*) echo "ARM $1 $verdict log=$log" ;;
+  esac
 }
 
 # Whether the unplanted head judges every planted arm's records, and runs each crate test ARMS selects, with a pass and no arm's line, the case where each arm must not fire.
@@ -185,28 +201,46 @@ control_clean() {
   return $clean
 }
 
-# Whether the overlay build with no switch set prints the head's control logs, on every planted arm's records and in each switched crate test ARMS selects.
-overlay_control_clean() {
+# Sets verdict to UNRUN for the first of the logs given that holds no finished run, printing its name, and fails then.
+logs_ran() {
+  for log; do
+    if ! arm_ran "$log" '^test result: ' ""; then
+      echo "ARM control UNRUN log=$log"
+      return 1
+    fi
+  done
+}
+
+# Sets control to the verdict of the overlay build with no switch set against the head's control logs, on every planted arm's records and in each switched crate test ARMS selects: the overlay's verdict when it is not built, UNRUN when a log holds no finished run, FIRED when a log differs and CLEAN when none does.
+overlay_control() {
   if ! build_overlay; then
-    echo "ARM control OVERLAY_UNBUILT"
-    return 1
+    echo "ARM control OVERLAY_$overlay"
+    control=$overlay
+    return
   fi
-  clean=0
   run_overlay control "" "$OUT/overlay-control.log" "$records"
-  if ! same_log "$OUT/control.log" "$OUT/overlay-control.log"; then
-    echo "ARM control OVERLAY_DIFFERS log=$OUT/overlay-control.log"
-    clean=1
-  fi
+  logs=$OUT/overlay-control.log
   for a in $CRATE_ARMS; do
     if overlay_arm "$a"; then
       run_overlay "$a" "" "$OUT/overlay-control-$a.log"
-      if ! same_crate_log "$OUT/control-$a.log" "$OUT/overlay-control-$a.log"; then
-        echo "ARM control OVERLAY_DIFFERS log=$OUT/overlay-control-$a.log"
-        clean=1
-      fi
+      logs="$logs $OUT/overlay-control-$a.log"
     fi
   done
-  return $clean
+  if ! logs_ran $logs; then
+    control=$verdict
+    return
+  fi
+  control=CLEAN
+  if ! same_log "$OUT/control.log" "$OUT/overlay-control.log"; then
+    echo "ARM control OVERLAY_DIFFERS log=$OUT/overlay-control.log"
+    control=FIRED
+  fi
+  for a in $CRATE_ARMS; do
+    if overlay_arm "$a" && ! same_crate_log "$OUT/control-$a.log" "$OUT/overlay-control-$a.log"; then
+      echo "ARM control OVERLAY_DIFFERS log=$OUT/overlay-control-$a.log"
+      control=FIRED
+    fi
+  done
 }
 
 # Whether an arm's plant changes only how values are written, so it must hold rather than be caught.
@@ -214,11 +248,13 @@ encoding_arm() {
   [ "$1" = ctx-encoding ]
 }
 
-# Judges an encoding arm's records on the overlay with no switch set and sets held to the arm's verdict against that run.
+# Judges an encoding arm's records on the overlay with no switch set and sets verdict to the arm's verdict against that run.
 held() {
+  arm_ran "$OUT/$1.log" '^test result: ' "$1" || return 0
   run_overlay "$1" "" "$OUT/$1.unplanted.log" "$(paste -sd, "$HERE/plants/$1.records")"
   grep -h '^CONTEXT ' "$OUT/$1.unplanted.log" "$OUT/$1.log" | sed "s/^/ARM $1 /" || true
-  held=$(encoding_verdict "$OUT/$1.log" "$OUT/$1.unplanted.log")
+  arm_ran "$OUT/$1.unplanted.log" '^test result: ' "" || return 0
+  verdict=$(encoding_verdict "$OUT/$1.log" "$OUT/$1.unplanted.log")
 }
 
 overlay_arms=
@@ -232,26 +268,31 @@ done
 judge_switched() {
   arm=$1
   echo "ARM $arm dolos=$dolos_rev pallas=$pin_short-overlay switch=$arm"
-  started=$(date +%s)
-  run_overlay "$arm" "$arm" "$OUT/$arm.log" "$(paste -sd, "$HERE/plants/$arm.records")"
-  echo "ARM $arm records=$(grep -c . "$HERE/plants/$arm.records" || true) judge_seconds=$(($(date +%s) - started))"
-  if ! grep -q -x -F "ORACLE_PLANT reached $arm" "$OUT/$arm.log"; then
-    echo "ARM $arm UNREACHED log=$OUT/$arm.log"
-    verdict=MISSED
-  elif encoding_arm "$arm"; then
-    held "$arm"
-    verdict=$held
-  elif caught "$arm" "$OUT/$arm.log" "$OUT/$arm"; then
-    verdict=CAUGHT
-  else
-    verdict=MISSED
-  fi
+  case " $overlay_unplanted " in
+    *" $arm "*)
+      echo "ARM $arm UNPLANTED log=$OUT/overlay.plant"
+      verdict=UNPLANTED
+      ;;
+    *)
+      started=$(date +%s)
+      run_overlay "$arm" "$arm" "$OUT/$arm.log" "$(paste -sd, "$HERE/plants/$arm.records")"
+      echo "ARM $arm records=$(grep -c . "$HERE/plants/$arm.records" || true) judge_seconds=$(($(date +%s) - started))"
+      if encoding_arm "$arm"; then
+        held "$arm"
+        case $verdict in
+          UN*) echo "ARM $arm $verdict log=$OUT/$arm.log" ;;
+        esac
+      else
+        judge_verdict "$arm" "$OUT/$arm.log" "$arm"
+      fi
+      ;;
+  esac
   echo "$arm=$verdict"
   echo "$verdict" >"$OUT/$arm.verdict"
 }
 
 switched_batch=
-# Judges the switched arms of switched_batch on one overlay build, ARM_JOBS at a time, and adds their verdicts in their order, MISSED for an arm that wrote none.
+# Judges the switched arms of switched_batch on one overlay build, ARM_JOBS at a time, and adds their verdicts in their order, the overlay's verdict for each when it is not built and UNRUN for an arm that wrote none.
 judge_batch() {
   if [ -z "$switched_batch" ]; then
     return 0
@@ -267,11 +308,12 @@ judge_batch() {
     pool "$ARM_JOBS" judge_switched $switched_batch
   else
     for batch_arm in $switched_batch; do
-      echo "$batch_arm=MISSED"
+      echo "$batch_arm=$overlay"
+      echo "$overlay" >"$OUT/$batch_arm.verdict"
     done
   fi
   for batch_arm in $switched_batch; do
-    verdict=$(cat "$OUT/$batch_arm.verdict" 2>/dev/null || echo MISSED)
+    verdict=$(cat "$OUT/$batch_arm.verdict" 2>/dev/null || echo UNRUN)
     verdicts="$verdicts $batch_arm=$verdict"
   done
   switched_batch=
@@ -308,7 +350,7 @@ for arm in $ARMS; do
   esac
   if ! $plant >"$OUT/$arm.plant" 2>&1; then
     echo "ARM $arm PLANT_FAILED log=$OUT/$arm.plant"
-    verdicts="$verdicts $arm=MISSED"
+    verdicts="$verdicts $arm=UNPLANTED"
     continue
   fi
   source=$(pallas_source)
@@ -318,21 +360,21 @@ for arm in $ARMS; do
   fi
   if [ -z "$locked" ] && [ "$source" != "/w/$PALLAS/pallas-validate" ]; then
     echo "ARM $arm REFUSED pallas_source=$source"
-    verdicts="$verdicts $arm=MISSED"
+    verdicts="$verdicts $arm=UNPLANTED"
     continue
   fi
   echo "ARM $arm dolos=$dolos_rev pallas=$pallas_rev pallas_source=$source"
   started=$(date +%s)
   if crate_test "$arm" >/dev/null; then
-    run_crate_test "$arm" "$OUT/$arm.log"
-    echo "ARM $arm test=$(crate_test "$arm" | sed 's/.* //')$(crate_test_filter "$arm" | sed 's/^/:/; s/ .*//') seconds=$(($(date +%s) - started))"
-    if caught "$arm" "$OUT/$arm.log" "$OUT/$arm"; then
-      echo "$arm=CAUGHT"
-      verdicts="$verdicts $arm=CAUGHT"
+    if run_crate_test "$arm" "$OUT/$arm.log"; then
+      echo "ARM $arm test=$(crate_test "$arm" | sed 's/.* //')$(crate_test_filter "$arm" | sed 's/^/:/; s/ .*//') seconds=$(($(date +%s) - started))"
+      judge_verdict "$arm" "$OUT/$arm.log" ""
     else
-      echo "$arm=MISSED"
-      verdicts="$verdicts $arm=MISSED"
+      echo "ARM $arm BUILD_REFUSED log=$OUT/$arm.log"
+      verdict=UNBUILT
     fi
+    echo "$arm=$verdict"
+    verdicts="$verdicts $arm=$verdict"
     continue
   fi
   joint=
@@ -341,7 +383,7 @@ for arm in $ARMS; do
   fi
   if ! built=$(build_judge "$OUT/$arm.build" $joint $locked); then
     echo "ARM $arm BUILD_REFUSED $built"
-    verdicts="$verdicts $arm=MISSED"
+    verdicts="$verdicts $arm=UNBUILT"
     continue
   fi
   judge=$(executable "$OUT/$arm.build" dolos)
@@ -364,38 +406,49 @@ for arm in $ARMS; do
     sh "$IN_IMAGE" "$SCRATCH" "$judge" "$test" --exact --ignored --nocapture >"$OUT/$arm.log" 2>&1 || true
   echo "ARM $arm judge_seconds=$(($(date +%s) - started))"
   if [ "$arm" = control ]; then
+    crate_tests_built=yes
+    control_logs="$OUT/head.log $OUT/control.log"
     for a in $CRATE_ARMS; do
       if joint_crate_test "$a"; then
         run_crate_test "$a" "$OUT/control-$a.log" "$(executable "$OUT/$arm.build" "$(crate_test_target "$a")")"
-      else
-        run_crate_test "$a" "$OUT/control-$a.log"
+      elif ! run_crate_test "$a" "$OUT/control-$a.log"; then
+        echo "ARM control BUILD_REFUSED log=$OUT/control-$a.log"
+        crate_tests_built=no
       fi
+      control_logs="$control_logs $OUT/control-$a.log"
     done
-    control=CLEAN
-    control_clean || control=FIRED
-    # The overlay arms' verdicts hold only if the overlay build with no switch set is the head.
-    if [ -n "$overlay_arms" ]; then
+    if [ "$crate_tests_built" = no ]; then
+      control=UNBUILT
+    elif ! logs_ran $control_logs; then
+      control=$verdict
+    elif ! control_clean; then
+      control=FIRED
+    elif [ -n "$overlay_arms" ]; then
+      # The overlay arms' verdicts hold only if the overlay build with no switch set is the head.
       started=$(date +%s)
-      overlay_control_clean || control=FIRED
+      overlay_control
       echo "ARM control overlay_seconds=$(($(date +%s) - started))"
+    else
+      control=CLEAN
     fi
     echo "control=$control"
     verdicts="$verdicts control=$control"
   elif [ "$arm" = head ]; then
     sed -n 's/^CANDIDATE coverage.txt //p' "$OUT/$arm.log" >"$OUT/head.counts"
     grep -E '^(MUTATION|VERDICT|VERDICTS|RESULT) ' "$OUT/$arm.log" | cut -c1-400 || true
-    if grep -q '^RESULT PASS' "$OUT/$arm.log" && ! grep -q '^RESULT FAIL' "$OUT/$arm.log"; then
+    if ! arm_ran "$OUT/$arm.log" '^test result: ' ""; then
+      echo "ARM head $verdict log=$OUT/$arm.log"
+      head_result=$verdict
+    elif grep -q '^RESULT PASS' "$OUT/$arm.log" && ! grep -q '^RESULT FAIL' "$OUT/$arm.log"; then
       head_result=PASS
     else
       head_result=FAIL
     fi
     verdicts="$verdicts head=$head_result"
-  elif caught "$arm" "$OUT/$arm.log" "$OUT/$arm"; then
-    echo "$arm=CAUGHT"
-    verdicts="$verdicts $arm=CAUGHT"
   else
-    echo "$arm=MISSED"
-    verdicts="$verdicts $arm=MISSED"
+    judge_verdict "$arm" "$OUT/$arm.log" ""
+    echo "$arm=$verdict"
+    verdicts="$verdicts $arm=$verdict"
   fi
 done
 judge_batch
