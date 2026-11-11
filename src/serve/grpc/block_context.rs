@@ -2,9 +2,9 @@
 //! The map is discarded after the response; no state survives a rollback.
 use pallas::{
     interop::utxorpc::{LedgerContext, TxoRef, UtxoMap},
-    ledger::traverse::{MultiEraBlock, MultiEraTx},
+    ledger::traverse::{Era, MultiEraBlock, MultiEraTx},
 };
-use std::{collections::HashSet, sync::Arc};
+use std::{borrow::Cow, collections::HashSet, sync::Arc};
 
 use crate::serve::ChainReads;
 
@@ -28,23 +28,72 @@ pub(super) struct BlockContext<C: ChainReads> {
     made: Arc<UtxoMap>,
 }
 
+/// The transactions of one block, with the era and slot of that block.
+pub(super) struct BlockTxs<'b> {
+    era: Era,
+    slot: u64,
+    txs: Vec<MultiEraTx<'b>>,
+}
+
+/// A transaction of a block, held with the transactions of that block.
+pub(super) struct TxOfBlock<'t, 'b> {
+    block: &'t BlockTxs<'b>,
+    tx: Cow<'t, MultiEraTx<'b>>,
+}
+
+impl<'b> BlockTxs<'b> {
+    /// The transactions of `block`.
+    pub(super) fn of(block: &'b MultiEraBlock<'_>) -> Self {
+        Self {
+            era: block.era(),
+            slot: block.slot(),
+            txs: block.txs(),
+        }
+    }
+
+    /// The top level transactions of the block, in the order it lists them.
+    pub(super) fn top_level(&self) -> &[MultiEraTx<'b>] {
+        &self.txs
+    }
+
+    /// The top level transaction at `index` of the block.
+    pub(super) fn at(&self, index: usize) -> Option<TxOfBlock<'_, 'b>> {
+        self.txs.get(index).map(|tx| TxOfBlock {
+            block: self,
+            tx: Cow::Borrowed(tx),
+        })
+    }
+
+    /// The transaction of the block whose hash is `hash`, a sub transaction
+    /// included.
+    pub(super) fn applied(&self, hash: &[u8]) -> Option<TxOfBlock<'_, 'b>> {
+        dolos_core::tx_in(&self.txs, hash).map(|(_, tx)| TxOfBlock {
+            block: self,
+            tx: Cow::Owned(tx),
+        })
+    }
+}
+
+impl<'b> TxOfBlock<'_, 'b> {
+    /// The transaction.
+    pub(super) fn tx(&self) -> &MultiEraTx<'b> {
+        &self.tx
+    }
+}
+
 /// The outputs among `named` that the transactions of the block produce, sub
 /// transactions included.
-fn made_among(
-    block: &MultiEraBlock<'_>,
-    txs: &[MultiEraTx<'_>],
-    named: &HashSet<TxoRef>,
-) -> UtxoMap {
+fn made_among(block: &BlockTxs<'_>, named: &HashSet<TxoRef>) -> UtxoMap {
     let makers: HashSet<_> = named.iter().map(|(hash, _)| *hash).collect();
     let mut made = UtxoMap::new();
-    for tx in txs {
+    for tx in &block.txs {
         let Ok(()) = dolos_core::for_each_applied_tx(tx, |tx| {
             let hash = tx.hash();
             if makers.contains(&hash) {
                 for (i, output) in tx.produces() {
                     let made_ref = (hash, i as u32);
                     if named.contains(&made_ref) {
-                        made.insert(made_ref, (block.era(), output.encode()));
+                        made.insert(made_ref, (block.era, output.encode()));
                     }
                 }
             }
@@ -66,28 +115,17 @@ fn named_inputs(tx: &MultiEraTx<'_>) -> Vec<TxoRef> {
 
 impl<C: ChainReads> BlockContext<C> {
     pub(super) fn new(inner: C, block: &MultiEraBlock<'_>) -> Self {
-        let txs = block.txs();
-        Self::resolving(inner, block, &txs, &txs)
+        let block = BlockTxs::of(block);
+        Self::resolving(inner, &block, &block.txs)
     }
 
     /// A context for mapping one transaction of a block, resolving only the inputs that transaction names.
-    pub(super) fn for_tx(
-        inner: C,
-        block: &MultiEraBlock<'_>,
-        txs: &[MultiEraTx<'_>],
-        tx: &MultiEraTx<'_>,
-    ) -> Self {
-        Self::resolving(inner, block, txs, std::slice::from_ref(tx))
+    pub(super) fn for_tx(inner: C, tx: &TxOfBlock<'_, '_>) -> Self {
+        Self::resolving(inner, tx.block, std::slice::from_ref(tx.tx()))
     }
 
-    /// A context for mapping `mapped`, where `txs` are the transactions of
-    /// `block`.
-    fn resolving(
-        inner: C,
-        block: &MultiEraBlock<'_>,
-        txs: &[MultiEraTx<'_>],
-        mapped: &[MultiEraTx<'_>],
-    ) -> Self {
+    /// A context for mapping `mapped`, transactions of `block`.
+    fn resolving(inner: C, block: &BlockTxs<'_>, mapped: &[MultiEraTx<'_>]) -> Self {
         let start = std::time::Instant::now();
         let named: HashSet<TxoRef> = mapped
             .iter()
@@ -101,7 +139,7 @@ impl<C: ChainReads> BlockContext<C> {
                 refs
             })
             .collect();
-        let made = made_among(block, txs, &named);
+        let made = made_among(block, &named);
         let refs: Vec<_> = named
             .into_iter()
             .filter(|r| !made.contains_key(r))
@@ -111,7 +149,7 @@ impl<C: ChainReads> BlockContext<C> {
         } else {
             inner.utxos(&refs)
         };
-        tracing::trace!(slot = block.slot(), input_count = refs.len(),
+        tracing::trace!(slot = block.slot, input_count = refs.len(),
             resolved_count = resolved.as_ref().map(|x| x.len()),
             elapsed = ?start.elapsed(), "Prepared block input context");
         Self {
@@ -258,31 +296,33 @@ mod made_in_block_tests {
 
     /// The references asked of the context and the outputs served from the
     /// block, for one transaction.
-    fn resolve_one(
-        block: &MultiEraBlock<'_>,
-        txs: &[MultiEraTx<'_>],
-        tx: &MultiEraTx<'_>,
-    ) -> (HashSet<TxoRef>, HashSet<TxoRef>) {
+    fn resolve_one(tx: &TxOfBlock<'_, '_>) -> (HashSet<TxoRef>, HashSet<TxoRef>) {
         let context = Recording::default();
-        let prepared = BlockContext::for_tx(context.clone(), block, txs, tx);
+        let prepared = BlockContext::for_tx(context.clone(), tx);
         let asked = context.0.lock().unwrap().iter().copied().collect();
         (asked, prepared.made.keys().copied().collect())
+    }
+
+    /// The first top level transaction of `txs` that `pick` accepts.
+    fn top_level_where<'t, 'b>(
+        txs: &'t BlockTxs<'b>,
+        pick: impl Fn(&MultiEraTx<'b>) -> bool,
+    ) -> TxOfBlock<'t, 'b> {
+        let index = txs.top_level().iter().position(pick).unwrap();
+        txs.at(index).unwrap()
     }
 
     #[test]
     fn a_transaction_naming_no_output_of_its_block_asks_the_context_for_every_input() {
         let (raw, _) = spends_its_own_sub_output();
         let block = MultiEraBlock::decode(&raw).unwrap();
-        let txs = block.txs();
+        let txs = BlockTxs::of(&block);
         let produced = produced_by(&block);
-        let tx = txs
-            .iter()
-            .find(|tx| named_with_subs(tx).is_disjoint(&produced))
-            .expect("a transaction names no output of its block");
+        let tx = top_level_where(&txs, |tx| named_with_subs(tx).is_disjoint(&produced));
 
-        let (asked, served) = resolve_one(&block, &txs, tx);
+        let (asked, served) = resolve_one(&tx);
 
-        assert_eq!(asked, named_with_subs(tx));
+        assert_eq!(asked, named_with_subs(tx.tx()));
         assert_eq!(served, HashSet::new());
     }
 
@@ -290,19 +330,47 @@ mod made_in_block_tests {
     fn a_transaction_spending_an_output_of_its_block_serves_it_from_the_block() {
         let (raw, made) = spends_its_own_sub_output();
         let block = MultiEraBlock::decode(&raw).unwrap();
-        let txs = block.txs();
-        let carrier = txs
-            .iter()
-            .find(|tx| named_with_subs(tx).contains(&made))
-            .unwrap();
+        let txs = BlockTxs::of(&block);
+        let carrier = top_level_where(&txs, |tx| named_with_subs(tx).contains(&made));
         let produced = produced_by(&block);
-        let (inside, outside): (HashSet<_>, HashSet<_>) = named_with_subs(carrier)
+        let (inside, outside): (HashSet<_>, HashSet<_>) = named_with_subs(carrier.tx())
             .into_iter()
             .partition(|r| produced.contains(r));
         assert!(inside.contains(&made));
 
-        let (asked, served) = resolve_one(&block, &txs, carrier);
+        let (asked, served) = resolve_one(&carrier);
 
+        assert_eq!(asked, outside);
+        assert_eq!(served, inside);
+    }
+
+    #[test]
+    fn a_hash_no_transaction_of_the_block_has_names_no_transaction() {
+        let (raw, _) = spends_its_own_sub_output();
+        let block = MultiEraBlock::decode(&raw).unwrap();
+        let txs = BlockTxs::of(&block);
+        let absent = [0u8; 32];
+        assert!(dolos_core::applied_txs(&block)
+            .iter()
+            .all(|(_, tx)| tx.hash().as_slice() != absent));
+
+        assert!(txs.applied(&absent).is_none());
+    }
+
+    #[test]
+    fn a_sub_transaction_found_by_its_hash_is_resolved_against_its_block() {
+        let (raw, made) = spends_its_own_sub_output();
+        let block = MultiEraBlock::decode(&raw).unwrap();
+        let txs = BlockTxs::of(&block);
+
+        let sub = txs.applied(made.0.as_slice()).unwrap();
+
+        assert_eq!(sub.tx().hash(), made.0);
+        let produced = produced_by(&block);
+        let (inside, outside): (HashSet<_>, HashSet<_>) = named_with_subs(sub.tx())
+            .into_iter()
+            .partition(|r| produced.contains(r));
+        let (asked, served) = resolve_one(&sub);
         assert_eq!(asked, outside);
         assert_eq!(served, inside);
     }

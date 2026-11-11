@@ -9,7 +9,7 @@ use tonic::{Request, Response, Status};
 use tracing::{info, warn};
 
 use crate::prelude::*;
-use crate::serve::grpc::block_context::{BlockContext, NoInputs};
+use crate::serve::grpc::block_context::{BlockContext, BlockTxs, NoInputs};
 use crate::serve::grpc::block_refs::BlockRefData;
 use crate::serve::grpc::masking::apply_mask;
 use crate::serve::ChainReads;
@@ -1025,11 +1025,12 @@ where
         let block = MultiEraBlock::decode(&block_bytes)
             .map_err(|e| Status::internal(format!("failed to decode block: {e}")))?;
 
-        let txs = block.txs();
-        let (_, tx) = dolos_core::tx_in(&txs, &tx_hash)
+        let txs = BlockTxs::of(&block);
+        let tx = txs
+            .applied(&tx_hash)
             .ok_or_else(|| Status::not_found("tx hash not found"))?;
 
-        let native_bytes = tx.encode().into();
+        let native_bytes = tx.tx().encode().into();
 
         let cursor = self
             .domain
@@ -1053,13 +1054,8 @@ where
                         .unwrap_or(0),
                 }),
                 chain: Some(u5c::query::any_chain_tx::Chain::Cardano(
-                    interop::Mapper::new(BlockContext::for_tx(
-                        self.domain.clone(),
-                        &block,
-                        &txs,
-                        &tx,
-                    ))
-                    .map_tx(&tx),
+                    interop::Mapper::new(BlockContext::for_tx(self.domain.clone(), &tx))
+                        .map_tx(tx.tx()),
                 )),
             }),
             ledger_tip: cursor,
