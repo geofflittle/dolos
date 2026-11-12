@@ -324,7 +324,8 @@ pub trait MempoolStore: Clone + Send + Sync + 'static {
     fn find_inflight(&self, tx_hash: &TxHash) -> Option<MempoolTx>;
 
     /// Returns all inflight transactions (Propagated, Acknowledged,
-    /// or Confirmed) in arbitrary order. Does not remove them.
+    /// or Confirmed) in the order they were first admitted. Does not remove
+    /// them.
     fn peek_inflight(&self) -> Vec<MempoolTx>;
 
     /// Called after each chain-sync event.

@@ -616,14 +616,16 @@ impl InflightTable {
 
     fn peek(rx: &redb::ReadTransaction) -> Result<Vec<MempoolTx>, RedbMempoolError> {
         let table = rx.open_table(Self::DEF)?;
-        let mut result = Vec::new();
+        let mut records = Vec::new();
         for entry in table.iter()? {
             let entry = entry?;
-            let hash = entry.0.value().to_tx_hash();
-            let record = entry.1.value();
-            result.push(record.to_mempool_tx(hash));
+            records.push((entry.0.value().to_tx_hash(), entry.1.value()));
         }
-        Ok(result)
+        records.sort_by_key(|(_, record)| record.seq);
+        Ok(records
+            .into_iter()
+            .map(|(hash, record)| record.to_mempool_tx(hash))
+            .collect())
     }
 }
 
@@ -1349,6 +1351,39 @@ mod tests {
         assert_eq!(store.check_status(&a).stage, MempoolTxStage::Confirmed);
         assert_eq!(store.check_status(&a).confirmed_at, Some(test_point_2()));
         assert_eq!(pending(&store), [t]);
+    }
+
+    fn inflight(store: &RedbMempool) -> Vec<TxHash> {
+        store.peek_inflight().iter().map(|tx| tx.hash()).collect()
+    }
+
+    #[test]
+    fn an_inflight_transaction_requeued_and_sent_again_keeps_its_first_place() {
+        let store = test_store();
+        let (a, t) = (test_hash(1), test_hash(2));
+        store.receive(test_tx(1)).unwrap();
+        store.mark_inflight(&[a]).unwrap();
+        store.receive(test_tx(2)).unwrap();
+        store.mark_inflight(&[t]).unwrap();
+        store.confirm(&test_point(), &[a], &[], 10, 10).unwrap();
+        store.confirm(&test_point_2(), &[], &[a], 10, 10).unwrap();
+        assert_eq!(pending(&store), [a]);
+        store.mark_inflight(&[a]).unwrap();
+        assert_eq!(inflight(&store), [a, t]);
+    }
+
+    #[test]
+    fn inflight_transactions_list_in_the_order_they_were_admitted() {
+        let store = test_store();
+        let admitted: Vec<TxHash> = (1..=8).map(test_hash).collect();
+        let mut by_hash = admitted.clone();
+        by_hash.sort();
+        assert_ne!(by_hash, admitted);
+        for n in 1..=8 {
+            store.receive(test_tx(n)).unwrap();
+        }
+        store.mark_inflight(&admitted).unwrap();
+        assert_eq!(inflight(&store), admitted);
     }
 
     #[test]
