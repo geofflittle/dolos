@@ -2,6 +2,12 @@
 
 PALLAS=${PALLAS:-scratch/pallas}
 SCRATCH=${SCRATCH:-scratch/dolos}
+# The clone each planted state is made in, whose files every plant writes again.
+PLANT=${PLANT:-scratch/plant}
+# The Dolos and pallas trees the overlay build reads, and the target dir it writes.
+OVERLAY_DOLOS=${OVERLAY_DOLOS:-scratch/overlay-dolos}
+OVERLAY_PALLAS=${OVERLAY_PALLAS:-scratch/overlay-pallas}
+OVERLAY_TARGET=${OVERLAY_TARGET:-target/overlay}
 REV=${REV:-feat/ledger-oracle}
 MIN_FREE_G=${MIN_FREE_G:-6}
 OUT=${OUT:-"$ROOT/runs/$(date -u +%Y%m%dT%H%M%SZ)"}
@@ -14,8 +20,6 @@ GRPCURL=${GRPCURL:-grpcurl}
 BOX_PATH=oracle/box
 # The Dolos test module that judges the corpora and the live node.
 ORACLE_TESTS=serve::grpc::v1::ledger_oracle_tests
-# One line for each unit of the target dir, the tree ids of the scratch trees its last build read and its output files.
-BUILT="$ROOT/${TARGET:-target}/built-units"
 # The arms whose switch an overlay diff adds, one per line.
 switches() {
   sed -n 's/^+.*oracle_plant("\([a-z0-9-]*\)").*/\1/p' "$@" | sort -u
@@ -361,6 +365,39 @@ plant_overlay() {
   [ "$rejected" -gt 0 ] && [ "$status" -eq 1 ]
 }
 
+# Commits the plant clone's files over the parent $1 without the rejected hunks plant_overlay leaves, and prints the commit, the same one for the same files and parent.
+planted_commit() {
+  git -C "$ROOT/$PLANT" ls-files -z --others -- '*.rej' | (cd "$ROOT/$PLANT" && xargs -0 -r rm -f) &&
+    planted_tree=$(tree_of "$ROOT/$PLANT") &&
+    GIT_AUTHOR_NAME=oracle GIT_AUTHOR_EMAIL=oracle GIT_AUTHOR_DATE='@1 +0000' \
+      GIT_COMMITTER_NAME=oracle GIT_COMMITTER_EMAIL=oracle GIT_COMMITTER_DATE='@1 +0000' \
+      git -C "$ROOT/$PLANT" commit-tree "$planted_tree" -p "$1" -m planted
+}
+
+# Puts the clone $1 at the commit $3 of the repository $2 with each diff after $4 planted over it hunk by hunk, and its pallas crates pointed at the tree $4 when $4 is not empty, making each state in the plant clone so the clone $1 writes only the files whose content differs from its last state, and prints the switch each rejected hunk adds and, on stderr, whether git writes each diff as committed.
+plant_tree() {
+  plant_at=$1
+  plant_paths=$4
+  clone_at "$PLANT" "$2" "$3" >&2 || return 2
+  plant_state=$(git -C "$ROOT/$PLANT" rev-parse HEAD) || return 2
+  shift 4
+  for plant_diff; do
+    plant_overlay "$plant_diff" "$ROOT/$PLANT" || return
+    plant_parent=$plant_state
+    plant_state=$(planted_commit "$plant_parent") || return 2
+    plant_regen=differs
+    if git -C "$ROOT/$PLANT" diff --no-color --abbrev=8 "$plant_parent" "$plant_state" | cmp -s - "$plant_diff"; then
+      plant_regen=same
+    fi
+    echo "REGEN diff=${plant_diff#"$HERE"/} $plant_regen" >&2
+  done
+  if [ -n "$plant_paths" ]; then
+    pallas_paths "$ROOT/$PLANT" "$plant_paths" &&
+      plant_state=$(planted_commit "$plant_state") || return 2
+  fi
+  clone_at "$plant_at" "$ROOT/$PLANT" "$plant_state" >&2 || return 2
+}
+
 # Whether a verdict list holds a passing head and every verdict in it names a passing word.
 passed() {
   case " $1 " in
@@ -633,13 +670,17 @@ pallas_history() {
   fi
 }
 
-# Checks pallas out at a commit into the scratch pallas tree and points the scratch tree's pallas crates at it.
+# Checks pallas out at a commit into the scratch pallas tree.
 pallas_tree() {
   pallas_history "$1" || return
   git -C "$ROOT/$PALLAS" checkout -q -f --detach "$1" &&
-    git -C "$ROOT/$PALLAS" clean -q -fdx &&
-    sed -E -i 's#^(pallas[a-z-]*) = \{ git = "https://github.com/[^/]+/pallas", rev = "[0-9a-f]+"#\1 = { path = "/w/'"$PALLAS"'/\1"#' \
-      "$ROOT/$SCRATCH/Cargo.toml"
+    git -C "$ROOT/$PALLAS" clean -q -fdx
+}
+
+# Points the pallas crates of the Dolos tree $1 at the pallas tree $2 under the build root.
+pallas_paths() {
+  sed -E -i 's#^(pallas[a-z-]*) = \{ git = "https://github.com/[^/]+/pallas", rev = "[0-9a-f]+"#\1 = { path = "/w/'"$2"'/\1"#' \
+    "$1/Cargo.toml"
 }
 
 # The manifest of fix commits, each with its arm or the reason it has none.
@@ -841,14 +882,19 @@ fix_arms_both() {
   fix_arms "$ROOT/$PALLAS" pallas "$pin" && [ "$dolos" -eq 0 ]
 }
 
+# Puts the clone $1 under the build root at the commit $3 of the repository $2 with no other change, cloning it first when it is absent, and writes only the files whose content differs from its last state.
+clone_at() {
+  if [ ! -d "$ROOT/$1/.git" ]; then
+    git clone -q --no-checkout "$2" "$ROOT/$1" || return
+  fi
+  git -C "$ROOT/$1" fetch -q "$2" "$3" &&
+    git -C "$ROOT/$1" checkout -q -f --detach FETCH_HEAD &&
+    git -C "$ROOT/$1" clean -q -fdx
+}
+
 # Puts the scratch tree at REV of the bare repository $ROOT/dolos.git with no planted change.
 reset_scratch() {
-  if [ ! -d "$ROOT/$SCRATCH/.git" ]; then
-    git clone -q --no-checkout "$ROOT/dolos.git" "$ROOT/$SCRATCH"
-  fi
-  git -C "$ROOT/$SCRATCH" fetch -q "$ROOT/dolos.git" "$REV"
-  git -C "$ROOT/$SCRATCH" checkout -q -f --detach FETCH_HEAD
-  git -C "$ROOT/$SCRATCH" clean -q -fdx
+  clone_at "$SCRATCH" "$ROOT/dolos.git" "$REV"
 }
 
 # Runs the function $2 on each later argument, $1 at a time with the arguments dealt to $1 workers in turn, then prints each run's output in argument order.
@@ -968,6 +1014,8 @@ record_units() {
 build_checked() {
   json=$1
   shift
+  # One line for each unit of the target dir, the tree ids of the scratch trees its last build read and its output files.
+  BUILT="$ROOT/${TARGET:-target}/built-units"
   dolos=$(tree_of "$ROOT/$SCRATCH")
   pallas=$(tree_of "$ROOT/$PALLAS")
   if [ ! -f "$BUILT" ]; then
@@ -995,6 +1043,11 @@ build_checked() {
   fi
   # A fresh unit that reads no changed file has the inputs it would have at the current trees.
   record_units "$json" "$dolos" "$pallas"
+}
+
+# Runs a command with the trees and the target dir of the overlay build in place of the head's.
+in_overlay() {
+  SCRATCH=$OVERLAY_DOLOS PALLAS=$OVERLAY_PALLAS TARGET=$OVERLAY_TARGET "$@"
 }
 
 # Builds the test binary of the scratch tree's dolos library, cargo's messages in $1 and the rest of the arguments passed to cargo.

@@ -11,6 +11,8 @@ LAST_VALUE=${LAST_VALUE:-$ROOT/runs/last-value}
 VALUE_RESULTS=${VALUE_RESULTS:-$ROOT/value/results}
 # The image the harness runs the generator and the Haskell ledger in.
 VALUE_IMAGE=conformance-gen-hs:2
+# The pallas tree the overlay probe reads.
+VALUE_PALLAS=${VALUE_PALLAS:-scratch/value-pallas}
 # The arms of the value leg, each a switch of value/pallas.diff or of overlay/pallas.diff.
 VALUE_ARMS="emptyguards value-guards-top value-guards-sub value-spend-redeemer value-withdrawal-order"
 
@@ -68,7 +70,7 @@ value_verdict() {
   arm_verdict "$(value_key "$1")" "$OUT/value/$1.ran" '^DECODE-ORACLE values=[1-9]' "$1" value_caught "$OUT/value/$1" "$(value_class "$1")"
 }
 
-# Puts the harness of value/harness.rev in $ROOT/value/gen, the pinned pallas tree in $ROOT/value/conf and the generator for its oracle/Main.hs in its bin.
+# Puts the harness of value/harness.rev in $ROOT/value/gen and the generator for its oracle/Main.hs in its bin.
 value_harness() {
   rev=$(cat "$HERE/value/harness.rev")
   repo=$ROOT/value/harness.git
@@ -81,7 +83,6 @@ value_harness() {
   rm -rf "$ROOT/value/gen" "$ROOT/value/conf"
   mkdir -p "$ROOT/value/gen"
   git -C "$repo" archive "$rev" conformance-value-oracle/gen | tar -x -C "$ROOT/value/gen" --strip-components 2 || return
-  ln -s "../$PALLAS" "$ROOT/value/conf"
   main=$(sha256sum "$ROOT/value/gen/oracle/Main.hs" | cut -c1-12)
   gen=$VALUE_GEN_DIR/conformance-gen-$main
   if [ ! -x "$gen" ]; then
@@ -93,9 +94,10 @@ value_harness() {
   echo "$rev"
 }
 
-# Builds the probe over the scratch pallas tree with its current changes into $OUT/value/bin/$1, with the pallas tree's toolchain and the target $2.
+# Builds the probe over the pallas tree $3, which $ROOT/value/conf names, into $OUT/value/bin/$1, with that tree's toolchain and the target $2.
 value_probe() {
-  cp "$ROOT/$PALLAS/rust-toolchain.toml" "$ROOT/value/gen/probe-value/"
+  ln -sfn "../$3" "$ROOT/value/conf"
+  cp "$ROOT/$3/rust-toolchain.toml" "$ROOT/value/gen/probe-value/"
   if ! TARGET=$2 sh "$IN_IMAGE" value/gen/probe-value cargo build --release >"$OUT/value/$1.build" 2>&1; then
     echo "VALUE BUILD_FAILED probe=$1 log=$OUT/value/$1.build"
     return 1
@@ -301,21 +303,22 @@ value_leg() {
   fi
   head=FAIL
   : >"$OUT/value/results.used"
-  if value_probe head target/value-head && value_tier head "$OUT/value/head" "" >"$OUT/value/head.out" 2>&1; then
+  if value_probe head target/value-head "$PALLAS" && value_tier head "$OUT/value/head" "" >"$OUT/value/head.out" 2>&1; then
     head=PASS
   fi
   grep -E '^(DECODE-ORACLE|V1-FIELDS|PRE-V1|ATTACH|EXPECTED) ' "$OUT/value/head.out" || true
   sed -n 's/^TIER /VALUE head /p' "$OUT/value/head.out"
   verdicts="value-head=$head"
-  if ! unplanted=$({ plant_overlay "$HERE/overlay/pallas.diff" "$ROOT/$PALLAS" &&
-    plant_overlay "$HERE/value/pallas.diff" "$ROOT/$PALLAS"; } 2>"$OUT/value/overlay.plant"); then
+  if ! unplanted=$(plant_tree "$VALUE_PALLAS" "$ROOT/$PALLAS" "$pin" "" "$HERE/overlay/pallas.diff" \
+    "$HERE/value/pallas.diff" 2>"$OUT/value/overlay.plant"); then
     echo "VALUE OVERLAY_UNPLANTED log=$OUT/value/overlay.plant"
     overlay=UNPLANTED
-  elif ! value_probe overlay target/value-overlay; then
+  elif ! value_probe overlay target/value-overlay "$VALUE_PALLAS"; then
     overlay=UNBUILT
   else
     overlay=built
   fi
+  sed -n 's/^REGEN /VALUE regen /p' "$OUT/value/overlay.plant"
   if [ "$overlay" != built ]; then
     verdicts="$verdicts value-control=$overlay"
     for arm in $VALUE_ARMS; do

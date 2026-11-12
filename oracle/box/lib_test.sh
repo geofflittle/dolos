@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier and which of its steps it reruns, the value control's verdict, the amaru pin and the amaru leg's verdicts.
+# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, the overlay build's target dir, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the files a planted tree writes and whether git writes each diff as committed, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier and which of its steps it reruns, the value control's verdict, the amaru pin and the amaru leg's verdicts.
 # Usage: lib_test.sh <empty work dir>
 set -eu
 W=$(cd "$1" && pwd)
@@ -81,6 +81,23 @@ build x=false y=false >/dev/null
 change_a
 expect between "$(build y=true)" "exit=0 "
 expect skipped "$(build x=true y=true)" "exit=1 STALE unit=/w/target/release/deps/libx-1.rlib file=a.rs"
+
+# Must hand an overlay build the overlay's target dir and keep its record there, and must leave the head's record and trees as they were.
+setup overlay_target
+build x=false y=false >/dev/null
+head_record=$(cat "$ROOT/target/built-units")
+git clone -q "$ROOT/scratch/dolos" "$ROOT/scratch/overlay-dolos"
+mkdir -p "$ROOT/target/overlay"
+printf 'echo "$TARGET" >"%s/target-seen"\ncat "%s/messages"\n' "$ROOT" "$ROOT" >"$ROOT/runner.sh"
+overlay_built=$(
+  SCRATCH=scratch/dolos IN_IMAGE=$ROOT/runner.sh
+  . "$LIB"
+  in_overlay build_checked "$ROOT/overlay.json" build >/dev/null
+  head=changed
+  if [ "$(cat "$ROOT/target/built-units")" = "$head_record" ]; then head=same; fi
+  echo "target=$(cat "$ROOT/target-seen") scratch=$SCRATCH head=$head overlay_units=$(grep -c . "$ROOT/target/overlay/built-units")"
+)
+expect overlay_target "$overlay_built" "target=target/overlay scratch=scratch/dolos head=same overlay_units=2"
 
 # An overlay whose added lines switch a in pallas and b in Dolos, with c only on a context line and f only on a removed one, and plants of their own for d in pallas and e in Dolos.
 H=$W/arms
@@ -437,6 +454,57 @@ expect plant_switches "$(plant_of 'a.rs b.rs')" "exit=0 a b switched="
 expect plant_shared "$(plant_of c.rs)" "exit=1  switched=a.rs,b.rs"
 expect plant_gone "$(plant_of '' a.rs)" "exit=1  switched=b.rs"
 expect plant_gone_beside_switch "$(plant_of b.rs c.rs)" "exit=1 b switched=a.rs"
+
+# A repository of a.rs, b.rs and a Cargo.toml pinning pallas by git, a diff switching a in a.rs as git writes it, the same diff with longer blob names and a diff switching b in b.rs.
+T=$W/plant-tree
+rm -rf "$T" "$H/tree"
+mkdir -p "$H/tree"
+git init -q "$T/src"
+for f in a b; do printf '%s\n' "fn $f() {" '}' >"$T/src/$f.rs"; done
+echo 'pallas-validate = { git = "https://github.com/a/pallas", rev = "111" }' >"$T/src/Cargo.toml"
+git -C "$T/src" add -A
+git -C "$T/src" -c user.name=t -c user.email=t@t commit -q -m t
+tree_base=$(git -C "$T/src" rev-parse HEAD)
+for f in a b; do
+  printf '%s\n' "fn $f() {" "    oracle_plant(\"$f\");" '}' >"$T/src/$f.rs"
+  git -C "$T/src" diff --no-color --abbrev=8 >"$H/tree/$f.diff"
+  git -C "$T/src" diff --no-color --abbrev=12 >"$H/tree/$f-long.diff"
+  git -C "$T/src" checkout -q -- .
+done
+# Gives each file of the planted clone an old time the index records.
+tree_stamp() {
+  touch -d @1000000000 "$T/built/a.rs" "$T/built/b.rs" "$T/built/Cargo.toml"
+  git -C "$T/built" update-index -q --refresh
+}
+# Plants the diffs given over the repository's commit into the clone $T/built, printing plant_tree's exit, its regen lines, the files it wrote and kept, the switched files and where the clone's Cargo.toml points pallas.
+tree_plant() {
+  (
+    ROOT=$T HERE=$H
+    . "$LIB"
+    status=0
+    out=$(plant_tree built "$T/src" "$tree_base" scratch/pallas-x "$@" 2>"$T/plant.err") || status=$?
+    kept=
+    written=
+    for f in a.rs b.rs Cargo.toml; do
+      if [ "$(stat -c %Y "$T/built/$f")" = 1000000000 ]; then kept="$kept$f,"; else written="$written$f,"; fi
+    done
+    echo "exit=$status $(echo $out) $(sed -n 's/^REGEN //p' "$T/plant.err" | paste -sd ' ' -) kept=$kept written=$written" \
+      "switched=$(cd "$T/built" && grep -l oracle_plant a.rs b.rs | paste -sd, -) $(sed -n 's/.*path = "\([^"]*\)".*/\1/p' "$T/built/Cargo.toml")"
+  )
+}
+tree_plant "$H/tree/a.diff" >/dev/null
+tree_stamp
+# Must not write a file whose content the last plant gave it, and must say git writes a diff it wrote as committed.
+expect tree_kept "$(tree_plant "$H/tree/a.diff")" \
+  "exit=0  diff=tree/a.diff same kept=a.rs,b.rs,Cargo.toml, written= switched=a.rs /w/scratch/pallas-x/pallas-validate"
+tree_stamp
+# Must write each file whose content changes, and only those.
+expect tree_moved "$(tree_plant "$H/tree/b.diff")" \
+  "exit=0  diff=tree/b.diff same kept=Cargo.toml, written=a.rs,b.rs, switched=b.rs /w/scratch/pallas-x/pallas-validate"
+tree_stamp
+# Must say git does not write a diff as committed when its bytes differ from what git writes for the same change.
+expect tree_regen_differs "$(tree_plant "$H/tree/a-long.diff")" \
+  "exit=0  diff=tree/a-long.diff differs kept=Cargo.toml, written=a.rs,b.rs, switched=a.rs /w/scratch/pallas-x/pallas-validate"
 
 # The free gibibytes of a filesystem holding $1 bytes free and require_free's verdict with a floor of $2, with a df that answers -B1 in bytes and -BG in gibibytes rounded up.
 free_of() {
