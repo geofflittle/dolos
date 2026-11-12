@@ -13,7 +13,7 @@ MIN_FREE_G=${MIN_FREE_G:-6}
 OUT=${OUT:-"$ROOT/runs/$(date -u +%Y%m%dT%H%M%SZ)"}
 IN_IMAGE=${IN_IMAGE:-$HERE/in-image.sh}
 # The image in-image.sh runs builds and tests in.
-BUILD_IMAGE=dolos-build:1
+BUILD_IMAGE='dolos-build:1'
 export BUILD_IMAGE
 GRPCURL=${GRPCURL:-grpcurl}
 # The Dolos path of the box scripts, which holds the arms manifest and each arm's plant and records.
