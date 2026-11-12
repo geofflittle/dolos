@@ -1,10 +1,13 @@
 //! Resolved inputs for the transaction mappings of one block response.
 //! The map is discarded after the response; no state survives a rollback.
 use pallas::{
+    crypto::hash::Hash,
     interop::utxorpc::{LedgerContext, TxoRef, UtxoMap},
     ledger::traverse::{Era, MultiEraBlock, MultiEraTx},
 };
 use std::{borrow::Cow, collections::HashSet, sync::Arc};
+
+use dolos_core::TxOrder;
 
 use crate::serve::ChainReads;
 
@@ -33,6 +36,15 @@ pub(super) struct BlockTxs<'b> {
     era: Era,
     slot: u64,
     txs: Vec<MultiEraTx<'b>>,
+    applied: Vec<AppliedTx>,
+}
+
+/// A transaction of a block by its hash and its place in the order the ledger
+/// applies the block.
+struct AppliedTx {
+    hash: Hash<32>,
+    index: TxOrder,
+    step: usize,
 }
 
 /// A transaction of a block, held with the transactions of that block.
@@ -44,16 +56,53 @@ pub(super) struct TxOfBlock<'t, 'b> {
 impl<'b> BlockTxs<'b> {
     /// The transactions of `block`.
     pub(super) fn of(block: &'b MultiEraBlock<'_>) -> Self {
+        Self::hashed_by(block, |tx| tx.hash())
+    }
+
+    /// The transactions of `block`, each hashed once by `hash`.
+    fn hashed_by(
+        block: &'b MultiEraBlock<'_>,
+        mut hash: impl FnMut(&MultiEraTx<'b>) -> Hash<32>,
+    ) -> Self {
+        let txs = block.txs();
+        let mut applied = Vec::new();
+        for (index, tx) in txs.iter().enumerate() {
+            let mut step = 0;
+            let Ok(()) = dolos_core::for_each_applied_tx(tx, |tx| {
+                applied.push(AppliedTx {
+                    hash: hash(tx),
+                    index,
+                    step,
+                });
+                step += 1;
+                Ok::<_, std::convert::Infallible>(())
+            });
+        }
         Self {
             era: block.era(),
             slot: block.slot(),
-            txs: block.txs(),
+            txs,
+            applied,
         }
     }
 
-    /// The top level transactions of the block, in the order it lists them.
-    pub(super) fn top_level(&self) -> &[MultiEraTx<'b>] {
-        &self.txs
+    /// The hash of each transaction of the block in the order the ledger
+    /// applies them, with the index of the top level transaction that lists it.
+    pub(super) fn applied_hashes(&self) -> impl DoubleEndedIterator<Item = (TxOrder, &Hash<32>)> {
+        self.applied.iter().map(|x| (x.index, &x.hash))
+    }
+
+    /// The transaction `applied` names.
+    fn tx_at(&self, applied: &AppliedTx) -> Option<MultiEraTx<'b>> {
+        let mut step = 0;
+        let found = dolos_core::for_each_applied_tx(self.txs.get(applied.index)?, |tx| {
+            if step == applied.step {
+                return Err(tx.clone());
+            }
+            step += 1;
+            Ok(())
+        });
+        found.err()
     }
 
     /// The top level transaction at `index` of the block.
@@ -67,7 +116,8 @@ impl<'b> BlockTxs<'b> {
     /// The transaction of the block whose hash is `hash`, a sub transaction
     /// included.
     pub(super) fn applied(&self, hash: &[u8]) -> Option<TxOfBlock<'_, 'b>> {
-        dolos_core::tx_in(&self.txs, hash).map(|(_, tx)| TxOfBlock {
+        let applied = self.applied.iter().find(|x| x.hash.as_slice() == hash)?;
+        self.tx_at(applied).map(|tx| TxOfBlock {
             block: self,
             tx: Cow::Owned(tx),
         })
@@ -86,19 +136,16 @@ impl<'b> TxOfBlock<'_, 'b> {
 fn made_among(block: &BlockTxs<'_>, named: &HashSet<TxoRef>) -> UtxoMap {
     let makers: HashSet<_> = named.iter().map(|(hash, _)| *hash).collect();
     let mut made = UtxoMap::new();
-    for tx in &block.txs {
-        let Ok(()) = dolos_core::for_each_applied_tx(tx, |tx| {
-            let hash = tx.hash();
-            if makers.contains(&hash) {
-                for (i, output) in tx.produces() {
-                    let made_ref = (hash, i as u32);
-                    if named.contains(&made_ref) {
-                        made.insert(made_ref, (block.era, output.encode()));
-                    }
-                }
+    for applied in block.applied.iter().filter(|x| makers.contains(&x.hash)) {
+        let Some(tx) = block.tx_at(applied) else {
+            continue;
+        };
+        for (i, output) in tx.produces() {
+            let made_ref = (applied.hash, i as u32);
+            if named.contains(&made_ref) {
+                made.insert(made_ref, (block.era, output.encode()));
             }
-            Ok::<_, std::convert::Infallible>(())
-        });
+        }
     }
     made
 }
@@ -308,7 +355,7 @@ mod made_in_block_tests {
         txs: &'t BlockTxs<'b>,
         pick: impl Fn(&MultiEraTx<'b>) -> bool,
     ) -> TxOfBlock<'t, 'b> {
-        let index = txs.top_level().iter().position(pick).unwrap();
+        let index = txs.txs.iter().position(pick).unwrap();
         txs.at(index).unwrap()
     }
 
@@ -373,6 +420,131 @@ mod made_in_block_tests {
         let (asked, served) = resolve_one(&sub);
         assert_eq!(asked, outside);
         assert_eq!(served, inside);
+    }
+
+    #[test]
+    fn each_transaction_of_a_block_is_found_by_its_hash() {
+        let (raw, _) = spends_its_own_sub_output();
+        let block = MultiEraBlock::decode(&raw).unwrap();
+        let txs = BlockTxs::of(&block);
+        let hashes: Vec<_> = dolos_core::applied_txs(&block)
+            .iter()
+            .map(|(_, tx)| Some(tx.hash()))
+            .collect();
+
+        let found: Vec<_> = hashes
+            .iter()
+            .flatten()
+            .map(|hash| txs.applied(hash.as_slice()).map(|tx| tx.tx().hash()))
+            .collect();
+
+        assert_eq!(found, hashes);
+    }
+
+    thread_local! {
+        static HASHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// The hash of `tx`, counted in `HASHED`.
+    fn counted(tx: &MultiEraTx<'_>) -> Hash<32> {
+        HASHED.with(|x| x.set(x.get() + 1));
+        tx.hash()
+    }
+
+    /// The hash `hash` with its first byte flipped.
+    fn flipped(hash: Hash<32>) -> Hash<32> {
+        let mut bytes = *hash;
+        bytes[0] ^= 0xff;
+        Hash::new(bytes)
+    }
+
+    /// The hash of `tx` with its first byte flipped.
+    fn shifted(tx: &MultiEraTx<'_>) -> Hash<32> {
+        flipped(tx.hash())
+    }
+
+    #[test]
+    fn finding_a_transaction_and_preparing_its_context_hash_each_transaction_of_the_block_once() {
+        let (raw, made) = spends_its_own_sub_output();
+        let block = MultiEraBlock::decode(&raw).unwrap();
+        let applied = dolos_core::applied_txs(&block).len();
+        HASHED.with(|x| x.set(0));
+
+        let txs = BlockTxs::hashed_by(&block, counted);
+        let sub = txs.applied(made.0.as_slice()).unwrap();
+        resolve_one(&sub);
+
+        assert_eq!(HASHED.with(|x| x.get()), applied);
+    }
+
+    #[test]
+    fn the_outputs_a_block_makes_are_found_by_the_hashes_it_holds() {
+        let (raw, made) = spends_its_own_sub_output();
+        let block = MultiEraBlock::decode(&raw).unwrap();
+        let txs = BlockTxs::hashed_by(&block, shifted);
+        let held = (flipped(made.0), made.1);
+
+        let served: HashSet<TxoRef> = made_among(&txs, &HashSet::from([held, made]))
+            .into_keys()
+            .collect();
+
+        assert_eq!(served, HashSet::from([held]));
+    }
+
+    /// A block holding `count` transactions, the fixture block's transactions
+    /// repeated in order.
+    fn with_txs(count: usize) -> Vec<u8> {
+        let (raw, _) = spends_its_own_sub_output();
+        let (era, mut block): (u16, dijkstra::Block) = minicbor::decode(&raw).unwrap();
+        let txs: Vec<_> = block
+            .block_body
+            .transactions
+            .iter()
+            .cycle()
+            .take(count)
+            .cloned()
+            .collect();
+        block.block_body.transactions = MaybeIndefArray::Def(txs);
+        minicbor::to_vec((era, block)).unwrap()
+    }
+
+    #[test]
+    #[ignore = "a timing, run by hand"]
+    fn time_finding_one_transaction_against_the_size_of_its_block() {
+        use std::time::{Duration, Instant};
+        let calls = 100;
+        for count in [10, 100, 1000] {
+            let raw = with_txs(count);
+            let block = MultiEraBlock::decode(&raw).unwrap();
+            let first = block.txs()[0].hash();
+            HASHED.with(|x| x.set(0));
+            let txs = BlockTxs::hashed_by(&block, counted);
+            resolve_one(&txs.applied(first.as_slice()).unwrap());
+            let hashed = HASHED.with(|x| x.get());
+            let (mut decode, mut hash, mut find) = (Duration::ZERO, Duration::ZERO, Duration::ZERO);
+            for _ in 0..calls {
+                let start = Instant::now();
+                let block = MultiEraBlock::decode(&raw).unwrap();
+                decode += start.elapsed();
+                let start = Instant::now();
+                let applied = dolos_core::applied_txs(&block);
+                applied.iter().for_each(|(_, tx)| {
+                    std::hint::black_box(tx.hash());
+                });
+                hash += start.elapsed();
+                let start = Instant::now();
+                let txs = BlockTxs::of(&block);
+                resolve_one(&txs.applied(first.as_slice()).unwrap());
+                find += start.elapsed();
+            }
+            println!(
+                "FIND txs={count} bytes={} hashed={hashed} decode_us={} hash_pass_us={} find_us={}",
+                raw.len(),
+                decode.as_micros() / calls,
+                hash.as_micros() / calls,
+                find.as_micros() / calls
+            );
+        }
     }
 
     #[test]

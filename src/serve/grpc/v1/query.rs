@@ -3,7 +3,7 @@ use itertools::Itertools as _;
 use pallas::interop::utxorpc::v1::spec::query::any_utxo_pattern::UtxoPattern;
 use pallas::interop::utxorpc::v1::{self as interop, spec as u5c};
 use pallas::interop::utxorpc::LedgerContext;
-use pallas::ledger::traverse::{MultiEraBlock, MultiEraOutput, MultiEraTx};
+use pallas::ledger::traverse::{MultiEraBlock, MultiEraOutput};
 use std::collections::HashSet;
 use tonic::{Request, Response, Status};
 use tracing::{info, warn};
@@ -752,21 +752,6 @@ fn map_cardano_genesis(genesis: &Genesis) -> Result<u5c::cardano::Genesis, Statu
     })
 }
 
-/// The hash of each transaction of `txs` in the order the ledger applies them,
-/// with the index of the top level transaction that lists it.
-fn applied_hashes(
-    txs: &[MultiEraTx<'_>],
-) -> Vec<(dolos_core::TxOrder, pallas::crypto::hash::Hash<32>)> {
-    let mut applied = Vec::new();
-    for (index, tx) in txs.iter().enumerate() {
-        let Ok(()) = dolos_core::for_each_applied_tx(tx, |tx| {
-            applied.push((index, tx.hash()));
-            Ok::<_, std::convert::Infallible>(())
-        });
-    }
-    applied
-}
-
 fn last_including<H: AsRef<[u8]>>(
     applied: impl DoubleEndedIterator<Item = (dolos_core::TxOrder, H)>,
     hash: &[u8],
@@ -1110,7 +1095,7 @@ where
             .map_err(|e| Status::internal(format!("failed to decode block: {e}")))?;
 
         let txs = BlockTxs::of(&block);
-        let tx = last_including(applied_hashes(txs.top_level()).into_iter(), &tx_hash)
+        let tx = last_including(txs.applied_hashes(), &tx_hash)
             .and_then(|index| txs.at(index))
             .ok_or_else(|| Status::not_found("tx hash not found"))?;
 
