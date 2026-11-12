@@ -368,7 +368,8 @@ plant_overlay() {
 # Commits the plant clone's files over the parent $1 without the rejected hunks plant_overlay leaves, and prints the commit, the same one for the same files and parent.
 planted_commit() {
   git -C "$ROOT/$PLANT" ls-files -z --others -- '*.rej' | (cd "$ROOT/$PLANT" && xargs -0 -r rm -f) &&
-    planted_tree=$(tree_of "$ROOT/$PLANT") &&
+    git -C "$ROOT/$PLANT" add -A &&
+    planted_tree=$(git -C "$ROOT/$PLANT" write-tree) &&
     GIT_AUTHOR_NAME=oracle GIT_AUTHOR_EMAIL=oracle GIT_AUTHOR_DATE='@1 +0000' \
       GIT_COMMITTER_NAME=oracle GIT_COMMITTER_EMAIL=oracle GIT_COMMITTER_DATE='@1 +0000' \
       git -C "$ROOT/$PLANT" commit-tree "$planted_tree" -p "$1" -m planted

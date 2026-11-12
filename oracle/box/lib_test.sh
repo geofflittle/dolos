@@ -455,7 +455,7 @@ expect plant_shared "$(plant_of c.rs)" "exit=1  switched=a.rs,b.rs"
 expect plant_gone "$(plant_of '' a.rs)" "exit=1  switched=b.rs"
 expect plant_gone_beside_switch "$(plant_of b.rs c.rs)" "exit=1 b switched=a.rs"
 
-# A repository of a.rs, b.rs and a Cargo.toml pinning pallas by git, a diff switching a in a.rs as git writes it, the same diff with longer blob names and a diff switching b in b.rs.
+# A repository of a.rs, b.rs, a Cargo.toml pinning pallas by git and a submodule no clone checks out, a diff switching a in a.rs as git writes it, the same diff with longer blob names and a diff switching b in b.rs.
 T=$W/plant-tree
 rm -rf "$T" "$H/tree"
 mkdir -p "$H/tree"
@@ -463,6 +463,8 @@ git init -q "$T/src"
 for f in a b; do printf '%s\n' "fn $f() {" '}' >"$T/src/$f.rs"; done
 echo 'pallas-validate = { git = "https://github.com/a/pallas", rev = "111" }' >"$T/src/Cargo.toml"
 git -C "$T/src" add -A
+mkdir "$T/src/sub"
+git -C "$T/src" update-index --add --cacheinfo 160000,0460c5a6152ae094bcfdad64a54b1a6561d7e38a,sub
 git -C "$T/src" -c user.name=t -c user.email=t@t commit -q -m t
 tree_base=$(git -C "$T/src" rev-parse HEAD)
 for f in a b; do
