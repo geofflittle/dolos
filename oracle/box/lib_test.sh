@@ -1362,7 +1362,7 @@ for script in run.sh breaks.sh candidate.sh; do
     tier "$K" "" "$script" "$([ "$script" = candidate.sh ] && echo "$K/dir" || echo done)"
   )
   expect "slice_out_$script" "$(run_out "$K" | sed -e "s#$HERE/##g" -e "s#$K/##g")" \
-    "systemctl set-property --runtime dolos-oracle.slice MemoryMax=2048M MemorySwapMax=1G systemd-run --scope --quiet --collect --slice=dolos-oracle.slice sh $script $([ "$script" = candidate.sh ] && echo dir || echo done) exit=0"
+    "systemctl set-property --runtime dolos-oracle.slice MemoryMax=2560M MemorySwapMax=1G systemd-run --scope --quiet --collect --slice=dolos-oracle.slice sh $script $([ "$script" = candidate.sh ] && echo dir || echo done) exit=0"
   expect "slice_out_lock_$script" "$(record_left "$K")" removed
 done
 # Must fire: an ORACLE_MEMORY given to a run sets the slice's memory limit, and the swap limit stays.
@@ -1402,7 +1402,7 @@ expect arm_jobs_fit "$(arm_jobs_of 8589934592 1073741824)" 8
 expect arm_jobs_floor "$(arm_jobs_of 3221225471 1073741824)" 2
 # Must fire: a slice smaller than one judge still runs one, and the box's slice runs fewer judges than the four it was killed at.
 expect arm_jobs_one "$(arm_jobs_of 536870912 1073741824)" 1
-expect arm_jobs_box "$(arm_jobs_of 2147483648 '')" 1
+expect arm_jobs_box "$(arm_jobs_of 2684354560 '')" 1
 
 # The arguments the docker of the box scripts hands the docker it fronts for the arguments given, or its refusal and exit.
 D=$W/docker
