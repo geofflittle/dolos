@@ -506,9 +506,9 @@ leg_due() {
   [ ! -f "$1" ] || [ "$(cat "$1")" != "$2" ]
 }
 
-# The systemd slice every process and container of an oracle run is placed in, and the memory and swap it may use, sized so the node and the serving Dolos keep their peak working sets.
+# The systemd slice every process and container of an oracle run is placed in, and the memory and swap it may use, where ORACLE_MEMORY is the one value that bounds the oracle's share of the box.
 ORACLE_SLICE=${ORACLE_SLICE:-dolos-oracle.slice}
-ORACLE_MEMORY=${ORACLE_MEMORY:-2560M}
+ORACLE_MEMORY=${ORACLE_MEMORY:-2048M}
 ORACLE_SWAP=${ORACLE_SWAP:-1G}
 CGROUP_FILE=${CGROUP_FILE:-/proc/self/cgroup}
 CGROUP_ROOT=${CGROUP_ROOT:-/sys/fs/cgroup}
