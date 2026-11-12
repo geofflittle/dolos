@@ -8,6 +8,7 @@ set -eu
 MEMORY=${MEMORY:-6g}
 TREE=$1
 shift
+IMAGE=$(sh "$(dirname "$0")/image-name.sh" dolos-build)
 exec docker run --rm --log-driver none --memory "$MEMORY" --memory-swap "$MEMORY" \
   --user "$(id -u):$(id -g)" -v "$ROOT:/w" \
   -e HOME=/w/home -e CARGO_HOME=/w/cargo-home -e RUSTUP_HOME=/w/rustup \
@@ -18,4 +19,4 @@ exec docker run --rm --log-driver none --memory "$MEMORY" --memory-swap "$MEMORY
   ${LIVE_DIR:+-e "LIVE_DIR=$LIVE_DIR"} ${ORACLE_RECORDS:+-e "ORACLE_RECORDS=$ORACLE_RECORDS"} \
   ${ORACLE_PLANT:+-e "ORACLE_PLANT=$ORACLE_PLANT"} ${FIXTURE_DIR:+-e "FIXTURE_DIR=$FIXTURE_DIR"} \
   ${ORACLE_DESELECT:+-e "ORACLE_DESELECT=$ORACLE_DESELECT"} ${ORACLE_HEAD_COUNTS:+-e "ORACLE_HEAD_COUNTS=$ORACLE_HEAD_COUNTS"} \
-  -w "/w/$TREE" dolos-build:1 "$@"
+  -w "/w/$TREE" "$IMAGE" "$@"

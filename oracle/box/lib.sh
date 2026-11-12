@@ -378,6 +378,15 @@ require_free() {
   fi
 }
 
+# Builds the image of the dir images/$1 under its name when docker has no image of that name, the build held to 4g of memory and swap.
+build_image() {
+  name=$(sh "$HERE/image-name.sh" "$1") || return
+  if docker image inspect "$name" >/dev/null 2>&1; then
+    return 0
+  fi
+  docker build --memory 4g --memory-swap 4g -t "$name" "$HERE/images/$1"
+}
+
 # Prints the full sha of the commit the ref $2 names in $ROOT/dolos.git, or exits 2 with a REFUSED line naming the variable $1 when it names none.
 full_commit() {
   if ! git -C "$ROOT/dolos.git" rev-parse --verify --quiet "$2^{commit}"; then
