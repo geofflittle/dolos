@@ -252,15 +252,62 @@ arm_ran() {
   fi
 }
 
-# Sets verdict for an arm whose run wrote the output $1 to what arm_ran sets when the output lacks the pattern $2 or the plant $3, else to CAUGHT when the command after $3 succeeds and MISSED when it fails.
+# Sets verdict for the arm $1 whose run wrote the output $2 to what arm_ran sets when the output lacks the pattern $3 or the plant $4, else to CAUGHT when the command after $4 succeeds and MISSED when it fails, recording the lines the command prints as what the arm served.
 arm_verdict() {
+  name=$1
+  shift
   arm_ran "$1" "$2" "$3" || return 0
   shift 3
-  if "$@"; then
+  mkdir -p "$OUT/served"
+  if "$@" >"$OUT/served/$name.printed"; then
     verdict=CAUGHT
   else
     verdict=MISSED
   fi
+  record_served "$name" <"$OUT/served/$name.printed"
+  rm -f "$OUT/served/$name.printed"
+}
+
+# Writes the lines on stdin to $OUT/served/$1 as what the arm $1 served, in byte order and without the number libtest gives a panicking test's thread.
+record_served() {
+  mkdir -p "$OUT/served"
+  sed "s/^\(thread '[^']*'\) ([0-9]*) panicked at /\1 panicked at /" | LC_ALL=C sort >"$OUT/served/$1"
+}
+
+# The row of served.txt for what the arm $1 served in this run: its name, its line count and the sha256 of its lines.
+served_row() {
+  echo "$1 lines=$(wc -l <"$OUT/served/$1" | tr -dc 0-9) sha256=$(sha256sum <"$OUT/served/$1" | cut -c1-64)"
+}
+
+# Sets checked to the verdict list $1 with each CAUGHT or HELD verdict turned to UNRECORDED when this run recorded nothing its arm served, to UNREFERENCED when served.txt holds no row for the arm and to CHANGED when its row differs from this run's, adding each row of this run to $OUT/served.txt and printing a SERVED line for each verdict turned.
+served_check() {
+  checked=
+  for checked_verdict in $1; do
+    checked_arm=${checked_verdict%%=*}
+    case $checked_verdict in
+      *=CAUGHT | *=HELD)
+        reference=$(awk -v arm="$checked_arm" '$1 == arm' "$HERE/served.txt" 2>/dev/null || true)
+        row=
+        if [ ! -f "$OUT/served/$checked_arm" ]; then
+          checked_verdict=$checked_arm=UNRECORDED
+        else
+          row=$(served_row "$checked_arm")
+          echo "$row" >>"$OUT/served.txt"
+          if [ -z "$reference" ]; then
+            checked_verdict=$checked_arm=UNREFERENCED
+          elif [ "$reference" != "$row" ]; then
+            checked_verdict=$checked_arm=CHANGED
+          fi
+        fi
+        case $checked_verdict in
+          *=UNRECORDED | *=UNREFERENCED | *=CHANGED)
+            echo "SERVED $checked_verdict reference=\"$reference\" run=\"$row\" lines=$OUT/served/$checked_arm"
+            ;;
+        esac
+        ;;
+    esac
+    checked="${checked:+$checked }$checked_verdict"
+  done
 }
 
 # Applies the overlay diff $1 over the work tree $2, keeping each hunk that applies, prints the switch each rejected hunk adds, and fails when a rejected hunk adds no switch or a file of the diff did not apply hunk by hunk.
@@ -360,7 +407,7 @@ take_lock() {
           ;;
       esac
       holder=$(cat "$RUN_LOCK")
-      if [ "$holder" != "$waited" ]; then
+      if [ -n "$holder" ] && [ "$holder" != "$waited" ]; then
         echo "WAITING lock_pid=$holder"
         waited=$holder
       fi

@@ -3,6 +3,7 @@
 # Usage: ROOT=dir [REV=ref] [BASE=ref] run.sh quick|done|ship|live|regen|value
 # The value tier runs the value leg of value.sh alone. The quick, done and ship tiers run it too when its inputs differ from those of the last passing value leg.
 # The quick tier judges the head on both corpora, the control and each arm whose plant changes a file that differs between BASE and REV, a pallas arm when the pallas entries of Cargo.toml or Cargo.lock differ. BASE defaults to the commit of the last done or ship run that passed, and when there is none every arm runs. The done tier, run per change, judges the head, the control and every arm, and fails on a fix commit that arms.toml gives neither an arm nor an exclusion. The ship tier, run before a rollout of the dolos-serve image, is the done tier while the live leg syncs a candidate from genesis. Only the ship tier and the live leg read the live node. The done and ship tiers record their commit in runs/last-done when they pass, and the ship tier and the live leg record theirs in runs/last-ship when the live leg passes.
+# The quick, done, ship and value tiers fail when a caught or held arm served other lines than its row of served.txt records, and a change that alters what an arm serves on purpose copies the arm's row from the run's served.txt into served.txt.
 # The live leg reads ENDPOINT, NODE, NODE_DB, GRPCURL, SERVE_CONFIG and CANDIDATE_GRPC from $LIVE_ENV.
 set -eu
 # Prints the run's exit status as its last line, after releasing the box lock when this run holds it.
@@ -201,6 +202,8 @@ value_verdicts() {
   reset_scratch >&2
   legs="$(sed -n 's/^VALUE \(value-head=.*\) pin=.*/\1/p' "$OUT/value.out" | grep . || echo value-head=FAIL) $(
     sed -n 's/^AMARU \(amaru-head=[A-Z]*\( amaru-[a-z0-9-]*=[A-Z]*\)*\).*/\1/p' "$OUT/amaru.out" | grep . || echo amaru-head=FAIL)"
+  served_check "$legs" >&2
+  legs=$checked
   case " $legs " in
     *" value-head=PASS "*" amaru-head=PASS "*)
       if passed "head=PASS $legs"; then
