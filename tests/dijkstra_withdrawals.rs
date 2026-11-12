@@ -369,6 +369,19 @@ fn pending_and_inflight_withdrawals_reserve_only_available_rewards() {
 }
 
 #[test]
+fn the_chain_keeps_the_effects_of_the_unconfirmed_transactions_each_submit_read() {
+    let (domain, txs, _) = synthetic(&[1, 1, 1, 100], 10);
+    let mut received = vec![];
+    for tx in &txs[..3] {
+        let hash = domain.receive_tx("each", &domain.read_chain(), tx).unwrap();
+        assert_eq!(domain.read_chain().unconfirmed_txs_held(), received);
+        received.push(hash);
+    }
+    assert_rejected(&domain, &txs[3], "amount exceeds the original balance");
+    assert_eq!(domain.read_chain().unconfirmed_txs_held(), received);
+}
+
+#[test]
 fn confirmation_rollback_and_drop_update_withdrawal_reservations() {
     let (domain, txs, credential) = synthetic(&[4, 6, 7], 10);
     let hash = domain

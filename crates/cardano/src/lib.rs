@@ -8,7 +8,7 @@ pub use pallas;
 use dolos_core::{
     config::CardanoConfig, BlockSlot, ChainError, ChainPoint, Domain, DomainError, EraCbor,
     Genesis, MempoolAwareUtxoStore, MempoolTx, MempoolUpdate, RawBlock, StateStore, TipEvent,
-    WorkUnit,
+    TxHash, WorkUnit,
 };
 
 use crate::{
@@ -274,9 +274,22 @@ pub struct CardanoLogic {
     /// eras. Set after Genesis or EStart work units are popped, cleared at
     /// next pop_work call.
     needs_cache_refresh: bool,
+    /// The effects of the unconfirmed transactions the last submit read, for
+    /// the next submit to extend.
+    unconfirmed: std::sync::Mutex<Option<validate::UnconfirmedEffects>>,
 }
 
 impl CardanoLogic {
+    /// The transactions whose combined effects the last submit kept.
+    pub fn unconfirmed_txs_held(&self) -> Vec<TxHash> {
+        self.unconfirmed
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|effects| effects.txs().to_vec())
+            .unwrap_or_default()
+    }
+
     /// Refresh the cached era summary from state.
     /// Called after work units that may change era information (like genesis).
     pub fn refresh_cache<D: Domain>(&mut self, state: &D::State) -> Result<(), ChainError> {
@@ -379,6 +392,7 @@ impl dolos_core::ChainLogic for CardanoLogic {
             },
             work: Some(work),
             needs_cache_refresh: false,
+            unconfirmed: Default::default(),
         })
     }
 
@@ -585,7 +599,7 @@ impl dolos_core::ChainLogic for CardanoLogic {
         tip: Option<ChainPoint>,
         genesis: &Genesis,
     ) -> Result<MempoolTx, ChainError> {
-        validate::validate_tx(cbor, utxos, tip, genesis)
+        validate::validate_tx(cbor, utxos, tip, genesis, &self.unconfirmed)
     }
 }
 

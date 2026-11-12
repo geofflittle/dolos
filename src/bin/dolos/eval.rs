@@ -71,6 +71,7 @@ pub async fn run(config: &RootConfig, args: &Args) -> miette::Result<()> {
         &utxos,
         Some(ChainPoint::Slot(args.block_slot)),
         &genesis,
+        &Default::default(),
     )
     .into_diagnostic()
     .context("validating and evaluating transaction")?;

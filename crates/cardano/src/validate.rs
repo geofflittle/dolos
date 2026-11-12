@@ -1,12 +1,13 @@
 use std::borrow::Cow;
+use std::sync::Mutex;
 
 use dolos_core::{
     ChainError, ChainPoint, Domain, EraCbor, Genesis, MempoolAwareUtxoStore, MempoolStore,
-    MempoolTx, StateStore, UtxoMap,
+    MempoolTx, StateStore, TxHash, UtxoMap,
 };
 
 use pallas::ledger::{
-    primitives::{NetworkId, TransactionInput},
+    primitives::{dijkstra::BlockTransaction, NetworkId, TransactionInput},
     traverse::{Era, MultiEraInput, MultiEraOutput, MultiEraTx},
 };
 use pallas_validate::phase1::dijkstra::{dijkstra_ledger_effects, validate_dijkstra_tx_with_time};
@@ -14,8 +15,8 @@ use pallas_validate::phase2::{
     script_context::SlotConfig, tx::MultiEraTxEvalResult, Builtin, MultiEraEvalReport,
 };
 use pallas_validate::utils::{
-    dijkstra_state::{DijkstraLedgerOverlay, DijkstraLedgerState},
-    CertState, DijkstraProtParams, MultiEraProtocolParameters,
+    dijkstra_state::{DijkstraLedgerDelta, DijkstraLedgerOverlay, DijkstraLedgerState},
+    CertState, DijkstraProtParams, MultiEraProtocolParameters, ValidationError,
 };
 use tracing::debug;
 
@@ -26,6 +27,7 @@ pub fn validate_tx<D: Domain>(
     utxos: &MempoolAwareUtxoStore<D>,
     tip: Option<ChainPoint>,
     genesis: &Genesis,
+    held: &Mutex<Option<UnconfirmedEffects>>,
 ) -> Result<MempoolTx, ChainError> {
     let active = crate::load_effective_pparams::<D>(utxos.state())?;
     let era = submission_era(active.ensure_protocol_version()?)?;
@@ -67,16 +69,33 @@ pub fn validate_tx<D: Domain>(
                 .to_pallas_time_context(env.block_slot, crate::utils::stability_window(genesis))?;
             let stored = ledger::StoredLedger::<D>::new(utxos.state())?;
             let unconfirmed = unconfirmed_txs(utxos);
-            let state = with_unconfirmed(&stored, &unconfirmed, pp, env.network_id)?;
-            validate_dijkstra_tx_with_time(
-                native,
-                &pallas_utxos,
-                pp,
-                &env.block_slot,
-                &env.network_id,
-                &state,
-                &time,
+            let cursor = utxos.state().read_cursor()?;
+            let kept = held.lock().unwrap().take();
+            let effects = UnconfirmedEffects::fold(
+                kept,
+                cursor.clone(),
+                env.network_id,
+                &stored,
+                &unconfirmed,
+                |tx, state| dijkstra_ledger_effects(tx, pp, env.network_id, state),
             )?;
+            let (effects, validated) = effects.over(&stored, |state| {
+                validate_dijkstra_tx_with_time(
+                    native,
+                    &pallas_utxos,
+                    pp,
+                    &env.block_slot,
+                    &env.network_id,
+                    state,
+                    &time,
+                )
+            });
+            // A rollback commits without the chain lock, so effects folded
+            // across one are not kept.
+            if utxos.state().read_cursor()? == cursor {
+                *held.lock().unwrap() = Some(effects);
+            }
+            validated?;
             Some(time)
         }
         _ => {
@@ -533,31 +552,107 @@ pub fn validation_parameters(
     }))
 }
 
-/// The ledger state `stored` holds once each of `unconfirmed` the state still admits applies in order.
-fn with_unconfirmed<'a, S: DijkstraLedgerState + ?Sized>(
-    stored: &'a S,
-    unconfirmed: &[MempoolTx],
-    pp: &DijkstraProtParams,
+/// The combined effects of a sequence of unconfirmed transactions over the
+/// stored state at one cursor.
+pub struct UnconfirmedEffects {
+    cursor: Option<ChainPoint>,
     network_id: u8,
-) -> Result<DijkstraLedgerOverlay<'a, S>, pallas::codec::minicbor::decode::Error> {
-    let mut state = DijkstraLedgerOverlay::new(stored);
-    for entry in unconfirmed {
-        entry.with_tx(|tx| tx.map(|tx| admit_unconfirmed(&mut state, tx, pp, network_id)))?;
+    txs: Vec<TxHash>,
+    delta: DijkstraLedgerDelta,
+}
+
+impl UnconfirmedEffects {
+    /// The transactions these effects combine, in the order they applied.
+    pub fn txs(&self) -> &[TxHash] {
+        &self.txs
     }
-    Ok(state)
+
+    /// The effects of `unconfirmed` over `stored` at `cursor`, reusing `held`
+    /// when it combines a prefix of them at the same cursor and network.
+    fn fold<S, F>(
+        held: Option<Self>,
+        cursor: Option<ChainPoint>,
+        network_id: u8,
+        stored: &S,
+        unconfirmed: &[MempoolTx],
+        mut effects: F,
+    ) -> Result<Self, pallas::codec::minicbor::decode::Error>
+    where
+        S: DijkstraLedgerState + ?Sized,
+        F: FnMut(
+            &BlockTransaction<'_>,
+            &DijkstraLedgerOverlay<'_, S>,
+        ) -> Result<DijkstraLedgerDelta, ValidationError>,
+    {
+        let txs: Vec<TxHash> = unconfirmed.iter().map(MempoolTx::hash).collect();
+        let (folded, delta) = match held {
+            Some(held)
+                if held.cursor == cursor
+                    && held.network_id == network_id
+                    && txs.starts_with(&held.txs) =>
+            {
+                (held.txs.len(), held.delta)
+            }
+            _ => (0, DijkstraLedgerDelta::default()),
+        };
+        let mut state = DijkstraLedgerOverlay {
+            base: stored,
+            delta,
+        };
+        for entry in &unconfirmed[folded..] {
+            entry.with_tx(|tx| tx.map(|tx| admit_unconfirmed(&mut state, tx, &mut effects)))?;
+        }
+        Ok(Self {
+            cursor,
+            network_id,
+            txs,
+            delta: state.delta,
+        })
+    }
+
+    /// Runs `f` over `stored` with these effects laid over it, keeping the
+    /// effects.
+    fn over<S, R>(self, stored: &S, f: impl FnOnce(&DijkstraLedgerOverlay<'_, S>) -> R) -> (Self, R)
+    where
+        S: DijkstraLedgerState + ?Sized,
+    {
+        let Self {
+            cursor,
+            network_id,
+            txs,
+            delta,
+        } = self;
+        let state = DijkstraLedgerOverlay {
+            base: stored,
+            delta,
+        };
+        let result = f(&state);
+        let held = Self {
+            cursor,
+            network_id,
+            txs,
+            delta: state.delta,
+        };
+        (held, result)
+    }
 }
 
 /// Applies the effects of `tx` to `state` when the state admits it.
-fn admit_unconfirmed<S: DijkstraLedgerState + ?Sized>(
+fn admit_unconfirmed<S, F>(
     state: &mut DijkstraLedgerOverlay<'_, S>,
     tx: &MultiEraTx<'_>,
-    pp: &DijkstraProtParams,
-    network_id: u8,
-) {
+    effects: &mut F,
+) where
+    S: DijkstraLedgerState + ?Sized,
+    F: FnMut(
+        &BlockTransaction<'_>,
+        &DijkstraLedgerOverlay<'_, S>,
+    ) -> Result<DijkstraLedgerDelta, ValidationError>,
+{
     let Some(native) = tx.as_dijkstra() else {
         return;
     };
-    match dijkstra_ledger_effects(native, pp, network_id, state) {
+    match effects(native, state) {
         Ok(delta) => state.delta.extend(delta),
         Err(error) => {
             debug!(tx = %tx.hash(), ?error, "unconfirmed tx left out of the ledger state")
@@ -716,10 +811,8 @@ mod pending_tests {
         pp
     }
 
-    /// The account of `credential(byte)` once `txs` apply to the stored state in order.
-    fn account_after(txs: &[Vec<u8>], byte: u8) -> Option<DijkstraAccount> {
-        let txs: Vec<_> = txs
-            .iter()
+    fn mempool_txs(txs: &[Vec<u8>]) -> Vec<MempoolTx> {
+        txs.iter()
             .map(|cbor| {
                 let hash = MultiEraTx::decode_for_era(Era::Dijkstra, cbor)
                     .unwrap()
@@ -727,10 +820,100 @@ mod pending_tests {
                 let payload = dolos_core::EraCbor(Era::Dijkstra.into(), cbor.clone());
                 MempoolTx::new(hash, payload, vec![])
             })
-            .collect();
+            .collect()
+    }
+
+    /// The effects of `txs` over `stored` at slot `cursor` on `network`, folded
+    /// from `held`, with the number of effect computations the fold ran.
+    fn fold_counting(
+        held: Option<UnconfirmedEffects>,
+        cursor: u64,
+        network: u8,
+        stored: &DijkstraLedgerSnapshot,
+        txs: &[MempoolTx],
+    ) -> (UnconfirmedEffects, usize) {
+        let pp = params();
+        let mut count = 0;
+        let effects = UnconfirmedEffects::fold(
+            held,
+            Some(ChainPoint::Slot(cursor)),
+            network,
+            stored,
+            txs,
+            |tx, state| {
+                count += 1;
+                dijkstra_ledger_effects(tx, &pp, network, state)
+            },
+        )
+        .unwrap();
+        (effects, count)
+    }
+
+    /// The account of `credential(byte)` once `txs` apply to the stored state
+    /// in order.
+    fn account_after(txs: &[Vec<u8>], byte: u8) -> Option<DijkstraAccount> {
         let stored = stored();
-        let state = with_unconfirmed(&stored, &txs, &params(), 0).unwrap();
-        state.account(&credential(byte)).unwrap()
+        let (effects, _) = fold_counting(None, 1, 0, &stored, &mempool_txs(txs));
+        effects
+            .over(&stored, |state| state.account(&credential(byte)))
+            .1
+            .unwrap()
+    }
+
+    fn withdrawing(amount: u64) -> Vec<u8> {
+        tx_moving(vec![], &[(1, amount)], &[])
+    }
+
+    fn depositing(amount: u64) -> Vec<u8> {
+        tx_moving(vec![], &[], &[(1, amount)])
+    }
+
+    #[test]
+    fn effects_held_at_another_cursor_or_network_are_folded_again() {
+        let txs = mempool_txs(&[withdrawing(2), depositing(4)]);
+        let mut richer = stored();
+        richer.accounts.insert(credential(1), holding(50));
+
+        let (held, _) = fold_counting(None, 1, 0, &stored(), &txs[..1]);
+        let (effects, count) = fold_counting(Some(held), 2, 0, &richer, &txs);
+        let (_, account) = effects.over(&richer, |state| state.account(&credential(1)));
+        assert_eq!((count, account.unwrap()), (2, holding(52)));
+
+        let (held, _) = fold_counting(None, 1, 0, &stored(), &txs[..1]);
+        let (_, count) = fold_counting(Some(held), 1, 1, &stored(), &txs);
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn effects_held_for_a_sequence_the_new_one_does_not_extend_are_folded_again() {
+        let txs = mempool_txs(&[withdrawing(2), depositing(4), withdrawing(1)]);
+        let (held, _) = fold_counting(None, 1, 0, &stored(), &txs[..2]);
+        let (effects, count) = fold_counting(Some(held), 1, 0, &stored(), &txs[1..]);
+        let (_, account) = effects.over(&stored(), |state| state.account(&credential(1)));
+        assert_eq!((count, account.unwrap()), (2, holding(8)));
+    }
+
+    #[test]
+    fn successive_folds_over_a_growing_sequence_compute_each_effect_once() {
+        let txs = mempool_txs(&[
+            withdrawing(2),
+            tx_moving(vec![unreg(4)], &[(1, 2)], &[]),
+            depositing(4),
+            withdrawing(9),
+            tx_moving(vec![reg(3)], &[], &[(2, 3)]),
+            withdrawing(1),
+        ]);
+        let mut held = None;
+        let mut total = 0;
+        for n in 1..=txs.len() {
+            let (effects, count) = fold_counting(held, 1, 0, &stored(), &txs[..n]);
+            held = Some(effects);
+            total += count;
+        }
+        let (fresh, _) = fold_counting(None, 1, 0, &stored(), &txs);
+        let held = held.unwrap();
+        assert_eq!((held.txs(), &held.delta), (fresh.txs(), &fresh.delta));
+        assert_eq!(total, txs.len());
     }
 
     fn holding(balance: u64) -> Option<DijkstraAccount> {
