@@ -111,10 +111,10 @@ index c91bdb20..d9adb395 100644
                  delta
                      .produced_utxo
 diff --git a/crates/cardano/src/validate.rs b/crates/cardano/src/validate.rs
-index b9b0d798..c06879f0 100644
+index 75cf0bbc..5fbd493f 100644
 --- a/crates/cardano/src/validate.rs
 +++ b/crates/cardano/src/validate.rs
-@@ -67,6 +67,11 @@ pub fn validate_tx<D: Domain>(
+@@ -69,6 +69,11 @@ pub fn validate_tx<D: Domain>(
                  .to_pallas_time_context(env.block_slot, crate::utils::stability_window(genesis))?;
              let stored = ledger::StoredLedger::<D>::new(utxos.state())?;
              let unconfirmed = unconfirmed_txs(utxos);
@@ -123,10 +123,10 @@ index b9b0d798..c06879f0 100644
 +            } else {
 +                unconfirmed
 +            };
-             let state = with_unconfirmed(&stored, &unconfirmed, pp, env.network_id)?;
-             validate_dijkstra_tx_with_time(
-                 native,
-@@ -115,6 +120,10 @@ pub fn required_utxos<D: Domain>(
+             let cursor = utxos.state().read_cursor()?;
+             let kept = held.lock().unwrap().take();
+             let effects = UnconfirmedEffects::fold(
+@@ -134,6 +139,10 @@ pub fn required_utxos<D: Domain>(
      tx: &MultiEraTx<'_>,
      utxos: &MempoolAwareUtxoStore<D>,
  ) -> Result<UtxoMap, ChainError> {
@@ -137,7 +137,7 @@ index b9b0d798..c06879f0 100644
      Ok(utxos.get_utxos(tx.requires().iter().map(From::from).collect())?)
  }
  
-@@ -187,6 +196,9 @@ pub fn redeemer_arguments<D: Domain>(
+@@ -206,6 +215,9 @@ pub fn redeemer_arguments<D: Domain>(
      let active = crate::load_effective_pparams::<D>(utxos.state())?;
      let tx = decode_submission(submission_era(active.ensure_protocol_version()?)?, cbor)?;
      let pparams = validation_parameters(&active)?;
@@ -147,7 +147,7 @@ index b9b0d798..c06879f0 100644
      let (utxos, _, time) = evaluation_inputs::<D>(&tx, utxos, genesis, None)?;
      let time = time.ok_or(evaluation_error(
          pallas_validate::phase2::error::Error::WrongEra(),
-@@ -228,6 +240,9 @@ fn evaluate_decoded<D: Domain>(
+@@ -247,6 +259,9 @@ fn evaluate_decoded<D: Domain>(
          let estimates = estimate_decoded::<D>(tx, utxos, genesis, pparams, admission_time)?;
          return Ok(estimates.into_iter().map(|(result, _)| result).collect());
      }
@@ -157,7 +157,7 @@ index b9b0d798..c06879f0 100644
      let (utxos, slot_config, time) = evaluation_inputs::<D>(tx, utxos, genesis, admission_time)?;
      if let Some(time) = time {
          pallas_validate::phase2::evaluate_tx_with_time(tx, pparams, &utxos, &time)
-@@ -244,6 +259,18 @@ fn estimate_decoded<D: Domain>(
+@@ -263,6 +278,18 @@ fn estimate_decoded<D: Domain>(
      pparams: &MultiEraProtocolParameters,
      admission_time: Option<&pallas_validate::utils::DijkstraTimeContext>,
  ) -> Result<Vec<(MultiEraTxEvalResult, Vec<Builtin>)>, ChainError> {
@@ -176,7 +176,7 @@ index b9b0d798..c06879f0 100644
      let (utxos, slot_config, time) = evaluation_inputs::<D>(tx, utxos, genesis, admission_time)?;
      if let Some(time) = time {
          pallas_validate::phase2::estimate_tx_calls_with_time(tx, pparams, &utxos, &time)
-@@ -308,13 +335,45 @@ fn evaluation_inputs<D: Domain>(
+@@ -327,13 +354,45 @@ fn evaluation_inputs<D: Domain>(
  /// The chain error for a phase two evaluation pallas could not complete.
  fn evaluation_error(error: pallas_validate::phase2::error::Error) -> ChainError {
      match error {
@@ -223,7 +223,7 @@ index b9b0d798..c06879f0 100644
  /// Submission has no era tag in its signed envelope. Only known protocol
  /// versions select an era; unknown future versions must not inherit this
  /// subset.
-@@ -568,7 +627,11 @@ fn admit_unconfirmed<S: DijkstraLedgerState + ?Sized>(
+@@ -663,7 +722,11 @@ fn admit_unconfirmed<S, F>(
  /// The mempool transactions, inflight before pending, each once.
  fn unconfirmed_txs<D: Domain>(utxos: &MempoolAwareUtxoStore<D>) -> Vec<MempoolTx> {
      let pending = utxos.pending();
@@ -236,7 +236,7 @@ index b9b0d798..c06879f0 100644
      // Relay can move a transaction between these two reads. Count it once.
      let mut seen = std::collections::HashSet::new();
      inflight
-@@ -587,6 +650,9 @@ fn unconfirmed_txs<D: Domain>(utxos: &MempoolAwareUtxoStore<D>) -> Vec<MempoolTx
+@@ -682,6 +745,9 @@ fn unconfirmed_txs<D: Domain>(utxos: &MempoolAwareUtxoStore<D>) -> Vec<MempoolTx
  }
  
  fn decode_submission(era: Era, cbor: &[u8]) -> Result<MultiEraTx<'_>, ChainError> {
@@ -322,29 +322,30 @@ index 38d80bab..f867d209 100644
                  if let Some(output) = outputs.get(&(r.1 as usize)) {
                      result.insert(r, (block.era(), output.encode()));
 diff --git a/src/serve/grpc/block_context.rs b/src/serve/grpc/block_context.rs
-index 1e5c53b2..b7816a1e 100644
+index 737ce6b0..c0d02353 100644
 --- a/src/serve/grpc/block_context.rs
 +++ b/src/serve/grpc/block_context.rs
-@@ -86,10 +86,16 @@ impl<'b> TxOfBlock<'_, 'b> {
+@@ -136,10 +136,18 @@ impl<'b> TxOfBlock<'_, 'b> {
  fn made_among(block: &BlockTxs<'_>, named: &HashSet<TxoRef>) -> UtxoMap {
      let makers: HashSet<_> = named.iter().map(|(hash, _)| *hash).collect();
      let mut made = UtxoMap::new();
--    for tx in &block.txs {
-+    for tx in block
-+        .txs
+-    for applied in block.applied.iter().filter(|x| makers.contains(&x.hash)) {
++    for applied in block
++        .applied
 +        .iter()
++        .filter(|x| makers.contains(&x.hash))
 +        .filter(|_| !pallas::crypto::oracle_plant("block-made-unserved"))
 +    {
-         let Ok(()) = dolos_core::for_each_applied_tx(tx, |tx| {
-             let hash = tx.hash();
--            if makers.contains(&hash) {
-+            if makers.contains(&hash)
-+                && (!pallas::crypto::oracle_plant("subouts") || tx.as_dijkstra_sub().is_none())
-+            {
-                 for (i, output) in tx.produces() {
-                     let made_ref = (hash, i as u32);
-                     if named.contains(&made_ref) {
-@@ -140,9 +146,11 @@ impl<C: ChainReads> BlockContext<C> {
+         let Some(tx) = block.tx_at(applied) else {
+             continue;
+         };
++        if pallas::crypto::oracle_plant("subouts") && tx.as_dijkstra_sub().is_some() {
++            continue;
++        }
+         for (i, output) in tx.produces() {
+             let made_ref = (applied.hash, i as u32);
+             if named.contains(&made_ref) {
+@@ -187,9 +195,11 @@ impl<C: ChainReads> BlockContext<C> {
              })
              .collect();
          let made = made_among(block, &named);
@@ -357,10 +358,10 @@ index 1e5c53b2..b7816a1e 100644
          let resolved = if refs.is_empty() {
              Some(UtxoMap::new())
 diff --git a/src/serve/grpc/v1/query.rs b/src/serve/grpc/v1/query.rs
-index 2dbae42a..712f0249 100644
+index c43e0b0b..f9d81d25 100644
 --- a/src/serve/grpc/v1/query.rs
 +++ b/src/serve/grpc/v1/query.rs
-@@ -816,6 +816,9 @@ async fn into_u5c_utxo<S: Domain>(
+@@ -801,6 +801,9 @@ async fn into_u5c_utxo<S: Domain>(
  
      let parsed_output = MultiEraOutput::try_from(body)?;
      let mut parsed = mapper.map_tx_output(&parsed_output, None);
