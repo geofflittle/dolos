@@ -549,6 +549,16 @@ enter_slice() {
   esac
 }
 
+# The memory in bytes one switched arm judge may use.
+ARM_MEMORY=${ARM_MEMORY:-1610612736}
+
+# The number of switched arms judged at once, as many judges of ARM_MEMORY as the memory limit of the oracle slice holds and at least one.
+arm_jobs() {
+  slice_memory=$(slice_limits | sed -n 's/^memory=\([0-9]*\) .*/\1/p')
+  arm_fit=$((slice_memory / ARM_MEMORY))
+  echo $((arm_fit > 0 ? arm_fit : 1))
+}
+
 # The names of a candidate's config files in its store.
 CONFIG_FILES="dolos.toml byron-genesis.json shelley-genesis.json alonzo-genesis.json conway-genesis.json dijkstra-genesis.json"
 

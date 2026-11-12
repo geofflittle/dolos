@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, the overlay build's target dir, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the files a planted tree writes and whether git writes each diff as committed, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier and which of its steps it reruns, the value control's verdict, the amaru pin and the amaru leg's verdicts.
+# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, the overlay build's target dir, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the files a planted tree writes and whether git writes each diff as committed, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, how many switched arms are judged at once, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier and which of its steps it reruns, the value control's verdict, the amaru pin and the amaru leg's verdicts.
 # Usage: lib_test.sh <empty work dir>
 set -eu
 W=$(cd "$1" && pwd)
@@ -1374,6 +1374,25 @@ lock_root slice-no-swap
 slice_of "$K" /dolos.slice/dolos-oracle.slice 2684354560 max
 tier "$K"
 expect slice_no_swap "$(run_out "$K")" "REFUSED slice=dolos-oracle.slice memory=2684354560 swap=max run-exit=2 exit=2"
+
+# The number of switched arms judged at once in the oracle slice with the memory limit $1, for ARM_MEMORY $2 or its default when $2 is empty.
+arm_jobs_of() {
+  J=$W/arm-jobs-$1
+  slice_of "$J" /dolos.slice/dolos-oracle.slice "$1" 1073741824
+  (
+    ROOT=$J CGROUP_FILE=$J/cgroup CGROUP_ROOT=$J/cgroup-fs
+    unset ARM_MEMORY
+    [ -z "$2" ] || ARM_MEMORY=$2
+    . "$LIB"
+    arm_jobs
+  )
+}
+# Must not fire: a slice that holds several judges runs that many at once.
+expect arm_jobs_fit "$(arm_jobs_of 8589934592 1073741824)" 8
+expect arm_jobs_floor "$(arm_jobs_of 3221225471 1073741824)" 2
+# Must fire: a slice smaller than one judge still runs one, and the box's slice runs fewer judges than the four it was killed at.
+expect arm_jobs_one "$(arm_jobs_of 536870912 1073741824)" 1
+expect arm_jobs_box "$(arm_jobs_of 2684354560 '')" 1
 
 # The arguments the docker of the box scripts hands the docker it fronts for the arguments given, or its refusal and exit.
 D=$W/docker
