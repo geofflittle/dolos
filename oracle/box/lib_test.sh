@@ -849,11 +849,11 @@ src=$(git -C "$P" rev-parse HEAD)
 expect tree_absent "$(tree_of "$P" 0000000000000000000000000000000000000001)" refused
 expect tree_fetch "$(tree_of "$P" "$src")" "$src"
 
-# A box dir with the value leg's files and a scratch tree with its corpora, and the verdicts of value_due before a pass, after one, after a changed pin, plant, corpus or seed.
+# A box dir with the value and amaru legs' files and a scratch tree with its corpora, and whether each leg is due before a pass, after one, after a changed pin, image, plant, corpus or seed.
 V=$W/value
 rm -rf "$V"
 mkdir -p "$V/box/value" "$V/box/overlay" "$V/box/amaru" "$V/runs" "$V/scratch/dolos/test_data/ledger-oracle"
-cp "$HERE/value.sh" "$HERE/amaru.sh" "$V/box/"
+cp "$HERE/lib.sh" "$HERE/value.sh" "$HERE/amaru.sh" "$V/box/"
 echo r1 >"$V/box/value/harness.rev"
 echo p1 >"$V/box/value/pallas.diff"
 echo o1 >"$V/box/overlay/pallas.diff"
@@ -861,44 +861,67 @@ echo a1 >"$V/box/amaru/a.diff"
 echo i1 >"$V/scratch/dolos/test_data/ledger-oracle/ic.jsonl.gz"
 echo s1 >"$V/scratch/dolos/test_data/ledger-oracle/supp.jsonl.gz"
 : >"$V/box/served.txt"
+# Prints for the leg $1, value or amaru, on the pin $2 and the image $3 whether it is due, or with record set records its inputs as passed.
 due() {
   (
     ROOT=$V HERE=$V/box SCRATCH=scratch/dolos
+    . "$V/box/lib.sh"
     . "$V/box/value.sh"
-    if value_due "$1"; then echo due; else echo passed; fi
+    . "$V/box/amaru.sh"
+    if [ "$1" = value ]; then
+      inputs=$(value_inputs "$2" "$3")
+      last=$LAST_VALUE
+    else
+      inputs=$(amaru_inputs "$2" "$3")
+      last=$LAST_AMARU
+    fi
+    if [ "${record:-}" = yes ]; then
+      echo "$inputs" >"$last"
+    elif leg_due "$last" "$inputs"; then
+      echo due
+    else
+      echo passed
+    fi
   )
 }
-record_value() {
-  (
-    ROOT=$V HERE=$V/box SCRATCH=scratch/dolos
-    . "$V/box/value.sh"
-    value_inputs "$1" >"$LAST_VALUE"
-  )
-}
-# Must fire with no passing leg, must not on the inputs that passed, and must fire on another pin, another value plant, another amaru plant, another corpus or another seed.
-expect value_due_none "$(due aaa)" due
-record_value aaa
-expect value_due_same "$(due aaa)" passed
-expect value_due_pin "$(due bbb)" due
+# Must fire with no passing leg, must not on the inputs that passed, and must fire on another pin, another image, another plant of its own, another corpus or another seed.
+expect value_due_none "$(due value aaa i1)" due
+expect amaru_due_none "$(due amaru 'u r1' i1)" due
+record=yes due value aaa i1
+record=yes due amaru 'u r1' i1
+expect value_due_same "$(due value aaa i1)" passed
+expect amaru_due_same "$(due amaru 'u r1' i1)" passed
+expect value_due_pin "$(due value bbb i1)" due
+expect amaru_due_rev "$(due amaru 'u r2' i1)" due
+expect value_due_image "$(due value aaa i2)" due
+expect amaru_due_image "$(due amaru 'u r1' i2)" due
 echo p2 >"$V/box/value/pallas.diff"
-expect value_due_plant "$(due aaa)" due
-record_value aaa
+expect value_due_plant "$(due value aaa i1)" due
+# Must not fire on the plant of the other leg.
+expect amaru_due_value_plant "$(due amaru 'u r1' i1)" passed
+record=yes due value aaa i1
 echo a2 >"$V/box/amaru/a.diff"
-expect value_due_amaru_plant "$(due aaa)" due
-record_value aaa
+expect amaru_due_plant "$(due amaru 'u r1' i1)" due
+expect value_due_amaru_plant "$(due value aaa i1)" passed
+record=yes due amaru 'u r1' i1
 echo s2 >"$V/scratch/dolos/test_data/ledger-oracle/supp.jsonl.gz"
-expect value_due_corpus "$(due aaa)" due
-record_value aaa
-expect value_due_seed "$(VALUE_SEED=2 due aaa)" due
-# Must not fire on another row of an arm of neither leg, and must fire on another row of a value arm or an amaru arm.
+expect value_due_corpus "$(due value aaa i1)" due
+expect amaru_due_corpus "$(due amaru 'u r1' i1)" passed
+record=yes due value aaa i1
+expect value_due_seed "$(VALUE_SEED=2 due value aaa i1)" due
+# Must not fire on another row of an arm of neither leg or of the other leg, and must fire on another row of its own arm.
 printf '%s\n' 'amaru-d lines=1 sha256=a' 'coin lines=1 sha256=a' 'value-e lines=1 sha256=a' >"$V/box/served.txt"
-record_value aaa
+record=yes due value aaa i1
+record=yes due amaru 'u r1' i1
 printf '%s\n' 'amaru-d lines=1 sha256=a' 'coin lines=2 sha256=b' 'value-e lines=1 sha256=a' >"$V/box/served.txt"
-expect value_due_other_row "$(due aaa)" passed
+expect value_due_other_row "$(due value aaa i1)" passed
+expect amaru_due_other_row "$(due amaru 'u r1' i1)" passed
 printf '%s\n' 'amaru-d lines=1 sha256=a' 'coin lines=2 sha256=b' 'value-e lines=2 sha256=b' >"$V/box/served.txt"
-expect value_due_value_row "$(due aaa)" due
+expect value_due_value_row "$(due value aaa i1)" due
+expect amaru_due_value_row "$(due amaru 'u r1' i1)" passed
 printf '%s\n' 'amaru-d lines=2 sha256=b' 'coin lines=2 sha256=b' 'value-e lines=1 sha256=a' >"$V/box/served.txt"
-expect value_due_amaru_row "$(due aaa)" due
+expect value_due_amaru_row "$(due value aaa i1)" passed
+expect amaru_due_amaru_row "$(due amaru 'u r1' i1)" due
 
 # A build root whose branch pins pallas and holds the corpora, and a copy of this box dir whose arms, tests and legs are stubs that count each leg run.
 Q=$W/quick
@@ -918,19 +941,28 @@ echo 'echo "ARMS head=PASS control=CLEAN logs=x"' >"$W/quick-box/breaks.sh"
 echo 'exit 0' >"$W/quick-box/lib_test.sh"
 echo 'exit 0' >"$W/quick-box/fields_test.sh"
 echo 'value_leg() { echo ran >>"$ROOT/legs"; echo "VALUE value-head=PASS value-control=CLEAN pin=x"; }' >>"$W/quick-box/value.sh"
-echo 'amaru_leg() { echo "AMARU amaru-head=PASS rev=x"; }' >>"$W/quick-box/amaru.sh"
-# The number of leg runs after a quick run on the build root Q with BASE the judged commit.
+printf '%s\n' 'amaru_leg() { echo ran >>"$ROOT/amaru-legs"; echo "AMARU amaru-head=PASS rev=x"; }' \
+  'amaru_pin() { cat "$ROOT/amaru-pin"; }' 'pallas_history() { :; }' 'image_id() { echo i1; }' >>"$W/quick-box/amaru.sh"
+echo 'u r1' >"$Q/amaru-pin"
+slice_of "$Q" /dolos.slice/dolos-oracle.slice 2684354560 1073741824
+# The number of value and amaru leg runs after a quick run on the build root Q with BASE the judged commit.
 quick_legs() {
   (
     ROOT=$Q OUT=$Q/runs/q$1 JUDGED=t REV=$qrev BASE=$qrev MIN_FREE_G=0 RUN_LOCK=$Q/run.lock
-    export ROOT OUT JUDGED REV BASE MIN_FREE_G RUN_LOCK
+    CGROUP_FILE=$Q/cgroup CGROUP_ROOT=$Q/cgroup-fs
+    export ROOT OUT JUDGED REV BASE MIN_FREE_G RUN_LOCK CGROUP_FILE CGROUP_ROOT
     timeout 30 sh "$W/quick-box/run.sh" quick >"$Q/q$1.out" 2>&1 || true
   )
-  cat "$Q/legs" 2>/dev/null | grep -c . || true
+  echo "value=$(cat "$Q/legs" 2>/dev/null | grep -c . || true) amaru=$(cat "$Q/amaru-legs" 2>/dev/null | grep -c . || true)"
 }
 # Must run the legs on an unchanged pin when no leg has passed on these inputs, and must not run them again once they have.
-expect quick_value_unpassed "$(quick_legs 1)" 1
-expect quick_value_passed "$(quick_legs 2)" 1
+expect quick_value_unpassed "$(quick_legs 1)" "value=1 amaru=1"
+expect quick_value_passed "$(quick_legs 2)" "value=1 amaru=1"
+expect quick_value_line "$(grep '^DONE ' "$Q/q2.out" | sed 's/ base=.*//')" \
+  "DONE tier=quick head=PASS control=CLEAN value=passed-on-these-inputs amaru=passed-on-these-inputs"
+# Must run the amaru leg alone on another amaru commit.
+echo 'u r2' >"$Q/amaru-pin"
+expect quick_amaru_rev "$(quick_legs 3)" "value=1 amaru=2"
 
 # The run of the value arm emptyguards with the tier output $2, the reached line $3 and the disagreement class $4, and value_verdict's verdict for it.
 value_verdict_of() {

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs the oracle on the build box, its quick, done or ship tier, its live leg alone or the regeneration of its committed manifests.
 # Usage: ROOT=dir [REV=ref] [BASE=ref] run.sh quick|done|ship|live|regen|value
-# The value tier runs the value leg of value.sh alone. The quick, done and ship tiers run it too when its inputs differ from those of the last passing value leg.
+# The value tier runs the value leg of value.sh and the amaru leg of amaru.sh alone. The quick, done and ship tiers run each of them too when its inputs differ from those of its last passing run.
 # The quick tier judges the head on both corpora, the control and each arm whose plant changes a file that differs between BASE and REV, a pallas arm when the pallas entries of Cargo.toml or Cargo.lock differ. BASE defaults to the commit of the last done or ship run that passed, and when there is none every arm runs. The done tier, run per change, judges the head, the control and every arm, and fails on a fix commit that arms.toml gives neither an arm nor an exclusion. The ship tier, run before a rollout of the dolos-serve image, is the done tier while the live leg syncs a candidate from genesis. Only the ship tier and the live leg read the live node. The done and ship tiers record their commit in runs/last-done when they pass, and the ship tier and the live leg record theirs in runs/last-ship when the live leg passes.
 # The quick, done, ship and value tiers fail when a caught or held arm served other lines than its row of served.txt records, and a change that alters what an arm serves on purpose copies the arm's row from the run's served.txt into served.txt.
 # The live leg reads ENDPOINT, NODE, NODE_DB, GRPCURL, SERVE_CONFIG and CANDIDATE_GRPC from $LIVE_ENV.
@@ -188,42 +188,45 @@ quick_run() {
   echo "QUICK base=$base arms=\"$arms\""
   ARMS="head control${arms:+ $arms}" sh "$HERE/breaks.sh" | tee "$OUT/breaks.out"
   verdicts=$(sed -n 's/^ARMS \(.*\) logs=.*/\1/p' "$OUT/breaks.out")
-  verdicts="$verdicts $(due_value_verdicts)"
+  verdicts="$verdicts $(value_verdicts due)"
   echo "DONE tier=quick $verdicts base=$base commit=$commit logs=$OUT"
   passed "$verdicts"
 }
 
-# Runs the value and amaru legs over a reset scratch tree, printing their lines, returning their verdicts on the last line and recording their inputs in LAST_VALUE when both pass.
+# Sets checked to the verdicts of the leg $1 whose run wrote $OUT/$1.out and whose verdict line the sed script $2 prints, its head failing when none does, records the inputs $4 in the file $3 when every verdict passes, and prints the leg's lines.
+leg_verdicts() {
+  cat "$OUT/$1.out"
+  served_check "$(sed -n "$2" "$OUT/$1.out" | grep . || echo "$1-head=FAIL")"
+  if passed "head=PASS $checked"; then
+    echo "$4" >"$3"
+  fi
+}
+
+# Runs over a reset scratch tree the value leg and the amaru leg, each when $1 is all or its inputs differ from those of its last passing run, printing their lines and returning their verdicts on the last line, a leg not run as its name and passed-on-these-inputs.
 value_verdicts() {
   reset_scratch >&2
   pin=$(pallas_pin)
-  value_leg >"$OUT/value.out" 2>&1 || true
-  amaru_leg "$pin" >"$OUT/amaru.out" 2>&1 || true
-  cat "$OUT/value.out" "$OUT/amaru.out" >&2
-  reset_scratch >&2
-  legs="$(sed -n 's/^VALUE \(value-head=.*\) pin=.*/\1/p' "$OUT/value.out" | grep . || echo value-head=FAIL) $(
-    sed -n 's/^AMARU \(amaru-head=[A-Z]*\( amaru-[a-z0-9-]*=[A-Z]*\)*\).*/\1/p' "$OUT/amaru.out" | grep . || echo amaru-head=FAIL)"
-  served_check "$legs" >&2
-  legs=$checked
-  case " $legs " in
-    *" value-head=PASS "*" amaru-head=PASS "*)
-      if passed "head=PASS $legs"; then
-        value_inputs "$pin" >"$LAST_VALUE"
-      fi
-      ;;
-  esac
-  echo "$legs"
-}
-
-# Runs the value and amaru legs when their inputs differ from those of the last run in which both passed, printing their verdicts, or the inputs that passed.
-due_value_verdicts() {
-  pin=$(pallas_pin)
-  if value_due "$pin"; then
-    value_verdicts
+  inputs=$(value_inputs "$pin" "$(image_id "$VALUE_IMAGE")")
+  if [ "$1" = all ] || leg_due "$LAST_VALUE" "$inputs"; then
+    value_leg >"$OUT/value.out" 2>&1 || true
+    leg_verdicts value 's/^VALUE \(value-head=.*\) pin=.*/\1/p' "$LAST_VALUE" "$inputs" >&2
+    legs=$checked
   else
-    echo "VALUE due=no $(cat "$LAST_VALUE")" >&2
-    echo "value=passed-on-these-inputs"
+    echo "VALUE due=no $inputs" >&2
+    legs=value=passed-on-these-inputs
   fi
+  pallas_history "$pin" >&2 || true
+  inputs=$(amaru_inputs "$(amaru_pin "$pin")" "$(image_id "$BUILD_IMAGE")")
+  if [ "$1" = all ] || leg_due "$LAST_AMARU" "$inputs"; then
+    amaru_leg "$pin" >"$OUT/amaru.out" 2>&1 || true
+    leg_verdicts amaru 's/^AMARU \(amaru-head=[A-Z]*\( amaru-[a-z0-9-]*=[A-Z]*\)*\).*/\1/p' "$LAST_AMARU" "$inputs" >&2
+    legs="$legs $checked"
+  else
+    echo "AMARU due=no $inputs" >&2
+    legs="$legs amaru=passed-on-these-inputs"
+  fi
+  reset_scratch >&2
+  echo "$legs"
 }
 
 # Judges the pinned pallas with the value leg alone.
@@ -233,7 +236,7 @@ value_run() {
   require_lib_test
   reset_scratch
   commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
-  verdicts=$(value_verdicts)
+  verdicts=$(value_verdicts all)
   echo "DONE tier=value $verdicts commit=$commit logs=$OUT"
   case " $verdicts " in
     *" value-head=PASS "*) ;;
@@ -254,7 +257,7 @@ done_run() {
   cat "$OUT/fix-arms.out"
   sh "$HERE/breaks.sh" | tee "$OUT/breaks.out"
   verdicts=$(sed -n 's/^ARMS \(.*\) logs=.*/\1/p' "$OUT/breaks.out")
-  verdicts="$verdicts $fix_arms $(due_value_verdicts)"
+  verdicts="$verdicts $fix_arms $(value_verdicts due)"
   echo "DONE tier=done $verdicts commit=$commit logs=$OUT"
   record_pass done "$commit" "$verdicts"
 }
@@ -284,7 +287,7 @@ ship_run() {
   fi
   cat "$OUT/live-leg.out"
   verdicts=$(sed -n 's/^ARMS \(.*\) logs=.*/\1/p' "$OUT/breaks.out")
-  verdicts="$verdicts $(due_value_verdicts)"
+  verdicts="$verdicts $(value_verdicts due)"
   live_lines
   shift_verdict=$(live_shift | tail -1)
   echo "DONE tier=ship $verdicts $shift_verdict live=$live commit=$commit logs=$OUT"

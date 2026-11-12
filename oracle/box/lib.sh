@@ -6,6 +6,9 @@ REV=${REV:-feat/ledger-oracle}
 MIN_FREE_G=${MIN_FREE_G:-6}
 OUT=${OUT:-"$ROOT/runs/$(date -u +%Y%m%dT%H%M%SZ)"}
 IN_IMAGE=${IN_IMAGE:-$HERE/in-image.sh}
+# The image in-image.sh runs builds and tests in.
+BUILD_IMAGE=dolos-build:1
+export BUILD_IMAGE
 GRPCURL=${GRPCURL:-grpcurl}
 # The Dolos path of the box scripts, which holds the arms manifest and each arm's plant and records.
 BOX_PATH=oracle/box
@@ -366,7 +369,7 @@ passed() {
   esac
   for verdict in $1; do
     case $verdict in
-      *=PASS | *=CLEAN | *=CAUGHT | *=HELD | value=passed-on-these-inputs) ;;
+      *=PASS | *=CLEAN | *=CAUGHT | *=HELD | value=passed-on-these-inputs | amaru=passed-on-these-inputs) ;;
       *) return 1 ;;
     esac
   done
@@ -453,6 +456,16 @@ release_lock() {
   if [ "$(cat "$RUN_LOCK" 2>/dev/null)" = "$$" ]; then
     : >"$RUN_LOCK"
   fi
+}
+
+# The id of the local docker image $1, or none when docker has no such image.
+image_id() {
+  docker image inspect -f '{{.Id}}' "$1" 2>/dev/null || echo none
+}
+
+# Whether a leg whose inputs are $2 is due: the record $1 of the inputs of its last passing run is missing or differs.
+leg_due() {
+  [ ! -f "$1" ] || [ "$(cat "$1")" != "$2" ]
 }
 
 # The systemd slice every process and container of an oracle run is placed in, and the memory and swap it may use, sized so the node and the serving Dolos keep their peak working sets.

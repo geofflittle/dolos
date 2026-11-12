@@ -1,9 +1,18 @@
 # The amaru leg: the amaru-uplc conformance test at the amaru commit the pinned pallas-validate builds against, its arms the patches in amaru/.
-# Sourced by run.sh after lib.sh. Reads ROOT, OUT, PALLAS, HERE and IN_IMAGE.
+# Sourced by run.sh after lib.sh. Reads ROOT, OUT, PALLAS, HERE, IN_IMAGE and LAST_AMARU.
 
 AMARU=amaru
 # The test the leg runs, the IntersectMBO plutus conformance programs.
 AMARU_TEST="cargo test --locked -p amaru-uplc --test conformance"
+LAST_AMARU=${LAST_AMARU:-$ROOT/runs/last-amaru}
+
+# The inputs of the amaru leg on the amaru url and commit $1 with the build image of id $2: the commit, the image and the hash of its box files and rows of served.txt.
+amaru_inputs() {
+  echo "amaru=$1 image=$2 files=$({
+    cat "$HERE/amaru.sh" "$HERE"/amaru/*.diff
+    grep -E '^amaru-' "$HERE/served.txt" || true
+  } | sha256sum | cut -c1-12)"
+}
 
 # The url and commit of the amaru-uplc entry of the pallas-validate Cargo.toml at the commit $1 of the scratch pallas tree, on one line.
 amaru_pin() {

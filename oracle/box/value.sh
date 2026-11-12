@@ -7,6 +7,8 @@ VALUE_SEED=${VALUE_SEED:-1}
 VALUE_GEN_DIR=${VALUE_GEN_DIR:-$ROOT/value-gen}
 VALUE_HARNESS_URL=${VALUE_HARNESS_URL:-https://github.com/geofflittle/pallas.git}
 LAST_VALUE=${LAST_VALUE:-$ROOT/runs/last-value}
+# The image the harness runs the generator and the Haskell ledger in.
+VALUE_IMAGE=conformance-gen-hs:2
 # The arms of the value leg, each a switch of value/pallas.diff or of overlay/pallas.diff.
 VALUE_ARMS="emptyguards value-guards-top value-guards-sub value-spend-redeemer value-withdrawal-order"
 
@@ -45,17 +47,12 @@ value_corpora() {
   done
 }
 
-# The inputs of the value and amaru legs on the pallas pin $1: the pin, the value count and seed, and the hash of their box files, corpora and rows of served.txt.
+# The inputs of the value leg on the pallas pin $1 with the ledger image of id $2: the pin, the value count and seed, the image and the hash of its box files, corpora and rows of served.txt.
 value_inputs() {
-  echo "pin=$1 n=$VALUE_N seed=$VALUE_SEED files=$({
-    cat "$HERE/value.sh" "$HERE/value/harness.rev" "$HERE/value/pallas.diff" "$HERE/overlay/pallas.diff" "$HERE/amaru.sh" "$HERE"/amaru/*.diff $(value_corpora)
-    grep -E '^(value|amaru)-' "$HERE/served.txt" || true
+  echo "pin=$1 n=$VALUE_N seed=$VALUE_SEED image=$2 files=$({
+    cat "$HERE/value.sh" "$HERE/value/harness.rev" "$HERE/value/pallas.diff" "$HERE/overlay/pallas.diff" $(value_corpora)
+    grep -E '^value-' "$HERE/served.txt" || true
   } | sha256sum | cut -c1-12)"
-}
-
-# Whether the value and amaru legs on the pallas pin $1 are due: their inputs differ from those of the last run in which both passed, or none did.
-value_due() {
-  [ ! -f "$LAST_VALUE" ] || [ "$(cat "$LAST_VALUE")" != "$(value_inputs "$1")" ]
 }
 
 # Whether the dir $1 of an arm's run holds a disagreement of the class $2, printing each with the name of its file.
