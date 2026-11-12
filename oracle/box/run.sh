@@ -40,6 +40,7 @@ if [ -z "${JUDGED:-}" ]; then
     BASE=$(full_commit BASE "$BASE")
   fi
 fi
+enter_slice "$0" "$@"
 take_lock
 trap finish EXIT
 # The tier runs the scripts and plants of the commit it judges, from that

@@ -362,7 +362,7 @@ served_of() {
   fi
   shift
   (
-    HERE=$S/box OUT=$S/run
+    HERE=$S/box OUT=$S/run ROOT=$W/served-tree
     . "$LIB"
     printf '%s\n' "$finished" >"$OUT/a.log"
     printf '%s\n' "$@" >"$OUT/a.caught"
@@ -385,6 +385,27 @@ expect served_changed_line "$(head -1 "$S/run/served.out")" \
   "SERVED a=CHANGED reference=\"$row\" run=\"$(cat "$S/run/served.txt")\" lines=$S/run/served/a"
 expect served_unreferenced "$(served_of "" "$first" "$second")" "head=PASS a=UNREFERENCED h=UNRECORDED m=MISSED"
 expect served_unrecorded_line "$(tail -1 "$S/run/served.out")" "SERVED h=UNRECORDED reference=\"\" run=\"\" lines=$S/run/served/h"
+
+# Writes src/c.rs of the scratch tree served_of reads with the lines given, one per argument.
+site_file() {
+  mkdir -p "$W/served-tree/scratch/dolos/src"
+  printf '%s\n' "$@" >"$W/served-tree/scratch/dolos/src/c.rs"
+}
+site_file 'fn helper() {}' '#[test]' 'fn two() {' '    assert!(' '        false' '    );' '    other();' '}'
+served_of "" "thread 'two' (3) panicked at src/c.rs:4:5:" >/dev/null
+sited="$(cat "$S/run/served.txt")"
+# Must name a panic's site by the fn above it and the lines between them, and keep a line outside the scratch tree or above every fn.
+expect served_site "$(cat "$S/run/served/a")" "thread 'two' panicked at src/c.rs:two+1:5:"
+served_of "" "thread 'one' (3) panicked at src/none.rs:4:5:" "thread 'two' (4) panicked at src/c.rs:1:5:" >/dev/null
+expect served_site_kept "$(paste -sd ' ' - <"$S/run/served/a")" \
+  "thread 'one' panicked at src/none.rs:4:5: thread 'two' panicked at src/c.rs:helper+0:5:"
+# Must not fire when lines elsewhere in the file move the panic's line, as an overlay that grows above a test does.
+site_file '// a plant' 'fn added() {' '}' 'fn helper() {}' '#[test]' 'pub(crate) async fn two() {' '    assert!(' '        false' '    );' '    other();' '}'
+expect served_site_moved "$(served_of "$sited" "thread 'two' (5) panicked at src/c.rs:7:5:")" "head=PASS a=CAUGHT h=UNRECORDED m=MISSED"
+# Must fire when the panic moves to another line of its fn, or to another fn.
+expect served_site_other_line "$(served_of "$sited" "thread 'two' (5) panicked at src/c.rs:10:5:")" "head=PASS a=CHANGED h=UNRECORDED m=MISSED"
+expect served_site_other_fn "$(served_of "$sited" "thread 'two' (5) panicked at src/c.rs:3:1:")" "head=PASS a=CHANGED h=UNRECORDED m=MISSED"
+rm -rf "$W/served-tree"
 
 # A work tree of a.rs, b.rs and c.rs, an overlay switching a in a.rs and b in b.rs and adding a call to c.rs, and plant_overlay's exit, printed switches and switched files after the files $1 change and the files $2 go.
 plant_of() {
@@ -580,15 +601,30 @@ expect live_passed "$(records_of live 'live=PASS live-shift=CAUGHT')" \
 # Prints lock=free, lock=held when flock reports the lock taken, or the exit of any other flock failure, for the lock RUN_LOCK.
 LOCK_PROBE='status=0; flock -n -E 75 "$RUN_LOCK" true || status=$?; case $status in 0) state=free ;; 75) state=held ;; *) state=flock_exit_$status ;; esac'
 
-# Runs the script run.sh, or $3, with the argument done, or $4, on the build root $1 and the lock $1/run.lock, JUDGED set unless $2 is entry, a floor no disk meets so a run past the lock refuses at once, its output and exit in $1/run.out, and a df that writes to $1/df.seen whether a process held the lock when the run read free space.
+# Writes for the build root $1 a cgroup file placing the process in a scope of the slice $2, and that slice's memory limit $3 and swap limit $4.
+slice_of() {
+  mkdir -p "$1/cgroup-fs$2"
+  echo "0::$2/run-t.scope" >"$1/cgroup"
+  echo "$3" >"$1/cgroup-fs$2/memory.max"
+  echo "$4" >"$1/cgroup-fs$2/memory.swap.max"
+}
+
+# Runs the script run.sh, or $3, with the argument done, or $4, on the build root $1 and the lock $1/run.lock, JUDGED set unless $2 is entry, a floor no disk meets so a run past the lock refuses at once, its output and exit in $1/run.out, a df that writes to $1/df.seen whether a process held the lock when the run read free space, a systemctl and a systemd-run that print their arguments, and the oracle slice with limits unless $1/cgroup places it elsewhere.
 tier() {
   mkdir -p "$1/bin"
   printf '%s\n' '#!/bin/sh' "$LOCK_PROBE" 'echo "lock=$state" >>"$ROOT/df.seen"' \
     "exec $(command -v df) \"\$@\"" >"$1/bin/df"
   chmod +x "$1/bin/df"
+  printf '%s\n' '#!/bin/sh' 'echo "systemctl $*"' >"$1/bin/systemctl"
+  printf '%s\n' '#!/bin/sh' 'echo "systemd-run $*"' >"$1/bin/systemd-run"
+  chmod +x "$1/bin/systemctl" "$1/bin/systemd-run"
+  if [ ! -f "$1/cgroup" ]; then
+    slice_of "$1" /dolos.slice/dolos-oracle.slice 2684354560 1073741824
+  fi
   (
     ROOT=$1 OUT=$1/runs/t MIN_FREE_G=999999 LOCK_POLL_SECONDS=1 RUN_LOCK=$1/run.lock PATH=$1/bin:$PATH
-    export ROOT OUT MIN_FREE_G LOCK_POLL_SECONDS RUN_LOCK PATH
+    CGROUP_FILE=$1/cgroup CGROUP_ROOT=$1/cgroup-fs
+    export ROOT OUT MIN_FREE_G LOCK_POLL_SECONDS RUN_LOCK PATH CGROUP_FILE CGROUP_ROOT
     unset JUDGED
     if [ "${2:-}" != entry ]; then
       JUDGED=t
@@ -1148,6 +1184,61 @@ expect value_key "$(
   . "$HERE/value.sh"
   echo "$(value_key value-spend-redeemer) $(value_key emptyguards)"
 )" "value-spend-redeemer value-emptyguards"
+
+# Must not fire: run.sh and breaks.sh run in the oracle slice with its limits set go on to the free space floor without setting a limit or starting a scope, as the lock cases of each entry script show.
+for script in run.sh breaks.sh; do
+  lock_root "slice-in-$script"
+  tier "$K" "" "$script"
+  expect "slice_in_$script" "$(run_out "$K")" "REFUSED free$([ "$script" = run.sh ] && echo ' run-exit=2') exit=2"
+done
+# Must fire: each entry script run outside the slice sets its limits and runs itself again in a scope of it, before taking the lock.
+for script in run.sh breaks.sh candidate.sh; do
+  lock_root "slice-out-$script"
+  slice_of "$K" /user.slice/user-0.slice 9999 max
+  (
+    CANDIDATE=c COMMIT=c NODE=n ENDPOINT=e SERVE_CONFIG=$K/config CANDIDATE_GRPC=g CANDIDATE_NEED_G=999999
+    export CANDIDATE COMMIT NODE ENDPOINT SERVE_CONFIG CANDIDATE_GRPC CANDIDATE_NEED_G
+    tier "$K" "" "$script" "$([ "$script" = candidate.sh ] && echo "$K/dir" || echo done)"
+  )
+  expect "slice_out_$script" "$(run_out "$K" | sed -e "s#$HERE/##g" -e "s#$K/##g")" \
+    "systemctl set-property --runtime dolos-oracle.slice MemoryMax=2560M MemorySwapMax=1G systemd-run --scope --quiet --collect --slice=dolos-oracle.slice sh $script $([ "$script" = candidate.sh ] && echo dir || echo done) exit=0"
+  expect "slice_out_lock_$script" "$(record_left "$K")" removed
+done
+# Must refuse a run in the oracle slice when the slice has no memory limit or no swap limit.
+lock_root slice-unbounded
+slice_of "$K" /dolos.slice/dolos-oracle.slice max 1073741824
+tier "$K"
+expect slice_unbounded "$(run_out "$K")" "REFUSED slice=dolos-oracle.slice memory=max swap=1073741824 run-exit=2 exit=2"
+lock_root slice-no-swap
+slice_of "$K" /dolos.slice/dolos-oracle.slice 2684354560 max
+tier "$K"
+expect slice_no_swap "$(run_out "$K")" "REFUSED slice=dolos-oracle.slice memory=2684354560 swap=max run-exit=2 exit=2"
+
+# The arguments the docker of the box scripts hands the docker it fronts for the arguments given, or its refusal and exit.
+D=$W/docker
+mkdir -p "$D"
+printf '%s\n' '#!/bin/sh' 'echo "$*"' >"$D/docker"
+chmod +x "$D/docker"
+docker_of() {
+  status=0
+  ORACLE_DOCKER=$D/docker ORACLE_SLICE=dolos-oracle.slice sh "$HERE/bin/docker" "$@" 2>&1 || status=$?
+  echo "exit=$status"
+}
+# Must not fire on a command that starts no container.
+expect docker_inspect "$(docker_of inspect -f x n | paste -sd ' ' -)" "inspect -f x n exit=0"
+expect docker_exec "$(docker_of exec n cardano-cli | paste -sd ' ' -)" "exec n cardano-cli exit=0"
+# Must place each container a run or a create starts in the slice.
+expect docker_run "$(docker_of run --rm -i image cmd | paste -sd ' ' -)" "run --cgroup-parent dolos-oracle.slice --rm -i image cmd exit=0"
+expect docker_create "$(docker_of create image | paste -sd ' ' -)" "create --cgroup-parent dolos-oracle.slice image exit=0"
+expect docker_container_run "$(docker_of container run -d image | paste -sd ' ' -)" "container run --cgroup-parent dolos-oracle.slice -d image exit=0"
+# Must refuse an option before the command, which could name a run it does not see.
+expect docker_option "$(docker_of --host x run image | paste -sd ' ' -)" "REFUSED docker option --host before the command exit=2"
+# Must resolve to itself on the PATH lib.sh exports, so a bare docker in a box script or the harness it starts reaches it.
+expect docker_path "$(
+  ROOT=$W/docker-path
+  . "$LIB"
+  command -v docker
+)" "$HERE/bin/docker"
 
 if [ "$failed" -eq 0 ]; then
   echo "LIB-TEST RESULT PASS"

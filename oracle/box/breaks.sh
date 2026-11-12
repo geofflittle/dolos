@@ -12,6 +12,7 @@ TEST=$ORACLE_TESTS::ledger_oracle
 # The number of switched arms judged at once.
 ARM_JOBS=${ARM_JOBS:-4}
 mkdir -p "$OUT"
+enter_slice "$0" "$@"
 take_lock
 ARMS=$(arm_order ${ARMS:-head control $PLANTED_ARMS} | paste -sd ' ' -)
 # The arms of ARMS whose crate test the control and the overlay build.

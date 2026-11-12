@@ -14,6 +14,7 @@ SAMPLE_MINUTES=${SAMPLE_MINUTES:-5}
 FIXED_SLOTS="205422 368793 783572"
 STORE="$ROOT/candidate/$(date -u +%Y%m%dT%H%M%SZ)"
 . "$HERE/lib.sh"
+enter_slice "$0" "$@"
 take_lock
 
 FSYNC=$(candidate_fsync) || exit 2

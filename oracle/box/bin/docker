@@ -1,0 +1,29 @@
+#!/bin/sh
+# Runs ORACLE_DOCKER with the arguments given, placing each container a run or create starts in the slice ORACLE_SLICE.
+set -eu
+: "${ORACLE_DOCKER:?}" "${ORACLE_SLICE:?}"
+if [ "$ORACLE_DOCKER" -ef "$0" ]; then
+  echo "REFUSED docker=$ORACLE_DOCKER is this command" >&2
+  exit 2
+fi
+case ${1:-} in
+  run | create)
+    command=$1
+    shift
+    exec "$ORACLE_DOCKER" "$command" --cgroup-parent "$ORACLE_SLICE" "$@"
+    ;;
+  container)
+    case ${2:-} in
+      run | create)
+        command=$2
+        shift 2
+        exec "$ORACLE_DOCKER" container "$command" --cgroup-parent "$ORACLE_SLICE" "$@"
+        ;;
+    esac
+    ;;
+  -*)
+    echo "REFUSED docker option $1 before the command" >&2
+    exit 2
+    ;;
+esac
+exec "$ORACLE_DOCKER" "$@"

@@ -1,4 +1,4 @@
-# Functions and defaults the oracle box scripts share, reading ROOT, SCRATCH, REV, MIN_FREE_G, OUT, HERE, TARGET, IN_IMAGE, LOCK_POLL_SECONDS, RUN_LOCK, LAST_DONE, LAST_SHIP, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_FSYNC, NODE, ENDPOINT, GRPCURL and the IO_ limits.
+# Functions and defaults the oracle box scripts share, reading ROOT, SCRATCH, REV, MIN_FREE_G, OUT, HERE, TARGET, IN_IMAGE, LOCK_POLL_SECONDS, RUN_LOCK, LAST_DONE, LAST_SHIP, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_FSYNC, NODE, ENDPOINT, GRPCURL, the ORACLE_ slice settings, CGROUP_FILE, CGROUP_ROOT and the IO_ limits.
 
 PALLAS=${PALLAS:-scratch/pallas}
 SCRATCH=${SCRATCH:-scratch/dolos}
@@ -268,10 +268,33 @@ arm_verdict() {
   rm -f "$OUT/served/$name.printed"
 }
 
-# Writes the lines on stdin to $OUT/served/$1 as what the arm $1 served, in byte order and without the number libtest gives a panicking test's thread.
+# Writes the lines on stdin to $OUT/served/$1 as what the arm $1 served, in byte order, without the number libtest gives a panicking test's thread, and with each panic's line in a file of the scratch tree given as the name of the fn whose line is the nearest above it and the count of lines between them.
 record_served() {
   mkdir -p "$OUT/served"
-  sed "s/^\(thread '[^']*'\) ([0-9]*) panicked at /\1 panicked at /" | LC_ALL=C sort >"$OUT/served/$1"
+  sed "s/^\(thread '[^']*'\) ([0-9]*) panicked at /\1 panicked at /" |
+    awk -v tree="$ROOT/$SCRATCH" '
+      match($0, / panicked at [^:]+:[0-9]+:[0-9]+:$/) {
+        head = substr($0, 1, RSTART + 12)
+        split(substr($0, RSTART + 13, RLENGTH - 14), site, ":")
+        path = tree "/" site[1]
+        name = ""
+        read = 0
+        while (read < site[2] + 0 && (getline text <path) > 0) {
+          read++
+          if (text ~ /^[ \t]*(pub(\([^)]*\))?[ \t]+)?((const|async|unsafe)[ \t]+)*fn[ \t]+[A-Za-z_]/) {
+            match(text, /fn[ \t]+[A-Za-z_][A-Za-z0-9_]*/)
+            name = substr(text, RSTART, RLENGTH)
+            sub(/^fn[ \t]+/, "", name)
+            at = read
+          }
+        }
+        close(path)
+        if (read == site[2] + 0 && name != "") {
+          print head site[1] ":" name "+" (read - at) ":" site[3] ":"
+          next
+        }
+      }
+      { print }' | LC_ALL=C sort >"$OUT/served/$1"
 }
 
 # The row of served.txt for what the arm $1 served in this run: its name, its line count and the sha256 of its lines.
@@ -430,6 +453,49 @@ release_lock() {
   if [ "$(cat "$RUN_LOCK" 2>/dev/null)" = "$$" ]; then
     : >"$RUN_LOCK"
   fi
+}
+
+# The systemd slice every process and container of an oracle run is placed in, and the memory and swap it may use, sized so the node and the serving Dolos keep their peak working sets.
+ORACLE_SLICE=${ORACLE_SLICE:-dolos-oracle.slice}
+ORACLE_MEMORY=${ORACLE_MEMORY:-2560M}
+ORACLE_SWAP=${ORACLE_SWAP:-1G}
+CGROUP_FILE=${CGROUP_FILE:-/proc/self/cgroup}
+CGROUP_ROOT=${CGROUP_ROOT:-/sys/fs/cgroup}
+# The docker every oracle script calls, a command that places each container it starts in ORACLE_SLICE in front of the docker it was found as.
+if [ -z "${ORACLE_DOCKER:-}" ]; then
+  ORACLE_DOCKER=$(command -v docker || echo docker)
+fi
+case :$PATH: in
+  *":$HERE/bin:"*) ;;
+  *) PATH=$HERE/bin:$PATH ;;
+esac
+export ORACLE_SLICE ORACLE_DOCKER PATH
+
+# The memory and swap limits of the slice this process runs in, or none when that slice is not ORACLE_SLICE.
+slice_limits() {
+  cgroup=$(sed -n 's/^0:://p' "$CGROUP_FILE")
+  slice=${cgroup%/*}
+  case $slice in
+    */"$ORACLE_SLICE")
+      echo "memory=$(cat "$CGROUP_ROOT$slice/memory.max") swap=$(cat "$CGROUP_ROOT$slice/memory.swap.max")"
+      ;;
+    *) echo none ;;
+  esac
+}
+
+# Runs the script $1 again with the arguments after it in a scope of ORACLE_SLICE, after setting the slice's limits, when this process runs outside it, and exits 2 when the slice it runs in has no memory or swap limit.
+enter_slice() {
+  if [ "$(slice_limits)" = none ]; then
+    systemctl set-property --runtime "$ORACLE_SLICE" MemoryMax="$ORACLE_MEMORY" MemorySwapMax="$ORACLE_SWAP" || exit 2
+    exec systemd-run --scope --quiet --collect --slice="$ORACLE_SLICE" sh "$@"
+  fi
+  case $(slice_limits) in
+    memory=[0-9]*" "swap=[0-9]*) ;;
+    *)
+      echo "REFUSED slice=$ORACLE_SLICE $(slice_limits)"
+      exit 2
+      ;;
+  esac
 }
 
 # The names of a candidate's config files in its store.
