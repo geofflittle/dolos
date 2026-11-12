@@ -129,12 +129,14 @@ value_all_pairs() {
   rm -rf "$1"
 }
 
-# The hash of the words $1 and of the bytes and paths of the files that follow.
+# The hash of the words $1 and of the bytes and names of the files that follow.
 value_hash() {
   {
     echo "$1"
     shift
-    [ $# -eq 0 ] || sha256sum -- "$@"
+    for file; do
+      echo "$(sha256sum <"$file" | cut -c1-64) $(basename "$file")"
+    done
   } | sha256sum | cut -c1-16
 }
 

@@ -1171,18 +1171,20 @@ done
 EOF
 }
 
-# What value_tier made and ran for the pairs $1 in a fresh run dir over the results the earlier calls kept, and the tally of the dir.
+# What value_tier made and ran for the pairs $1 in a run dir of a name no earlier call used, over the results the earlier calls kept, and the tally of the dir.
 tier_of() {
   : >"$R/log"
-  rm -rf "$R/runs"
-  mkdir -p "$R/runs/value/bin"
-  cp "$R/head" "$R/runs/value/bin/head"
+  runs=$(($(cat "$R/runs.count" 2>/dev/null || echo 0) + 1))
+  echo "$runs" >"$R/runs.count"
+  rm -rf "$R"/runs-*
+  mkdir -p "$R/runs-$runs/value/bin"
+  cp "$R/head" "$R/runs-$runs/value/bin/head"
   (
-    ROOT=$R OUT=$R/runs SCRATCH=scratch/dolos PALLAS=scratch/pallas HERE=$HERE VALUE_N=2 LOG=$R/log
+    ROOT=$R OUT=$R/runs-$runs SCRATCH=scratch/dolos PALLAS=scratch/pallas HERE=$HERE VALUE_N=2 LOG=$R/log
     export LOG
     . "$HERE/value.sh"
     image_id() { cat "$R/image"; }
-    value_tier head "$R/runs/value/head" "$1" | grep '^DECODE-ORACLE '
+    value_tier head "$R/runs-$runs/value/head" "$1" | grep '^DECODE-ORACLE '
   )
   echo "made=[$(sed -n 's/^made //p' "$R/log" | sort | paste -sd ' ' -)] ran=[$(sed -n 's/^ran //p' "$R/log" | sort | paste -sd ' ' -)]"
 }
