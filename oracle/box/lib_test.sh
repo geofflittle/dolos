@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier, the value control's verdict, the amaru pin and the amaru leg's verdicts.
+# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier and which of its steps it reruns, the value control's verdict, the amaru pin and the amaru leg's verdicts.
 # Usage: lib_test.sh <empty work dir>
 set -eu
 W=$(cd "$1" && pwd)
@@ -1066,22 +1066,79 @@ expect amaru_caught_other "$(amaru_caught_of 'test builtin_semantics_modinteger_
 expect amaru_caught_divide "$(amaru_caught_of 'test builtin_semantics_divideinteger_divideinteger_neg_pos_v3_protocol_version_11 ... FAILED')" \
   "caught test builtin_semantics_divideinteger_divideinteger_neg_pos_v3_protocol_version_11 ... FAILED"
 
-# A build root whose harness tier.sh prints the pairs, probe and given files it was handed, and what value_tier hands it for the pairs $1.
-tier_of() {
+# A build root whose harness tier.sh runs tx:given and eb:arb unless handed pairs, logging each pair whose values it made and each it ran the probe $R/head on, which prints the line in probe-KIND before each value.
+tier_root() {
   R=$W/tier
   rm -rf "$R"
-  mkdir -p "$R/value/gen" "$R/scratch/dolos/test_data/ledger-oracle" "$R/scratch/pallas/test_data" "$R/runs"
-  touch "$R/scratch/pallas/test_data/dijkstra-a.tx" "$R/scratch/pallas/test_data/dijkstra-b.block" "$R/scratch/pallas/test_data/c.ebbody"
-  echo 'echo "pairs=[${PAIRS:-}] probe=$(basename "$PROBE") tx=$(echo $TX_FILES | wc -w) block=$(basename $BLOCK_FILES) eb=$(basename $EB_FILES) n=$2"' >"$R/value/gen/tier.sh"
-  (
-    ROOT=$R OUT=$R/runs SCRATCH=scratch/dolos PALLAS=scratch/pallas HERE=$HERE VALUE_N=7
-    . "$HERE/value.sh"
-    value_tier head "$R/runs/t" "$1"
-  )
+  mkdir -p "$R/value/gen/bin" "$R/scratch/dolos/test_data/ledger-oracle" "$R/scratch/pallas/test_data"
+  touch "$R/scratch/dolos/test_data/ledger-oracle/ic.jsonl.gz" "$R/scratch/dolos/test_data/ledger-oracle/supp.jsonl.gz"
+  echo a >"$R/scratch/pallas/test_data/dijkstra-a.tx"
+  touch "$R/scratch/pallas/test_data/dijkstra-b.block" "$R/scratch/pallas/test_data/c.ebbody"
+  echo generator >"$R/value/gen/bin/conformance-gen"
+  echo image-1 >"$R/image"
+  printf '#!/bin/sh\ncat "%s/probe-$1" 2>/dev/null\ncat\n' "$R" >"$R/head"
+  chmod +x "$R/head"
+  cat >"$R/value/gen/tier.sh" <<'EOF'
+mkdir -p "$1"
+echo "tier pairs=[$(echo ${PAIRS:-})] probe=$(basename "$PROBE") from=${GEN_FROM:+yes} tx=$(echo $TX_FILES | wc -w) block=$(basename $BLOCK_FILES) eb=$(basename $EB_FILES) n=$2" >>"$LOG"
+for p in ${PAIRS:-tx:given eb:arb}; do
+  b=$1/${p%%:*}.${p#*:}
+  if [ "${VRUN:-}" = /dev/null ]; then
+    echo 0 >"$b.status"
+    continue
+  fi
+  if [ -n "${GEN_FROM:-}" ]; then
+    ln -f "$GEN_FROM/${p%%:*}.${p#*:}.gen.jsonl" "$b.gen.jsonl"
+    ln -f "$GEN_FROM/${p%%:*}.${p#*:}.oracle.jsonl" "$b.oracle.jsonl"
+  else
+    echo "made $p" >>"$LOG"
+    case $p in tx:given) cat $TX_FILES ;; *) printf 'v\nw\n' ;; esac >"$b.gen.jsonl"
+    sed 's/^/o/' "$b.gen.jsonl" >"$b.oracle.jsonl"
+  fi
+  "$PROBE" "${p%%:*}" <"$b.gen.jsonl" >"$b.probe.jsonl"
+  [ "$PROBE" = true ] || echo "ran $p" >>"$LOG"
+  echo 0 >"$b.status"
+done
+[ -n "${TALLY:-}" ] || echo "DECODE-ORACLE values=$(cat "$1"/*.gen.jsonl | grep -c .)"
+EOF
 }
-# Must not hand every pair when pairs are named, and must hand the given files and no pairs when none are.
-expect tier_pairs "$(tier_of 'tx:given eb:arb')" "pairs=[tx:given eb:arb] probe=head tx=3 block=dijkstra-b.block eb=c.ebbody n=7"
-expect tier_all "$(tier_of '')" "pairs=[] probe=head tx=3 block=dijkstra-b.block eb=c.ebbody n=7"
+
+# What value_tier made and ran for the pairs $1 in a fresh run dir over the results the earlier calls kept, and the tally of the dir.
+tier_of() {
+  : >"$R/log"
+  rm -rf "$R/runs"
+  mkdir -p "$R/runs/value/bin"
+  cp "$R/head" "$R/runs/value/bin/head"
+  (
+    ROOT=$R OUT=$R/runs SCRATCH=scratch/dolos PALLAS=scratch/pallas HERE=$HERE VALUE_N=2 LOG=$R/log
+    export LOG
+    . "$HERE/value.sh"
+    image_id() { cat "$R/image"; }
+    value_tier head "$R/runs/value/head" "$1" | grep '^DECODE-ORACLE '
+  )
+  echo "made=[$(sed -n 's/^made //p' "$R/log" | sort | paste -sd ' ' -)] ran=[$(sed -n 's/^ran //p' "$R/log" | sort | paste -sd ' ' -)]"
+}
+
+# A first run makes and runs every pair, and each later run with nothing changed must make and run none and still tally every value.
+tier_root
+expect tier_first "$(tier_of '')" "DECODE-ORACLE values=3
+made=[eb:arb tx:given] ran=[eb:arb tx:given]"
+expect tier_unchanged "$(tier_of '')" "DECODE-ORACLE values=3
+made=[] ran=[]"
+expect tier_named "$(tier_of 'tx:given')" "DECODE-ORACLE values=1
+made=[] ran=[]"
+# Must rerun only the pair whose probe output differs, and must remake the values of a given pair when its file changes, and of every pair when the ledger image does.
+echo extra >"$R/probe-tx"
+expect tier_probe_out "$(tier_of '')" "DECODE-ORACLE values=3
+made=[] ran=[tx:given]"
+echo b >"$R/scratch/pallas/test_data/dijkstra-a.tx"
+expect tier_given_file "$(tier_of '')" "DECODE-ORACLE values=3
+made=[tx:given] ran=[tx:given]"
+echo image-2 >"$R/image"
+expect tier_image "$(tier_of '')" "DECODE-ORACLE values=3
+made=[eb:arb tx:given] ran=[eb:arb tx:given]"
+# Must hand the harness the given files, the count and the values it made.
+expect tier_handed "$(grep '^tier ' "$R/log" | tail -1)" "tier pairs=[eb:arb tx:given] probe=head from=yes tx=3 block=dijkstra-b.block eb=c.ebbody n=2"
 
 # A head dir holding the values $2 and the head probe output $3 for the pair tx.given, and the verdict of value_control with a probe printing $4.
 control_of() {
