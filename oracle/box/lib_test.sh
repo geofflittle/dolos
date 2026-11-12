@@ -1150,12 +1150,13 @@ expect value_key "$(
   echo "$(value_key value-spend-redeemer) $(value_key emptyguards)"
 )" "value-spend-redeemer value-emptyguards"
 
-# A copy at $W/$1 of the box scripts whose build image dir holds the Dockerfile line $2, with a docker in its bin that logs each call to docker.log and reports an image present when the file present exists.
+# A copy at $W/$1 of the box scripts and overlay diffs whose build image dir holds the Dockerfile line $2, with a docker in its bin that logs each call to docker.log and reports an image present when the file present exists.
 image_box() {
   B=$W/$1
   rm -rf "$B"
   mkdir -p "$B/bin" "$B/box/images/dolos-build"
   cp "$HERE"/*.sh "$B/box/"
+  cp -R "$HERE/overlay" "$B/box/"
   echo "$2" >"$B/box/images/dolos-build/Dockerfile"
   printf '%s\n' '#!/bin/sh' "echo \"\$*\" >>'$B/docker.log'" \
     "if [ \"\$1 \$2\" = 'image inspect' ]; then [ -e '$B/present' ]; fi" >"$B/bin/docker"
