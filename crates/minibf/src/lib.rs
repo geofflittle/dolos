@@ -25,7 +25,7 @@ use tracing::Level;
 use dolos_core::{
     config::MinibfConfig, ArchiveStore as _, AsyncQueryFacade, BlockSlot, CancelToken, Domain,
     Entity, EntityKey, LogKey, ServeError, StateError, StateStore as _, SubmitExt, TemporalKey,
-    TxCbor, TxOrder,
+    TxCbor,
 };
 
 mod cache;
@@ -61,8 +61,6 @@ impl<D: Domain> Deref for Facade<D> {
 }
 
 pub type TxMap = HashMap<Hash<32>, Option<TxCbor>>;
-pub type BlockWithTx = (Vec<u8>, TxOrder);
-pub type BlockWithTxMap = HashMap<Hash<32>, BlockWithTx>;
 
 impl<D: Domain> Facade<D> {
     pub fn query(&self) -> AsyncQueryFacade<D>
@@ -189,28 +187,6 @@ impl<D: Domain> Facade<D> {
         for hash in hashes.into_iter() {
             let tx = self.get_tx(hash).await?;
             out.insert(hash, tx);
-        }
-
-        Ok(out)
-    }
-
-    pub async fn get_block_with_tx_batch(
-        &self,
-        hashes: impl IntoIterator<Item = Hash<32>>,
-    ) -> Result<BlockWithTxMap, StatusCode>
-    where
-        D: Clone + Send + Sync + 'static,
-    {
-        let mut out = BlockWithTxMap::new();
-        for hash in hashes.into_iter() {
-            let block = self
-                .query()
-                .block_by_tx_hash(hash.as_slice().to_vec())
-                .await
-                .map_err(log_and_500("failed to fetch block_with_tx batch"))?;
-            if let Some(block) = block {
-                out.insert(hash, block);
-            }
         }
 
         Ok(out)
