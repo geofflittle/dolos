@@ -1999,6 +1999,69 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    #[ignore = "a timing, run by hand"]
+    async fn time_read_tx_against_the_size_of_its_block() {
+        use pallas::codec::{minicbor, utils::MaybeIndefArray};
+        use pallas::ledger::primitives::dijkstra;
+        use std::time::Instant;
+
+        let fixture = crate::tests::musashi::sub_transaction_block();
+        let archive = fixture.domain.archive();
+        let stored = archive.get_block_by_slot(&fixture.slot).unwrap().unwrap();
+        let (_, source): (u16, dijkstra::Block) = minicbor::decode(&stored).unwrap();
+        let service = QueryServiceImpl::new(fixture.domain.clone());
+        let calls = 100;
+
+        for count in [10, 100, 1000] {
+            let (era, mut sized): (u16, dijkstra::Block) = minicbor::decode(&stored).unwrap();
+            let txs = source.block_body.transactions.iter().cycle().take(count);
+            sized.block_body.transactions = MaybeIndefArray::Def(txs.cloned().collect());
+            let raw = minicbor::to_vec((era, sized)).unwrap();
+            let owned = dolos_cardano::owned::OwnedMultiEraBlock::decode(Arc::new(raw.clone()))
+                .unwrap();
+            let block = owned.view();
+            let first = block.txs()[0].hash();
+            let located = owned.tx_ranges().unwrap()[0].clone();
+            let writer = archive.start_writer().unwrap();
+            writer
+                .apply(
+                    &ChainPoint::Specific(block.slot(), block.hash()),
+                    &Arc::new(raw.clone()),
+                )
+                .unwrap();
+            writer.commit().unwrap();
+
+            for (arm, range) in [("whole-block", None), ("located", Some(located))] {
+                let writer = archive.start_writer().unwrap();
+                writer
+                    .apply_index(&[dolos_core::ArchiveIndexDelta {
+                        slot: block.slot(),
+                        block_hash: block.hash().to_vec(),
+                        block_number: Some(block.number()),
+                        txs: vec![dolos_core::IndexedTx {
+                            hash: first.to_vec(),
+                            range,
+                        }],
+                        tags: Vec::new(),
+                    }])
+                    .unwrap();
+                writer.commit().unwrap();
+                read_tx_answer(&service, first.as_slice()).await.unwrap();
+
+                let start = Instant::now();
+                for _ in 0..calls {
+                    read_tx_answer(&service, first.as_slice()).await.unwrap();
+                }
+                println!(
+                    "READTX arm={arm} txs={count} bytes={} us_per_call={}",
+                    raw.len(),
+                    start.elapsed().as_micros() / calls
+                );
+            }
+        }
+    }
+
     /// A hash only one top level transaction includes names that transaction.
     #[test]
     fn a_hash_one_transaction_includes_names_that_transaction() {
