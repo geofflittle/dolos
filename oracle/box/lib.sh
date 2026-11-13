@@ -1061,7 +1061,7 @@ build_checked() {
     # With no record of any build, every file gets a new time, so cargo rebuilds each unit that reads one.
     for tree in "$SCRATCH" "$PALLAS"; do
       if [ -d "$ROOT/$tree/.git" ]; then
-        git -C "$ROOT/$tree" ls-files -z --cached --others --exclude-standard | (cd "$ROOT/$tree" && xargs -0 touch)
+        git -C "$ROOT/$tree" ls-files -z --cached --others --exclude-standard | (cd "$ROOT/$tree" && xargs -0 -r touch)
         # The index takes the new times too, so a later checkout of the same commit keeps each file and its time.
         git -C "$ROOT/$tree" update-index -q --refresh || true
       fi

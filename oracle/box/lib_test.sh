@@ -69,6 +69,11 @@ change_a
 expect rebuilt "$(build x=false y=true)" "exit=0 "
 expect warm "$(build x=true y=true)" "exit=0 "
 
+# Must build cold when the pallas checkout is a repository with no files yet.
+setup empty_pallas
+git -C "$ROOT" init -q scratch/pallas
+expect cold_empty_tree "$(build x=false y=false)" "exit=0 "
+
 # Must fire: a unit reported fresh after its file changed.
 setup changed
 build x=false y=false >/dev/null
