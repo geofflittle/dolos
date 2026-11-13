@@ -1,16 +1,13 @@
 # The value leg: the pallas conformance harness at the commit value/harness.rev names, judging the pallas commit the scratch tree pins with the Haskell ledger, its arms the switches value/pallas.diff adds over overlay/pallas.diff.
-# Sourced by run.sh after lib.sh. Reads ROOT, OUT, SCRATCH, PALLAS, HERE, IN_IMAGE, LAST_VALUE, VALUE_RESULTS, VALUE_N, VALUE_SEED, VALUE_GEN_DIR and VALUE_HARNESS_URL.
+# Sourced by run.sh after lib.sh. Reads ROOT, OUT, SCRATCH, PALLAS, HERE, IN_IMAGE, LAST_VALUE, VALUE_RESULTS, VALUE_N, VALUE_SEED and VALUE_GEN_DIR.
 
 VALUE_N=${VALUE_N:-100}
 VALUE_SEED=${VALUE_SEED:-1}
 # The generator binaries, each under the name the harness's generator-name.sh gives the files it was built from.
 VALUE_GEN_DIR=${VALUE_GEN_DIR:-$ROOT/value-gen}
-VALUE_HARNESS_URL=${VALUE_HARNESS_URL:-https://github.com/geofflittle/pallas.git}
 LAST_VALUE=${LAST_VALUE:-$ROOT/runs/last-value}
 # The output of each value tier step, in a dir named by the hash of what the step read.
 VALUE_RESULTS=${VALUE_RESULTS:-$ROOT/value/results}
-# The image the harness runs the generator and the Haskell ledger in.
-VALUE_IMAGE=conformance-gen-hs:2
 # The pallas tree the overlay probe reads.
 VALUE_PALLAS=${VALUE_PALLAS:-scratch/value-pallas}
 # The arms of the value leg, each a switch of value/pallas.diff or of overlay/pallas.diff.
@@ -51,9 +48,9 @@ value_corpora() {
   done
 }
 
-# The inputs of the value leg on the pallas pin $1 with the ledger image of id $2: the pin, the value count and seed, the image and the hash of its box files, corpora and rows of served.txt.
+# The inputs of the value leg on the pallas pin $1: the pin, the value count and seed, and the hash of its box files, corpora and rows of served.txt, where harness.rev fixes the harness and the files of the ledger image it runs.
 value_inputs() {
-  echo "pin=$1 n=$VALUE_N seed=$VALUE_SEED image=$2 files=$({
+  echo "pin=$1 n=$VALUE_N seed=$VALUE_SEED files=$({
     cat "$HERE/value.sh" "$HERE/value/harness.rev" "$HERE/value/pallas.diff" "$HERE/overlay/pallas.diff" $(value_corpora)
     grep -E '^value-' "$HERE/served.txt" || true
   } | sha256sum | cut -c1-12)"
@@ -72,17 +69,10 @@ value_verdict() {
 
 # Puts the harness of value/harness.rev in $ROOT/value/gen and the generator of its oracle sources, ledger commit and image in its bin, building that image when docker has none.
 value_harness() {
-  rev=$(cat "$HERE/value/harness.rev")
-  repo=$ROOT/value/harness.git
-  if [ ! -d "$repo" ]; then
-    git init -q --bare "$repo" || return
-  fi
-  if ! git -C "$repo" cat-file -e "$rev^{commit}" 2>/dev/null; then
-    git -C "$repo" fetch -q --filter=blob:none "$VALUE_HARNESS_URL" "$rev" || return
-  fi
+  rev=$(harness_commit) || return
   rm -rf "$ROOT/value/gen" "$ROOT/value/conf"
   mkdir -p "$ROOT/value/gen"
-  git -C "$repo" archive "$rev" conformance-value-oracle/gen | tar -x -C "$ROOT/value/gen" --strip-components 2 || return
+  git -C "$ROOT/value/harness.git" archive "$rev" conformance-value-oracle/gen | tar -x -C "$ROOT/value/gen" --strip-components 2 || return
   if ! image=$(sh "$ROOT/value/gen/build-image.sh" conformance-gen-hs); then
     echo "VALUE REFUSED generator_image=unbuilt" >&2
     return 1
@@ -155,7 +145,7 @@ value_values_key() {
     esac
   fi
   # shellcheck disable=SC2086
-  value_hash "values harness=$harness_rev generator=$generator image=$image n=$VALUE_N seed=$VALUE_SEED pair=$1" $given
+  value_hash "values harness=$harness_rev generator=$generator n=$VALUE_N seed=$VALUE_SEED pair=$1" $given
 }
 
 # Keeps the files of the pair $3 in the dir $2 whose names end in the suffixes that follow, or all of them, under VALUE_RESULTS/$1.
@@ -219,7 +209,7 @@ value_compare() {
       continue
     fi
     "$1" "${pair%%:*}" <"$4/$base.gen.jsonl" >"$2.keys/$base" 2>/dev/null || true
-    key=$(value_hash "compare harness=$harness_rev generator=$generator image=$image n=$VALUE_N pair=$pair" \
+    key=$(value_hash "compare harness=$harness_rev generator=$generator n=$VALUE_N pair=$pair" \
       "$4/$base.gen.jsonl" "$4/$base.oracle.jsonl" "$2.keys/$base")
     echo "$key" >>"$OUT/value/results.used"
     if [ -d "$VALUE_RESULTS/$key" ]; then
@@ -255,7 +245,6 @@ value_tier() {
   eb_files=$(ls "$fixtures"/*.ebbody | tr '\n' ' ')
   harness_rev=$(cat "$HERE/value/harness.rev")
   generator=$(sha256sum <"$ROOT/value/gen/bin/conformance-gen" | cut -c1-16)
-  image=$(image_id "$VALUE_IMAGE")
   pairs=${3:-$(value_all_pairs "$2.pairs")}
   from=${4:-}
   if [ -z "$from" ]; then

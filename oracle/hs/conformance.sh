@@ -1,12 +1,14 @@
 #!/bin/sh
 # Writes the protocol 12 V3 and V4 conformance directories of an amaru tree from its protocol 11 V3 programs, with the result and budget the ledger gives each text and flat program.
-# Usage: conformance.sh <amaru tree> <store dir> <work dir> [check]
+# Usage: GEN=<pallas conformance-value-oracle/gen dir> conformance.sh <amaru tree> <store dir> <work dir> [check]
 # With check it writes the protocol 11 V3 results instead, compares them with the tree's own, and prints one CONFORMANCE line.
 # A scenario the amaru test build lists as out of budget is counted apart, since the test replaces its expected files.
 set -eu
 TREE=$1/crates/amaru-uplc/tests/conformance
 STORE=$2
 WORK=$3
+IMAGE=${IMAGE:-$(sh "${GEN:?}/build-image.sh" conformance-gen-hs)}
+export IMAGE
 sh "$(dirname "$0")/build.sh" Conformance "$STORE" "$WORK"
 
 # Writes the programs with the language $1 at the protocol $2 and the cost model file $3 into the directory $4.
@@ -19,7 +21,7 @@ write() {
   (cd "$WORK/in" && find . \( -name '*.uplc' -o -name '*.flat' \) -exec cp {} "$WORK/out/{}" \;)
   cp "$WORK/list.txt" "$WORK/in/list.txt"
   cp "$3" "$WORK/in/costs.json"
-  docker run --rm -v "$WORK":/probe conformance-gen-hs:2 /probe/bin/Conformance "$1" "$2" /probe/in/costs.json /probe/in/list.txt
+  docker run --rm -v "$WORK":/probe "$IMAGE" /probe/bin/Conformance "$1" "$2" /probe/in/costs.json /probe/in/list.txt
   cp -R "$WORK/out/." "$4/"
 }
 

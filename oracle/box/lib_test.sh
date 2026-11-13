@@ -1,10 +1,10 @@
 #!/bin/sh
-# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, the overlay build's target dir, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the files a planted tree writes and whether git writes each diff as committed, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, how many switched arms are judged at once, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier and which of its steps it reruns, the value control's verdict, the amaru pin, the amaru leg's verdicts, the build image's name from its files and its build when docker has none.
+# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, the overlay build's target dir, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the files a planted tree writes and whether git writes each diff as committed, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, how many switched arms are judged at once, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier and which of its steps it reruns, the value control's verdict, the amaru pin, the amaru leg's verdicts, the build image's name by the harness's image scripts and the image in-image.sh runs.
 # Usage: lib_test.sh <empty work dir>
 set -eu
 W=$(cd "$1" && pwd)
-# Each case names its own REV, BASE and slice limits, so those of the run that calls the test are dropped.
-unset REV BASE ORACLE_SLICE ORACLE_MEMORY ORACLE_SWAP ARM_MEMORY
+# Each case names its own REV, BASE, slice limits and build image, so those of the run that calls the test are dropped.
+unset REV BASE ORACLE_SLICE ORACLE_MEMORY ORACLE_SWAP ARM_MEMORY BUILD_IMAGE
 HERE=$(cd "$(dirname "$0")" && pwd)
 LIB=$HERE/lib.sh
 
@@ -931,7 +931,7 @@ echo a1 >"$V/box/amaru/a.diff"
 echo i1 >"$V/scratch/dolos/test_data/ledger-oracle/ic.jsonl.gz"
 echo s1 >"$V/scratch/dolos/test_data/ledger-oracle/supp.jsonl.gz"
 : >"$V/box/served.txt"
-# Prints for the leg $1, value or amaru, on the pin $2 and the image $3 whether it is due, or with record set records its inputs as passed.
+# Prints for the leg $1, value or amaru, on the pin $2 and, for amaru, the build image $3 whether it is due, or with record set records its inputs as passed.
 due() {
   (
     ROOT=$V HERE=$V/box SCRATCH=scratch/dolos
@@ -939,7 +939,7 @@ due() {
     . "$V/box/value.sh"
     . "$V/box/amaru.sh"
     if [ "$1" = value ]; then
-      inputs=$(value_inputs "$2" "$3")
+      inputs=$(value_inputs "$2")
       last=$LAST_VALUE
     else
       inputs=$(amaru_inputs "$2" "$3")
@@ -954,7 +954,7 @@ due() {
     fi
   )
 }
-# Must fire with no passing leg, must not on the inputs that passed, and must fire on another pin, another image, another plant of its own, another corpus or another seed.
+# Must fire with no passing leg, must not on the inputs that passed, and must fire on another pin, another build image for amaru, another plant of its own, another corpus or another seed.
 expect value_due_none "$(due value aaa i1)" due
 expect amaru_due_none "$(due amaru 'u r1' i1)" due
 record=yes due value aaa i1
@@ -963,7 +963,6 @@ expect value_due_same "$(due value aaa i1)" passed
 expect amaru_due_same "$(due amaru 'u r1' i1)" passed
 expect value_due_pin "$(due value bbb i1)" due
 expect amaru_due_rev "$(due amaru 'u r2' i1)" due
-expect value_due_image "$(due value aaa i2)" due
 expect amaru_due_image "$(due amaru 'u r1' i2)" due
 echo p2 >"$V/box/value/pallas.diff"
 expect value_due_plant "$(due value aaa i1)" due
@@ -1010,7 +1009,7 @@ cp -R "$HERE" "$W/quick-box"
 echo 'echo "ARMS head=PASS control=CLEAN logs=x"' >"$W/quick-box/breaks.sh"
 echo 'exit 0' >"$W/quick-box/lib_test.sh"
 echo 'exit 0' >"$W/quick-box/fields_test.sh"
-echo 'build_image() { :; }' >>"$W/quick-box/lib.sh"
+echo 'build_image() { echo dolos-build:stub; }' >>"$W/quick-box/lib.sh"
 echo 'value_leg() { echo ran >>"$ROOT/legs"; echo "VALUE value-head=PASS value-control=CLEAN pin=x"; }' >>"$W/quick-box/value.sh"
 printf '%s\n' 'amaru_leg() { echo ran >>"$ROOT/amaru-legs"; echo "AMARU amaru-head=PASS rev=x"; }' \
   'amaru_pin() { cat "$ROOT/amaru-pin"; }' 'pallas_history() { :; }' 'image_id() { echo i1; }' >>"$W/quick-box/amaru.sh"
@@ -1207,11 +1206,15 @@ made=[] ran=[tx:given]"
 echo b >"$R/scratch/pallas/test_data/dijkstra-a.tx"
 expect tier_given_file "$(tier_of '')" "DECODE-ORACLE values=3
 made=[tx:given] ran=[tx:given]"
-echo image-2 >"$R/image"
-expect tier_image "$(tier_of '')" "DECODE-ORACLE values=3
+echo generator-2 >"$R/value/gen/bin/conformance-gen"
+expect tier_generator "$(tier_of '')" "DECODE-ORACLE values=3
 made=[eb:arb tx:given] ran=[eb:arb tx:given]"
 # Must hand the harness the given files, the count and the values it made.
 expect tier_handed "$(grep '^tier ' "$R/log" | tail -1)" "tier pairs=[eb:arb tx:given] probe=head from=yes tx=3 block=dijkstra-b.block eb=c.ebbody n=2"
+# Must not fire: an image docker holds under a tag the harness does not run changes no input.
+echo image-2 >"$R/image"
+expect tier_other_image "$(tier_of '')" "DECODE-ORACLE values=3
+made=[] ran=[]"
 
 # A head dir holding the values $2 and the head probe output $3 for the pair tx.given, and the verdict of value_control with a probe printing $4.
 control_of() {
@@ -1437,53 +1440,59 @@ expect docker_path "$(
   command -v docker
 )" "$HERE/bin/docker"
 
-# A copy at $W/$1 of the box scripts and overlay diffs whose build image dir holds the Dockerfile line $2, with a docker in its bin that logs each call to docker.log and reports an image present when the file present exists.
+# Commits to the git repo $W/harness-src image scripts whose build-image.sh prints NAME:$1@DOCKERFILE for the image dir NAME of the images dir it is handed, and prints the commit.
+harness_rule() {
+  H=$W/harness-src
+  [ -d "$H/.git" ] || git init -q "$H"
+  mkdir -p "$H/conformance-value-oracle/gen"
+  printf '#!/bin/sh\necho "$1:%s@$(cat "$2/$1/Dockerfile")"\n' "$1" >"$H/conformance-value-oracle/gen/build-image.sh"
+  printf '#!/bin/sh\necho "$1:%s"\n' "$1" >"$H/conformance-value-oracle/gen/image-name.sh"
+  git -C "$H" add -A
+  git -C "$H" -c user.name=test -c user.email=test@example.invalid commit -q -m "$1"
+  git -C "$H" rev-parse HEAD
+}
+
+# A copy at $W/$1 of the box scripts and overlay diffs whose build image dir holds the Dockerfile line $2 and whose harness.rev names the commit $3, with a docker in its bin that logs each call to docker.log.
 image_box() {
   B=$W/$1
   rm -rf "$B"
-  mkdir -p "$B/bin" "$B/box/images/dolos-build"
+  mkdir -p "$B/bin" "$B/box/images/dolos-build" "$B/box/value"
   cp "$HERE"/*.sh "$B/box/"
   cp -R "$HERE/overlay" "$B/box/"
   echo "$2" >"$B/box/images/dolos-build/Dockerfile"
-  printf '%s\n' '#!/bin/sh' "echo \"\$*\" >>'$B/docker.log'" \
-    "if [ \"\$1 \$2\" = 'image inspect' ]; then [ -e '$B/present' ]; fi" >"$B/bin/docker"
+  echo "$3" >"$B/box/value/harness.rev"
+  printf '%s\n' '#!/bin/sh' "echo \"\$*\" >>'$B/docker.log'" >"$B/bin/docker"
   chmod +x "$B/bin/docker"
 }
 
 # The image in-image.sh of the copy $1 runs a command in.
 run_image() {
   : >"$1/docker.log"
-  PATH=$1/bin:$PATH ROOT=$W sh "$1/box/in-image.sh" tree true || echo "in-image exit=$?"
+  PATH=$1/bin:$PATH ROOT=$W sh "$1/box/in-image.sh" tree true 2>/dev/null || echo "in-image exit=$?"
   sed -n 's|.* -w /w/tree \([^ ]*\) true$|\1|p' "$1/docker.log"
 }
 
-# The docker calls of build_image for the build image in the copy $1, the copy's box dir written BOX and the image name $2 written NAME.
-build_calls() {
-  : >"$1/docker.log"
+# The name build_image of the copy $1 prints for the build image, its build root under the copy and its harness fetched from $2.
+build_name() {
   (
-    ROOT=$W HERE=$1/box PATH=$1/bin:$PATH
+    ROOT=$1/root HERE=$1/box PATH=$1/bin:$PATH VALUE_HARNESS_URL=$2
     . "$1/box/lib.sh"
-    build_image dolos-build >/dev/null 2>&1 || echo "build_image exit=$?"
+    build_image dolos-build 2>/dev/null || echo "build_image exit=$?"
   )
-  sed "s|$1/box|BOX|g; s|$2|NAME|g" "$1/docker.log" | paste -sd ';' -
 }
 
-# Must name the image dolos-build tagged with a hash.
-image_box image-a 'FROM a'
-image_a=$(run_image "$W/image-a")
-expect image_name "$(echo "$image_a" | sed 's/:[0-9a-f]\{12\}$/:HASH/')" dolos-build:HASH
-# Must not fire: the same files in another dir name the same image.
-image_box image-a2 'FROM a'
-expect image_same_files "$(run_image "$W/image-a2")" "$image_a"
-# Must fire: a changed Dockerfile names another image, so an image built from the old file is not run.
-image_box image-b 'FROM b'
-image_b=$(run_image "$W/image-b")
-expect image_changed_file "$(if [ "$image_b" != "$image_a" ]; then echo differs; else echo "same $image_b"; fi)" differs
-# Must build the image under its name when docker has none, and must not build when docker has it.
-expect image_built "$(build_calls "$W/image-a" "$image_a")" \
-  "image inspect NAME;build --memory 4g --memory-swap 4g -t NAME BOX/images/dolos-build"
-touch "$W/image-a/present"
-expect image_present "$(build_calls "$W/image-a" "$image_a")" "image inspect NAME"
+rule1=$(harness_rule rule1)
+image_box image-a a "$rule1"
+# Must name and build the build image by the image scripts of the harness at value/harness.rev, over this box's images dir.
+expect image_rule "$(build_name "$W/image-a" "$W/harness-src")" "dolos-build:rule1@a"
+# Must fire: a harness commit whose rule differs names another image.
+echo "$(harness_rule rule2)" >"$W/image-a/box/value/harness.rev"
+expect image_rule_changed "$(build_name "$W/image-a" "$W/harness-src")" "dolos-build:rule2@a"
+# Must not fire: a harness commit the build root holds is not fetched again.
+expect image_rule_held "$(build_name "$W/image-a" "$W/missing")" "dolos-build:rule2@a"
+# Must run the image BUILD_IMAGE names, and must start no container when none is named.
+expect image_run_named "$(BUILD_IMAGE=named:1 run_image "$W/image-a")" named:1
+expect image_run_unnamed "$(run_image "$W/image-a" | sed 's/exit=[0-9]*/exit=N/') calls=$(grep -c . "$W/image-a/docker.log")" "in-image exit=N calls=0"
 
 if [ "$failed" -eq 0 ]; then
   echo "LIB-TEST RESULT PASS"

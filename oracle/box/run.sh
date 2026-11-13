@@ -67,12 +67,13 @@ require_lib_test() {
   fi
 }
 
-# Exits when the build image cannot be built from the files of images/dolos-build.
+# Exports as BUILD_IMAGE the name of the build image of the files of images/dolos-build, building it when docker has none, and exits when that fails.
 require_build_image() {
-  if ! build_image dolos-build >"$OUT/build-image.log" 2>&1; then
-    echo "REFUSED build image=$(sh "$HERE/image-name.sh" dolos-build) log=$OUT/build-image.log"
+  if ! BUILD_IMAGE=$(build_image dolos-build 2>"$OUT/build-image.log"); then
+    echo "REFUSED build image log=$OUT/build-image.log"
     exit 2
   fi
+  export BUILD_IMAGE
 }
 
 # Builds Dolos from the scratch tree into $OUT/bin/dolos.
@@ -216,7 +217,7 @@ leg_verdicts() {
 value_verdicts() {
   reset_scratch >&2
   pin=$(pallas_pin)
-  inputs=$(value_inputs "$pin" "$(image_id "$VALUE_IMAGE")")
+  inputs=$(value_inputs "$pin")
   if [ "$1" = all ] || leg_due "$LAST_VALUE" "$inputs"; then
     value_leg >"$OUT/value.out" 2>&1 || true
     leg_verdicts value 's/^VALUE \(value-head=.*\) pin=.*/\1/p' "$LAST_VALUE" "$inputs" >&2
@@ -226,7 +227,7 @@ value_verdicts() {
     legs=value=passed-on-these-inputs
   fi
   pallas_history "$pin" >&2 || true
-  inputs=$(amaru_inputs "$(amaru_pin "$pin")" "$(image_id "$(sh "$HERE/image-name.sh" dolos-build)")")
+  inputs=$(amaru_inputs "$(amaru_pin "$pin")" "$(image_id "$BUILD_IMAGE")")
   if [ "$1" = all ] || leg_due "$LAST_AMARU" "$inputs"; then
     amaru_leg "$pin" >"$OUT/amaru.out" 2>&1 || true
     leg_verdicts amaru 's/^AMARU \(amaru-head=[A-Z]*\( amaru-[a-z0-9-]*=[A-Z]*\)*\).*/\1/p' "$LAST_AMARU" "$inputs" >&2

@@ -1,14 +1,16 @@
 #!/bin/sh
 # Compiles one module of this directory against a prebuilt cardano-ledger
 # package store, mounted read only.
-# Usage: build.sh <module> <store dir> <work dir>
+# Usage: GEN=<pallas conformance-value-oracle/gen dir> build.sh <module> <store dir> <work dir>
+# GEN holds the build-image.sh that names the image, used unless IMAGE names it already.
 set -eu
 M=$1
 STORE=$2
 WORK=$3
+IMAGE=${IMAGE:-$(sh "${GEN:?}/build-image.sh" conformance-gen-hs)}
 mkdir -p "$WORK/bin" "$WORK/obj" "$WORK/out"
 cp "$(dirname "$0")"/*.hs "$WORK/"
-docker run --rm -v "$STORE":/work:ro -v "$WORK":/probe -w /probe conformance-gen-hs:2 \
+docker run --rm -v "$STORE":/work:ro -v "$WORK":/probe -w /probe "$IMAGE" \
   ghc -O0 -hide-all-packages -package-env - \
     -package-db /work/cabal-dir/store/ghc-9.6.7/package.db \
     -package-db /work/cardano-ledger/dist-newstyle/packagedb/ghc-9.6.7 \

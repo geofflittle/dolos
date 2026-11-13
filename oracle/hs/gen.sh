@@ -1,9 +1,11 @@
 #!/bin/sh
 # Builds and runs one corpus writer, then prints its line count and sha256.
-# Usage: gen.sh <Extract|Pwc|Supplement|Phase1|Uplc|Leaves> <store dir> <work dir>
+# Usage: GEN=<pallas conformance-value-oracle/gen dir> gen.sh <Extract|Pwc|Supplement|Phase1|Uplc|Leaves> <store dir> <work dir>
 set -eu
 STORE=$2
 WORK=$3
+IMAGE=${IMAGE:-$(sh "${GEN:?}/build-image.sh" conformance-gen-hs)}
+export IMAGE
 MODE=
 case $1 in
   Extract) M=Extract OUT=ic.jsonl ;;
@@ -17,6 +19,6 @@ esac
 sh "$(dirname "$0")/build.sh" "$M" "$STORE" "$WORK"
 cp "$(dirname "$0")/../../test_data/musashi-native-submission/registration-epoch64-parameters.json" "$WORK/"
 rm -f "$WORK/out/$OUT"
-docker run --rm -v "$WORK":/probe conformance-gen-hs:2 "/probe/bin/$M" $MODE --seed 42
+docker run --rm -v "$WORK":/probe "$IMAGE" "/probe/bin/$M" $MODE --seed 42
 wc -l < "$WORK/out/$OUT"
 sha256sum "$WORK/out/$OUT" | cut -c1-16

@@ -1,4 +1,4 @@
-# Functions and defaults the oracle box scripts share, reading ROOT, SCRATCH, REV, MIN_FREE_G, OUT, HERE, TARGET, IN_IMAGE, LOCK_POLL_SECONDS, RUN_LOCK, LAST_DONE, LAST_SHIP, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_FSYNC, NODE, ENDPOINT, GRPCURL, the ORACLE_ slice settings, CGROUP_FILE, CGROUP_ROOT and the IO_ limits.
+# Functions and defaults the oracle box scripts share, reading ROOT, SCRATCH, REV, MIN_FREE_G, OUT, HERE, TARGET, IN_IMAGE, LOCK_POLL_SECONDS, RUN_LOCK, LAST_DONE, LAST_SHIP, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_FSYNC, NODE, ENDPOINT, GRPCURL, the ORACLE_ slice settings, CGROUP_FILE, CGROUP_ROOT, the IO_ limits and VALUE_HARNESS_URL.
 
 PALLAS=${PALLAS:-scratch/pallas}
 SCRATCH=${SCRATCH:-scratch/dolos}
@@ -439,13 +439,30 @@ require_free() {
   fi
 }
 
-# Builds the image of the dir images/$1 under its name when docker has no image of that name, the build held to 4g of memory and swap.
-build_image() {
-  name=$(sh "$HERE/image-name.sh" "$1") || return
-  if docker image inspect "$name" >/dev/null 2>&1; then
-    return 0
+# The repo the value harness is fetched from, the pallas tree that holds conformance-value-oracle.
+VALUE_HARNESS_URL=${VALUE_HARNESS_URL:-https://github.com/geofflittle/pallas.git}
+
+# Prints the commit value/harness.rev names, fetching it into $ROOT/value/harness.git when that repo lacks it.
+harness_commit() {
+  rev=$(cat "$HERE/value/harness.rev")
+  repo=$ROOT/value/harness.git
+  if [ ! -d "$repo" ]; then
+    git init -q --bare "$repo" || return
   fi
-  docker build --memory 4g --memory-swap 4g -t "$name" "$HERE/images/$1"
+  if ! git -C "$repo" cat-file -e "$rev^{commit}" 2>/dev/null; then
+    git -C "$repo" fetch -q --filter=blob:none "$VALUE_HARNESS_URL" "$rev" || return
+  fi
+  echo "$rev"
+}
+
+# Prints the name of the image of the dir images/$1 and builds it when docker has none, by the image scripts of the value harness at value/harness.rev.
+build_image() {
+  rev=$(harness_commit) || return
+  rm -rf "$ROOT/value/image-scripts"
+  mkdir -p "$ROOT/value/image-scripts"
+  git -C "$ROOT/value/harness.git" archive "$rev" conformance-value-oracle/gen/image-name.sh conformance-value-oracle/gen/build-image.sh |
+    tar -x -C "$ROOT/value/image-scripts" --strip-components 2 || return
+  sh "$ROOT/value/image-scripts/build-image.sh" "$1" "$HERE/images"
 }
 
 # Prints the full sha of the commit the ref $2 names in $ROOT/dolos.git, or exits 2 with a REFUSED line naming the variable $1 when it names none.
