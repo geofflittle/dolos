@@ -1167,7 +1167,9 @@ for p in ${PAIRS:-tx:given eb:arb}; do
   fi
   "$PROBE" "${p%%:*}" <"$b.gen.jsonl" >"$b.probe.jsonl"
   [ "$PROBE" = true ] || echo "ran $p" >>"$LOG"
-  echo 0 >"$b.status"
+  R=$(dirname "$LOG")
+  cat "$R/status-${p%%:*}" >"$b.status" 2>/dev/null || echo 0 >"$b.status"
+  [ -e "$R/crash-${p%%:*}" ] || echo 1 >"$b.compared"
 done
 [ -n "${TALLY:-}" ] || echo "DECODE-ORACLE values=$(cat "$1"/*.gen.jsonl | grep -c .)"
 EOF
@@ -1215,6 +1217,19 @@ expect tier_handed "$(grep '^tier ' "$R/log" | tail -1)" "tier pairs=[eb:arb tx:
 echo image-2 >"$R/image"
 expect tier_other_image "$(tier_of '')" "DECODE-ORACLE values=3
 made=[] ran=[]"
+# Must not fire: a pair that failed before its compare finished is run again.
+echo 1 >"$R/status-tx"
+touch "$R/crash-tx"
+echo extra-2 >>"$R/probe-tx"
+tier_of '' >/dev/null
+expect tier_crash_rerun "$(tier_of '')" "DECODE-ORACLE values=3
+made=[] ran=[tx:given]"
+# Must fire: a pair whose compare finished with a disagreement is kept like a pass.
+rm "$R/crash-tx"
+tier_of '' >/dev/null
+expect tier_disagree_kept "$(tier_of '')" "DECODE-ORACLE values=3
+made=[] ran=[]"
+rm "$R/status-tx"
 
 # A head dir holding the values $2 and the head probe output $3 for the pair tx.given, and the verdict of value_control with a probe printing $4.
 control_of() {

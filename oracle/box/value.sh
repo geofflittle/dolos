@@ -197,7 +197,7 @@ value_values() {
   echo "TIER values pairs=$(echo $1 | wc -w) made=$(echo $made | wc -w) seconds=$(($(date +%s) - step_started))"
 }
 
-# Puts in the dir $2 the tier output of each pair of $3 run with the probe $1 over the values of the dir $4, running the tier only on pairs whose values and probe output VALUE_RESULTS holds no output for and keeping each that passes.
+# Puts in the dir $2 the tier output of each pair of $3 run with the probe $1 over the values of the dir $4, running the tier only on pairs whose values and probe output VALUE_RESULTS holds no output for and keeping each whose compare the harness marks finished, a pass or a disagreement.
 value_compare() {
   step_started=$(date +%s)
   rerun=
@@ -229,7 +229,7 @@ value_compare() {
   value_run_tier "$2" "$1" "${rerun:- }" "$4" || status=1
   for entry in $keys; do
     pair=${entry%%=*}
-    if [ "$(cat "$2/${pair%%:*}.${pair#*:}.status" 2>/dev/null)" = 0 ]; then
+    if [ -f "$2/${pair%%:*}.${pair#*:}.compared" ]; then
       value_keep "${entry#*=}" "$2" "$pair"
     fi
   done
