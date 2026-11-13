@@ -11,7 +11,8 @@ use dolos_core::TxOrder;
 
 use crate::serve::ChainReads;
 
-/// A ledger context that holds no outputs, for mapping values that name no inputs.
+/// A ledger context that holds no outputs, for mapping values that name no
+/// inputs.
 #[derive(Clone, Default)]
 pub(super) struct NoInputs;
 
@@ -166,7 +167,8 @@ impl<C: ChainReads> BlockContext<C> {
         Self::resolving(inner, Some(&block), &block.txs)
     }
 
-    /// A context for mapping one transaction of a block, resolving only the inputs that transaction names.
+    /// A context for mapping one transaction of a block, resolving only the
+    /// inputs that transaction names.
     pub(super) fn for_tx(inner: C, tx: &TxOfBlock<'_, '_>) -> Self {
         Self::resolving(inner, Some(tx.block), std::slice::from_ref(tx.tx()))
     }
@@ -177,7 +179,8 @@ impl<C: ChainReads> BlockContext<C> {
         Self::resolving(inner, None, std::slice::from_ref(tx))
     }
 
-    /// A context for mapping `mapped`, transactions of `block` when it is given.
+    /// A context for mapping `mapped`, transactions of `block` when it is
+    /// given.
     fn resolving(inner: C, block: Option<&BlockTxs<'_>>, mapped: &[MultiEraTx<'_>]) -> Self {
         let start = std::time::Instant::now();
         let named: HashSet<TxoRef> = mapped
@@ -264,7 +267,8 @@ mod made_in_block_tests {
         }
     }
 
-    /// A block whose sub transaction carrier also spends the first output of its first sub transaction.
+    /// A block whose sub transaction carrier also spends the first output of
+    /// its first sub transaction.
     fn spends_its_own_sub_output() -> (Vec<u8>, TxoRef) {
         let text = include_str!("../../../test_data/musashi-w36/ranking-sub-transaction.block");
         let cbor = hex::decode(text.trim()).unwrap();
@@ -292,7 +296,8 @@ mod made_in_block_tests {
         (minicbor::to_vec((era, block)).unwrap(), (made, 0))
     }
 
-    /// The output the v1 mapper serves for each input of the block's top level transactions.
+    /// The output the v1 mapper serves for each input of the block's top level
+    /// transactions.
     fn served(
         block: &MultiEraBlock<'_>,
         context: Known,

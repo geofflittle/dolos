@@ -278,7 +278,8 @@ fn original_signatures_are_verified() {
 }
 
 /// Synthetic key registrations with separate funding and one shared credential.
-/// Only the transaction shape and protocol context come from the control fixture.
+/// Only the transaction shape and protocol context come from the control
+/// fixture.
 fn independent_registrations() -> (
     ToyDomain,
     [Vec<u8>; 2],
@@ -378,7 +379,8 @@ fn pending_registration_reserves_credential_without_changing_ledger_state() {
         let before = domain.state().get_utxos(inputs.clone()).unwrap();
         assert_eq!(before.len(), 2);
         assert_unregistered();
-        // Both signed transactions are valid before either reserves the credential.
+        // Both signed transactions are valid before either reserves the
+        // credential.
         domain.validate_tx(&domain.read_chain(), &first).unwrap();
         domain.validate_tx(&domain.read_chain(), &second).unwrap();
         assert_unregistered();

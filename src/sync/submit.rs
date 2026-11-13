@@ -420,7 +420,9 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("mempool.redb");
             let store = if persistent {
-                MempoolBackend::Redb(RedbMempool::open(&path, &Default::default(), Default::default()).unwrap())
+                MempoolBackend::Redb(
+                    RedbMempool::open(&path, &Default::default(), Default::default()).unwrap(),
+                )
             } else {
                 MempoolBackend::Ephemeral(EphemeralMempool::new())
             };
@@ -499,7 +501,9 @@ mod tests {
                 stage = Stage::new(
                     peer_address,
                     network_magic,
-                    MempoolBackend::Redb(RedbMempool::open(&path, &Default::default(), Default::default()).unwrap()),
+                    MempoolBackend::Redb(
+                        RedbMempool::open(&path, &Default::default(), Default::default()).unwrap(),
+                    ),
                 );
             }
             let (mut worker, mut peer) = connect(&stage, &listener).await;
@@ -584,7 +588,10 @@ mod tests {
                 let dir = tempfile::tempdir().unwrap();
                 let db_path = dir.path().join("mempool.redb");
                 let store = if persistent {
-                    MempoolBackend::Redb(RedbMempool::open(&db_path, &Default::default(), Default::default()).unwrap())
+                    MempoolBackend::Redb(
+                        RedbMempool::open(&db_path, &Default::default(), Default::default())
+                            .unwrap(),
+                    )
                 } else {
                     MempoolBackend::Ephemeral(EphemeralMempool::new())
                 };
@@ -597,7 +604,10 @@ mod tests {
                 // Exercise durable encoding and a real reopen, not only Clone.
                 let store = if persistent {
                     drop(store);
-                    MempoolBackend::Redb(RedbMempool::open(&db_path, &Default::default(), Default::default()).unwrap())
+                    MempoolBackend::Redb(
+                        RedbMempool::open(&db_path, &Default::default(), Default::default())
+                            .unwrap(),
+                    )
                 } else {
                     store
                 };

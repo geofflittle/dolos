@@ -158,8 +158,8 @@ pub fn into_alonzo(previous: &PParamsSet, genesis: &alonzo::GenesisFile) -> PPar
 
 pub fn into_babbage(previous: &PParamsSet, genesis: &alonzo::GenesisFile) -> PParamsSet {
     // In the hardfork, the value got translated from words to bytes
-    // Since the transformation from words to bytes is hardcoded, the transformation
-    // here is also hardcoded
+    // Since the transformation from words to bytes is hardcoded, the
+    // transformation here is also hardcoded
     let ada_per_utxo_byte = previous.ada_per_utxo_byte().unwrap_or_default() / 8;
 
     let set = previous
@@ -175,7 +175,8 @@ pub fn into_babbage(previous: &PParamsSet, genesis: &alonzo::GenesisFile) -> PPa
     }
 }
 
-/// The cost models of the alonzo genesis file, its extra configuration included.
+/// The cost models of the alonzo genesis file, its extra configuration
+/// included.
 fn alonzo_cost_models(
     genesis: &alonzo::GenesisFile,
 ) -> pallas::ledger::primitives::conway::CostModels {
@@ -440,7 +441,8 @@ mod tests {
         assert_eq!(pparams.epoch_length_or_default(), 400);
     }
 
-    /// The proto-devnet genesis set loads and its parameters step to version 12.
+    /// The proto-devnet genesis set loads and its parameters step to version
+    /// 12.
     #[test]
     fn the_proto_devnet_genesis_set_loads_and_steps_to_dijkstra() {
         let dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -473,9 +475,9 @@ mod tests {
 
     /// The mainnet genesis with the proto-devnet Dijkstra file attached.
     ///
-    /// The Dijkstra file is the one a proto-devnet network is governed by, copied
-    /// byte for byte, so a cost model read out of it is the one the node runs
-    /// and not one chosen for a test.
+    /// The Dijkstra file is the one a proto-devnet network is governed by,
+    /// copied byte for byte, so a cost model read out of it is the one the
+    /// node runs and not one chosen for a test.
     fn genesis_with_dijkstra() -> dolos_core::Genesis {
         let path = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
             .join("..")

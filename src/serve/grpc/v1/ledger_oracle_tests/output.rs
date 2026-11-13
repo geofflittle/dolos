@@ -1,4 +1,5 @@
-//! The fields of a served output against the values decoded from the ledger's output bytes.
+//! The fields of a served output against the values decoded from the ledger's
+//! output bytes.
 
 use pallas::{
     codec::minicbor,
@@ -35,7 +36,9 @@ impl fmt::Display for OutputField {
     }
 }
 
-/// An integer as CBOR states it, its sign and the big endian magnitude, without leading zeros, of the value when nonnegative or of minus one minus the value when negative.
+/// An integer as CBOR states it, its sign and the big endian magnitude, without
+/// leading zeros, of the value when nonnegative or of minus one minus the value
+/// when negative.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct Integer {
     negative: bool,
@@ -60,7 +63,8 @@ impl Integer {
     }
 }
 
-/// A Plutus datum in the terms both the ledger's bytes and a served datum state.
+/// A Plutus datum in the terms both the ledger's bytes and a served datum
+/// state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Data {
     Constr {
@@ -99,14 +103,16 @@ impl Data {
     }
 }
 
-/// A credential in the terms both the ledger's bytes and a served credential state.
+/// A credential in the terms both the ledger's bytes and a served credential
+/// state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Credential {
     Key(Vec<u8>),
     Script(Vec<u8>),
 }
 
-/// A native script in the terms both the ledger's bytes and a served native script state.
+/// A native script in the terms both the ledger's bytes and a served native
+/// script state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Native {
     Pubkey(Vec<u8>),
@@ -121,7 +127,8 @@ pub(super) enum Native {
 }
 
 impl Native {
-    /// The native script of the ledger as a version serves it, a guard clause unset where `guards` is false.
+    /// The native script of the ledger as a version serves it, a guard clause
+    /// unset where `guards` is false.
     fn ledger(script: &dijkstra::NativeScript, guards: bool) -> Self {
         use dijkstra::NativeScript as N;
         let all = |items: &[N]| items.iter().map(|s| Native::ledger(s, guards)).collect();
@@ -143,7 +150,8 @@ impl Native {
     }
 }
 
-/// A reference script in the terms both the ledger's bytes and a served script state.
+/// A reference script in the terms both the ledger's bytes and a served script
+/// state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Script {
     Native(Native),
@@ -163,7 +171,8 @@ impl Script {
     }
 }
 
-/// The datum a served output states, each field none where the message states none.
+/// The datum a served output states, each field none where the message states
+/// none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ServedDatum {
     hash: Vec<u8>,
@@ -180,7 +189,8 @@ pub(super) enum ServedBytes {
     Stated(Option<Vec<u8>>),
 }
 
-/// The fields of a served output in terms every version of the spec states them.
+/// The fields of a served output in terms every version of the spec states
+/// them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ServedOutput {
     /// Whether the version states a native guard clause.
@@ -206,7 +216,8 @@ enum LedgerDatum {
 }
 
 impl LedgerDatum {
-    /// Whether a served datum states this datum, its hash for a datum hash and its hash, bytes and value for an inline datum.
+    /// Whether a served datum states this datum, its hash for a datum hash and
+    /// its hash, bytes and value for an inline datum.
     fn agrees(&self, served: Option<&ServedDatum>) -> bool {
         match (self, served) {
             (LedgerDatum::None, None) => true,
@@ -307,13 +318,15 @@ impl LedgerOutput {
 }
 
 impl ServedOutput {
-    /// The datum bytes the output states, none when it states no datum or no bytes.
+    /// The datum bytes the output states, none when it states no datum or no
+    /// bytes.
     pub(super) fn datum_cbor(&self) -> Option<&[u8]> {
         self.datum.as_ref()?.original_cbor.as_deref()
     }
 }
 
-/// The fields of a served output that state other values than the ledger's output bytes hold.
+/// The fields of a served output that state other values than the ledger's
+/// output bytes hold.
 pub(super) fn differing(
     ledger: &[u8],
     served: &ServedOutput,
@@ -344,7 +357,8 @@ pub(super) fn differing(
     Ok(differing.map(|(name, _)| name).collect())
 }
 
-/// Generates the conversion of one version's output message into a served output.
+/// Generates the conversion of one version's output message into a served
+/// output.
 macro_rules! served_output {
     (
         $version:ident,
@@ -541,7 +555,8 @@ mod tests {
     use super::super::super::spec::cardano;
     use super::*;
 
-    /// Every output the accepted records of both corpora leave in the ledger state.
+    /// Every output the accepted records of both corpora leave in the ledger
+    /// state.
     fn ledger_outputs() -> Vec<Vec<u8>> {
         let mut outputs = BTreeSet::new();
         for kind in [CorpusKind::Ic, CorpusKind::Supp] {
@@ -577,7 +592,9 @@ mod tests {
         [head, bytes.to_vec()].concat()
     }
 
-    /// An output with assets, an inline datum and a native reference script with a guard clause, and one with a datum hash and a Plutus reference script.
+    /// An output with assets, an inline datum and a native reference script
+    /// with a guard clause, and one with a datum hash and a Plutus reference
+    /// script.
     fn constructed() -> [Vec<u8>; 2] {
         let address = cbor_bytes(&[[0x61].as_slice(), &[0x11; 28]].concat());
         let policy = cbor_bytes(&[0x22; 28]);

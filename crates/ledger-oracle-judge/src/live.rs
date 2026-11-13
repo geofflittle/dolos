@@ -25,7 +25,8 @@ pub struct NodeTip {
 }
 
 impl NodeTip {
-    /// The slots of the tip's epoch, none when the tip's counts do not fit its slot.
+    /// The slots of the tip's epoch, none when the tip's counts do not fit its
+    /// slot.
     pub fn epoch_slots(&self) -> Option<Range<u64>> {
         let start = self.slot.checked_sub(self.slot_in_epoch)?;
         let end = self.slot.checked_add(self.slots_to_epoch_end)?;
@@ -33,7 +34,8 @@ impl NodeTip {
     }
 }
 
-/// Reads taken while the node stayed in the epoch that holds the served ledger slot.
+/// Reads taken while the node stayed in the epoch that holds the served ledger
+/// slot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Aligned<T> {
     epoch: u64,
@@ -41,7 +43,8 @@ pub struct Aligned<T> {
 }
 
 impl<T> Aligned<T> {
-    /// Pairs the reads with the epoch that contains both node tips and the served slot, none otherwise.
+    /// Pairs the reads with the epoch that contains both node tips and the
+    /// served slot, none otherwise.
     pub fn new(before: &NodeTip, after: &NodeTip, served_slot: u64, value: T) -> Option<Self> {
         let slots = before.epoch_slots()?;
         let aligned = before.epoch == after.epoch && slots.contains(&served_slot);
@@ -102,7 +105,8 @@ pub fn era_name(served: &[String], node: &str) -> EraName {
     }
 }
 
-/// The slot a node translates a POSIX second to, or past its horizon when it translates none.
+/// The slot a node translates a POSIX second to, or past its horizon when it
+/// translates none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeSlot {
     Slot(u64),
@@ -148,7 +152,8 @@ pub struct ServedTime {
     pub ms: u64,
 }
 
-/// The node's era, era history and translations of the seconds the served times name.
+/// The node's era, era history and translations of the seconds the served times
+/// name.
 #[derive(Debug, Clone, Copy)]
 pub struct NodeTime<'a> {
     pub era: &'a str,
@@ -160,7 +165,9 @@ fn show_bound(bound: Option<EraBound>) -> String {
     bound.map_or("none".to_string(), |b| format!("{}/{}", b.slot, b.epoch))
 }
 
-/// Counts the served eras against the node's eras that hold a slot, the start and tip times against the node's translation, and the slot length between them against the node's.
+/// Counts the served eras against the node's eras that hold a slot, the start
+/// and tip times against the node's translation, and the slot length between
+/// them against the node's.
 pub fn compare_era_summary(
     served: &[ServedEra],
     tip: ServedTime,
@@ -183,7 +190,8 @@ pub fn compare_era_summary(
             let (served, node) = (show_bound(Some(s.start)), show_bound(Some(n.start)));
             format!("era={} start served={served} node={node}", s.name)
         });
-        // The node's end of its current era is the forecast horizon, which is not an era end.
+        // The node's end of its current era is the forecast horizon, which is
+        // not an era end.
         let end = (i + 1 < eras.len()).then_some(n.end);
         tally.add(s.end == end, || {
             let (served, node) = (show_bound(s.end), show_bound(end));
@@ -232,7 +240,8 @@ pub fn compare_era_summary(
     });
 }
 
-/// The lines and verdict of the live comparisons, judged against the known list.
+/// The lines and verdict of the live comparisons, judged against the known
+/// list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settled {
     pub lines: Vec<String>,
@@ -240,7 +249,8 @@ pub struct Settled {
     pub pass: bool,
 }
 
-/// Judges each live locus's tally, failing one that compared nothing, disagrees off the list, or agrees on it.
+/// Judges each live locus's tally, failing one that compared nothing, disagrees
+/// off the list, or agrees on it.
 pub fn settle(tallies: &BTreeMap<LiveLocus, Tally>, known: &KnownLive) -> Settled {
     let mut settled = Settled {
         lines: Vec::new(),

@@ -4,7 +4,9 @@
 //! out.
 //!
 //! One test per process, since the log capture is a global subscriber:
-//! `EB_NODE=172.17.0.2:3001 cargo test --lib sync::pull::endorser_retry::two_failures_carries_s -- --exact --ignored --nocapture`
+//! `EB_NODE=172.17.0.2:3001 cargo test --lib
+//! sync::pull::endorser_retry::two_failures_carries_s -- --exact --ignored
+//! --nocapture`
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -170,7 +172,8 @@ fn run(hang: usize) -> Outcome {
     let mut input = InputPort::<PullEvent>::default();
     gasket::messaging::tokio::connect_ports(&mut stage.downstream, &mut input, 1000);
 
-    // The default retry count and dismissal, with a constant one second backoff.
+    // The default retry count and dismissal, with a constant one second
+    // backoff.
     let retries = gasket::retries::Policy {
         max_retries: 20,
         backoff_unit: Duration::from_secs(1),

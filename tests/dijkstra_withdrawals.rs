@@ -20,7 +20,8 @@ use pallas::{
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 // ToyDomain's mempool ignores lifecycle calls. Use the production Redb store
-// with an in-memory database, keeping chain/state/genesis fixture setup unchanged.
+// with an in-memory database, keeping chain/state/genesis fixture setup
+// unchanged.
 #[derive(Clone)]
 struct WithdrawalDomain {
     inner: ToyDomain,
@@ -106,7 +107,8 @@ fn registered(credential: n::StakeCredential, balance: u64) -> AccountState {
     let mut a = AccountState::new(64, credential);
     a.registered_at = Some(1400000);
     a.deposit = Some(2_000_000);
-    // Spendable rewards must exclude delegated UTxO stake and prior withdrawals.
+    // Spendable rewards must exclude delegated UTxO stake and prior
+    // withdrawals.
     a.stake = EpochValue::with_live(
         64,
         Stake {
@@ -234,7 +236,8 @@ fn captured_zero_withdrawal_requires_registered_zero_balance() {
     }
 }
 
-// Independent spending inputs ensure account conflicts cannot be masked by UTxO conflicts.
+// Independent spending inputs ensure account conflicts cannot be masked by UTxO
+// conflicts.
 fn synthetic(
     amounts: &[u64],
     balance: u64,
@@ -333,7 +336,8 @@ fn unavailable_or_inconsistent_account_state_rejects_without_defaults() {
             2 => account.stake = EpochValue::with_live(63, Stake::default()),
             _ => account.credential = n::StakeCredential::AddrKeyhash([99; 28].into()),
         }
-        // Also exercise corruption: entity contents need to match its lookup key.
+        // Also exercise corruption: entity contents need to match its lookup
+        // key.
         let w = domain.state().start_writer().unwrap();
         w.write_entity_typed(&minicbor::to_vec(&credential).unwrap().into(), &account)
             .unwrap();
@@ -388,7 +392,8 @@ fn confirmation_rollback_and_drop_update_withdrawal_reservations() {
         .receive_tx("first", &domain.read_chain(), &txs[0])
         .unwrap();
     domain.mempool().mark_inflight(&[hash]).unwrap();
-    // Model the chain's committed balance update, then its mempool notification.
+    // Model the chain's committed balance update, then its mempool
+    // notification.
     let mut account = get_account(&domain, &credential);
     let original = account.clone();
     let mut withdrawal = dolos_cardano::model::WithdrawalInc::new(credential.clone(), 4);
@@ -429,7 +434,8 @@ fn confirmation_rollback_and_drop_update_withdrawal_reservations() {
     domain.validate_tx(&domain.read_chain(), &txs[2]).unwrap();
 }
 
-// Unregisters the synthetic credential and returns a transaction that registers it.
+// Unregisters the synthetic credential and returns a transaction that registers
+// it.
 fn registration(
     domain: &WithdrawalDomain,
     txs: &[Vec<u8>],
@@ -624,7 +630,8 @@ fn a_pending_registration_a_block_includes_is_confirmed() {
     let a = domain
         .receive_tx("register", &domain.read_chain(), &register)
         .unwrap();
-    // Model the block's committed state: the input spent and the account registered.
+    // Model the block's committed state: the input spent and the account
+    // registered.
     let mut delta = UtxoSetDelta::default();
     delta
         .consumed_utxo

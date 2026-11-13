@@ -1,5 +1,6 @@
 //! Paired test with sundae-sync-v2's real follower and filters. All stores and
-//! the RPC listener belong to this test; no running node or AWS service is used.
+//! the RPC listener belong to this test; no running node or AWS service is
+//! used.
 use std::{sync::Arc, time::Duration};
 
 use dolos_core::{

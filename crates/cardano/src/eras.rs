@@ -101,7 +101,8 @@ impl ChainSummary {
         }
     }
 
-    /// Historical era times bounded by the forecast horizon of a ledger at `tip`.
+    /// Historical era times bounded by the forecast horizon of a ledger at
+    /// `tip`.
     pub fn to_pallas_time_context(
         &self,
         tip: BlockSlot,
@@ -129,7 +130,8 @@ impl ChainSummary {
                 })
             })
             .collect::<Result<Vec<_>, ChainError>>()?;
-        // The ledger forecasts up to the first epoch start at or after the slot one stability window past the tip.
+        // The ledger forecasts up to the first epoch start at or after the slot
+        // one stability window past the tip.
         let forecast = tip.saturating_add(1).saturating_add(stability_window);
         let era = known
             .iter()

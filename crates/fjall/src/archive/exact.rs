@@ -509,7 +509,10 @@ mod tests {
         let value = encode_tx_value(141868807, None);
 
         assert_eq!(value, encode_slot_value(141868807).to_vec());
-        assert_eq!((decode_slot_value(&value), decode_tx_range(&value)), (141868807, None));
+        assert_eq!(
+            (decode_slot_value(&value), decode_tx_range(&value)),
+            (141868807, None)
+        );
     }
 
     #[test]

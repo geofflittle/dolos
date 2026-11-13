@@ -45,7 +45,8 @@ impl From<CredentialObject> for Credential {
     }
 }
 
-/// A fraction the ledger writes as a decimal number or as its numerator and denominator.
+/// A fraction the ledger writes as a decimal number or as its numerator and
+/// denominator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fraction {
     pub numerator: u64,

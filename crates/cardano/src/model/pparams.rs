@@ -308,7 +308,8 @@ pub enum PParamValue {
     PerasCertBoost(#[n(0)] u64),
     #[n(58)]
     PerasTargetCommitteeSize(#[n(0)] u64),
-    /// The Peras bootstrap round, where None is a network with no bootstrap round.
+    /// The Peras bootstrap round, where None is a network with no bootstrap
+    /// round.
     #[n(59)]
     PerasBootstrapRound(#[n(0)] Option<u64>),
     #[n(60)]

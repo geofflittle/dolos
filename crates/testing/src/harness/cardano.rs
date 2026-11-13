@@ -277,7 +277,8 @@ impl LedgerHarness {
             cursor.clone(),
         )?;
 
-        // Skip first block when resuming (cursor points at last processed block)
+        // Skip first block when resuming (cursor points at last processed
+        // block)
         if cursor != Point::Origin {
             iter.next();
         }

@@ -143,7 +143,8 @@ fn convert_output_to_q16(output: &MultiEraOutput) -> Result<ReplyOutput, Error> 
     }
 }
 
-/// The datum of a post Alonzo reply output, an inline datum held as the bytes its transaction carried.
+/// The datum of a post Alonzo reply output, an inline datum held as the bytes
+/// its transaction carried.
 #[derive(Debug, Clone)]
 enum ReplyDatum {
     Hash(Hash<32>),
@@ -209,14 +210,16 @@ mod tests {
 
     use super::convert_output_to_q16;
 
-    /// The inline datum field of an output, its key and its option holding the datum bytes.
+    /// The inline datum field of an output, its key and its option holding the
+    /// datum bytes.
     fn datum_field(datum: &[u8]) -> Vec<u8> {
         let mut field = vec![0x02, 0x82, 0x01, 0xd8, 0x18];
         field.extend(minicbor::to_vec(<&minicbor::bytes::ByteSlice>::from(datum)).unwrap());
         field
     }
 
-    /// The reply's CBOR for an output to a Shelley testnet key address of one ada with the inline datum.
+    /// The reply's CBOR for an output to a Shelley testnet key address of one
+    /// ada with the inline datum.
     fn reply(datum: &[u8]) -> Vec<u8> {
         let mut output = vec![0xa3, 0x00, 0x58, 0x1d, 0x60];
         output.extend([0x11; 28]);

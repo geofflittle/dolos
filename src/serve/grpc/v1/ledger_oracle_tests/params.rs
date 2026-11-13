@@ -485,12 +485,14 @@ static PARAMS: [Param; 54] = params! {
         ),
 };
 
-/// The seed and served forms of a ledger parameter, none when the key is unmapped.
+/// The seed and served forms of a ledger parameter, none when the key is
+/// unmapped.
 fn param(key: &str) -> Option<&'static Param> {
     PARAMS.iter().find(|p| p.key == key)
 }
 
-/// The fields of a latest version's message that the parameters message of `version` states.
+/// The fields of a latest version's message that the parameters message of
+/// `version` states.
 fn narrowed(full: &u5c::PParams, version: Version) -> u5c::PParams {
     use crate::serve::grpc::{v1alpha, v1beta};
     use prost::Message as _;
@@ -507,7 +509,8 @@ fn narrowed(full: &u5c::PParams, version: Version) -> u5c::PParams {
     }
 }
 
-/// Parameters of the latest version's message with every field stated and none at its default.
+/// Parameters of the latest version's message with every field stated and none
+/// at its default.
 fn every_field_stated() -> u5c::PParams {
     let big = || {
         Some(u5c::BigInt {
@@ -598,7 +601,8 @@ fn every_field_stated() -> u5c::PParams {
     }
 }
 
-/// The parameters an older version's message states, read as the latest version's message whose fields it is a prefix of.
+/// The parameters an older version's message states, read as the latest
+/// version's message whose fields it is a prefix of.
 pub(super) fn as_latest(served: &impl prost::Message) -> u5c::PParams {
     prost::Message::decode(served.encode_to_vec().as_slice())
         .expect("an older parameters message decodes as the latest")
@@ -608,7 +612,8 @@ fn canon(key: &str, value: &serde_json::Value) -> Result<Canon, String> {
     Canon::of_json(key, value).map_err(|e| e.to_string())
 }
 
-/// The Dolos parameter values that seed a run, or the first key with no mapping or no exact form.
+/// The Dolos parameter values that seed a run, or the first key with no mapping
+/// or no exact form.
 pub(super) fn seed_values(pparams: &PParams) -> Result<Vec<P>, String> {
     let mut out = Vec::new();
     for (key, value) in &pparams.0 {
@@ -618,7 +623,8 @@ pub(super) fn seed_values(pparams: &PParams) -> Result<Vec<P>, String> {
     Ok(out)
 }
 
-/// Counts each ledger parameter of a run that the parameters message of `version` states against the value Dolos serves for it.
+/// Counts each ledger parameter of a run that the parameters message of
+/// `version` states against the value Dolos serves for it.
 pub(super) fn compare<F>(
     pparams: &PParams,
     served: &u5c::PParams,

@@ -347,8 +347,8 @@ fn per_kind_diff_ids_are_pinned() {
     let layers = all_layers();
 
     // Before the zip, not after: `zip` stops at the shorter side, so a dropped
-    // layer would quietly shorten the loop rather than fail it — in the one test
-    // whose whole job is to notice a layer changing.
+    // layer would quietly shorten the loop rather than fail it — in the one
+    // test whose whole job is to notice a layer changing.
     assert_eq!(
         layers.len(),
         GOLDEN_LAYERS.len(),
@@ -395,8 +395,8 @@ fn a_complete_stele_reads_back_and_reproduces_its_digest() {
     read.check_profile(&DolosProfile).unwrap();
 
     // Every layer streams back under the *default* record ceiling — the
-    // confirmation the stelae crate's streaming reader was left waiting for from
-    // its first real profile.
+    // confirmation the stelae crate's streaming reader was left waiting for
+    // from its first real profile.
     let index = stele.blob_index().unwrap();
     assert_eq!(index.len(), GOLDEN_LAYERS.len());
 

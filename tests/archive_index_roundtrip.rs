@@ -33,8 +33,8 @@ use std::ops::Range;
 use dolos_cardano::indexes::{archive_dimensions, CardanoArchiveIndexExt};
 use dolos_core::{
     builtin::MemoryArchiveStore, ArchiveIndexDelta, ArchiveStore as CoreArchiveStore,
-    ArchiveWriter as CoreArchiveWriter, BlockSlot, ExactKind, ExactRecord, IndexRecord,
-    IndexedTx, StateSchema, Tag, TagDimension, TagRecord,
+    ArchiveWriter as CoreArchiveWriter, BlockSlot, ExactKind, ExactRecord, IndexRecord, IndexedTx,
+    StateSchema, Tag, TagDimension, TagRecord,
 };
 
 const EPOCH_LEN: BlockSlot = 432_000;

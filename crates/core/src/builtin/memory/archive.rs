@@ -195,8 +195,11 @@ impl MemoryArchiveWriter {
         block: &ArchiveIndexDelta,
     ) -> impl Iterator<Item = Result<(ExactKind, ExactKey, Option<TxRange>), ArchiveError>> + '_
     {
-        let hash = (!block.block_hash.is_empty())
-            .then_some((ExactKind::BlockHash, block.block_hash.as_slice(), None));
+        let hash = (!block.block_hash.is_empty()).then_some((
+            ExactKind::BlockHash,
+            block.block_hash.as_slice(),
+            None,
+        ));
 
         let number = block.block_number.map(|n| (ExactKind::BlockNumber, n));
 
@@ -206,13 +209,15 @@ impl MemoryArchiveWriter {
             .map(|tx| (ExactKind::TxHash, tx.hash.as_slice(), tx.range.clone()));
 
         let hashes = hash.into_iter().chain(txs).map(|(kind, key, range)| {
-            exact_key(kind, key).map(|key| (kind, key, range)).ok_or_else(|| {
-                ArchiveError::InternalError(format!(
-                    "exact entry of kind {kind} has a {}-byte key, expected {}",
-                    key.len(),
-                    kind.key_len(),
-                ))
-            })
+            exact_key(kind, key)
+                .map(|key| (kind, key, range))
+                .ok_or_else(|| {
+                    ArchiveError::InternalError(format!(
+                        "exact entry of kind {kind} has a {}-byte key, expected {}",
+                        key.len(),
+                        kind.key_len(),
+                    ))
+                })
         });
 
         // A block number is type-enforced eight bytes, so it cannot be
@@ -674,7 +679,10 @@ impl ArchiveStore for MemoryArchiveStore {
             .expect("a u64 is the block-number key width");
 
         let tables = self.tables.read().map_err(|_| poisoned())?;
-        Ok(tables.exact.get(&(ExactKind::BlockNumber, key)).map(|x| x.0))
+        Ok(tables
+            .exact
+            .get(&(ExactKind::BlockNumber, key))
+            .map(|x| x.0))
     }
 
     fn tx_location_by_hash(&self, hash: &[u8]) -> Result<Option<TxLocation>, ArchiveError> {

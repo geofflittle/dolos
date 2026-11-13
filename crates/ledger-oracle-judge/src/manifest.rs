@@ -168,10 +168,12 @@ pub type Declared = BTreeMap<RecordId, Feature>;
 /// The catalog row each known disagreement is filed under, by locus and record.
 pub type KnownList = BTreeMap<(Locus, RecordId), Row>;
 
-/// The catalog row each known disagreement with a live node is filed under, by locus.
+/// The catalog row each known disagreement with a live node is filed under, by
+/// locus.
 pub type KnownLive = BTreeMap<LiveLocus, Row>;
 
-/// The committed known disagreements, against the corpora and against a live node.
+/// The committed known disagreements, against the corpora and against a live
+/// node.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Known {
     pub records: KnownList,
@@ -199,7 +201,8 @@ pub fn parse_declared(file: &'static str, text: &str) -> Result<Declared, Manife
     Ok(declared)
 }
 
-/// Reads the known list, one `<row> <locus> <record>...` or `<row> <live locus>` per line.
+/// Reads the known list, one `<row> <locus> <record>...` or `<row> <live
+/// locus>` per line.
 pub fn parse_known(file: &'static str, text: &str) -> Result<Known, ManifestError> {
     let mut known = Known::default();
     for (line, l) in lines(text) {
@@ -241,7 +244,8 @@ pub fn parse_known(file: &'static str, text: &str) -> Result<Known, ManifestErro
     Ok(known)
 }
 
-/// Writes declared support as `parse_declared` reads it, one record per line in record order.
+/// Writes declared support as `parse_declared` reads it, one record per line in
+/// record order.
 pub fn render_declared(declared: &Declared) -> String {
     let lines = declared.iter();
     lines
@@ -249,7 +253,8 @@ pub fn render_declared(declared: &Declared) -> String {
         .collect()
 }
 
-/// Writes a known list as `parse_known` reads it, record entries by row and then live entries by row.
+/// Writes a known list as `parse_known` reads it, record entries by row and
+/// then live entries by row.
 pub fn render_known(known: &Known) -> String {
     let records = known.records.iter();
     let mut records: Vec<_> = records
@@ -279,7 +284,8 @@ pub struct Candidates {
 }
 
 impl Candidates {
-    /// Each candidate line after `CANDIDATE` and the name of the file it belongs in.
+    /// Each candidate line after `CANDIDATE` and the name of the file it
+    /// belongs in.
     pub fn lines(&self) -> Vec<String> {
         let files = [
             ("expected-unsupported.txt", render_declared(&self.declared)),
@@ -303,7 +309,8 @@ pub fn known() -> Result<Known, ManifestError> {
     parse_known("known.txt", KNOWN)
 }
 
-/// A cell a catch names, a member of an axis or, ending in `*`, a prefix of its members.
+/// A cell a catch names, a member of an axis or, ending in `*`, a prefix of its
+/// members.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CellPattern {
     pub axis: Axis,
@@ -354,7 +361,8 @@ fn catch_term(text: &str) -> Result<CatchTerm, String> {
     cells.map(CatchTerm::Cell)
 }
 
-/// Reads the `[catches]` table of the arms manifest, one `arm = ["term term", ...]` per line.
+/// Reads the `[catches]` table of the arms manifest, one `arm = ["term term",
+/// ...]` per line.
 pub fn parse_catches(file: &'static str, text: &str) -> Result<Catches, ManifestError> {
     let mut catches = Catches::new();
     let mut inside = false;

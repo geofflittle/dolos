@@ -1,6 +1,4 @@
-use dolos_core::{
-    BlockBody, BlockHash, BlockSlot, EraCbor, RawBlock, RawUtxoMap, TxRange, TxoRef,
-};
+use dolos_core::{BlockBody, BlockHash, BlockSlot, EraCbor, RawBlock, RawUtxoMap, TxRange, TxoRef};
 use pallas::codec::minicbor;
 use pallas::ledger::traverse::{Era, MultiEraBlock, MultiEraOutput};
 use self_cell::self_cell;
@@ -147,7 +145,14 @@ mod tests {
             Some(_) => (vec![0x9f], vec![0xff], last),
             None => (header.array(n).unwrap().writer().clone(), vec![], last + 1),
         };
-        [&block[..head], &open, &block[first..last], &close, &block[rest..]].concat()
+        [
+            &block[..head],
+            &open,
+            &block[first..last],
+            &close,
+            &block[rest..],
+        ]
+        .concat()
     }
 
     /// The hashes of the transactions `ranges` span in `block`.
@@ -189,7 +194,12 @@ mod tests {
 
         for cbor in [stored, other] {
             let block = OwnedMultiEraBlock::decode(Arc::new(cbor.clone())).unwrap();
-            let expected: Vec<_> = block.view().txs().iter().map(|x| x.hash().to_vec()).collect();
+            let expected: Vec<_> = block
+                .view()
+                .txs()
+                .iter()
+                .map(|x| x.hash().to_vec())
+                .collect();
             let ranges = block.tx_ranges().unwrap();
 
             assert!(expected.len() > 1);

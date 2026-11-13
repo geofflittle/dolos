@@ -18,10 +18,10 @@
 //! Two refusals here are the point of the module rather than defensive extras.
 //! leios-fetch has no not-found reply, so an endorser block the peer does not
 //! hold arrives as a well formed empty body, and only the hash the announcement
-//! committed to tells that body apart from an endorser block that really is empty.
-//! And a payload is attached to a block by slot, never by arrival order, so a
-//! short or reordered block batch cannot silently move one block's transactions
-//! onto another.
+//! committed to tells that body apart from an endorser block that really is
+//! empty. And a payload is attached to a block by slot, never by arrival order,
+//! so a short or reordered block batch cannot silently move one block's
+//! transactions onto another.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -163,7 +163,8 @@ pub struct CertifiedPayload {
     pub txs: Vec<Vec<u8>>,
 }
 
-/// What the walk owes each certifying ranking block, keyed by that block's slot.
+/// What the walk owes each certifying ranking block, keyed by that block's
+/// slot.
 ///
 /// Every certification the walk sees is recorded here before its endorser block
 /// is fetched, and the payload is filled in when the fetch returns. Recording
@@ -213,9 +214,10 @@ impl PendingPayloads {
     /// A block whose certification was recorded and whose payload never arrived
     /// is refused. That block carries no transactions of its own, so passing it
     /// through would apply an empty block where a whole endorser block belonged
-    /// and leave the ledger short with nothing said. The cost of that silence is
-    /// paid thousands of slots later, by a transaction spending an output the
-    /// follower never saw, with nothing at that point to say where it went.
+    /// and leave the ledger short with nothing said. The cost of that silence
+    /// is paid thousands of slots later, by a transaction spending an
+    /// output the follower never saw, with nothing at that point to say
+    /// where it went.
     ///
     /// Every payload this consumes is removed. A payload left over is an
     /// endorser block that was fetched and never applied, which is refused
@@ -1272,7 +1274,8 @@ pub(crate) mod tests {
     /// produces its outputs.
     #[tokio::test]
     async fn a_transaction_committed_with_a_false_flag_is_applied_invalid() {
-        // Index 5 spends an input besides its collateral, index 8 has a sub transaction.
+        // Index 5 spends an input besides its collateral, index 8 has a sub
+        // transaction.
         const FLAGGED: [usize; 2] = [5, 8];
 
         let (body, txs, announced) = captured_eb();

@@ -1,4 +1,5 @@
-//! Judges the redeemer evaluations the evaluator and each EvalTx version give a record against the ledger's.
+//! Judges the redeemer evaluations the evaluator and each EvalTx version give a
+//! record against the ledger's.
 
 use std::collections::BTreeMap;
 
@@ -31,17 +32,20 @@ use tonic::Request;
 
 use super::{coverage::builtin_member, purpose, tag_number, validate::Group};
 
-/// The evaluator's answer for one transaction, with the builtins each redeemer called and what an EvalTx response says in its place.
+/// The evaluator's answer for one transaction, with the builtins each redeemer
+/// called and what an EvalTx response says in its place.
 struct Evaluator {
     answer: Result<DolosAnswer, Malformed>,
     calls: BTreeMap<RowKey, Vec<Builtin>>,
     /// The refusal and the message an EvalTx response renders it to.
     refusal: Option<(String, Refusal)>,
-    /// The message each EvalTx version that cannot represent a result gives in place of its report.
+    /// The message each EvalTx version that cannot represent a result gives in
+    /// place of its report.
     unrepresentable: BTreeMap<Layer, String>,
 }
 
-/// The message the EvalTx version `layer` gives in place of a report of `results` when it cannot represent one of them, naming the first.
+/// The message the EvalTx version `layer` gives in place of a report of
+/// `results` when it cannot represent one of them, naming the first.
 fn unrepresentable(
     layer: Layer,
     results: &[(MultiEraTxEvalResult, Vec<Builtin>)],
@@ -126,7 +130,8 @@ macro_rules! wire_fee {
 }
 pub(super) use wire_fee;
 
-/// The EvalTx response of one u5c version for a transaction against the group's domain, its errors read by the given closure.
+/// The EvalTx response of one u5c version for a transaction against the group's
+/// domain, its errors read by the given closure.
 macro_rules! wire_eval {
     ($version:ident, $group:expr, $tx:expr, $error:expr) => {{
         use pallas::interop::utxorpc::$version::spec::submit::{
@@ -164,7 +169,8 @@ macro_rules! wire_eval {
     }};
 }
 
-/// The response of each EvalTx version for a transaction against the group's domain.
+/// The response of each EvalTx version for a transaction against the group's
+/// domain.
 async fn wire_evals(group: &Group, tx: &[u8]) -> [(Layer, WireEval); 3] {
     let named = |purpose: Option<i32>, index: Option<u32>, msg: &String| {
         let purpose = purpose.zip(index).map(|(p, i)| wire_purpose(p, i));
@@ -183,7 +189,8 @@ async fn wire_evals(group: &Group, tx: &[u8]) -> [(Layer, WireEval); 3] {
     ]
 }
 
-/// Each EvalTx version's answer from its response, named by the evaluator's refusal and the message each version gives for what it cannot represent.
+/// Each EvalTx version's answer from its response, named by the evaluator's
+/// refusal and the message each version gives for what it cannot represent.
 fn wire_answers(
     wires: &[(Layer, WireEval)],
     evaluator: &Evaluator,
@@ -200,14 +207,17 @@ fn wire_answers(
     answers.collect()
 }
 
-/// The transaction a builder evaluates before signing, derived from one signed record with its top level key witnesses removed and its top level redeemer budgets zero.
+/// The transaction a builder evaluates before signing, derived from one signed
+/// record with its top level key witnesses removed and its top level redeemer
+/// budgets zero.
 struct Draft {
     signed: RecordId,
     bytes: Vec<u8>,
 }
 
 impl Draft {
-    /// The draft of a signed Dijkstra transaction, or why its bytes derive none.
+    /// The draft of a signed Dijkstra transaction, or why its bytes derive
+    /// none.
     fn of(signed: RecordId, tx: &[u8]) -> Result<Self, String> {
         let mut draft: MempoolTransaction = minicbor::decode(tx).map_err(|e| e.to_string())?;
         let witnesses = &mut draft.transaction_witness_set;
@@ -298,7 +308,8 @@ async fn judge_reward_output(group: &Group, draft: &Draft, tally: &mut EvalTally
     tally.add_reward_output(Layer::Pallas, draft.signed, &expected, &evaluator.answer);
 }
 
-/// Judges the evaluator's and each EvalTx version's answer for a draft against the signed record's ledger rows.
+/// Judges the evaluator's and each EvalTx version's answer for a draft against
+/// the signed record's ledger rows.
 async fn judge_draft(
     group: &Group,
     draft: &Draft,
@@ -347,7 +358,11 @@ impl AgreedCall {
     }
 }
 
-/// Judges the evaluator's and each EvalTx version's answer for one record against the ledger's rows, the rows the known list gives it and, when the ledger evaluated none, its outcome's demand and the answer the transaction known list gives it, and returns the builtins called by each redeemer the evaluator ran in the ledger's units.
+/// Judges the evaluator's and each EvalTx version's answer for one record
+/// against the ledger's rows, the rows the known list gives it and, when the
+/// ledger evaluated none, its outcome's demand and the answer the transaction
+/// known list gives it, and returns the builtins called by each redeemer the
+/// evaluator ran in the ledger's units.
 pub(super) async fn judge_record(
     group: &Group,
     id: RecordId,

@@ -21,8 +21,8 @@ use std::sync::Arc;
 use dolos_cardano::indexes::archive_dimensions;
 use dolos_core::{
     builtin::MemoryArchiveStore, ArchiveIndexDelta, ArchiveStore as CoreArchiveStore,
-    ArchiveWriter as _, BlockSlot, ChainPoint, EntityKey, LogKey, NamespaceType, RawBlock,
-    IndexedTx, StateSchema, Tag, TemporalKey,
+    ArchiveWriter as _, BlockSlot, ChainPoint, EntityKey, IndexedTx, LogKey, NamespaceType,
+    RawBlock, StateSchema, Tag, TemporalKey,
 };
 
 use dolos_testing::blocks::{byron_ebb_slot, make_byron_ebb, make_conway_block_with_prev};
@@ -1143,10 +1143,7 @@ fn undo_index_removes_exactly_what_apply_index_added<B: Backend>() {
     assert_eq!(store.slot_by_block_number(200).unwrap(), None);
     assert!(tagged_slots(&store, &undone.tags[0].key, 0, u64::MAX).is_empty());
 
-    assert_eq!(
-        store.slot_by_tx_hash(&kept.txs[0].hash).unwrap(),
-        Some(100)
-    );
+    assert_eq!(store.slot_by_tx_hash(&kept.txs[0].hash).unwrap(), Some(100));
     assert_eq!(
         store.slot_by_block_hash(&kept.block_hash).unwrap(),
         Some(100)

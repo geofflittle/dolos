@@ -115,15 +115,16 @@ impl Domain for DomainAdapter {
         // TODO: do a more thorough analysis to understand if this approach is
         // susceptible to race conditions. Things to explore:
         // - a mutex to block the sending of events while gathering the replay.
-        // - storing the previous block hash in the db to use for consistency checks.
+        // - storing the previous block hash in the db to use for consistency
+        //   checks.
 
-        // We first create the receiver so that the subscriber internal ring-buffer
-        // position is defined.
+        // We first create the receiver so that the subscriber internal
+        // ring-buffer position is defined.
         let receiver = self.tip_broadcast.subscribe();
 
-        // We then collect any gap between the from point and the current tip. This
-        // assumes that no event will be sent between the creation of the receiver and
-        // the collection of the replay.
+        // We then collect any gap between the from point and the current tip.
+        // This assumes that no event will be sent between the creation
+        // of the receiver and the collection of the replay.
         let blocks = self.wal().iter_blocks(from.clone(), None)?;
         let replay = dolos_core::wal::blocks_after(from.as_ref(), blocks).collect::<VecDeque<_>>();
 
@@ -202,7 +203,8 @@ fn resolve_archive_inputs<A: dolos_core::ArchiveStore>(
         };
         let mut wanted: HashMap<TxHash, Vec<TxoRef>> = HashMap::new();
         for (hash, refs, range) in located {
-            let found = range.and_then(|range| dolos_core::tx_in_range(&bytes, &range, hash.as_ref()));
+            let found =
+                range.and_then(|range| dolos_core::tx_in_range(&bytes, &range, hash.as_ref()));
             let Some((_, tx)) = found else {
                 wanted.insert(hash, refs);
                 continue;

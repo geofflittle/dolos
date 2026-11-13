@@ -1091,7 +1091,8 @@ where
             .map_err(|e| Status::internal(e.to_string()))?
             .ok_or_else(|| Status::not_found("tx hash not found"))?;
 
-        let located = range.and_then(|range| dolos_core::tx_in_range(&block_bytes, &range, &tx_hash));
+        let located =
+            range.and_then(|range| dolos_core::tx_in_range(&block_bytes, &range, &tx_hash));
 
         let (native_bytes, mapped, (slot, hash, height)) = match located {
             Some((tx, _)) => {
@@ -1246,8 +1247,8 @@ where
         let chain_summary = dolos_cardano::load_era_summary::<D>(state)
             .map_err(|e| Status::internal(format!("failed to load era summary: {e}")))?;
 
-        // the distribution in force for an epoch is the snapshot taken at the end of
-        // the epoch two before it
+        // the distribution in force for an epoch is the snapshot taken at the
+        // end of the epoch two before it
         let epoch = current_epoch.saturating_sub(2);
         let protocol = chain_summary.era_for_epoch(epoch).protocol.into();
 
@@ -1425,7 +1426,8 @@ mod tests {
     /// The BLS public key the node's pool state query answers for that pool.
     const CHAIN_POOL_BLS_PUBKEY: &str = "8d5e3e9901dbfa64a9c5d9f9949ecb7491b4e35656963bbf6e478c4e53d329f3d1209ed5924c228305d4fcff8a4935d40d508fe3ec6cb8e892d8a00b22c789669336e852d0a10eb2340ea1becf7c87e76eaeacfa5a847104354c5b095b84e2b4";
 
-    /// The BLS possession proof the node's pool state query answers for that pool.
+    /// The BLS possession proof the node's pool state query answers for that
+    /// pool.
     const CHAIN_POOL_BLS_PROOF: &str = "805438cd07ebc6fd19f424401fd0395dc801a8561302bd1ae7bcc48cbdbe664d3a4dfb8fa5dc3a0bc69045b0cd9f9a4c";
 
     /// The registration of `CHAIN_POOL` as the slot 132 block holds it.
@@ -1980,7 +1982,10 @@ mod tests {
                     slot: block.slot(),
                     block_hash: block.hash().to_vec(),
                     block_number: Some(block.number()),
-                    txs: vec![entry(fixture.parent.as_slice()), entry(fixture.sub.as_slice())],
+                    txs: vec![
+                        entry(fixture.parent.as_slice()),
+                        entry(fixture.sub.as_slice()),
+                    ],
                     tags: Vec::new(),
                 }])
                 .unwrap();
@@ -2018,8 +2023,8 @@ mod tests {
             let txs = source.block_body.transactions.iter().cycle().take(count);
             sized.block_body.transactions = MaybeIndefArray::Def(txs.cloned().collect());
             let raw = minicbor::to_vec((era, sized)).unwrap();
-            let owned = dolos_cardano::owned::OwnedMultiEraBlock::decode(Arc::new(raw.clone()))
-                .unwrap();
+            let owned =
+                dolos_cardano::owned::OwnedMultiEraBlock::decode(Arc::new(raw.clone())).unwrap();
             let block = owned.view();
             let first = block.txs()[0].hash();
             let located = owned.tx_ranges().unwrap()[0].clone();
