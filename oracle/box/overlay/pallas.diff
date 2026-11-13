@@ -1,8 +1,8 @@
 diff --git a/pallas-codec/src/lib.rs b/pallas-codec/src/lib.rs
-index 1ea0fbcf..e77f06c5 100644
+index eecd97a8..09381ec5 100644
 --- a/pallas-codec/src/lib.rs
 +++ b/pallas-codec/src/lib.rs
-@@ -62,6 +62,18 @@ pub mod tree;
+@@ -65,6 +65,18 @@ pub use tree::MAX_DECODE_DEPTH;
  /// Round-trip friendly common helper structs (`Bytes`, `Nullable`, `Set`, …).
  pub mod utils;
  
@@ -21,7 +21,7 @@ index 1ea0fbcf..e77f06c5 100644
  /// Blanket trait for any type that can be CBOR-encoded and decoded with
  /// [`minicbor`]. Implemented automatically for every such type.
  pub trait Fragment: Sized + for<'b> minicbor::Decode<'b, ()> + minicbor::Encode<()> {}
-@@ -89,6 +101,13 @@ macro_rules! codec_by_datatype {
+@@ -92,6 +104,13 @@ macro_rules! codec_by_datatype {
              fn decode(d: &mut minicbor::Decoder<'__b>, ctx: &mut C) -> Result<Self, minicbor::decode::Error> {
                  match d.datatype()? {
                      $( minicbor::data::Type::Array | minicbor::data::Type::ArrayIndef => {
@@ -275,10 +275,10 @@ index fd504aac..fc162cc5 100644
              }
  
 diff --git a/pallas-utxorpc/src/v1alpha/mod.rs b/pallas-utxorpc/src/v1alpha/mod.rs
-index dab04734..f9a174c9 100644
+index ce0755a2..f94c0435 100644
 --- a/pallas-utxorpc/src/v1alpha/mod.rs
 +++ b/pallas-utxorpc/src/v1alpha/mod.rs
-@@ -201,7 +201,11 @@ impl<C: LedgerContext> Mapper<C> {
+@@ -224,7 +224,11 @@ impl<C: LedgerContext> Mapper<C> {
                  total_collateral: u64_to_bigint(tx.total_collateral().unwrap_or_default()),
              }
              .into(),
@@ -292,10 +292,10 @@ index dab04734..f9a174c9 100644
                  start: tx.validity_start().unwrap_or_default(),
                  ttl: tx.ttl().unwrap_or_default(),
 diff --git a/pallas-utxorpc/src/v1beta/mod.rs b/pallas-utxorpc/src/v1beta/mod.rs
-index 6bbae61d..df2bec1b 100644
+index c42b934c..00acf3c4 100644
 --- a/pallas-utxorpc/src/v1beta/mod.rs
 +++ b/pallas-utxorpc/src/v1beta/mod.rs
-@@ -119,7 +119,11 @@ impl<C: LedgerContext> Mapper<C> {
+@@ -132,7 +132,11 @@ impl<C: LedgerContext> Mapper<C> {
                  total_collateral: u64_to_bigint(tx.total_collateral().unwrap_or_default()),
              }
              .into(),
@@ -309,10 +309,10 @@ index 6bbae61d..df2bec1b 100644
                  start: tx.validity_start().unwrap_or_default(),
                  ttl: tx.ttl().unwrap_or_default(),
 diff --git a/pallas-validate/src/phase1/conway.rs b/pallas-validate/src/phase1/conway.rs
-index 08356a15..617d8f88 100644
+index 5a757af8..ef97745a 100644
 --- a/pallas-validate/src/phase1/conway.rs
 +++ b/pallas-validate/src/phase1/conway.rs
-@@ -1550,12 +1550,19 @@ pub(crate) const BOOTSTRAP_ROOT_HEADER: [u8; 6] = [0x83, 0x00, 0x82, 0x00, 0x58,
+@@ -1593,12 +1593,19 @@ pub(crate) const BOOTSTRAP_ROOT_HEADER: [u8; 6] = [0x83, 0x00, 0x82, 0x00, 0x58,
  
  /// The key hash a bootstrap witness provides, over its key, chain code and attribute bytes as sent.
  pub(crate) fn bootstrap_wit_root(wit: &BootstrapWitness) -> AddressId {
