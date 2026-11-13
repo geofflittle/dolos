@@ -1494,6 +1494,64 @@ expect image_rule_held "$(build_name "$W/image-a" "$W/missing")" "dolos-build:ru
 expect image_run_named "$(BUILD_IMAGE=named:1 run_image "$W/image-a")" named:1
 expect image_run_unnamed "$(run_image "$W/image-a" | sed 's/exit=[0-9]*/exit=N/') calls=$(grep -c . "$W/image-a/docker.log")" "in-image exit=N calls=0"
 
+# Commits to the git repo $W/gen-src a harness whose generator is named gen-$1 and whose build-generator.sh logs each call to $W/gen.log and makes that generator unless $2 is fail, and prints the commit.
+harness_gen() {
+  H=$W/gen-src
+  G=$H/conformance-value-oracle/gen
+  [ -d "$H/.git" ] || git init -q "$H"
+  mkdir -p "$G"
+  printf '#!/bin/sh\necho "$1:img"\n' >"$G/build-image.sh"
+  printf '#!/bin/sh\necho gen-%s\n' "$1" >"$G/generator-name.sh"
+  cat >"$G/build-generator.sh" <<EOF
+#!/bin/sh
+echo "build work=\$1 out=\$2" >>"$W/gen.log"
+[ "$2" != fail ] || exit 1
+mkdir -p "\$2"
+printf '#!/bin/sh\n' >"\$2/gen-$1"
+chmod +x "\$2/gen-$1"
+echo "\$2/gen-$1"
+EOF
+  git -C "$H" add -A
+  git -C "$H" -c user.name=test -c user.email=test@example.invalid commit -q -m "$1"
+  git -C "$H" rev-parse HEAD
+}
+
+# What value_harness of the build root $W/gen-root prints for the harness commit $1 and the generator dir $W/gen-dir, and each build call it made.
+gen_of() {
+  B=$W/gen-box
+  rm -rf "$B" "$W/gen-root/value/gen"
+  mkdir -p "$B/value" "$W/gen-root/value"
+  cp "$HERE"/*.sh "$B/"
+  echo "$1" >"$B/value/harness.rev"
+  : >"$W/gen.log"
+  (
+    ROOT=$W/gen-root OUT=$W/gen-root HERE=$B VALUE_HARNESS_URL=$W/gen-src VALUE_GEN_DIR=$W/gen-dir
+    . "$B/lib.sh"
+    . "$B/value.sh"
+    if rev=$(value_harness 2>"$W/gen.err"); then
+      echo "rev=$([ "$rev" = "$1" ] && echo harness) bin=$(cat "$ROOT/value/gen/bin/conformance-gen" 2>/dev/null | wc -c | tr -dc 0-9)"
+    else
+      echo "value_harness exit=$? $(grep -o 'VALUE REFUSED [a-z_]*=[a-z]*' "$W/gen.err")"
+    fi
+  )
+  sed "s|$W/||g" "$W/gen.log"
+}
+
+# Must not fire: a generator the generator dir holds under the harness's name is used and not built.
+gen1=$(harness_gen g1 ok)
+mkdir -p "$W/gen-dir"
+printf '#!/bin/sh\n# held\n' >"$W/gen-dir/gen-g1"
+chmod +x "$W/gen-dir/gen-g1"
+expect gen_held "$(gen_of "$gen1")" "rev=harness bin=17"
+# Must fire: a generator the dir lacks is built into the dir, with a work dir the build root keeps across builds.
+gen2=$(harness_gen g2 ok)
+expect gen_built "$(gen_of "$gen2")" "rev=harness bin=10
+build work=gen-root/value/generator-work out=gen-dir"
+# Must refuse when the build fails, naming the generator unbuilt.
+gen3=$(harness_gen g3 fail)
+expect gen_unbuilt "$(gen_of "$gen3")" "value_harness exit=1 VALUE REFUSED generator=unbuilt
+build work=gen-root/value/generator-work out=gen-dir"
+
 if [ "$failed" -eq 0 ]; then
   echo "LIB-TEST RESULT PASS"
 else

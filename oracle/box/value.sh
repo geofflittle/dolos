@@ -67,21 +67,24 @@ value_verdict() {
   arm_verdict "$(value_key "$1")" "$OUT/value/$1.ran" '^DECODE-ORACLE values=[1-9]' "$1" value_caught "$OUT/value/$1" "$(value_class "$1")"
 }
 
-# Puts the harness of value/harness.rev in $ROOT/value/gen and the generator of its oracle sources, ledger commit and image in its bin, building that image when docker has none.
+# Puts the harness of value/harness.rev in $ROOT/value/gen and the generator of its oracle sources, ledger commit and image in its bin, building the image when docker has none and the generator when VALUE_GEN_DIR has none of its name.
 value_harness() {
   rev=$(harness_commit) || return
   rm -rf "$ROOT/value/gen" "$ROOT/value/conf"
   mkdir -p "$ROOT/value/gen"
   git -C "$ROOT/value/harness.git" archive "$rev" conformance-value-oracle/gen | tar -x -C "$ROOT/value/gen" --strip-components 2 || return
-  if ! image=$(sh "$ROOT/value/gen/build-image.sh" conformance-gen-hs); then
+  if ! sh "$ROOT/value/gen/build-image.sh" conformance-gen-hs >/dev/null; then
     echo "VALUE REFUSED generator_image=unbuilt" >&2
     return 1
   fi
   name=$(sh "$ROOT/value/gen/generator-name.sh")
   gen=$VALUE_GEN_DIR/$name
   if [ ! -x "$gen" ]; then
-    echo "VALUE REFUSED generator=missing name=$name image=$image build=\"sh $ROOT/value/gen/build-generator.sh WORK $VALUE_GEN_DIR\"" >&2
-    return 1
+    echo "VALUE generator=building name=$name log=$OUT/value/generator.build" >&2
+    if ! gen=$(sh "$ROOT/value/gen/build-generator.sh" "$ROOT/value/generator-work" "$VALUE_GEN_DIR" 2>"$OUT/value/generator.build"); then
+      echo "VALUE REFUSED generator=unbuilt name=$name log=$OUT/value/generator.build" >&2
+      return 1
+    fi
   fi
   mkdir -p "$ROOT/value/gen/bin"
   ln -f "$gen" "$ROOT/value/gen/bin/conformance-gen" 2>/dev/null || cp "$gen" "$ROOT/value/gen/bin/conformance-gen"
