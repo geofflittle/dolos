@@ -769,7 +769,7 @@ catches() {
     }' "${2:-$ARMS_MANIFEST}"
 }
 
-# Prints a REFUSED line for each planted arm with no records file or no catch, and for each records file or catch that names no planted arm.
+# Prints a REFUSED line for each planted arm with no records file or no catch, for each records file or catch that names no planted arm, and for each row of served.txt whose lines an earlier row holds.
 arm_mismatches() {
   for arm in $PLANTED_ARMS; do
     if [ ! -s "$HERE/plants/$arm.records" ]; then
@@ -792,6 +792,11 @@ arm_mismatches() {
       *) echo "REFUSED $source names no planted arm" ;;
     esac
   done
+  awk '{
+    lines = $2 " " $3
+    if (lines in arm) print "REFUSED arms " arm[lines] " " $1 " serve the same lines in served.txt"
+    else arm[lines] = $1
+  }' "$HERE/served.txt"
 }
 
 # Prints each line of the log $2 that a catch of the arm $1 selects, that names a record of the file $3 by its record field or, for a line about no one record, anywhere in it, and that the log $4 lacks.

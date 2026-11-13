@@ -1322,7 +1322,7 @@ index 279d4a9f..85c56531 100644
          .collect::<Result<Vec<_>, _>>()?;
      if *language == Language::PlutusV4 {
 diff --git a/pallas-validate/src/utils/dijkstra_time.rs b/pallas-validate/src/utils/dijkstra_time.rs
-index 0507ea76..607fcc5e 100644
+index 0507ea76..79e5d939 100644
 --- a/pallas-validate/src/utils/dijkstra_time.rs
 +++ b/pallas-validate/src/utils/dijkstra_time.rs
 @@ -91,6 +91,7 @@ impl DijkstraTimeContext {
@@ -1333,16 +1333,6 @@ index 0507ea76..607fcc5e 100644
          {
              return Err(DijkstraTimeError::PastHorizon { slot, horizon });
          }
-@@ -103,6 +104,9 @@ impl DijkstraTimeContext {
-                 slot,
-                 first_slot: self.eras[0].start_slot,
-             })?;
-+        if pallas_crypto::oracle_plant("slot-off-by-one") {
-+            return era.translate(slot + 1);
-+        }
-         era.translate(slot)
-     }
- 
 diff --git a/pallas-validate/src/utils/validation.rs b/pallas-validate/src/utils/validation.rs
 index 9d4c0995..ca56fa98 100644
 --- a/pallas-validate/src/utils/validation.rs

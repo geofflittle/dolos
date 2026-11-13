@@ -175,6 +175,7 @@ printf '%s\n' '+++ b/src/one.rs' '+oracle_plant("a")' '+oracle_plant("b")' >"$S/
 printf '%s\n' 'ic#1' >"$S/plants/a.records"
 printf '%s\n' 'ic#2' >"$S/plants/b.records"
 printf '%s\n' '[catches]' 'a = ["judge=validation"]' 'b = ["judge=utxo"]' >"$S/arms.toml"
+printf '%s\n' 'a lines=1 sha256=01' 'b lines=1 sha256=02' >"$S/served.txt"
 mismatches() {
   (
     HERE=$S ARMS_MANIFEST=$S/arms.toml
@@ -182,8 +183,14 @@ mismatches() {
     arm_mismatches | paste -sd '|' -
   )
 }
-# Must not fire when every arm has its switch, records and catch.
+# Must not fire when every arm has its switch, records and catch, and serves lines no other arm serves.
 expect arm_set_agrees "$(mismatches)" ""
+printf '%s\n' 'a lines=1 sha256=01' 'b lines=1 sha256=01' >"$S/served.txt"
+# Must fire on two arms that serve the same lines.
+expect arm_served_twice "$(mismatches)" "REFUSED arms a b serve the same lines in served.txt"
+printf '%s\n' 'a lines=1 sha256=01' 'b lines=1 sha256=02' >"$S/served.txt"
+# Must not fire on the arms this tree plants.
+expect arm_set_committed "$( (. "$LIB" && arm_mismatches) | paste -sd '|' -)" ""
 printf '%s\n' '+++ b/src/one.rs' '+oracle_plant("a")' >"$S/overlay/dolos.diff"
 # Must fire on the records file and the catch of an arm whose switch is gone.
 expect arm_switch_removed "$(mismatches)" "REFUSED plants/b.records names no planted arm|REFUSED the catch of b names no planted arm"
