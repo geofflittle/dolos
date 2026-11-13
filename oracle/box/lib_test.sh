@@ -3,8 +3,8 @@
 # Usage: lib_test.sh <empty work dir>
 set -eu
 W=$(cd "$1" && pwd)
-# Each case names its own REV and BASE, so those of the run that calls the test are dropped.
-unset REV BASE
+# Each case names its own REV, BASE and slice limits, so those of the run that calls the test are dropped.
+unset REV BASE ORACLE_SLICE ORACLE_MEMORY ORACLE_SWAP ARM_MEMORY
 HERE=$(cd "$(dirname "$0")" && pwd)
 LIB=$HERE/lib.sh
 
