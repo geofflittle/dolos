@@ -1391,7 +1391,7 @@ for script in run.sh breaks.sh; do
   tier "$K" "" "$script"
   expect "slice_in_$script" "$(run_out "$K")" "REFUSED free$([ "$script" = run.sh ] && echo ' run-exit=2') exit=2"
 done
-# Must fire: each entry script run outside the slice sets its limits and runs itself again in a scope of it, before taking the lock.
+# Must fire: each entry script run outside the slice with the box's ORACLE_MEMORY sets its limits and runs itself again in a scope of it, before taking the lock.
 for script in run.sh breaks.sh candidate.sh endorser-fixture.sh; do
   lock_root "slice-out-$script"
   slice_of "$K" /user.slice/user-0.slice 9999 max
@@ -1402,14 +1402,19 @@ for script in run.sh breaks.sh candidate.sh endorser-fixture.sh; do
   esac
   (
     CANDIDATE=c COMMIT=c NODE=n ENDPOINT=e SERVE_CONFIG=$K/config CANDIDATE_GRPC=g CANDIDATE_NEED_G=999999
-    TREE=t GRPCURL=g PEER=p LEIOS_DB=l
-    export CANDIDATE COMMIT NODE ENDPOINT SERVE_CONFIG CANDIDATE_GRPC CANDIDATE_NEED_G TREE GRPCURL PEER LEIOS_DB
+    TREE=t GRPCURL=g PEER=p LEIOS_DB=l ORACLE_MEMORY=24G
+    export CANDIDATE COMMIT NODE ENDPOINT SERVE_CONFIG CANDIDATE_GRPC CANDIDATE_NEED_G TREE GRPCURL PEER LEIOS_DB ORACLE_MEMORY
     tier "$K" "" "$script" "$([ "$arg" = done ] && echo done || echo "$K/$arg")"
   )
   expect "slice_out_$script" "$(run_out "$K" | sed -e "s#$HERE/##g" -e "s#$K/##g")" \
-    "systemctl set-property --runtime dolos-oracle.slice MemoryMax=2560M MemorySwapMax=1G systemd-run --scope --quiet --collect --slice=dolos-oracle.slice sh $script $arg exit=0"
+    "systemctl set-property --runtime dolos-oracle.slice MemoryMax=24G MemorySwapMax=1G systemd-run --scope --quiet --collect --slice=dolos-oracle.slice sh $script $arg exit=0"
   expect "slice_out_lock_$script" "$(record_left "$K")" removed
 done
+# Must refuse: a run outside the slice given no ORACLE_MEMORY sets no limit and starts no scope.
+lock_root slice-memory-unset
+slice_of "$K" /user.slice/user-0.slice 9999 max
+tier "$K"
+expect slice_memory_unset "$(run_out "$K")" "REFUSED slice=dolos-oracle.slice memory=unset run-exit=2 exit=2"
 # Must fire: an ORACLE_MEMORY given to a run sets the slice's memory limit, and the swap limit stays.
 lock_root slice-lowered
 slice_of "$K" /user.slice/user-0.slice 9999 max

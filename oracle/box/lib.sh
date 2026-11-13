@@ -529,9 +529,9 @@ leg_due() {
   [ ! -f "$1" ] || [ "$(cat "$1")" != "$2" ]
 }
 
-# The systemd slice every process and container of an oracle run is placed in, and the memory and swap it may use, where ORACLE_MEMORY is the one value that bounds the oracle's share of the box.
+# The systemd slice every process and container of an oracle run is placed in, and the memory and swap it may use, where ORACLE_MEMORY, set by the box that runs the oracle, is the one value that bounds the oracle's share of the box.
 ORACLE_SLICE=${ORACLE_SLICE:-dolos-oracle.slice}
-ORACLE_MEMORY=${ORACLE_MEMORY:-2560M}
+ORACLE_MEMORY=${ORACLE_MEMORY:-}
 ORACLE_SWAP=${ORACLE_SWAP:-1G}
 CGROUP_FILE=${CGROUP_FILE:-/proc/self/cgroup}
 CGROUP_ROOT=${CGROUP_ROOT:-/sys/fs/cgroup}
@@ -557,9 +557,13 @@ slice_limits() {
   esac
 }
 
-# Runs the script $1 again with the arguments after it in a scope of ORACLE_SLICE, after setting the slice's limits, when this process runs outside it, and exits 2 when the slice it runs in has no memory or swap limit.
+# Runs the script $1 again with the arguments after it in a scope of ORACLE_SLICE, after setting the slice's limits, when this process runs outside it, and exits 2 when ORACLE_MEMORY is unset there or the slice it runs in has no memory or swap limit.
 enter_slice() {
   if [ "$(slice_limits)" = none ]; then
+    if [ -z "$ORACLE_MEMORY" ]; then
+      echo "REFUSED slice=$ORACLE_SLICE memory=unset"
+      exit 2
+    fi
     systemctl set-property --runtime "$ORACLE_SLICE" MemoryMax="$ORACLE_MEMORY" MemorySwapMax="$ORACLE_SWAP" || exit 2
     exec systemd-run --scope --quiet --collect --slice="$ORACLE_SLICE" sh "$@"
   fi
