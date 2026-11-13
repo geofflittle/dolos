@@ -186,7 +186,8 @@ fn resolve_archive_inputs<A: dolos_core::ArchiveStore>(
     for r in refs {
         by_tx.entry(r.0).or_default().push(*r);
     }
-    let mut by_slot: HashMap<u64, Vec<(TxHash, Vec<TxoRef>, Option<TxRange>)>> = HashMap::new();
+    type Located = (TxHash, Vec<TxoRef>, Option<TxRange>);
+    let mut by_slot: HashMap<u64, Vec<Located>> = HashMap::new();
     for (hash, refs) in by_tx {
         if let Ok(Some(location)) = archive.tx_location_by_hash(hash.as_ref()) {
             by_slot
