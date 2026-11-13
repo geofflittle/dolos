@@ -638,7 +638,7 @@ IO_BREACH_SAMPLES=3
 # One LIVE-IO sample of the node tip's lag behind the wall clock in seconds, the serving Dolos tip's lag behind the node tip in slots and the serving Dolos's ReadTip time in milliseconds, each failed read printed as failed.
 io_line() {
   wall=$(wall_slot) || wall=
-  node=$(docker exec "$NODE" cardano-cli latest query tip 2>/dev/null | jq -r '.slot // empty') || node=
+  node=$(sh "$HERE/node-cli.sh" latest query tip 2>/dev/null | jq -r '.slot // empty') || node=
   before=$(date +%s%N)
   serve=$("$GRPCURL" -max-time 10 -d '{}' "$ENDPOINT" utxorpc.v1.sync.SyncService/ReadTip 2>/dev/null |
     jq -r '.tip.slot // empty') || serve=

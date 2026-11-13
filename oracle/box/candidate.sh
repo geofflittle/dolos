@@ -71,7 +71,7 @@ candidate_slot() {
 }
 
 node_slot() {
-  docker exec "$NODE" cardano-cli latest query tip | jq -r .slot
+  sh "$HERE/node-cli.sh" latest query tip | jq -r .slot
 }
 
 start=$(date +%s)

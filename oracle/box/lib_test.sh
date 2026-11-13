@@ -1552,6 +1552,48 @@ gen3=$(harness_gen g3 fail)
 expect gen_unbuilt "$(gen_of "$gen3")" "value_harness exit=1 VALUE REFUSED generator=unbuilt
 build work=gen-root/value/generator-work out=gen-dir"
 
+# Writes a docker at $W/node-cli/docker that answers inspect of a container with the image node:1, the user $1 and the environment A=1 and B=two words, and logs every other call and each line of the env file it is handed.
+node_docker() {
+  D=$W/node-cli
+  rm -rf "$D"
+  mkdir -p "$D"
+  cat >"$D/docker" <<EOF
+#!/bin/sh
+case "\$1 \$3" in
+  "inspect {{.Config.Image}}") echo node:1 ;;
+  "inspect {{.Config.User}}") echo "$1" ;;
+  inspect*) printf 'A=1\nB=two words\n' ;;
+  *)
+    echo "\$*" | sed 's|--env-file [^ ]*|--env-file F|' >>"$D/docker.log"
+    prev=
+    for a; do
+      if [ "\$prev" = --env-file ]; then sed 's/^/env /' "\$a" >>"$D/docker.log"; fi
+      prev=\$a
+    done
+    ;;
+esac
+EOF
+  chmod +x "$D/docker"
+}
+
+# The docker calls node-cli.sh makes for a tip query through the docker shim in front of the docker of node_docker.
+node_cli_of() {
+  : >"$W/node-cli/docker.log"
+  PATH=$HERE/bin:$PATH ORACLE_DOCKER=$W/node-cli/docker ORACLE_SLICE=dolos-oracle.slice NODE=n \
+    sh "$HERE/node-cli.sh" latest query tip || echo "node-cli exit=$?"
+  cat "$W/node-cli/docker.log"
+}
+
+# Must not fire: no box script runs a command in another container, whose memory the oracle slice does not bound.
+expect node_cli_no_exec "$(cd "$HERE" && grep -l 'docker exec' -- *.sh | grep -v '^lib_test.sh$')" ""
+# Must run cardano-cli in a container of the node's image, user, environment and volumes that the shim places in the slice.
+node_docker ""
+expect node_cli_root "$(node_cli_of)" "run --cgroup-parent dolos-oracle.slice --rm --network none --volumes-from n --env-file F --user 0 --entrypoint cardano-cli node:1 latest query tip
+env A=1
+env B=two words"
+node_docker 1000:1000
+expect node_cli_user "$(node_cli_of | head -1)" "run --cgroup-parent dolos-oracle.slice --rm --network none --volumes-from n --env-file F --user 1000:1000 --entrypoint cardano-cli node:1 latest query tip"
+
 if [ "$failed" -eq 0 ]; then
   echo "LIB-TEST RESULT PASS"
 else
