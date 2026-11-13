@@ -1,21 +1,3 @@
-diff --git a/crates/cardano/src/eras.rs b/crates/cardano/src/eras.rs
-index 5ddc91bb..47b494c9 100644
---- a/crates/cardano/src/eras.rs
-+++ b/crates/cardano/src/eras.rs
-@@ -140,7 +140,12 @@ impl ChainSummary {
-             .div_ceil(era.epoch_length)
-             .saturating_mul(era.epoch_length)
-             .saturating_add(era.start.slot);
--        DijkstraTimeContext::new(eras, ForecastHorizon::Slot(horizon)).map_err(|error| {
-+        let horizon = if pallas::crypto::oracle_plant("horizon-unbounded") {
-+            ForecastHorizon::Unbounded
-+        } else {
-+            ForecastHorizon::Slot(horizon)
-+        };
-+        DijkstraTimeContext::new(eras, horizon).map_err(|error| {
-             ChainError::InvalidConfig(format!("invalid chain time history: {error}"))
-         })
-     }
 diff --git a/crates/cardano/src/forks.rs b/crates/cardano/src/forks.rs
 index dbabe5f2..2f571fd1 100644
 --- a/crates/cardano/src/forks.rs

@@ -1,7 +1,13 @@
-# Functions and defaults the oracle box scripts share, reading ROOT, SCRATCH, REV, MIN_FREE_G, OUT, HERE, TARGET, IN_IMAGE, LOCK_POLL_SECONDS, RUN_LOCK, LAST_DONE, LAST_SHIP, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_FSYNC, NODE, ENDPOINT, GRPCURL and the IO_ limits.
+# Functions and defaults the oracle box scripts share, reading ROOT, SCRATCH, REV, MIN_FREE_G, OUT, HERE, TARGET, IN_IMAGE, LOCK_POLL_SECONDS, RUN_LOCK, LAST_DONE, LAST_SHIP, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_FSYNC, NODE, ENDPOINT, GRPCURL, the ORACLE_ slice settings, CGROUP_FILE, CGROUP_ROOT, the IO_ limits and VALUE_HARNESS_URL.
 
 PALLAS=${PALLAS:-scratch/pallas}
 SCRATCH=${SCRATCH:-scratch/dolos}
+# The clone each planted state is made in, whose files every plant writes again.
+PLANT=${PLANT:-scratch/plant}
+# The Dolos and pallas trees the overlay build reads, and the target dir it writes.
+OVERLAY_DOLOS=${OVERLAY_DOLOS:-scratch/overlay-dolos}
+OVERLAY_PALLAS=${OVERLAY_PALLAS:-scratch/overlay-pallas}
+OVERLAY_TARGET=${OVERLAY_TARGET:-target/overlay}
 REV=${REV:-feat/ledger-oracle}
 MIN_FREE_G=${MIN_FREE_G:-6}
 OUT=${OUT:-"$ROOT/runs/$(date -u +%Y%m%dT%H%M%SZ)"}
@@ -11,8 +17,6 @@ GRPCURL=${GRPCURL:-grpcurl}
 BOX_PATH=oracle/box
 # The Dolos test module that judges the corpora and the live node.
 ORACLE_TESTS=serve::grpc::v1::ledger_oracle_tests
-# One line for each unit of the target dir, the tree ids of the scratch trees its last build read and its output files.
-BUILT="$ROOT/${TARGET:-target}/built-units"
 # The arms whose switch an overlay diff adds, one per line.
 switches() {
   sed -n 's/^+.*oracle_plant("\([a-z0-9-]*\)").*/\1/p' "$@" | sort -u
@@ -21,7 +25,7 @@ switches() {
 # The arms that plant a defect, each judged on the records plants/<arm>.records names.
 PLANTED_ARMS=$({
   switches "$HERE"/overlay/*.diff
-  for plant in "$HERE"/plants/*.diff "$HERE"/plants/*.deselect; do
+  for plant in "$HERE"/plants/*.deselect; do
     if [ -f "$plant" ]; then basename "$plant" | sed 's/\.[a-z]*$//'; fi
   done
 } | sort -u | paste -sd ' ' -)
@@ -51,11 +55,7 @@ overlay_arm() {
 
 # Whether an arm plants its defect in pallas.
 pallas_arm() {
-  if overlay_arm "$1"; then
-    switches "$HERE/overlay/pallas.diff" | grep -q -x -F "$1"
-  else
-    sed -n 's#^+++ b/##p' "$HERE/plants/$1.diff" 2>/dev/null | grep -q '^pallas'
-  fi
+  switches "$HERE/overlay/pallas.diff" | grep -q -x -F "$1"
 }
 
 # The cargo arguments of the crate test an arm runs in place of the judge, none for an arm the judge runs.
@@ -178,19 +178,13 @@ plant_files() {
   if overlay_arm "$1"; then
     awk -v call="oracle_plant(\"$1\")" '/^\+\+\+ b\// { file = substr($0, 7) } /^\+/ && index($0, call) { print file }' \
       "$HERE/overlay/dolos.diff" | sort -u
-    return
   fi
-  if deselect_arm "$1"; then
-    return
-  fi
-  sed -n 's#^+++ b/##p' "$HERE/plants/$1.diff"
 }
 
-# The Dolos files whose change puts an arm in the quick tier, its plant files, its plant or deselection, its records file and the source of its crate test.
+# The Dolos files whose change puts an arm in the quick tier, its plant files, its deselection, its records file and the source of its crate test.
 arm_files() {
   plant_files "$1"
-  if ! overlay_arm "$1"; then
-    echo "$BOX_PATH/plants/$1.diff"
+  if deselect_arm "$1"; then
     echo "$BOX_PATH/plants/$1.deselect"
   fi
   echo "$BOX_PATH/plants/$1.records"
@@ -268,10 +262,43 @@ arm_verdict() {
   rm -f "$OUT/served/$name.printed"
 }
 
-# Writes the lines on stdin to $OUT/served/$1 as what the arm $1 served, in byte order and without the number libtest gives a panicking test's thread.
+# Writes the lines on stdin to $OUT/served/$1 as what the arm $1 served, in byte order, without the number libtest gives a panicking test's thread, and with each panic's line in a file of the scratch tree given as the name of the innermost fn whose braces hold it and the count of lines from its fn line.
 record_served() {
   mkdir -p "$OUT/served"
-  sed "s/^\(thread '[^']*'\) ([0-9]*) panicked at /\1 panicked at /" | LC_ALL=C sort >"$OUT/served/$1"
+  sed "s/^\(thread '[^']*'\) ([0-9]*) panicked at /\1 panicked at /" |
+    awk -v tree="$ROOT/$SCRATCH" '
+      match($0, / panicked at [^:]+:[0-9]+:[0-9]+:$/) {
+        head = substr($0, 1, RSTART + 12)
+        split(substr($0, RSTART + 13, RLENGTH - 14), site, ":")
+        path = tree "/" site[1]
+        line = site[2] + 0
+        # The fns open at the line read, innermost last, each with its name, its fn line, the brace depth before it and whether its body has opened.
+        top = 0
+        depth = 0
+        read = 0
+        while (read < line && (getline text <path) > 0) {
+          read++
+          if (text ~ /^[ \t]*(pub(\([^)]*\))?[ \t]+)?((const|async|unsafe)[ \t]+)*fn[ \t]+[A-Za-z_]/ && text !~ /;[ \t]*$/) {
+            match(text, /fn[ \t]+[A-Za-z_][A-Za-z0-9_]*/)
+            top++
+            name[top] = substr(text, RSTART, RLENGTH)
+            sub(/^fn[ \t]+/, "", name[top])
+            at[top] = read
+            base[top] = depth
+            opened[top] = 0
+          }
+          braces = gsub(/[{]/, "{", text)
+          depth += braces - gsub(/[}]/, "}", text)
+          if (top > 0 && braces > 0) opened[top] = 1
+          while (read < line && top > 0 && opened[top] && depth <= base[top]) top--
+        }
+        close(path)
+        if (read == line && top > 0) {
+          print head site[1] ":" name[top] "+" (read - at[top]) ":" site[3] ":"
+          next
+        }
+      }
+      { print }' | LC_ALL=C sort >"$OUT/served/$1"
 }
 
 # The row of served.txt for what the arm $1 served in this run: its name, its line count and the sha256 of its lines.
@@ -335,6 +362,40 @@ plant_overlay() {
   [ "$rejected" -gt 0 ] && [ "$status" -eq 1 ]
 }
 
+# Commits the plant clone's files over the parent $1 without the rejected hunks plant_overlay leaves, and prints the commit, the same one for the same files and parent.
+planted_commit() {
+  git -C "$ROOT/$PLANT" ls-files -z --others -- '*.rej' | (cd "$ROOT/$PLANT" && xargs -0 -r rm -f) &&
+    git -C "$ROOT/$PLANT" add -A &&
+    planted_tree=$(git -C "$ROOT/$PLANT" write-tree) &&
+    GIT_AUTHOR_NAME=oracle GIT_AUTHOR_EMAIL=oracle GIT_AUTHOR_DATE='@1 +0000' \
+      GIT_COMMITTER_NAME=oracle GIT_COMMITTER_EMAIL=oracle GIT_COMMITTER_DATE='@1 +0000' \
+      git -C "$ROOT/$PLANT" commit-tree "$planted_tree" -p "$1" -m planted
+}
+
+# Puts the clone $1 at the commit $3 of the repository $2 with each diff after $4 planted over it hunk by hunk, and its pallas crates pointed at the tree $4 when $4 is not empty, making each state in the plant clone so the clone $1 writes only the files whose content differs from its last state, and prints the switch each rejected hunk adds and, on stderr, whether git writes each diff as committed.
+plant_tree() {
+  plant_at=$1
+  plant_paths=$4
+  clone_at "$PLANT" "$2" "$3" >&2 || return 2
+  plant_state=$(git -C "$ROOT/$PLANT" rev-parse HEAD) || return 2
+  shift 4
+  for plant_diff; do
+    plant_overlay "$plant_diff" "$ROOT/$PLANT" || return
+    plant_parent=$plant_state
+    plant_state=$(planted_commit "$plant_parent") || return 2
+    plant_regen=differs
+    if git -C "$ROOT/$PLANT" diff --no-color --abbrev=8 "$plant_parent" "$plant_state" | cmp -s - "$plant_diff"; then
+      plant_regen=same
+    fi
+    echo "REGEN diff=${plant_diff#"$HERE"/} $plant_regen" >&2
+  done
+  if [ -n "$plant_paths" ]; then
+    pallas_paths "$ROOT/$PLANT" "$plant_paths" &&
+      plant_state=$(planted_commit "$plant_state") || return 2
+  fi
+  clone_at "$plant_at" "$ROOT/$PLANT" "$plant_state" >&2 || return 2
+}
+
 # Whether a verdict list holds a passing head and every verdict in it names a passing word.
 passed() {
   case " $1 " in
@@ -343,7 +404,7 @@ passed() {
   esac
   for verdict in $1; do
     case $verdict in
-      *=PASS | *=CLEAN | *=CAUGHT | *=HELD | value=passed-on-these-inputs) ;;
+      *=PASS | *=CLEAN | *=CAUGHT | *=HELD | value=passed-on-these-inputs | amaru=passed-on-these-inputs) ;;
       *) return 1 ;;
     esac
   done
@@ -376,6 +437,32 @@ require_free() {
     echo "REFUSED free=${free}G below ${MIN_FREE_G}G at $ROOT"
     exit 2
   fi
+}
+
+# The repo the value harness is fetched from, the pallas tree that holds conformance-value-oracle.
+VALUE_HARNESS_URL=${VALUE_HARNESS_URL:-https://github.com/geofflittle/pallas.git}
+
+# Prints the commit value/harness.rev names, fetching it into $ROOT/value/harness.git when that repo lacks it.
+harness_commit() {
+  rev=$(cat "$HERE/value/harness.rev")
+  repo=$ROOT/value/harness.git
+  if [ ! -d "$repo" ]; then
+    git init -q --bare "$repo" || return
+  fi
+  if ! git -C "$repo" cat-file -e "$rev^{commit}" 2>/dev/null; then
+    git -C "$repo" fetch -q --filter=blob:none "$VALUE_HARNESS_URL" "$rev" || return
+  fi
+  echo "$rev"
+}
+
+# Prints the name of the image of the dir images/$1 and builds it when docker has none, by the image scripts of the value harness at value/harness.rev.
+build_image() {
+  rev=$(harness_commit) || return
+  rm -rf "$ROOT/value/image-scripts"
+  mkdir -p "$ROOT/value/image-scripts"
+  git -C "$ROOT/value/harness.git" archive "$rev" conformance-value-oracle/gen/image-name.sh conformance-value-oracle/gen/build-image.sh |
+    tar -x -C "$ROOT/value/image-scripts" --strip-components 2 || return
+  sh "$ROOT/value/image-scripts/build-image.sh" "$1" "$HERE/images"
 }
 
 # Prints the full sha of the commit the ref $2 names in $ROOT/dolos.git, or exits 2 with a REFUSED line naming the variable $1 when it names none.
@@ -430,6 +517,73 @@ release_lock() {
   if [ "$(cat "$RUN_LOCK" 2>/dev/null)" = "$$" ]; then
     : >"$RUN_LOCK"
   fi
+}
+
+# The id of the local docker image $1, or none when docker has no such image.
+image_id() {
+  docker image inspect -f '{{.Id}}' "$1" 2>/dev/null || echo none
+}
+
+# Whether a leg whose inputs are $2 is due: the record $1 of the inputs of its last passing run is missing or differs.
+leg_due() {
+  [ ! -f "$1" ] || [ "$(cat "$1")" != "$2" ]
+}
+
+# The systemd slice every process and container of an oracle run is placed in, and the memory and swap it may use, where ORACLE_MEMORY, set by the box that runs the oracle, is the one value that bounds the oracle's share of the box.
+ORACLE_SLICE=${ORACLE_SLICE:-dolos-oracle.slice}
+ORACLE_MEMORY=${ORACLE_MEMORY:-}
+ORACLE_SWAP=${ORACLE_SWAP:-1G}
+CGROUP_FILE=${CGROUP_FILE:-/proc/self/cgroup}
+CGROUP_ROOT=${CGROUP_ROOT:-/sys/fs/cgroup}
+# The docker every oracle script calls, a command that places each container it starts in ORACLE_SLICE in front of the docker it was found as.
+if [ -z "${ORACLE_DOCKER:-}" ]; then
+  ORACLE_DOCKER=$(command -v docker || echo docker)
+fi
+case :$PATH: in
+  *":$HERE/bin:"*) ;;
+  *) PATH=$HERE/bin:$PATH ;;
+esac
+export ORACLE_SLICE ORACLE_DOCKER PATH
+
+# The memory and swap limits of the slice this process runs in, or none when that slice is not ORACLE_SLICE.
+slice_limits() {
+  cgroup=$(sed -n 's/^0:://p' "$CGROUP_FILE")
+  slice=${cgroup%/*}
+  case $slice in
+    */"$ORACLE_SLICE")
+      echo "memory=$(cat "$CGROUP_ROOT$slice/memory.max") swap=$(cat "$CGROUP_ROOT$slice/memory.swap.max")"
+      ;;
+    *) echo none ;;
+  esac
+}
+
+# Runs the script $1 again with the arguments after it in a scope of ORACLE_SLICE, after setting the slice's limits, when this process runs outside it, and exits 2 when ORACLE_MEMORY is unset there or the slice it runs in has no memory or swap limit.
+enter_slice() {
+  if [ "$(slice_limits)" = none ]; then
+    if [ -z "$ORACLE_MEMORY" ]; then
+      echo "REFUSED slice=$ORACLE_SLICE memory=unset"
+      exit 2
+    fi
+    systemctl set-property --runtime "$ORACLE_SLICE" MemoryMax="$ORACLE_MEMORY" MemorySwapMax="$ORACLE_SWAP" || exit 2
+    exec systemd-run --scope --quiet --collect --slice="$ORACLE_SLICE" sh "$@"
+  fi
+  case $(slice_limits) in
+    memory=[0-9]*" "swap=[0-9]*) ;;
+    *)
+      echo "REFUSED slice=$ORACLE_SLICE $(slice_limits)"
+      exit 2
+      ;;
+  esac
+}
+
+# The memory in bytes one switched arm judge may use.
+ARM_MEMORY=${ARM_MEMORY:-1610612736}
+
+# The number of switched arms judged at once, as many judges of ARM_MEMORY as the memory limit of the oracle slice holds and at least one.
+arm_jobs() {
+  slice_memory=$(slice_limits | sed -n 's/^memory=\([0-9]*\) .*/\1/p')
+  arm_fit=$((slice_memory / ARM_MEMORY))
+  echo $((arm_fit > 0 ? arm_fit : 1))
 }
 
 # The names of a candidate's config files in its store.
@@ -488,7 +642,7 @@ IO_BREACH_SAMPLES=3
 # One LIVE-IO sample of the node tip's lag behind the wall clock in seconds, the serving Dolos tip's lag behind the node tip in slots and the serving Dolos's ReadTip time in milliseconds, each failed read printed as failed.
 io_line() {
   wall=$(wall_slot) || wall=
-  node=$(docker exec "$NODE" cardano-cli latest query tip 2>/dev/null | jq -r '.slot // empty') || node=
+  node=$(sh "$HERE/node-cli.sh" latest query tip 2>/dev/null | jq -r '.slot // empty') || node=
   before=$(date +%s%N)
   serve=$("$GRPCURL" -max-time 10 -d '{}' "$ENDPOINT" utxorpc.v1.sync.SyncService/ReadTip 2>/dev/null |
     jq -r '.tip.slot // empty') || serve=
@@ -554,13 +708,17 @@ pallas_history() {
   fi
 }
 
-# Checks pallas out at a commit into the scratch pallas tree and points the scratch tree's pallas crates at it.
+# Checks pallas out at a commit into the scratch pallas tree.
 pallas_tree() {
   pallas_history "$1" || return
   git -C "$ROOT/$PALLAS" checkout -q -f --detach "$1" &&
-    git -C "$ROOT/$PALLAS" clean -q -fdx &&
-    sed -E -i 's#^(pallas[a-z-]*) = \{ git = "https://github.com/[^/]+/pallas", rev = "[0-9a-f]+"#\1 = { path = "/w/'"$PALLAS"'/\1"#' \
-      "$ROOT/$SCRATCH/Cargo.toml"
+    git -C "$ROOT/$PALLAS" clean -q -fdx
+}
+
+# Points the pallas crates of the Dolos tree $1 at the pallas tree $2 under the build root.
+pallas_paths() {
+  sed -E -i 's#^(pallas[a-z-]*) = \{ git = "https://github.com/[^/]+/pallas", rev = "[0-9a-f]+"#\1 = { path = "/w/'"$2"'/\1"#' \
+    "$1/Cargo.toml"
 }
 
 # The manifest of fix commits, each with its arm or the reason it has none.
@@ -615,7 +773,7 @@ catches() {
     }' "${2:-$ARMS_MANIFEST}"
 }
 
-# Prints a REFUSED line for each planted arm with no records file or no catch, and for each records file or catch that names no planted arm.
+# Prints a REFUSED line for each planted arm with no records file or no catch, for each records file or catch that names no planted arm, and for each row of served.txt whose lines an earlier row holds.
 arm_mismatches() {
   for arm in $PLANTED_ARMS; do
     if [ ! -s "$HERE/plants/$arm.records" ]; then
@@ -638,6 +796,11 @@ arm_mismatches() {
       *) echo "REFUSED $source names no planted arm" ;;
     esac
   done
+  awk '{
+    lines = $2 " " $3
+    if (lines in arm) print "REFUSED arms " arm[lines] " " $1 " serve the same lines in served.txt"
+    else arm[lines] = $1
+  }' "$HERE/served.txt"
 }
 
 # Prints each line of the log $2 that a catch of the arm $1 selects, that names a record of the file $3 by its record field or, for a line about no one record, anywhere in it, and that the log $4 lacks.
@@ -762,14 +925,19 @@ fix_arms_both() {
   fix_arms "$ROOT/$PALLAS" pallas "$pin" && [ "$dolos" -eq 0 ]
 }
 
+# Puts the clone $1 under the build root at the commit $3 of the repository $2 with no other change, cloning it first when it is absent, and writes only the files whose content differs from its last state.
+clone_at() {
+  if [ ! -d "$ROOT/$1/.git" ]; then
+    git clone -q --no-checkout "$2" "$ROOT/$1" || return
+  fi
+  git -C "$ROOT/$1" fetch -q "$2" "$3" &&
+    git -C "$ROOT/$1" checkout -q -f --detach FETCH_HEAD &&
+    git -C "$ROOT/$1" clean -q -fdx
+}
+
 # Puts the scratch tree at REV of the bare repository $ROOT/dolos.git with no planted change.
 reset_scratch() {
-  if [ ! -d "$ROOT/$SCRATCH/.git" ]; then
-    git clone -q --no-checkout "$ROOT/dolos.git" "$ROOT/$SCRATCH"
-  fi
-  git -C "$ROOT/$SCRATCH" fetch -q "$ROOT/dolos.git" "$REV"
-  git -C "$ROOT/$SCRATCH" checkout -q -f --detach FETCH_HEAD
-  git -C "$ROOT/$SCRATCH" clean -q -fdx
+  clone_at "$SCRATCH" "$ROOT/dolos.git" "$REV"
 }
 
 # Runs the function $2 on each later argument, $1 at a time with the arguments dealt to $1 workers in turn, then prints each run's output in argument order.
@@ -889,13 +1057,15 @@ record_units() {
 build_checked() {
   json=$1
   shift
+  # One line for each unit of the target dir, the tree ids of the scratch trees its last build read and its output files.
+  BUILT="$ROOT/${TARGET:-target}/built-units"
   dolos=$(tree_of "$ROOT/$SCRATCH")
   pallas=$(tree_of "$ROOT/$PALLAS")
   if [ ! -f "$BUILT" ]; then
     # With no record of any build, every file gets a new time, so cargo rebuilds each unit that reads one.
     for tree in "$SCRATCH" "$PALLAS"; do
       if [ -d "$ROOT/$tree/.git" ]; then
-        git -C "$ROOT/$tree" ls-files -z --cached --others --exclude-standard | (cd "$ROOT/$tree" && xargs -0 touch)
+        git -C "$ROOT/$tree" ls-files -z --cached --others --exclude-standard | (cd "$ROOT/$tree" && xargs -0 -r touch)
         # The index takes the new times too, so a later checkout of the same commit keeps each file and its time.
         git -C "$ROOT/$tree" update-index -q --refresh || true
       fi
@@ -916,6 +1086,11 @@ build_checked() {
   fi
   # A fresh unit that reads no changed file has the inputs it would have at the current trees.
   record_units "$json" "$dolos" "$pallas"
+}
+
+# Runs a command with the trees and the target dir of the overlay build in place of the head's.
+in_overlay() {
+  SCRATCH=$OVERLAY_DOLOS PALLAS=$OVERLAY_PALLAS TARGET=$OVERLAY_TARGET "$@"
 }
 
 # Builds the test binary of the scratch tree's dolos library, cargo's messages in $1 and the rest of the arguments passed to cargo.

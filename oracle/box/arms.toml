@@ -12,7 +12,7 @@ fixes = [
   { commit = "429066a41", arm = "requests-scripts-reverted" },
   { commit = "185925e76", exclude = "lint" },
   { commit = "3c5f56c92", arm = "v1-guarding" },
-  { commit = "89e2b9159", arm = "horizon-unbounded" },
+  { commit = "89e2b9159", arm = "horizon-removed" },
   { commit = "8cbc1861a", arm = "datum-sub-unsearched" },
   { commit = "c4a1f5fac", exclude = "follower" },
   { commit = "7bab64ec5", arm = "system-start" },
@@ -156,7 +156,6 @@ tag24-ref = ["judge=validation failure:disagree"]
 unreg-refund = ["judge=validation failure:disagree"]
 drep-deposit = ["judge=validation failure:disagree"]
 upper-inclusive = ["judge=validation failure:disagree"]
-slot-off-by-one = ["judge=validation failure:disagree"]
 horizon-removed = ["judge=validation failure:disagree"]
 system-start = ["judge=validation failure:disagree"]
 cost-models = ["test=musashi_era_translation_keeps_the_published_v3_cost_model"]
@@ -207,7 +206,6 @@ sub-valid-always = ["judge=utxo|accounts"]
 pointer-output-refused = ["judge=validation failure:disagree ledger:PtrPresentInCollateralReturn dolos:accepted"]
 native-guard-datum-required = ["judge=validation failure:disagree ledger:accepted dolos:DijkstraMalformedGuardDatum"]
 plutus-guard-datum-optional = ["judge=validation failure:disagree ledger:SubMalformedGuardDatums dolos:accepted"]
-horizon-unbounded = ["judge=validation failure:disagree ledger:CollectErrors dolos:accepted"]
 builtin-term-walk = ["judge=eval-oracle entry=estimate_tx_calls level:top ledger:ran dolos:refused refusal:V3_builtin_outside_audited_protocol-12_subset !listed:*"]
 builtin-call-unaudited = ["judge=eval-oracle entry=estimate_tx_calls level:top ledger:ran dolos:refused refusal:V3_builtin_outside_audited_protocol-12_subset !listed:*"]
 pending-registrations-ignored = ["judge=validation failure:disagree ledger:accepted dolos:DijkstraInvalidAccount"]

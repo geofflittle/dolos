@@ -1,5 +1,5 @@
 diff --git a/pallas-codec/src/lib.rs b/pallas-codec/src/lib.rs
-index 1ea0fbcf8..e77f06c52 100644
+index 1ea0fbcf..e77f06c5 100644
 --- a/pallas-codec/src/lib.rs
 +++ b/pallas-codec/src/lib.rs
 @@ -62,6 +62,18 @@ pub mod tree;
@@ -36,7 +36,7 @@ index 1ea0fbcf8..e77f06c52 100644
                              // Using the identifiers trivially to ensure repetition.
                              Ok($enum_name::$many_f($({ let $vars = a.decode_with(ctx)?; $vars }, )+ ))
 diff --git a/pallas-codec/src/utils.rs b/pallas-codec/src/utils.rs
-index 14fd263ea..2d1679329 100644
+index 14fd263e..2d167932 100644
 --- a/pallas-codec/src/utils.rs
 +++ b/pallas-codec/src/utils.rs
 @@ -1420,7 +1420,7 @@ pub fn decode_bytes_def_or_indef<'b, C>(
@@ -58,7 +58,7 @@ index 14fd263ea..2d1679329 100644
          for chunk in d.str_iter()? {
              joined.push_str(chunk?);
 diff --git a/pallas-configs/src/alonzo.rs b/pallas-configs/src/alonzo.rs
-index c933fa0b5..313a39fb7 100644
+index c933fa0b..313a39fb 100644
 --- a/pallas-configs/src/alonzo.rs
 +++ b/pallas-configs/src/alonzo.rs
 @@ -232,6 +232,11 @@ fn cost_model_values(
@@ -74,7 +74,7 @@ index c933fa0b5..313a39fb7 100644
          Value::Object(map) => initial_names(language_number)
              .iter()
 diff --git a/pallas-crypto/src/lib.rs b/pallas-crypto/src/lib.rs
-index 977279afc..621ce4899 100644
+index 977279af..621ce489 100644
 --- a/pallas-crypto/src/lib.rs
 +++ b/pallas-crypto/src/lib.rs
 @@ -67,3 +67,5 @@ pub mod key;
@@ -84,7 +84,7 @@ index 977279afc..621ce4899 100644
 +
 +pub use pallas_codec::oracle_plant;
 diff --git a/pallas-primitives/src/babbage/model.rs b/pallas-primitives/src/babbage/model.rs
-index 752fbf2be..8ce729461 100644
+index 752fbf2b..8ce72946 100644
 --- a/pallas-primitives/src/babbage/model.rs
 +++ b/pallas-primitives/src/babbage/model.rs
 @@ -361,6 +361,9 @@ where
@@ -108,7 +108,7 @@ index 752fbf2be..8ce729461 100644
      let data = match pallas_codec::utils::decode_bytes_def_or_indef(d, ctx)? {
          std::borrow::Cow::Borrowed(cbor) => minicbor::decode_with(cbor, ctx)?,
 diff --git a/pallas-primitives/src/dijkstra/model.rs b/pallas-primitives/src/dijkstra/model.rs
-index 7e13b9da4..ad9f6a633 100644
+index 7e13b9da..ad9f6a63 100644
 --- a/pallas-primitives/src/dijkstra/model.rs
 +++ b/pallas-primitives/src/dijkstra/model.rs
 @@ -1030,6 +1030,9 @@ pub(crate) mod guards_field {
@@ -122,7 +122,7 @@ index 7e13b9da4..ad9f6a633 100644
          if probe.datatype()? == Type::Null {
              d.skip()?;
 diff --git a/pallas-primitives/src/flat_enum.rs b/pallas-primitives/src/flat_enum.rs
-index 3aa9341b3..df94dc61e 100644
+index 3aa9341b..df94dc61 100644
 --- a/pallas-primitives/src/flat_enum.rs
 +++ b/pallas-primitives/src/flat_enum.rs
 @@ -28,6 +28,13 @@ macro_rules! decode_flat_enum {
@@ -140,7 +140,7 @@ index 3aa9341b3..df94dc61e 100644
                      let index: i64 = a.decode_with(ctx)?;
                      match index {
 diff --git a/pallas-traverse/src/governance.rs b/pallas-traverse/src/governance.rs
-index f59e54938..630306743 100644
+index f59e5493..63030674 100644
 --- a/pallas-traverse/src/governance.rs
 +++ b/pallas-traverse/src/governance.rs
 @@ -228,6 +228,13 @@ macro_rules! dijkstra_param {
@@ -158,7 +158,7 @@ index f59e54938..630306743 100644
                      None => ParamRead::Unchanged,
                  },
 diff --git a/pallas-traverse/src/script_ref.rs b/pallas-traverse/src/script_ref.rs
-index 245103afd..ebec2f4b5 100644
+index 245103af..ebec2f4b 100644
 --- a/pallas-traverse/src/script_ref.rs
 +++ b/pallas-traverse/src/script_ref.rs
 @@ -117,6 +117,11 @@ impl<'b> MultiEraScriptRef<'b> {
@@ -174,7 +174,7 @@ index 245103afd..ebec2f4b5 100644
                      MultiEraNativeScript::from_dijkstra(s).hash()
                  }
 diff --git a/pallas-traverse/src/tx.rs b/pallas-traverse/src/tx.rs
-index 0b4c7f227..08b27e058 100644
+index 0b4c7f22..08b27e05 100644
 --- a/pallas-traverse/src/tx.rs
 +++ b/pallas-traverse/src/tx.rs
 @@ -1026,7 +1026,9 @@ impl<'b> MultiEraTx<'b> {
@@ -189,7 +189,7 @@ index 0b4c7f227..08b27e058 100644
      }
  
 diff --git a/pallas-utxorpc/src/before_v1.rs b/pallas-utxorpc/src/before_v1.rs
-index d61d83bf6..62589b72c 100644
+index d61d83bf..62589b72 100644
 --- a/pallas-utxorpc/src/before_v1.rs
 +++ b/pallas-utxorpc/src/before_v1.rs
 @@ -34,6 +34,9 @@ macro_rules! impl_cardano_mapper_before_v1 {
@@ -203,7 +203,7 @@ index d61d83bf6..62589b72c 100644
          }
  
 diff --git a/pallas-utxorpc/src/shared.rs b/pallas-utxorpc/src/shared.rs
-index fd504aacb..fc162cc50 100644
+index fd504aac..fc162cc5 100644
 --- a/pallas-utxorpc/src/shared.rs
 +++ b/pallas-utxorpc/src/shared.rs
 @@ -45,6 +45,12 @@ macro_rules! impl_cardano_mapper_shared {
@@ -275,7 +275,7 @@ index fd504aacb..fc162cc50 100644
              }
  
 diff --git a/pallas-utxorpc/src/v1alpha/mod.rs b/pallas-utxorpc/src/v1alpha/mod.rs
-index dab04734e..f9a174c93 100644
+index dab04734..f9a174c9 100644
 --- a/pallas-utxorpc/src/v1alpha/mod.rs
 +++ b/pallas-utxorpc/src/v1alpha/mod.rs
 @@ -201,7 +201,11 @@ impl<C: LedgerContext> Mapper<C> {
@@ -292,7 +292,7 @@ index dab04734e..f9a174c93 100644
                  start: tx.validity_start().unwrap_or_default(),
                  ttl: tx.ttl().unwrap_or_default(),
 diff --git a/pallas-utxorpc/src/v1beta/mod.rs b/pallas-utxorpc/src/v1beta/mod.rs
-index 6bbae61d0..df2bec1b4 100644
+index 6bbae61d..df2bec1b 100644
 --- a/pallas-utxorpc/src/v1beta/mod.rs
 +++ b/pallas-utxorpc/src/v1beta/mod.rs
 @@ -119,7 +119,11 @@ impl<C: LedgerContext> Mapper<C> {
@@ -309,7 +309,7 @@ index 6bbae61d0..df2bec1b4 100644
                  start: tx.validity_start().unwrap_or_default(),
                  ttl: tx.ttl().unwrap_or_default(),
 diff --git a/pallas-validate/src/phase1/conway.rs b/pallas-validate/src/phase1/conway.rs
-index 08356a15d..617d8f882 100644
+index 08356a15..617d8f88 100644
 --- a/pallas-validate/src/phase1/conway.rs
 +++ b/pallas-validate/src/phase1/conway.rs
 @@ -1550,12 +1550,19 @@ pub(crate) const BOOTSTRAP_ROOT_HEADER: [u8; 6] = [0x83, 0x00, 0x82, 0x00, 0x58,
@@ -334,7 +334,7 @@ index 08356a15d..617d8f882 100644
          .concat(),
      )
 diff --git a/pallas-validate/src/phase1/dijkstra.rs b/pallas-validate/src/phase1/dijkstra.rs
-index 7c94770bc..b1b1daf84 100644
+index 7c94770b..b1b1daf8 100644
 --- a/pallas-validate/src/phase1/dijkstra.rs
 +++ b/pallas-validate/src/phase1/dijkstra.rs
 @@ -98,7 +98,7 @@ pub(super) fn validate_dijkstra_tx_inner<S: DijkstraLedgerState + ?Sized>(
@@ -648,7 +648,7 @@ index 7c94770bc..b1b1daf84 100644
              ScriptRef::PlutusV2Script(s) => well_formed_plutus(&Language::PlutusV2, s.as_ref()),
              ScriptRef::PlutusV3Script(s) => well_formed_plutus(&Language::PlutusV3, s.as_ref()),
 diff --git a/pallas-validate/src/phase1/dijkstra_ledger.rs b/pallas-validate/src/phase1/dijkstra_ledger.rs
-index 22ff11828..833271150 100644
+index 22ff1182..83327115 100644
 --- a/pallas-validate/src/phase1/dijkstra_ledger.rs
 +++ b/pallas-validate/src/phase1/dijkstra_ledger.rs
 @@ -99,7 +99,11 @@ impl<'a> Level<'a> {
@@ -717,7 +717,7 @@ index 22ff11828..833271150 100644
                      CertificateFailure::PoolMetadataHashTooBig,
                  ));
 diff --git a/pallas-validate/src/phase2/dijkstra.rs b/pallas-validate/src/phase2/dijkstra.rs
-index 71f121e29..4c26b4058 100644
+index 71f121e2..4c26b405 100644
 --- a/pallas-validate/src/phase2/dijkstra.rs
 +++ b/pallas-validate/src/phase2/dijkstra.rs
 @@ -70,14 +70,15 @@ impl LegacyContextData for ContextOutput {
@@ -933,7 +933,7 @@ index 71f121e29..4c26b4058 100644
                          certificates: context.certificates.clone(),
                          withdrawals: x.withdrawals.into(),
 diff --git a/pallas-validate/src/phase2/dijkstra_v4_context.rs b/pallas-validate/src/phase2/dijkstra_v4_context.rs
-index cdc70b06a..1a9b4acbd 100644
+index cdc70b06..1a9b4acb 100644
 --- a/pallas-validate/src/phase2/dijkstra_v4_context.rs
 +++ b/pallas-validate/src/phase2/dijkstra_v4_context.rs
 @@ -140,7 +140,10 @@ impl<'a> Context<'a> {
@@ -961,7 +961,7 @@ index cdc70b06a..1a9b4acbd 100644
      }
  
 diff --git a/pallas-validate/src/phase2/error.rs b/pallas-validate/src/phase2/error.rs
-index 38ace336e..616aeb686 100644
+index 38ace336..616aeb68 100644
 --- a/pallas-validate/src/phase2/error.rs
 +++ b/pallas-validate/src/phase2/error.rs
 @@ -14,7 +14,11 @@ pub struct Unsupported(pub UnsupportedEvaluation);
@@ -977,7 +977,7 @@ index 38ace336e..616aeb686 100644
          ReferenceScriptLanguage => "reference script language (requires V3)",
      }
 diff --git a/pallas-validate/src/phase2/mod.rs b/pallas-validate/src/phase2/mod.rs
-index 198f4462e..5c5003b62 100644
+index 198f4462..5c5003b6 100644
 --- a/pallas-validate/src/phase2/mod.rs
 +++ b/pallas-validate/src/phase2/mod.rs
 @@ -88,11 +88,44 @@ pub fn redeemer_arguments(
@@ -1027,7 +1027,7 @@ index 198f4462e..5c5003b62 100644
  /// enforcing declared redeemer budgets. Earlier eras return [`Error::WrongEra`].
  ///
 diff --git a/pallas-validate/src/phase2/native_evaluator.rs b/pallas-validate/src/phase2/native_evaluator.rs
-index d84f5bb49..5f08c1ec4 100644
+index d84f5bb4..5f08c1ec 100644
 --- a/pallas-validate/src/phase2/native_evaluator.rs
 +++ b/pallas-validate/src/phase2/native_evaluator.rs
 @@ -1,12 +1,13 @@
@@ -1217,7 +1217,7 @@ index d84f5bb49..5f08c1ec4 100644
      // Bridge pallas PlutusData -> amaru-uplc PlutusData through CBOR. Both
      // sides implement the same Plutus data encoding; the upstream amaru node
 diff --git a/pallas-validate/src/phase2/to_plutus_data.rs b/pallas-validate/src/phase2/to_plutus_data.rs
-index be4fafed3..9e9fd939b 100644
+index be4fafed..9e9fd939 100644
 --- a/pallas-validate/src/phase2/to_plutus_data.rs
 +++ b/pallas-validate/src/phase2/to_plutus_data.rs
 @@ -114,9 +114,14 @@ impl ToPlutusData for Address {
@@ -1289,7 +1289,7 @@ index be4fafed3..9e9fd939b 100644
                          wrap_with_constr(0, reward_account.to_plutus_data()),
                          *amount,
 diff --git a/pallas-validate/src/utils/dijkstra_context.rs b/pallas-validate/src/utils/dijkstra_context.rs
-index 279d4a9f8..85c565316 100644
+index 279d4a9f..85c56531 100644
 --- a/pallas-validate/src/utils/dijkstra_context.rs
 +++ b/pallas-validate/src/utils/dijkstra_context.rs
 @@ -111,13 +111,16 @@ pub(crate) fn check_translatable(
@@ -1322,7 +1322,7 @@ index 279d4a9f8..85c565316 100644
          .collect::<Result<Vec<_>, _>>()?;
      if *language == Language::PlutusV4 {
 diff --git a/pallas-validate/src/utils/dijkstra_time.rs b/pallas-validate/src/utils/dijkstra_time.rs
-index 0507ea76c..607fcc5e4 100644
+index 0507ea76..79e5d939 100644
 --- a/pallas-validate/src/utils/dijkstra_time.rs
 +++ b/pallas-validate/src/utils/dijkstra_time.rs
 @@ -91,6 +91,7 @@ impl DijkstraTimeContext {
@@ -1333,18 +1333,8 @@ index 0507ea76c..607fcc5e4 100644
          {
              return Err(DijkstraTimeError::PastHorizon { slot, horizon });
          }
-@@ -103,6 +104,9 @@ impl DijkstraTimeContext {
-                 slot,
-                 first_slot: self.eras[0].start_slot,
-             })?;
-+        if pallas_crypto::oracle_plant("slot-off-by-one") {
-+            return era.translate(slot + 1);
-+        }
-         era.translate(slot)
-     }
- 
 diff --git a/pallas-validate/src/utils/validation.rs b/pallas-validate/src/utils/validation.rs
-index 9d4c09951..ca56fa98c 100644
+index 9d4c0995..ca56fa98 100644
 --- a/pallas-validate/src/utils/validation.rs
 +++ b/pallas-validate/src/utils/validation.rs
 @@ -113,16 +113,22 @@ labels! {

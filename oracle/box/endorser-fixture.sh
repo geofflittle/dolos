@@ -6,6 +6,10 @@ set -eu
 OUT=$1
 shift
 HERE=$(cd "$(dirname "$0")" && pwd)
+. "$HERE/lib.sh"
+enter_slice "$0" "$OUT" "$@"
+BUILD_IMAGE=$(build_image dolos-build)
+export BUILD_IMAGE
 WORK=fixture-work/endorser
 DIR=$ROOT/$WORK
 rm -rf "$DIR"

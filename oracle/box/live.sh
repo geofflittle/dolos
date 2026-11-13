@@ -27,7 +27,7 @@ query_node() {
     tip | protocol-parameters | utxo | era-history | slot-number) ;;
     *) echo "LIVE refused node query $query" >&2 ; exit 2 ;;
   esac
-  docker exec "$NODE" cardano-cli latest query "$query" "$@" >"$DIR/$out"
+  sh "$(dirname "$0")/node-cli.sh" latest query "$query" "$@" >"$DIR/$out"
 }
 
 # Writes the slot the node holds at a POSIX second, or past-horizon when it translates none, once per second.

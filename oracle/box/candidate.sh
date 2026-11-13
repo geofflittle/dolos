@@ -1,7 +1,7 @@
 #!/bin/sh
 # Syncs a candidate Dolos from the node beside the serving one, reads both and the node, prints each field the two serve differently, and removes the candidate.
 # Usage: CANDIDATE=<binary path or image reference> COMMIT=sha candidate.sh <dir>
-# Reads ROOT, RUN_LOCK, NODE, NODE_DB, ENDPOINT, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_NEED_G, CANDIDATE_FSYNC, the IO_ limits, SAMPLE_MINUTES and GRPCURL from the environment.
+# Reads ROOT, RUN_LOCK, NODE, NODE_DB, ENDPOINT, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_NEED_G, CANDIDATE_FSYNC, the IO_ limits, SAMPLE_MINUTES and GRPCURL from the environment, and BUILD_IMAGE when CANDIDATE is a binary path.
 set -eu
 DIR=$1
 : "${CANDIDATE:?}" "${COMMIT:?}" "${ROOT:?}" "${NODE:?}" "${ENDPOINT:?}" "${SERVE_CONFIG:?}"
@@ -14,6 +14,7 @@ SAMPLE_MINUTES=${SAMPLE_MINUTES:-5}
 FIXED_SLOTS="205422 368793 783572"
 STORE="$ROOT/candidate/$(date -u +%Y%m%dT%H%M%SZ)"
 . "$HERE/lib.sh"
+enter_slice "$0" "$@"
 take_lock
 
 FSYNC=$(candidate_fsync) || exit 2
@@ -39,7 +40,7 @@ cp "$DIR/config/"* "$STORE/"
 case $CANDIDATE in
   /*)
     cp "$CANDIDATE" "$STORE/dolos-candidate"
-    IMAGE=dolos-build:1
+    IMAGE=${BUILD_IMAGE:?}
     ENTRY="--entrypoint /run-dolos/dolos-candidate"
     ;;
   *)
@@ -70,7 +71,7 @@ candidate_slot() {
 }
 
 node_slot() {
-  docker exec "$NODE" cardano-cli latest query tip | jq -r .slot
+  sh "$HERE/node-cli.sh" latest query tip | jq -r .slot
 }
 
 start=$(date +%s)

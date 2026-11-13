@@ -2,11 +2,13 @@
 # Writes the mutant corpus. Each record writer runs with the mutants of its
 # accepted records, its records must equal its committed corpus, and the
 # mutants of lowest rank per corpus and operator are kept in generation order.
-# Usage: mutants.sh <store dir> <work dir> [seed], then the corpus is
+# Usage: GEN=<pallas conformance-value-oracle/gen dir> mutants.sh <store dir> <work dir> [seed], then the corpus is
 # test_data/ledger-oracle/mut.jsonl.gz and the last line gives its sha256.
 set -eu
 STORE=$1
 WORK=$2
+IMAGE=${IMAGE:-$(sh "${GEN:?}/build-image.sh" conformance-gen-hs)}
+export IMAGE
 SEED=${3:-42}
 PER=100
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -20,7 +22,7 @@ for writer in Extract:ic Supplement:supp Phase1:p1; do
   C=${writer#*:}
   sh "$HERE/build.sh" "$M" "$STORE" "$WORK"
   rm -f "$WORK/out/$C.jsonl" "$WORK/out/$C.jsonl.mutants" "$WORK/out/$C.jsonl.skipped"
-  docker run --rm -v "$WORK":/probe conformance-gen-hs:2 "/probe/bin/$M" --mutants "$SEED" --seed 42 >"$WORK/$C.log" 2>&1
+  docker run --rm -v "$WORK":/probe "$IMAGE" "/probe/bin/$M" --mutants "$SEED" --seed 42 >"$WORK/$C.log" 2>&1
   made=$(sha256sum <"$WORK/out/$C.jsonl" | cut -c1-64)
   committed=$(gzip -dc "$DATA/$C.jsonl.gz" | sha256sum | cut -c1-64)
   if [ "$made" != "$committed" ]; then
