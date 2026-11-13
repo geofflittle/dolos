@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, the overlay build's target dir, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the files a planted tree writes and whether git writes each diff as committed, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, how many switched arms are judged at once, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier and which of its steps it reruns, the value control's verdict, the amaru pin, the amaru leg's verdicts, the build image's name by the harness's image scripts and the image in-image.sh runs.
+# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, the overlay build's target dir, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the files a planted tree writes and whether git writes each diff as committed, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, how many switched arms are judged at once, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier and which of its steps it reruns, the value control's verdict, the amaru pin, the amaru leg's verdicts, the build image's name by the harness's image scripts, the image in-image.sh runs and the endorser block endorser_fixture.py reads from each LeiosDb layout.
 # Usage: lib_test.sh <empty work dir>
 set -eu
 W=$(cd "$1" && pwd)
@@ -1620,6 +1620,40 @@ env A=1
 env B=two words"
 node_docker 1000:1000
 expect node_cli_user "$(node_cli_of | head -1)" "run --cgroup-parent dolos-oracle.slice --rm --network none --volumes-from n --env-file F --user 1000:1000 --entrypoint cardano-cli node:1 latest query tip"
+
+# Writes the captured endorser block into a LeiosDb of a layout, a change and the schemas named, then prints node-eb's exit and either same, when it prints the line write_leiosdb.py says it must, or its refusal.
+node_eb_of() {
+  db=$W/leiosdb/$1.db
+  layout=$2
+  change=$3
+  shift 3
+  mkdir -p "$W/leiosdb"
+  python3 -I "$HERE/leiosdb/write_leiosdb.py" "$db" "$layout" "$change" "$@" >"$db.want"
+  status=0
+  python3 -I "$HERE/endorser_fixture.py" node-eb "$db" 100000 600 \
+    17c497727d273e8dbd0bc188752ef8a7334f5fac6dc077324424a5410cc77fc0 >"$db.got" 2>"$db.err" || status=$?
+  if cmp -s "$db.want" "$db.got"; then echo "exit=$status same"; else echo "exit=$status $(cat "$db.err")"; fi
+}
+
+# Must not fire: the same block read from either partition of the rc-2026w42 layout and of the rc-2026w45 layout.
+expect leiosdb_rows "$(node_eb_of rows rows none rc-2026w42-imm)" "exit=0 same"
+expect leiosdb_rows_volatile "$(node_eb_of rows-vol rows none rc-2026w42-vol)" "exit=0 same"
+expect leiosdb_closure "$(node_eb_of closure closure none rc-2026w45-imm)" "exit=0 same"
+expect leiosdb_closure_volatile "$(node_eb_of closure-vol closure none rc-2026w45-vol)" "exit=0 same"
+# Must fire: a layout neither release writes, both layouts in one file, a transaction not written, a transaction whose bytes changed and a stored body whose bytes changed.
+expect leiosdb_neither "$(node_eb_of neither none none consensus-60f44c41)" \
+  "exit=1 refused: the leios store holds no known layout, it holds ebs(ebSlot, ebHashBytes, txWritten, txBounds, body, txs)"
+expect leiosdb_both "$(node_eb_of both none none rc-2026w42-imm rc-2026w45-imm)" \
+  "exit=1 refused: the leios store holds the layouts rows and closure"
+expect leiosdb_rows_unfilled "$(node_eb_of rows-unfilled rows unfilled rc-2026w42-imm)" "exit=1 refused: offset 3 unfilled"
+expect leiosdb_rows_changed "$(node_eb_of rows-changed rows tx-changed rc-2026w42-imm)" \
+  "exit=1 refused: offset 3 bytes do not hash to the body's entry"
+expect leiosdb_closure_unfilled "$(node_eb_of closure-unfilled closure unfilled rc-2026w45-imm)" "exit=1 refused: offset 3 unfilled"
+expect leiosdb_closure_absent "$(node_eb_of closure-absent closure absent rc-2026w45-imm)" "exit=1 refused: offset 0 unfilled"
+expect leiosdb_closure_changed "$(node_eb_of closure-changed closure tx-changed rc-2026w45-imm)" \
+  "exit=1 refused: offset 3 bytes do not hash to the body's entry"
+expect leiosdb_closure_body_changed "$(node_eb_of closure-body-changed closure body-changed rc-2026w45-imm)" \
+  "exit=1 refused: the body of 17c497727d273e8dbd0bc188752ef8a7334f5fac6dc077324424a5410cc77fc0 does not hash to it"
 
 if [ "$failed" -eq 0 ]; then
   echo "LIB-TEST RESULT PASS"
