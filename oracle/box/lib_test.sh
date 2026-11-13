@@ -1466,6 +1466,10 @@ expect docker_exec "$(docker_of exec n cardano-cli | paste -sd ' ' -)" "exec n c
 expect docker_run "$(docker_of run --rm -i image cmd | paste -sd ' ' -)" "run --cgroup-parent dolos-oracle.slice --rm -i image cmd exit=0"
 expect docker_create "$(docker_of create image | paste -sd ' ' -)" "create --cgroup-parent dolos-oracle.slice image exit=0"
 expect docker_container_run "$(docker_of container run -d image | paste -sd ' ' -)" "container run --cgroup-parent dolos-oracle.slice -d image exit=0"
+# Must place the container of each step a build runs in the slice.
+expect docker_build "$(docker_of build -t name dir | paste -sd ' ' -)" "build --cgroup-parent dolos-oracle.slice -t name dir exit=0"
+expect docker_image_build "$(docker_of image build -t name dir | paste -sd ' ' -)" "image build --cgroup-parent dolos-oracle.slice -t name dir exit=0"
+expect docker_builder_build "$(docker_of builder build -t name dir | paste -sd ' ' -)" "builder build --cgroup-parent dolos-oracle.slice -t name dir exit=0"
 # Must refuse an option before the command, which could name a run it does not see.
 expect docker_option "$(docker_of --host x run image | paste -sd ' ' -)" "REFUSED docker option --host before the command exit=2"
 # Must resolve to itself on the PATH lib.sh exports, so a bare docker in a box script or the harness it starts reaches it.

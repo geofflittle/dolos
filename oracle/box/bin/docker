@@ -1,5 +1,5 @@
 #!/bin/sh
-# Runs ORACLE_DOCKER with the arguments given, placing each container a run or create starts in the slice ORACLE_SLICE.
+# Runs ORACLE_DOCKER with the arguments given, placing each container a run, create or build starts in the slice ORACLE_SLICE.
 set -eu
 : "${ORACLE_DOCKER:?}" "${ORACLE_SLICE:?}"
 if [ "$ORACLE_DOCKER" -ef "$0" ]; then
@@ -7,17 +7,18 @@ if [ "$ORACLE_DOCKER" -ef "$0" ]; then
   exit 2
 fi
 case ${1:-} in
-  run | create)
+  run | create | build)
     command=$1
     shift
     exec "$ORACLE_DOCKER" "$command" --cgroup-parent "$ORACLE_SLICE" "$@"
     ;;
-  container)
-    case ${2:-} in
-      run | create)
+  container | image | builder)
+    case "$1 ${2:-}" in
+      "container run" | "container create" | "image build" | "builder build")
+        group=$1
         command=$2
         shift 2
-        exec "$ORACLE_DOCKER" container "$command" --cgroup-parent "$ORACLE_SLICE" "$@"
+        exec "$ORACLE_DOCKER" "$group" "$command" --cgroup-parent "$ORACLE_SLICE" "$@"
         ;;
     esac
     ;;
