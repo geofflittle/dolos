@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, the overlay build's target dir, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the files a planted tree writes and whether git writes each diff as committed, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, how many switched arms are judged at once, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier and which of its steps it reruns, the value control's verdict, the amaru pin and the amaru leg's verdicts.
+# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, the overlay build's target dir, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the files a planted tree writes and whether git writes each diff as committed, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, how many switched arms are judged at once, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier and which of its steps it reruns, the value control's verdict, the amaru pin, the amaru leg's verdicts, the build image's name from its files and its build when docker has none.
 # Usage: lib_test.sh <empty work dir>
 set -eu
 W=$(cd "$1" && pwd)
@@ -993,7 +993,7 @@ printf '%s\n' 'amaru-d lines=2 sha256=b' 'coin lines=2 sha256=b' 'value-e lines=
 expect value_due_amaru_row "$(due value aaa i1)" passed
 expect amaru_due_amaru_row "$(due amaru 'u r1' i1)" due
 
-# A build root whose branch pins pallas and holds the corpora, and a copy of this box dir whose arms, tests and legs are stubs that count each leg run.
+# A build root whose branch pins pallas and holds the corpora, and a copy of this box dir whose arms, tests, image build and legs are stubs that count each leg run.
 Q=$W/quick
 rm -rf "$Q" "$W/quick-src" "$W/quick-box"
 mkdir -p "$Q/runs" "$W/quick-src/test_data/ledger-oracle"
@@ -1010,6 +1010,7 @@ cp -R "$HERE" "$W/quick-box"
 echo 'echo "ARMS head=PASS control=CLEAN logs=x"' >"$W/quick-box/breaks.sh"
 echo 'exit 0' >"$W/quick-box/lib_test.sh"
 echo 'exit 0' >"$W/quick-box/fields_test.sh"
+echo 'build_image() { :; }' >>"$W/quick-box/lib.sh"
 echo 'value_leg() { echo ran >>"$ROOT/legs"; echo "VALUE value-head=PASS value-control=CLEAN pin=x"; }' >>"$W/quick-box/value.sh"
 printf '%s\n' 'amaru_leg() { echo ran >>"$ROOT/amaru-legs"; echo "AMARU amaru-head=PASS rev=x"; }' \
   'amaru_pin() { cat "$ROOT/amaru-pin"; }' 'pallas_history() { :; }' 'image_id() { echo i1; }' >>"$W/quick-box/amaru.sh"
@@ -1435,6 +1436,54 @@ expect docker_path "$(
   . "$LIB"
   command -v docker
 )" "$HERE/bin/docker"
+
+# A copy at $W/$1 of the box scripts and overlay diffs whose build image dir holds the Dockerfile line $2, with a docker in its bin that logs each call to docker.log and reports an image present when the file present exists.
+image_box() {
+  B=$W/$1
+  rm -rf "$B"
+  mkdir -p "$B/bin" "$B/box/images/dolos-build"
+  cp "$HERE"/*.sh "$B/box/"
+  cp -R "$HERE/overlay" "$B/box/"
+  echo "$2" >"$B/box/images/dolos-build/Dockerfile"
+  printf '%s\n' '#!/bin/sh' "echo \"\$*\" >>'$B/docker.log'" \
+    "if [ \"\$1 \$2\" = 'image inspect' ]; then [ -e '$B/present' ]; fi" >"$B/bin/docker"
+  chmod +x "$B/bin/docker"
+}
+
+# The image in-image.sh of the copy $1 runs a command in.
+run_image() {
+  : >"$1/docker.log"
+  PATH=$1/bin:$PATH ROOT=$W sh "$1/box/in-image.sh" tree true || echo "in-image exit=$?"
+  sed -n 's|.* -w /w/tree \([^ ]*\) true$|\1|p' "$1/docker.log"
+}
+
+# The docker calls of build_image for the build image in the copy $1, the copy's box dir written BOX and the image name $2 written NAME.
+build_calls() {
+  : >"$1/docker.log"
+  (
+    ROOT=$W HERE=$1/box PATH=$1/bin:$PATH
+    . "$1/box/lib.sh"
+    build_image dolos-build >/dev/null 2>&1 || echo "build_image exit=$?"
+  )
+  sed "s|$1/box|BOX|g; s|$2|NAME|g" "$1/docker.log" | paste -sd ';' -
+}
+
+# Must name the image dolos-build tagged with a hash.
+image_box image-a 'FROM a'
+image_a=$(run_image "$W/image-a")
+expect image_name "$(echo "$image_a" | sed 's/:[0-9a-f]\{12\}$/:HASH/')" dolos-build:HASH
+# Must not fire: the same files in another dir name the same image.
+image_box image-a2 'FROM a'
+expect image_same_files "$(run_image "$W/image-a2")" "$image_a"
+# Must fire: a changed Dockerfile names another image, so an image built from the old file is not run.
+image_box image-b 'FROM b'
+image_b=$(run_image "$W/image-b")
+expect image_changed_file "$(if [ "$image_b" != "$image_a" ]; then echo differs; else echo "same $image_b"; fi)" differs
+# Must build the image under its name when docker has none, and must not build when docker has it.
+expect image_built "$(build_calls "$W/image-a" "$image_a")" \
+  "image inspect NAME;build --memory 4g --memory-swap 4g -t NAME BOX/images/dolos-build"
+touch "$W/image-a/present"
+expect image_present "$(build_calls "$W/image-a" "$image_a")" "image inspect NAME"
 
 if [ "$failed" -eq 0 ]; then
   echo "LIB-TEST RESULT PASS"

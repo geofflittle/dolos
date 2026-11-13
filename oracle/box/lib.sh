@@ -12,9 +12,6 @@ REV=${REV:-feat/ledger-oracle}
 MIN_FREE_G=${MIN_FREE_G:-6}
 OUT=${OUT:-"$ROOT/runs/$(date -u +%Y%m%dT%H%M%SZ)"}
 IN_IMAGE=${IN_IMAGE:-$HERE/in-image.sh}
-# The image in-image.sh runs builds and tests in.
-BUILD_IMAGE='dolos-build:1'
-export BUILD_IMAGE
 GRPCURL=${GRPCURL:-grpcurl}
 # The Dolos path of the box scripts, which holds the arms manifest and each arm's plant and records.
 BOX_PATH=oracle/box
@@ -440,6 +437,15 @@ require_free() {
     echo "REFUSED free=${free}G below ${MIN_FREE_G}G at $ROOT"
     exit 2
   fi
+}
+
+# Builds the image of the dir images/$1 under its name when docker has no image of that name, the build held to 4g of memory and swap.
+build_image() {
+  name=$(sh "$HERE/image-name.sh" "$1") || return
+  if docker image inspect "$name" >/dev/null 2>&1; then
+    return 0
+  fi
+  docker build --memory 4g --memory-swap 4g -t "$name" "$HERE/images/$1"
 }
 
 # Prints the full sha of the commit the ref $2 names in $ROOT/dolos.git, or exits 2 with a REFUSED line naming the variable $1 when it names none.

@@ -3,7 +3,7 @@
 
 VALUE_N=${VALUE_N:-100}
 VALUE_SEED=${VALUE_SEED:-1}
-# The generator binaries, each named for the sha256 of the oracle/Main.hs it was built from.
+# The generator binaries, each under the name the harness's generator-name.sh gives the files it was built from.
 VALUE_GEN_DIR=${VALUE_GEN_DIR:-$ROOT/value-gen}
 VALUE_HARNESS_URL=${VALUE_HARNESS_URL:-https://github.com/geofflittle/pallas.git}
 LAST_VALUE=${LAST_VALUE:-$ROOT/runs/last-value}
@@ -70,7 +70,7 @@ value_verdict() {
   arm_verdict "$(value_key "$1")" "$OUT/value/$1.ran" '^DECODE-ORACLE values=[1-9]' "$1" value_caught "$OUT/value/$1" "$(value_class "$1")"
 }
 
-# Puts the harness of value/harness.rev in $ROOT/value/gen and the generator for its oracle/Main.hs in its bin.
+# Puts the harness of value/harness.rev in $ROOT/value/gen and the generator of its oracle sources, ledger commit and image in its bin, building that image when docker has none.
 value_harness() {
   rev=$(cat "$HERE/value/harness.rev")
   repo=$ROOT/value/harness.git
@@ -83,10 +83,14 @@ value_harness() {
   rm -rf "$ROOT/value/gen" "$ROOT/value/conf"
   mkdir -p "$ROOT/value/gen"
   git -C "$repo" archive "$rev" conformance-value-oracle/gen | tar -x -C "$ROOT/value/gen" --strip-components 2 || return
-  main=$(sha256sum "$ROOT/value/gen/oracle/Main.hs" | cut -c1-12)
-  gen=$VALUE_GEN_DIR/conformance-gen-$main
+  if ! image=$(sh "$ROOT/value/gen/build-image.sh" conformance-gen-hs); then
+    echo "VALUE REFUSED generator_image=unbuilt" >&2
+    return 1
+  fi
+  name=$(sh "$ROOT/value/gen/generator-name.sh")
+  gen=$VALUE_GEN_DIR/$name
   if [ ! -x "$gen" ]; then
-    echo "VALUE REFUSED generator=missing main_hs=$main dir=$VALUE_GEN_DIR" >&2
+    echo "VALUE REFUSED generator=missing name=$name image=$image build=\"sh $ROOT/value/gen/build-generator.sh WORK $VALUE_GEN_DIR\"" >&2
     return 1
   fi
   mkdir -p "$ROOT/value/gen/bin"

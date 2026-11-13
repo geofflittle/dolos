@@ -67,6 +67,14 @@ require_lib_test() {
   fi
 }
 
+# Exits when the build image cannot be built from the files of images/dolos-build.
+require_build_image() {
+  if ! build_image dolos-build >"$OUT/build-image.log" 2>&1; then
+    echo "REFUSED build image=$(sh "$HERE/image-name.sh" dolos-build) log=$OUT/build-image.log"
+    exit 2
+  fi
+}
+
 # Builds Dolos from the scratch tree into $OUT/bin/dolos.
 build_candidate() {
   mkdir -p "$OUT/bin"
@@ -154,6 +162,7 @@ live_run() {
   mkdir -p "$OUT"
   require_free
   require_lib_test
+  require_build_image
   candidate_fsync >/dev/null || exit 2
   reset_scratch
   commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
@@ -172,6 +181,7 @@ quick_run() {
   mkdir -p "$OUT"
   require_free
   require_lib_test
+  require_build_image
   reset_scratch
   commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
   if [ -z "$BASE" ] && [ -f "$LAST_DONE" ]; then
@@ -216,7 +226,7 @@ value_verdicts() {
     legs=value=passed-on-these-inputs
   fi
   pallas_history "$pin" >&2 || true
-  inputs=$(amaru_inputs "$(amaru_pin "$pin")" "$(image_id "$BUILD_IMAGE")")
+  inputs=$(amaru_inputs "$(amaru_pin "$pin")" "$(image_id "$(sh "$HERE/image-name.sh" dolos-build)")")
   if [ "$1" = all ] || leg_due "$LAST_AMARU" "$inputs"; then
     amaru_leg "$pin" >"$OUT/amaru.out" 2>&1 || true
     leg_verdicts amaru 's/^AMARU \(amaru-head=[A-Z]*\( amaru-[a-z0-9-]*=[A-Z]*\)*\).*/\1/p' "$LAST_AMARU" "$inputs" >&2
@@ -234,6 +244,7 @@ value_run() {
   mkdir -p "$OUT"
   require_free
   require_lib_test
+  require_build_image
   reset_scratch
   commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
   verdicts=$(value_verdicts all)
@@ -250,6 +261,7 @@ done_run() {
   mkdir -p "$OUT"
   require_free
   require_lib_test
+  require_build_image
   reset_scratch
   commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
   fix_arms=fix-arms=PASS
@@ -267,6 +279,7 @@ ship_run() {
   mkdir -p "$OUT"
   require_free
   require_lib_test
+  require_build_image
   candidate_fsync >/dev/null || exit 2
   reset_scratch
   commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
@@ -298,6 +311,7 @@ regen_run() {
   mkdir -p "$OUT"
   require_free
   require_lib_test
+  require_build_image
   candidate_fsync >/dev/null || exit 2
   reset_scratch
   commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)

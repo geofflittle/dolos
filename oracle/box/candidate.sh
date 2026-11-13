@@ -40,7 +40,7 @@ cp "$DIR/config/"* "$STORE/"
 case $CANDIDATE in
   /*)
     cp "$CANDIDATE" "$STORE/dolos-candidate"
-    IMAGE=$BUILD_IMAGE
+    IMAGE=$(sh "$HERE/image-name.sh" dolos-build)
     ENTRY="--entrypoint /run-dolos/dolos-candidate"
     ;;
   *)
