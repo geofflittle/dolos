@@ -69,32 +69,25 @@ pub fn validate_tx<D: Domain>(
                 .to_pallas_time_context(env.block_slot, crate::utils::stability_window(genesis))?;
             let stored = ledger::StoredLedger::<D>::new(utxos.state())?;
             let unconfirmed = unconfirmed_txs(utxos);
-            let cursor = utxos.state().read_cursor()?;
-            let kept = held.lock().unwrap().take();
-            let effects = UnconfirmedEffects::fold(
-                kept,
-                cursor.clone(),
+            let validated = validate_over_unconfirmed(
+                held,
+                || Ok(utxos.state().read_cursor()?),
                 env.network_id,
                 &stored,
                 &unconfirmed,
                 |tx, state| dijkstra_ledger_effects(tx, pp, env.network_id, state),
+                |state| {
+                    validate_dijkstra_tx_with_time(
+                        native,
+                        &pallas_utxos,
+                        pp,
+                        &env.block_slot,
+                        &env.network_id,
+                        state,
+                        &time,
+                    )
+                },
             )?;
-            let (effects, validated) = effects.over(&stored, |state| {
-                validate_dijkstra_tx_with_time(
-                    native,
-                    &pallas_utxos,
-                    pp,
-                    &env.block_slot,
-                    &env.network_id,
-                    state,
-                    &time,
-                )
-            });
-            // A rollback commits without the chain lock, so effects folded
-            // across one are not kept.
-            if utxos.state().read_cursor()? == cursor {
-                *held.lock().unwrap() = Some(effects);
-            }
             validated?;
             Some(time)
         }
@@ -552,6 +545,44 @@ pub fn validation_parameters(
     }))
 }
 
+/// Runs `validate` over the effects of `unconfirmed` folded from those `held`,
+/// and keeps the effects in `held` when `read_cursor` reads the same cursor
+/// after the fold as before it.
+fn validate_over_unconfirmed<S, F, R>(
+    held: &Mutex<Option<UnconfirmedEffects>>,
+    mut read_cursor: impl FnMut() -> Result<Option<ChainPoint>, ChainError>,
+    network_id: u8,
+    stored: &S,
+    unconfirmed: &[MempoolTx],
+    effects: F,
+    validate: impl FnOnce(&DijkstraLedgerOverlay<'_, S>) -> R,
+) -> Result<R, ChainError>
+where
+    S: DijkstraLedgerState + ?Sized,
+    F: FnMut(
+        &BlockTransaction<'_>,
+        &DijkstraLedgerOverlay<'_, S>,
+    ) -> Result<DijkstraLedgerDelta, ValidationError>,
+{
+    let cursor = read_cursor()?;
+    let kept = held.lock().unwrap().take();
+    let folded = UnconfirmedEffects::fold(
+        kept,
+        cursor.clone(),
+        network_id,
+        stored,
+        unconfirmed,
+        effects,
+    )?;
+    let (folded, validated) = folded.over(stored, validate);
+    // A rollback commits without the chain lock, so effects folded across one
+    // are not kept.
+    if read_cursor()? == cursor {
+        *held.lock().unwrap() = Some(folded);
+    }
+    Ok(validated)
+}
+
 /// The combined effects of a sequence of unconfirmed transactions over the
 /// stored state at one cursor.
 pub struct UnconfirmedEffects {
@@ -882,6 +913,41 @@ mod pending_tests {
         let (held, _) = fold_counting(None, 1, 0, &stored(), &txs[..1]);
         let (_, count) = fold_counting(Some(held), 1, 1, &stored(), &txs);
         assert_eq!(count, 2);
+    }
+
+    /// The transactions whose effects a validation keeps when the cursor reads
+    /// `before` ahead of the fold and `after` once it ends.
+    fn kept_across(before: u64, after: u64) -> Option<Vec<TxHash>> {
+        let txs = mempool_txs(&[withdrawing(2)]);
+        let pp = params();
+        let held = Mutex::new(None);
+        let mut reads = [before, after].into_iter();
+        let validated = validate_over_unconfirmed(
+            &held,
+            || Ok(reads.next().map(ChainPoint::Slot)),
+            0,
+            &stored(),
+            &txs,
+            |tx, state| dijkstra_ledger_effects(tx, &pp, 0, state),
+            |state| state.account(&credential(1)),
+        )
+        .unwrap();
+        assert_eq!(validated.unwrap(), holding(3));
+        assert_eq!(reads.next(), None);
+        held.into_inner()
+            .unwrap()
+            .map(|effects| effects.txs().to_vec())
+    }
+
+    #[test]
+    fn effects_folded_while_the_cursor_holds_are_kept() {
+        let txs = mempool_txs(&[withdrawing(2)]);
+        assert_eq!(kept_across(1, 1), Some(vec![txs[0].hash()]));
+    }
+
+    #[test]
+    fn effects_folded_across_a_cursor_move_are_not_kept() {
+        assert_eq!(kept_across(1, 2), None);
     }
 
     #[test]
