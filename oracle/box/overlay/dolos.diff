@@ -286,23 +286,22 @@ index f501516c..aaa23f63 100644
          warn!(?e, "mempool revalidation failed");
      }
 diff --git a/src/adapters/mod.rs b/src/adapters/mod.rs
-index f6b55de5..697911b1 100644
+index 541f6ba4..700721ee 100644
 --- a/src/adapters/mod.rs
 +++ b/src/adapters/mod.rs
-@@ -227,7 +227,12 @@ fn resolve_archive_inputs<A: dolos_core::ArchiveStore>(
-             let Some(refs) = wanted.remove(&tx.hash()) else {
-                 continue;
-             };
--            let outputs: HashMap<usize, _> = tx.produces().into_iter().collect();
-+            let outputs: HashMap<usize, _> =
-+                if pallas::crypto::oracle_plant("archive-outputs-only") {
-+                    tx.outputs().into_iter().enumerate().collect()
-+                } else {
-+                    tx.produces().into_iter().collect()
-+                };
-             for r in refs {
-                 if let Some(output) = outputs.get(&(r.1 as usize)) {
-                     result.insert(r, (block.era(), output.encode()));
+@@ -240,7 +240,11 @@ fn insert_named_outputs(
+     tx: &pallas::ledger::traverse::MultiEraTx,
+     refs: Vec<pallas::interop::utxorpc::TxoRef>,
+ ) {
+-    let outputs: HashMap<usize, _> = tx.produces().into_iter().collect();
++    let outputs: HashMap<usize, _> = if pallas::crypto::oracle_plant("archive-outputs-only") {
++        tx.outputs().into_iter().enumerate().collect()
++    } else {
++        tx.produces().into_iter().collect()
++    };
+     for r in refs {
+         if let Some(output) = outputs.get(&(r.1 as usize)) {
+             result.insert(r, (era, output.encode()));
 diff --git a/src/serve/grpc/block_context.rs b/src/serve/grpc/block_context.rs
 index 6a010719..b24b47e5 100644
 --- a/src/serve/grpc/block_context.rs
