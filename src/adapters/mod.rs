@@ -210,12 +210,7 @@ fn resolve_archive_inputs<A: dolos_core::ArchiveStore>(
                 wanted.insert(hash, refs);
                 continue;
             };
-            let outputs: HashMap<usize, _> = tx.produces().into_iter().collect();
-            for r in refs {
-                if let Some(output) = outputs.get(&(r.1 as usize)) {
-                    result.insert(r, (tx.era(), output.encode()));
-                }
-            }
+            insert_named_outputs(&mut result, tx.era(), &tx, refs);
         }
         if wanted.is_empty() {
             continue;
@@ -227,12 +222,7 @@ fn resolve_archive_inputs<A: dolos_core::ArchiveStore>(
             let Some(refs) = wanted.remove(&tx.hash()) else {
                 continue;
             };
-            let outputs: HashMap<usize, _> = tx.produces().into_iter().collect();
-            for r in refs {
-                if let Some(output) = outputs.get(&(r.1 as usize)) {
-                    result.insert(r, (block.era(), output.encode()));
-                }
-            }
+            insert_named_outputs(&mut result, block.era(), &tx, refs);
             if wanted.is_empty() {
                 break;
             }
@@ -241,6 +231,21 @@ fn resolve_archive_inputs<A: dolos_core::ArchiveStore>(
     tracing::trace!(requested = refs.len(), resolved = result.len(), source_blocks,
         elapsed = ?start.elapsed(), "Resolved archived inputs");
     result
+}
+
+/// Inserts into `result` each output `tx` produces that one of `refs` names.
+fn insert_named_outputs(
+    result: &mut pallas::interop::utxorpc::UtxoMap,
+    era: pallas::ledger::traverse::Era,
+    tx: &pallas::ledger::traverse::MultiEraTx,
+    refs: Vec<pallas::interop::utxorpc::TxoRef>,
+) {
+    let outputs: HashMap<usize, _> = tx.produces().into_iter().collect();
+    for r in refs {
+        if let Some(output) = outputs.get(&(r.1 as usize)) {
+            result.insert(r, (era, output.encode()));
+        }
+    }
 }
 
 #[cfg(test)]
