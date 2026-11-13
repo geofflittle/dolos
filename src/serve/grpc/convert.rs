@@ -16,7 +16,17 @@ pub fn bytes_to_hash32(data: &Bytes) -> Result<Hash<32>, Status> {
 pub fn submit_error_status(error: DomainError) -> Status {
     let message = format!("could not process tx: {error}");
     match error {
-        DomainError::MempoolError(MempoolError::Full(_)) => Status::resource_exhausted(message),
+        DomainError::MempoolError(error) => match error {
+            MempoolError::Full(_) => Status::resource_exhausted(message),
+            MempoolError::Internal(_)
+            | MempoolError::TraverseError(_)
+            | MempoolError::DecodeError(_)
+            | MempoolError::StateError(_)
+            | MempoolError::PlutusNotSupported
+            | MempoolError::InvalidTx(_)
+            | MempoolError::PParamsNotAvailable
+            | MempoolError::DuplicateTx => Status::invalid_argument(message),
+        },
         _ => Status::invalid_argument(message),
     }
 }
