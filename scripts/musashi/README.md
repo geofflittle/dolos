@@ -1,12 +1,6 @@
-# Musashi Leios devnet sync operations
+# Musashi Leios devnet comparisons
 
-These run on the box that syncs Dolos from origin against the Musashi Leios devnet, from `/opt/build/run`, where they must stay byte identical to these copies.
-
-`checkpoint.sh` stops the `dolos-sync` container, copies its data directory to `checkpoints/<store tip slot>`, starts it again and logs the tip, the size and how long the sync was down, and `dolos-checkpoint.timer` runs it with `--if-crossed` every five minutes so it acts only once the applied tip has crossed another ten percent of the chain, keeping the newest four and skipping when under 15 GB would remain free.
-
-`rewind.sh <tip-slot>` puts one of those checkpoints back, keeping the store it replaced as `data.broken.<timestamp>`, and it copies rather than moves so the same checkpoint can be used twice.
-
-`status.py` reports progress as three separately labelled slots, because the pull stage's slot, the apply stage's lower bound and the store's own tip are different numbers and reading one as another has misled a diagnosis.
+These compare a Dolos that follows the Musashi Leios devnet with the node it follows, and check the log of a workspace test run.
 
 `compare-utxo-set.py` takes no arguments, reads the node's whole utxo set through `guarded-utxo.sh`, which kills a dump that would press the box, and asks the follower for every one of those keys over UtxoRPC in batches, and prints one `UTXO` count line, a line per missing or differing key, and exits non-zero if anything differs or if the follower never came level. Set `EXTRA_KEYS` to a file of `txid#index` lines to also check the other direction, which no enumeration of the follower can reach.
 
