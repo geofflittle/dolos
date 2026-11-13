@@ -28,7 +28,11 @@ fn domain_with_block() -> (ToyDomain, TxHash) {
             slot: block.slot(),
             block_hash: block.hash().to_vec(),
             block_number: Some(block.number()),
-            tx_hashes: block.txs().iter().map(|tx| tx.hash().to_vec()).collect(),
+            txs: block
+                .txs()
+                .iter()
+                .map(|tx| dolos_core::IndexedTx::unplaced(tx.hash().to_vec()))
+                .collect(),
             tags: Vec::new(),
         }])
         .unwrap();
@@ -59,7 +63,10 @@ fn domain_with_shared_blocks(
             slot: block.slot(),
             block_hash: block.hash().to_vec(),
             block_number: Some(block.number()),
-            tx_hashes: tx_hashes.iter().map(|hash| hash.to_vec()).collect(),
+            txs: tx_hashes
+                .iter()
+                .map(|hash| dolos_core::IndexedTx::unplaced(hash.to_vec()))
+                .collect(),
             tags: Vec::new(),
         });
         hashes.push(tx_hashes);
@@ -161,7 +168,11 @@ async fn hashes_indexed_to_one_slot_search_each_candidate_body_once() {
                     slot: shared_slot,
                     block_hash: block.hash().to_vec(),
                     block_number: Some(block.number()),
-                    tx_hashes: block.txs().iter().map(|tx| tx.hash().to_vec()).collect(),
+                    txs: block
+                        .txs()
+                        .iter()
+                        .map(|tx| dolos_core::IndexedTx::unplaced(tx.hash().to_vec()))
+                        .collect(),
                     tags: Vec::new(),
                 })
                 .collect::<Vec<_>>(),
@@ -201,7 +212,7 @@ async fn undecodable_sibling_does_not_hide_requested_transaction() {
             slot: block.slot(),
             block_hash: block.hash().to_vec(),
             block_number: Some(block.number()),
-            tx_hashes: vec![known.to_vec()],
+            txs: vec![dolos_core::IndexedTx::unplaced(known.to_vec())],
             tags: Vec::new(),
         }])
         .unwrap();
@@ -228,7 +239,7 @@ async fn undecodable_requested_body_remains_an_error() {
             slot,
             block_hash: vec![0xff; 32],
             block_number: Some(1),
-            tx_hashes: vec![hash.to_vec()],
+            txs: vec![dolos_core::IndexedTx::unplaced(hash.to_vec())],
             tags: Vec::new(),
         }])
         .unwrap();
@@ -274,7 +285,7 @@ async fn the_body_lookup_returns_the_indexed_body_undecoded() {
             slot: 1,
             block_hash: vec![0xff; 32],
             block_number: Some(1),
-            tx_hashes: vec![hash.to_vec()],
+            txs: vec![dolos_core::IndexedTx::unplaced(hash.to_vec())],
             tags: Vec::new(),
         }])
         .unwrap();

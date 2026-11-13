@@ -805,9 +805,10 @@ mod tests {
     }
 
     /// The keys the archive index tags the block with in one dimension.
-    fn tagged(block: &MultiEraBlock, dimension: TagDimension) -> Vec<Vec<u8>> {
+    fn tagged(cbor: &[u8], dimension: TagDimension) -> Vec<Vec<u8>> {
+        let block = crate::OwnedMultiEraBlock::decode(std::sync::Arc::new(cbor.to_vec())).unwrap();
         let mut builder = CardanoIndexDeltaBuilder::new();
-        builder.index_block(block, &HashMap::new());
+        builder.index_block(&block, &HashMap::new());
         builder
             .build()
             .into_iter()
@@ -824,7 +825,7 @@ mod tests {
         let absent = Hash::new([7; 32]);
 
         assert_eq!(datum_in_block(&block, absent), None);
-        assert!(!tagged(&block, archive::DATUM).contains(&absent.to_vec()));
+        assert!(!tagged(&cbor, archive::DATUM).contains(&absent.to_vec()));
     }
 
     #[test]
@@ -832,7 +833,7 @@ mod tests {
         let (cbor, datum_hash, datum) = block_with_sub_datum();
         let block = MultiEraBlock::decode(&cbor).unwrap();
         let found = datum_in_block(&block, datum_hash);
-        let tagged = tagged(&block, archive::DATUM).contains(&datum_hash.to_vec());
+        let tagged = tagged(&cbor, archive::DATUM).contains(&datum_hash.to_vec());
 
         assert_eq!((found, tagged), (Some(datum), true));
     }
@@ -844,7 +845,7 @@ mod tests {
         let absent = Hash::new([7; 28]);
 
         assert_eq!(script_in_block(&block, absent), None);
-        assert!(!tagged(&block, archive::SCRIPT).contains(&absent.to_vec()));
+        assert!(!tagged(&cbor, archive::SCRIPT).contains(&absent.to_vec()));
     }
 
     #[test]
@@ -852,7 +853,7 @@ mod tests {
         let (cbor, native, _) = block_with_scripts();
         let block = MultiEraBlock::decode(&cbor).unwrap();
         let found = script_in_block(&block, native).map(|s| s.language);
-        let tagged = tagged(&block, archive::SCRIPT).contains(&native.to_vec());
+        let tagged = tagged(&cbor, archive::SCRIPT).contains(&native.to_vec());
 
         assert_eq!((found, tagged), (Some(ScriptLanguage::Native), true));
     }
@@ -862,7 +863,7 @@ mod tests {
         let (cbor, _, v4) = block_with_scripts();
         let block = MultiEraBlock::decode(&cbor).unwrap();
         let found = script_in_block(&block, v4);
-        let tagged = tagged(&block, archive::SCRIPT).contains(&v4.to_vec());
+        let tagged = tagged(&cbor, archive::SCRIPT).contains(&v4.to_vec());
         let expected = ScriptData {
             language: ScriptLanguage::PlutusV4,
             script: vec![1, 2, 3],

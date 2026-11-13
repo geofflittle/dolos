@@ -13,7 +13,7 @@
 //! | Type | Key Format | Value |
 //! |------|------------|-------|
 //! | Block Hash | `[dim_hash:8][hash:32]` | `[slot:8]` |
-//! | Tx Hash | `[dim_hash:8][hash:32]` | `[slot:8]` |
+//! | Tx Hash | `[dim_hash:8][hash:32]` | `[slot:8]` or `[slot:8][start:4][end:4]` |
 //! | Block Number | `[dim_hash:8][num:8]` | `[slot:8]` |
 //!
 //! The `dim_hash` is computed as `xxh3("exact:" + dimension)`.
@@ -21,7 +21,8 @@
 use std::ops::Range;
 
 use dolos_core::{
-    ArchiveError, ArchiveIndexDelta, BlockSlot, ExactKind, ExactRecord, MAX_EXACT_KEY_LEN,
+    ArchiveError, ArchiveIndexDelta, BlockSlot, ExactKind, ExactRecord, TxLocation, TxRange,
+    MAX_EXACT_KEY_LEN,
 };
 use fjall::{Keyspace, OwnedWriteBatch, Readable, Snapshot};
 
@@ -122,6 +123,25 @@ fn decode_slot_value(value: &[u8]) -> u64 {
     decode_slot(value)
 }
 
+/// The value of a transaction hash entry: `[slot:8]`, or
+/// `[slot:8][start:4][end:4]` when the range of its transaction is known.
+fn encode_tx_value(slot: u64, range: Option<&TxRange>) -> Vec<u8> {
+    let mut value = encode_slot(slot).to_vec();
+    if let Some(range) = range {
+        value.extend(range.start.to_be_bytes());
+        value.extend(range.end.to_be_bytes());
+    }
+    value
+}
+
+/// The transaction range a transaction hash entry's value holds.
+fn decode_tx_range(value: &[u8]) -> Option<TxRange> {
+    let range: &[u8; 8] = value.get(SLOT_SIZE..)?.try_into().ok()?;
+    let start = u32::from_be_bytes(range[..4].try_into().ok()?);
+    let end = u32::from_be_bytes(range[4..].try_into().ok()?);
+    Some(start..end)
+}
+
 /// The slot a stored exact entry resolves to, read from its value.
 ///
 /// The prune sweep's view of an entry: the slot is the value, so the key is
@@ -163,10 +183,14 @@ fn apply_block(
         batch.insert(exact_keyspace, key, encode_slot_value(slot));
     }
 
-    // Exact lookup: tx hashes -> slot
-    for tx_hash in &block.tx_hashes {
-        let key = exact_key_or_codec_error(ExactKind::TxHash, tx_hash.as_slice())?;
-        batch.insert(exact_keyspace, key.as_slice(), encode_slot_value(slot));
+    // Exact lookup: each tx hash to its slot and transaction range
+    for tx in &block.txs {
+        let key = exact_key_or_codec_error(ExactKind::TxHash, tx.hash.as_slice())?;
+        batch.insert(
+            exact_keyspace,
+            key.as_slice(),
+            encode_tx_value(slot, tx.range.as_ref()),
+        );
     }
 
     Ok(())
@@ -188,8 +212,8 @@ fn undo_block(
         batch.remove(exact_keyspace, key);
     }
 
-    for tx_hash in &block.tx_hashes {
-        let key = exact_key_or_codec_error(ExactKind::TxHash, tx_hash.as_slice())?;
+    for tx in &block.txs {
+        let key = exact_key_or_codec_error(ExactKind::TxHash, tx.hash.as_slice())?;
         batch.remove(exact_keyspace, key.as_slice());
     }
 
@@ -298,7 +322,7 @@ pub fn get_by_tx_hash<R: Readable>(
     readable: &R,
     exact_keyspace: &Keyspace,
     tx_hash: &[u8],
-) -> Result<Option<BlockSlot>, Error> {
+) -> Result<Option<TxLocation>, Error> {
     let Some(key) = build_exact_key(ExactKind::TxHash, tx_hash) else {
         return Ok(None);
     };
@@ -306,10 +330,10 @@ pub fn get_by_tx_hash<R: Readable>(
         .get(exact_keyspace, key.as_slice())
         .map_err(Error::Fjall)?
     {
-        Some(value) => {
-            let slot = decode_slot_value(value.as_ref());
-            Ok(Some(slot))
-        }
+        Some(value) => Ok(Some(TxLocation {
+            slot: decode_slot_value(value.as_ref()),
+            range: decode_tx_range(value.as_ref()),
+        })),
         None => Ok(None),
     }
 }
@@ -478,6 +502,24 @@ mod tests {
         let encoded = encode_slot_value(slot);
         let decoded = decode_slot_value(&encoded);
         assert_eq!(slot, decoded);
+    }
+
+    #[test]
+    fn test_tx_value_without_a_range_reads_as_a_slot_alone() {
+        let value = encode_tx_value(141868807, None);
+
+        assert_eq!(value, encode_slot_value(141868807).to_vec());
+        assert_eq!((decode_slot_value(&value), decode_tx_range(&value)), (141868807, None));
+    }
+
+    #[test]
+    fn test_tx_value_roundtrips_its_range() {
+        let value = encode_tx_value(141868807, Some(&(1234..56789)));
+
+        assert_eq!(
+            (decode_slot_value(&value), decode_tx_range(&value)),
+            (141868807, Some(1234..56789))
+        );
     }
 
     #[test]

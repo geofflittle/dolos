@@ -73,8 +73,33 @@ pub struct ArchiveIndexDelta {
     pub slot: BlockSlot,
     pub block_hash: Vec<u8>,
     pub block_number: Option<u64>,
-    pub tx_hashes: Vec<Vec<u8>>,
+    pub txs: Vec<IndexedTx>,
     pub tags: Vec<Tag>,
+}
+
+/// A transaction of a block as the hash index records it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexedTx {
+    pub hash: Vec<u8>,
+    pub range: Option<TxRange>,
+}
+
+impl IndexedTx {
+    /// A transaction whose bytes the index does not locate in its block.
+    pub fn unplaced(hash: Vec<u8>) -> Self {
+        Self { hash, range: None }
+    }
+}
+
+/// The bytes of a block that one top level transaction spans.
+pub type TxRange = std::ops::Range<u32>;
+
+/// The block the hash index records for a transaction, and the bytes of that
+/// block its top level transaction spans when the index holds them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TxLocation {
+    pub slot: BlockSlot,
+    pub range: Option<TxRange>,
 }
 
 /// What can go wrong building an index record.

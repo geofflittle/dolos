@@ -742,7 +742,7 @@ mod tests {
                 slot: 1,
                 block_hash: vec![0xff; 32],
                 block_number: Some(1),
-                tx_hashes: vec![hash.to_vec()],
+                txs: vec![dolos_core::IndexedTx::unplaced(hash.to_vec())],
                 tags: Vec::new(),
             }])
             .unwrap();

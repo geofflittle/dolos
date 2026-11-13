@@ -453,7 +453,7 @@ impl WorkBatch {
             }
 
             // Archive indexes (shared logic)
-            builder.index_block(work_block.block.view(), &self.utxos_decoded);
+            builder.index_block(&work_block.block, &self.utxos_decoded);
         }
 
         let (utxo, archive) = builder.into_parts();

@@ -334,11 +334,14 @@ impl ArchiveStore for FaultyArchiveStore {
         self.inner.slot_by_block_number(number)
     }
 
-    fn slot_by_tx_hash(&self, hash: &[u8]) -> Result<Option<BlockSlot>, ArchiveError> {
+    fn tx_location_by_hash(
+        &self,
+        hash: &[u8],
+    ) -> Result<Option<dolos_core::TxLocation>, ArchiveError> {
         if self.should_fault() {
             return Err(self.fault_err());
         }
-        self.inner.slot_by_tx_hash(hash)
+        self.inner.tx_location_by_hash(hash)
     }
 
     fn slots_by_tag(

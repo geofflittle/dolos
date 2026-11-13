@@ -519,7 +519,7 @@ impl dolos_core::ChainLogic for CardanoLogic {
 
         // The archive entries the block wrote, rebuilt the way the apply path
         // built them, so `undo_index` removes exactly what `apply_index` added.
-        builder.index_block(blockv, &decoded_inputs);
+        builder.index_block(&blockd, &decoded_inputs);
 
         let (utxo_index_delta, archive_index_deltas) = builder.into_parts();
 
@@ -559,7 +559,7 @@ impl dolos_core::ChainLogic for CardanoLogic {
         builder.add_utxo_tags_from_delta(&utxo_delta);
 
         // Archive indexes (shared logic)
-        builder.index_block(blockv, &decoded_inputs);
+        builder.index_block(&blockd, &decoded_inputs);
 
         let (utxo_index_delta, archive_index_deltas) = builder.into_parts();
 

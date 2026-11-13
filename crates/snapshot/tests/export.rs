@@ -1569,8 +1569,11 @@ impl<S: ArchiveStore> ArchiveStore for Counted<S> {
         self.inner.slot_by_block_number(number)
     }
 
-    fn slot_by_tx_hash(&self, hash: &[u8]) -> Result<Option<BlockSlot>, ArchiveError> {
-        self.inner.slot_by_tx_hash(hash)
+    fn tx_location_by_hash(
+        &self,
+        hash: &[u8],
+    ) -> Result<Option<dolos_core::TxLocation>, ArchiveError> {
+        self.inner.tx_location_by_hash(hash)
     }
 
     fn slots_by_tag(
@@ -1623,7 +1626,7 @@ fn index_across_the_skeleton() -> MemoryArchiveStore {
                 slot,
                 block_hash: vec![slot as u8; 32],
                 block_number: Some(slot),
-                tx_hashes: vec![vec![0x80 | slot as u8; 32]],
+                txs: vec![dolos_core::IndexedTx::unplaced(vec![0x80 | slot as u8; 32])],
                 tags: archive_dimensions::ALL
                     .into_iter()
                     .map(|dimension| dolos_core::Tag::new(dimension, vec![slot as u8; 28]))

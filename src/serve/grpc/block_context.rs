@@ -163,16 +163,22 @@ fn named_inputs(tx: &MultiEraTx<'_>) -> Vec<TxoRef> {
 impl<C: ChainReads> BlockContext<C> {
     pub(super) fn new(inner: C, block: &MultiEraBlock<'_>) -> Self {
         let block = BlockTxs::of(block);
-        Self::resolving(inner, &block, &block.txs)
+        Self::resolving(inner, Some(&block), &block.txs)
     }
 
     /// A context for mapping one transaction of a block, resolving only the inputs that transaction names.
     pub(super) fn for_tx(inner: C, tx: &TxOfBlock<'_, '_>) -> Self {
-        Self::resolving(inner, tx.block, std::slice::from_ref(tx.tx()))
+        Self::resolving(inner, Some(tx.block), std::slice::from_ref(tx.tx()))
     }
 
-    /// A context for mapping `mapped`, transactions of `block`.
-    fn resolving(inner: C, block: &BlockTxs<'_>, mapped: &[MultiEraTx<'_>]) -> Self {
+    /// A context for mapping one transaction decoded without its block,
+    /// resolving every input it names through `inner`.
+    pub(super) fn for_lone_tx(inner: C, tx: &MultiEraTx<'_>) -> Self {
+        Self::resolving(inner, None, std::slice::from_ref(tx))
+    }
+
+    /// A context for mapping `mapped`, transactions of `block` when it is given.
+    fn resolving(inner: C, block: Option<&BlockTxs<'_>>, mapped: &[MultiEraTx<'_>]) -> Self {
         let start = std::time::Instant::now();
         let named: HashSet<TxoRef> = mapped
             .iter()
@@ -186,7 +192,9 @@ impl<C: ChainReads> BlockContext<C> {
                 refs
             })
             .collect();
-        let made = made_among(block, &named);
+        let made = block
+            .map(|block| made_among(block, &named))
+            .unwrap_or_default();
         let refs: Vec<_> = named
             .into_iter()
             .filter(|r| !made.contains_key(r))
@@ -196,7 +204,7 @@ impl<C: ChainReads> BlockContext<C> {
         } else {
             inner.utxos(&refs)
         };
-        tracing::trace!(slot = block.slot, input_count = refs.len(),
+        tracing::trace!(slot = block.map(|x| x.slot), input_count = refs.len(),
             resolved_count = resolved.as_ref().map(|x| x.len()),
             elapsed = ?start.elapsed(), "Prepared block input context");
         Self {

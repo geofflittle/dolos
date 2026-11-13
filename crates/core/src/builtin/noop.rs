@@ -210,7 +210,10 @@ impl ArchiveStore for NoOpArchiveStore {
         Ok(None)
     }
 
-    fn slot_by_tx_hash(&self, _hash: &[u8]) -> Result<Option<BlockSlot>, ArchiveError> {
+    fn tx_location_by_hash(
+        &self,
+        _hash: &[u8],
+    ) -> Result<Option<crate::TxLocation>, ArchiveError> {
         Ok(None)
     }
 

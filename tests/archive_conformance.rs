@@ -22,7 +22,7 @@ use dolos_cardano::indexes::archive_dimensions;
 use dolos_core::{
     builtin::MemoryArchiveStore, ArchiveIndexDelta, ArchiveStore as CoreArchiveStore,
     ArchiveWriter as _, BlockSlot, ChainPoint, EntityKey, LogKey, NamespaceType, RawBlock,
-    StateSchema, Tag, TemporalKey,
+    IndexedTx, StateSchema, Tag, TemporalKey,
 };
 
 use dolos_testing::blocks::{byron_ebb_slot, make_byron_ebb, make_conway_block_with_prev};
@@ -1046,7 +1046,7 @@ fn index_delta(slot: u64, seed: u8) -> ArchiveIndexDelta {
         slot,
         block_hash: vec![seed; 32],
         block_number: Some(slot),
-        tx_hashes: vec![vec![0x80 | seed; 32]],
+        txs: vec![IndexedTx::unplaced(vec![0x80 | seed; 32])],
         tags: vec![Tag::new(archive_dimensions::ADDRESS, vec![seed; 28])],
     }
 }
@@ -1074,12 +1074,12 @@ fn apply_index_then_slot_by_tx_hash_resolves<B: Backend>() {
 
     // Nothing is visible before the commit: the entries ride the block's
     // batch rather than landing ahead of it.
-    assert_eq!(store.slot_by_tx_hash(&delta.tx_hashes[0]).unwrap(), None);
+    assert_eq!(store.slot_by_tx_hash(&delta.txs[0].hash).unwrap(), None);
 
     writer.commit().unwrap();
 
     assert_eq!(
-        store.slot_by_tx_hash(&delta.tx_hashes[0]).unwrap(),
+        store.slot_by_tx_hash(&delta.txs[0].hash).unwrap(),
         Some(100)
     );
     assert_eq!(
@@ -1094,6 +1094,32 @@ fn apply_index_then_slot_by_tx_hash_resolves<B: Backend>() {
         Some(fake_block(100)),
         "the block the entries point at is there too"
     );
+}
+
+/// A transaction hash answers with the range its entry was written with, and
+/// with none when it was written without one.
+fn tx_location_by_hash_returns_the_written_range<B: Backend>() {
+    let (store, _guard) = B::open();
+
+    let mut delta = index_delta(100, 0x01);
+    let placed = vec![0xaa; 32];
+    delta.txs.push(IndexedTx {
+        hash: placed.clone(),
+        range: Some(1234..56789),
+    });
+
+    let writer = store.start_writer().unwrap();
+    writer.apply_index(std::slice::from_ref(&delta)).unwrap();
+    writer.commit().unwrap();
+
+    let location = |hash: &[u8]| {
+        store
+            .tx_location_by_hash(hash)
+            .unwrap()
+            .map(|x| (x.slot, x.range))
+    };
+    assert_eq!(location(&delta.txs[0].hash), Some((100, None)));
+    assert_eq!(location(&placed), Some((100, Some(1234..56789))));
 }
 
 /// A rollback takes back exactly the undone block's entries, and nothing of
@@ -1112,13 +1138,13 @@ fn undo_index_removes_exactly_what_apply_index_added<B: Backend>() {
     writer.undo_index(std::slice::from_ref(&undone)).unwrap();
     writer.commit().unwrap();
 
-    assert_eq!(store.slot_by_tx_hash(&undone.tx_hashes[0]).unwrap(), None);
+    assert_eq!(store.slot_by_tx_hash(&undone.txs[0].hash).unwrap(), None);
     assert_eq!(store.slot_by_block_hash(&undone.block_hash).unwrap(), None);
     assert_eq!(store.slot_by_block_number(200).unwrap(), None);
     assert!(tagged_slots(&store, &undone.tags[0].key, 0, u64::MAX).is_empty());
 
     assert_eq!(
-        store.slot_by_tx_hash(&kept.tx_hashes[0]).unwrap(),
+        store.slot_by_tx_hash(&kept.txs[0].hash).unwrap(),
         Some(100)
     );
     assert_eq!(
@@ -1142,7 +1168,7 @@ fn slots_by_tag_bounds_are_inclusive<B: Backend>() {
             slot,
             block_hash: vec![slot as u8; 32],
             block_number: Some(slot),
-            tx_hashes: Vec::new(),
+            txs: Vec::new(),
             tags: vec![Tag::new(archive_dimensions::ADDRESS, key.clone())],
         })
         .collect();
@@ -1180,7 +1206,7 @@ fn slot_delta(slot: u64) -> ArchiveIndexDelta {
         slot,
         block_hash,
         block_number: Some(slot),
-        tx_hashes: vec![tx_hash],
+        txs: vec![IndexedTx::unplaced(tx_hash)],
         tags: vec![Tag::new(
             archive_dimensions::ADDRESS,
             SHARED_TAG_KEY.to_vec(),
@@ -1208,7 +1234,7 @@ fn exact_entries_present<S: CoreArchiveStore>(store: &S, slot: u64) -> bool {
     let delta = slot_delta(slot);
     let answers = [
         store.slot_by_block_hash(&delta.block_hash).unwrap(),
-        store.slot_by_tx_hash(&delta.tx_hashes[0]).unwrap(),
+        store.slot_by_tx_hash(&delta.txs[0].hash).unwrap(),
         store.slot_by_block_number(slot).unwrap(),
     ];
 
@@ -1461,6 +1487,7 @@ macro_rules! full_suite {
                 truncate_front_drops_logs_at_the_cut_slot,
                 logs_and_blocks_share_one_writer_commit,
                 apply_index_then_slot_by_tx_hash_resolves,
+                tx_location_by_hash_returns_the_written_range,
                 undo_index_removes_exactly_what_apply_index_added,
                 slots_by_tag_bounds_are_inclusive,
                 prune_history_drops_tags_and_exact_below_the_cutoff,

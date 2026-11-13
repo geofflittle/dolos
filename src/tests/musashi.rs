@@ -61,6 +61,49 @@ pub(crate) fn sub_transaction_block() -> SubTransactionBlock {
     }
 }
 
+/// The bytes of the Dijkstra block `block` with every top level transaction
+/// but `kept` replaced by a byte string of the same length, so the block no
+/// longer decodes and every byte of `kept` keeps its offset.
+pub(crate) fn only_one_tx_decodes(block: &[u8], kept: Hash<32>) -> Vec<u8> {
+    use pallas::codec::minicbor::Decoder;
+
+    let hashes: Vec<_> = MultiEraBlock::decode(block)
+        .unwrap()
+        .txs()
+        .iter()
+        .map(|tx| tx.hash())
+        .collect();
+
+    // `[era, [header, [transactions, leios certificate, peras certificate]]]`
+    let mut d = Decoder::new(block);
+    d.array().unwrap();
+    d.skip().unwrap();
+    d.array().unwrap();
+    d.skip().unwrap();
+    d.array().unwrap();
+    d.array().unwrap();
+
+    let mut out = block.to_vec();
+    for hash in hashes {
+        let start = d.position();
+        d.skip().unwrap();
+        let end = d.position();
+        if hash == kept {
+            continue;
+        }
+        let width = end - start;
+        let filler = if width - 2 < 256 {
+            vec![0x58, (width - 2) as u8]
+        } else {
+            let len = u16::try_from(width - 3).unwrap().to_be_bytes();
+            vec![0x59, len[0], len[1]]
+        };
+        out[start..start + filler.len()].copy_from_slice(&filler);
+        out[start + filler.len()..end].fill(0);
+    }
+    out
+}
+
 /// An empty store with the Musashi network magic and the Dijkstra genesis,
 /// applying endorsed transactions leniently.
 pub(crate) fn musashi_domain() -> ToyDomain {

@@ -7,7 +7,8 @@
 //! store).
 
 use dolos_core::{
-    ArchiveIndexDelta, BlockSlot, EraCbor, Tag, TxoRef, UtxoIndexDelta, UtxoMap, UtxoSetDelta,
+    ArchiveIndexDelta, BlockSlot, EraCbor, IndexedTx, Tag, TxoRef, UtxoIndexDelta, UtxoMap,
+    UtxoSetDelta,
 };
 use pallas::{
     codec::minicbor,
@@ -38,7 +39,7 @@ use crate::pallas_extras;
 /// builder.start_block(slot, block_hash, Some(block_number));
 ///
 /// // Add tags as block is traversed
-/// builder.add_tx_hash(tx_hash);
+/// builder.add_tx(IndexedTx::unplaced(tx_hash));
 /// builder.add_address(&address);
 /// builder.add_produced_utxo(txo_ref, &output);
 ///
@@ -131,7 +132,7 @@ impl CardanoIndexDeltaBuilder {
             slot,
             block_hash,
             block_number: number,
-            tx_hashes: Vec::new(),
+            txs: Vec::new(),
             tags: Vec::new(),
         });
     }
@@ -143,9 +144,9 @@ impl CardanoIndexDeltaBuilder {
             .expect("must call start_block before adding tags")
     }
 
-    /// Add a transaction hash to the current block.
-    pub fn add_tx_hash(&mut self, hash: Vec<u8>) {
-        self.current_block().tx_hashes.push(hash);
+    /// Add a transaction to the current block.
+    pub fn add_tx(&mut self, tx: IndexedTx) {
+        self.current_block().txs.push(tx);
     }
 
     /// Add address tags to the current block.
@@ -281,16 +282,25 @@ impl CardanoIndexDeltaBuilder {
     /// redeemers.
     pub fn index_block(
         &mut self,
-        block: &pallas::ledger::traverse::MultiEraBlock<'_>,
+        block: &crate::OwnedMultiEraBlock,
         resolved_inputs: &std::collections::HashMap<TxoRef, crate::OwnedMultiEraOutput>,
     ) {
         use pallas::ledger::traverse::{ComputeHash as _, OriginalHash as _};
 
+        let ranges = block.tx_ranges();
+        let block = block.view();
+        let txs = block.txs();
+        let ranges = ranges.filter(|x| x.len() == txs.len());
+
         self.start_block(block.slot(), block.hash().to_vec(), Some(block.number()));
 
-        for tx in block.txs() {
-            let Ok(()) = pallas_extras::for_each_applied_tx(&tx, |tx| {
-                self.add_tx_hash(tx.hash().to_vec());
+        for (index, tx) in txs.iter().enumerate() {
+            let range = ranges.as_ref().map(|x| x[index].clone());
+            let Ok(()) = pallas_extras::for_each_applied_tx(tx, |tx| {
+                self.add_tx(IndexedTx {
+                    hash: tx.hash().to_vec(),
+                    range: range.clone(),
+                });
 
                 for (label, _) in tx.metadata().collect::<Vec<_>>() {
                     self.add_metadata_label(label);
@@ -446,7 +456,7 @@ mod tests {
         let mut builder = CardanoIndexDeltaBuilder::new();
 
         builder.start_block(100, vec![0; 32], Some(50));
-        builder.add_tx_hash(vec![1; 32]);
+        builder.add_tx(IndexedTx::unplaced(vec![1; 32]));
         builder.add_address(&test_shelley_address());
 
         let archive = builder.build();
@@ -454,7 +464,7 @@ mod tests {
         assert_eq!(archive.len(), 1);
         assert_eq!(archive[0].slot, 100);
         assert_eq!(archive[0].block_number, Some(50));
-        assert_eq!(archive[0].tx_hashes.len(), 1);
+        assert_eq!(archive[0].txs.len(), 1);
         // Shelley address produces 3 tags: full, payment, stake
         assert_eq!(archive[0].tags.len(), 3);
     }
@@ -513,7 +523,7 @@ mod tests {
         use std::collections::BTreeMap;
 
         builder.start_block(100, vec![0; 32], Some(50));
-        builder.add_tx_hash(vec![1; 32]);
+        builder.add_tx(IndexedTx::unplaced(vec![1; 32]));
 
         // ADDRESS, PAYMENT, STAKE
         builder.add_address(&test_shelley_address());

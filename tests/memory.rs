@@ -376,7 +376,7 @@ fn seed_archive_tags<S: CoreArchiveStore>(store: &S) {
                 slot,
                 block_hash: vec![0x01; 32],
                 block_number: Some(b),
-                tx_hashes: Vec::new(),
+                txs: Vec::new(),
                 tags,
             });
         }

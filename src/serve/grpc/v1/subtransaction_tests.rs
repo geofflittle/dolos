@@ -39,9 +39,9 @@ async fn sundae_sync_consumes_child_inputs_over_v1() {
             slot: block.slot(),
             block_hash: block.hash().to_vec(),
             block_number: Some(block.number()),
-            tx_hashes: dolos_core::applied_txs(&block)
+            txs: dolos_core::applied_txs(&block)
                 .iter()
-                .map(|(_, tx)| tx.hash().to_vec())
+                .map(|(_, tx)| dolos_core::IndexedTx::unplaced(tx.hash().to_vec()))
                 .collect(),
             tags: vec![],
         }])
