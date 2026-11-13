@@ -265,11 +265,15 @@ The `sync` section controls how Dolos synchronizes the chain from upstream peers
 
 The `submit` section controls how Dolos submits transactions to the network. This involves maintaining a mempool of txs and sharing them with the upstream node.
 
-| property     | type    | example |
-| ------------ | ------- | ------- |
-| prune_height | integer | 60      |
+| property                  | type    | example |
+| ------------------------- | ------- | ------- |
+| prune_height              | integer | 60      |
+| mempool_bound.max_txs     | integer | 20000   |
+| mempool_bound.max_bytes   | integer | 4000000 |
 
 - `prune_height`: the number of stacked blocks since the tx to be considered safe for pruning.
+- `mempool_bound.max_txs`: the most transactions the mempool holds, pending or inflight, before a submit is refused as full (defaults to 20000).
+- `mempool_bound.max_bytes`: the most transaction bytes the mempool holds, pending or inflight, before a submit is refused as full (defaults to 4000000).
 
 ## `serve.grpc` section
 

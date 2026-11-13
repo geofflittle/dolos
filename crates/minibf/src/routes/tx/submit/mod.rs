@@ -50,6 +50,7 @@ pub async fn route<D: Domain + SubmitExt>(
             MempoolError::StateError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             MempoolError::PParamsNotAvailable => StatusCode::INTERNAL_SERVER_ERROR,
             MempoolError::DuplicateTx => StatusCode::CONFLICT,
+            MempoolError::Full(_) => StatusCode::TOO_EARLY,
         },
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     })?;

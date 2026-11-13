@@ -9,8 +9,9 @@ use tokio_stream::wrappers::BroadcastStream;
 use tracing::{debug, warn};
 
 use dolos_core::{
-    config::RedbMempoolConfig, ChainPoint, EraCbor, MempoolError, MempoolEvent, MempoolPage,
-    MempoolStore, MempoolTx, MempoolTxStage, TxHash, TxStatus, UnconfirmedIndex, UnconfirmedTxs,
+    config::RedbMempoolConfig, ChainPoint, EraCbor, MempoolBound, MempoolError, MempoolEvent,
+    MempoolPage, MempoolStore, MempoolTx, MempoolTxStage, TxHash, TxStatus, UnconfirmedIndex,
+    UnconfirmedTxs,
 };
 
 // ── Error newtype (mirrors wal/mod.rs pattern) ──────────────────────────
@@ -722,6 +723,7 @@ impl RedbMempool {
     pub fn open(
         path: impl AsRef<std::path::Path>,
         config: &RedbMempoolConfig,
+        bound: MempoolBound,
     ) -> Result<Self, MempoolError> {
         let db = redb::Database::builder()
             .set_repair_callback(|x| {
@@ -731,7 +733,7 @@ impl RedbMempool {
             .create(path)
             .map_err(|e| MempoolError::Internal(Box::new(e)))?;
 
-        Self::from_db(db)
+        Self::from_db(db, bound)
     }
 
     pub fn in_memory() -> Result<Self, MempoolError> {
@@ -739,15 +741,15 @@ impl RedbMempool {
             .create_with_backend(redb::backends::InMemoryBackend::new())
             .map_err(|e| MempoolError::Internal(Box::new(e)))?;
 
-        Self::from_db(db)
+        Self::from_db(db, MempoolBound::default())
     }
 
-    fn from_db(db: redb::Database) -> Result<Self, MempoolError> {
+    fn from_db(db: redb::Database, bound: MempoolBound) -> Result<Self, MempoolError> {
         let (updates, _) = broadcast::channel(16);
 
         let out = Self {
             db: Arc::new(db),
-            unconfirmed: Arc::default(),
+            unconfirmed: Arc::new(RwLock::new(UnconfirmedTxs::bounded(bound))),
             updates,
             submit: Arc::default(),
         };
@@ -839,6 +841,7 @@ impl RedbMempool {
         if InflightTable::read(&wx, &tx.hash())?.is_some() {
             return Err(MempoolError::DuplicateTx.into());
         }
+        unconfirmed.room_for(&tx)?;
         let seq = PendingTable::next_seq(&wx)?;
         PendingTable::insert(&wx, seq, &tx.hash(), tx.payload())?;
         wx.commit()?;
@@ -1104,6 +1107,7 @@ impl MempoolStore for RedbMempool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dolos_core::PassedBound;
 
     fn test_store() -> RedbMempool {
         RedbMempool::in_memory().unwrap()
@@ -1503,7 +1507,7 @@ mod tests {
         let txs = block_txs();
         let hashes: Vec<TxHash> = txs.iter().map(MempoolTx::hash).collect();
         {
-            let store = RedbMempool::open(&path, &config).unwrap();
+            let store = RedbMempool::open(&path, &config, MempoolBound::default()).unwrap();
             for tx in &txs {
                 store.receive(tx.clone()).unwrap();
             }
@@ -1511,10 +1515,82 @@ mod tests {
             store.drop_pending(&hashes[2..3]).unwrap();
         }
 
-        let store = RedbMempool::open(&path, &config).unwrap();
+        let store = RedbMempool::open(&path, &config, MempoolBound::default()).unwrap();
 
         assert_ne!(index(&store), UnconfirmedIndex::default());
         assert_eq!(index(&store), walked(&store));
+    }
+
+    fn sized(n: u8, bytes: usize) -> MempoolTx {
+        MempoolTx::new(test_hash(n), EraCbor(7, vec![0x80; bytes]), vec![])
+    }
+
+    #[test]
+    fn a_submit_past_the_bound_is_refused_and_leaves_the_tables_as_they_were() {
+        let dir = tempfile::tempdir().unwrap();
+        let bound = MempoolBound {
+            max_txs: 2,
+            max_bytes: 25,
+        };
+        let store =
+            RedbMempool::open(dir.path().join("mempool"), &Default::default(), bound).unwrap();
+        store.receive(sized(1, 10)).unwrap();
+        store.receive(sized(2, 10)).unwrap();
+        let refused = store.receive(sized(3, 1));
+        assert!(
+            matches!(
+                refused,
+                Err(MempoolError::Full(PassedBound::Txs {
+                    bound: 2,
+                    would_hold: 3
+                }))
+            ),
+            "{refused:?}"
+        );
+        store.drop_pending(&[test_hash(2)]).unwrap();
+        let refused = store.receive(sized(4, 16));
+        assert!(
+            matches!(
+                refused,
+                Err(MempoolError::Full(PassedBound::Bytes {
+                    bound: 25,
+                    would_hold: 26
+                }))
+            ),
+            "{refused:?}"
+        );
+        let pending: Vec<TxHash> = store.peek_pending().iter().map(MempoolTx::hash).collect();
+        assert_eq!(pending, [test_hash(1)]);
+        store.receive(sized(5, 15)).unwrap();
+    }
+
+    #[test]
+    fn a_transaction_in_flight_and_one_reloaded_count_against_the_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mempool");
+        let bound = MempoolBound {
+            max_txs: 10,
+            max_bytes: 10,
+        };
+        {
+            let store = RedbMempool::open(&path, &Default::default(), bound).unwrap();
+            store.receive(sized(1, 10)).unwrap();
+            store.mark_inflight(&[test_hash(1)]).unwrap();
+            assert!(store.receive(sized(2, 1)).is_err());
+        }
+
+        let store = RedbMempool::open(&path, &Default::default(), bound).unwrap();
+        let refused = store.receive(sized(2, 1));
+        assert!(
+            matches!(
+                refused,
+                Err(MempoolError::Full(PassedBound::Bytes {
+                    bound: 10,
+                    would_hold: 11
+                }))
+            ),
+            "{refused:?}"
+        );
     }
 
     #[test]

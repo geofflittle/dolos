@@ -272,15 +272,17 @@ pub fn check_state_revision(store: &StateStoreBackend) -> Result<(), Error> {
 pub fn open_mempool_store(config: &RootConfig) -> Result<MempoolBackend, Error> {
     check_storage_version(&config.storage.version)?;
 
+    let bound = config.submit.mempool_bound;
+
     match &config.storage.mempool {
         MempoolStoreConfig::InMemory => Ok(MempoolBackend::Ephemeral(
-            dolos_core::builtin::EphemeralMempool::new(),
+            dolos_core::builtin::EphemeralMempool::bounded(bound),
         )),
         MempoolStoreConfig::Redb(cfg) => {
             let path = config.storage.mempool_path().unwrap_or_default();
             ensure_store_path(&path)?;
             Ok(MempoolBackend::Redb(
-                dolos_redb3::mempool::RedbMempool::open(path, cfg)?,
+                dolos_redb3::mempool::RedbMempool::open(path, cfg, bound)?,
             ))
         }
     }

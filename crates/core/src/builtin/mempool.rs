@@ -13,8 +13,8 @@ use tokio_stream::wrappers::BroadcastStream;
 use tracing::debug;
 
 use crate::{
-    ChainPoint, MempoolError, MempoolEvent, MempoolPage, MempoolStore, MempoolTx, MempoolTxStage,
-    TxHash, TxStatus, UnconfirmedIndex,
+    ChainPoint, MempoolBound, MempoolError, MempoolEvent, MempoolPage, MempoolStore, MempoolTx,
+    MempoolTxStage, TxHash, TxStatus, UnconfirmedIndex,
 };
 
 /// The position a transaction took in the pending queue when first admitted.
@@ -22,21 +22,30 @@ type Seq = u64;
 
 mod live {
     use super::Seq;
-    use crate::{MempoolTx, TxHash, UnconfirmedIndex, UnconfirmedTxs};
+    use crate::{MempoolBound, MempoolError, MempoolTx, TxHash, UnconfirmedIndex, UnconfirmedTxs};
 
     /// Each transaction not yet finalized or dropped, with its admission
     /// position, and the index of their effects.
-    #[derive(Default)]
     pub(super) struct LiveTxs {
         txs: UnconfirmedTxs<Seq>,
         next_seq: Seq,
     }
 
     impl LiveTxs {
-        /// Admits `tx` behind every transaction admitted before it.
-        pub(super) fn insert(&mut self, tx: MempoolTx) {
+        pub(super) fn bounded(bound: MempoolBound) -> Self {
+            Self {
+                txs: UnconfirmedTxs::bounded(bound),
+                next_seq: 0,
+            }
+        }
+
+        /// Admits `tx` behind every transaction admitted before it, when the
+        /// bound has room for it.
+        pub(super) fn admit(&mut self, tx: MempoolTx) -> Result<(), MempoolError> {
+            self.txs.room_for(&tx)?;
             self.txs.insert(self.next_seq, tx);
             self.next_seq += 1;
+            Ok(())
         }
 
         /// Takes the transaction out, with its effects.
@@ -81,7 +90,6 @@ mod live {
     }
 }
 
-#[derive(Default)]
 struct MempoolState {
     live: live::LiveTxs,
     finalized_log: VecDeque<MempoolTx>,
@@ -121,7 +129,14 @@ impl Default for EphemeralMempool {
 
 impl EphemeralMempool {
     pub fn new() -> Self {
-        let state = Arc::new(RwLock::new(MempoolState::default()));
+        Self::bounded(MempoolBound::default())
+    }
+
+    pub fn bounded(bound: MempoolBound) -> Self {
+        let state = Arc::new(RwLock::new(MempoolState {
+            live: live::LiveTxs::bounded(bound),
+            finalized_log: VecDeque::new(),
+        }));
         let (updates, _) = broadcast::channel(16);
 
         Self {
@@ -185,8 +200,8 @@ impl MempoolStore for EphemeralMempool {
             return Err(MempoolError::DuplicateTx);
         }
 
+        state.live.admit(tx.clone())?;
         debug!(tx.hash = %tx.hash(), "tx received");
-        state.live.insert(tx.clone());
         self.notify(tx);
         self.log_state(&state);
 
@@ -423,7 +438,7 @@ impl MempoolStore for EphemeralMempool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::EraCbor;
+    use crate::{EraCbor, PassedBound};
 
     fn tx(n: u8) -> MempoolTx {
         MempoolTx::new(TxHash::new([n; 32]), EraCbor(7, vec![0x80]), vec![])
@@ -431,6 +446,77 @@ mod tests {
 
     fn pending(store: &EphemeralMempool) -> Vec<TxHash> {
         store.peek_pending().iter().map(|tx| tx.hash()).collect()
+    }
+
+    fn sized(n: u8, bytes: usize) -> MempoolTx {
+        MempoolTx::new(TxHash::new([n; 32]), EraCbor(7, vec![0x80; bytes]), vec![])
+    }
+
+    fn bound(max_txs: usize, max_bytes: usize) -> EphemeralMempool {
+        EphemeralMempool::bounded(MempoolBound { max_txs, max_bytes })
+    }
+
+    #[test]
+    fn submits_that_fill_the_bound_exactly_are_admitted() {
+        let store = bound(3, 30);
+        for n in 1..=3 {
+            store.receive(sized(n, 10)).unwrap();
+        }
+        assert_eq!(pending(&store).len(), 3);
+    }
+
+    #[test]
+    fn a_submit_past_the_count_bound_is_refused_and_leaves_the_mempool_as_it_was() {
+        let store = bound(2, 1000);
+        store.receive(sized(1, 10)).unwrap();
+        store.receive(sized(2, 10)).unwrap();
+        let refused = store.receive(sized(3, 10));
+        assert!(
+            matches!(
+                refused,
+                Err(MempoolError::Full(PassedBound::Txs {
+                    bound: 2,
+                    would_hold: 3
+                }))
+            ),
+            "{refused:?}"
+        );
+        assert_eq!(pending(&store), [sized(1, 0).hash(), sized(2, 0).hash()]);
+        assert_eq!(
+            store.check_status(&sized(3, 0).hash()).stage,
+            MempoolTxStage::Unknown
+        );
+    }
+
+    #[test]
+    fn a_submit_past_the_byte_bound_is_refused_and_a_smaller_one_fills_it() {
+        let store = bound(10, 25);
+        store.receive(sized(1, 10)).unwrap();
+        store.receive(sized(2, 10)).unwrap();
+        let refused = store.receive(sized(3, 6));
+        assert!(
+            matches!(
+                refused,
+                Err(MempoolError::Full(PassedBound::Bytes {
+                    bound: 25,
+                    would_hold: 26
+                }))
+            ),
+            "{refused:?}"
+        );
+        store.receive(sized(4, 5)).unwrap();
+        assert_eq!(pending(&store).len(), 3);
+    }
+
+    #[test]
+    fn a_dropped_transaction_frees_its_bytes() {
+        let store = bound(10, 10);
+        let a = sized(1, 10).hash();
+        store.receive(sized(1, 10)).unwrap();
+        assert!(store.receive(sized(2, 10)).is_err());
+        store.drop_pending(&[a]).unwrap();
+        store.receive(sized(2, 10)).unwrap();
+        assert_eq!(pending(&store), [sized(2, 0).hash()]);
     }
 
     #[test]

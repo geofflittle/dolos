@@ -4,7 +4,7 @@ use pallas::ledger::primitives::Epoch;
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr};
 
-use crate::{Cbor, Era, TxoRef};
+use crate::{Cbor, Era, MempoolBound, TxoRef};
 
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
@@ -139,11 +139,14 @@ fn default_pull_batch_size() -> usize {
 pub struct SubmitConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prune_height: Option<u64>,
+
+    #[serde(default, skip_serializing_if = "MempoolBound::is_default")]
+    pub mempool_bound: MempoolBound,
 }
 
 impl SubmitConfig {
     pub fn is_default(&self) -> bool {
-        self.prune_height.is_none()
+        self.prune_height.is_none() && self.mempool_bound.is_default()
     }
 }
 
@@ -1269,6 +1272,26 @@ mod tests {
 
         assert!(json.get("archive").is_none());
         assert!(json.get("state").is_none());
+    }
+
+    #[test]
+    fn a_mempool_bound_given_in_part_keeps_the_default_for_the_rest() {
+        use serde_json::json;
+
+        let default: SubmitConfig = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(default.mempool_bound, MempoolBound::default());
+        assert_eq!(serde_json::to_value(&default).unwrap(), json!({}));
+
+        let given: SubmitConfig =
+            serde_json::from_value(json!({"mempool_bound": {"max_bytes": 100}})).unwrap();
+        assert_eq!(
+            given.mempool_bound,
+            MempoolBound {
+                max_txs: MempoolBound::DEFAULT_MAX_TXS,
+                max_bytes: 100,
+            }
+        );
+        assert!(!given.is_default());
     }
 
     #[test]

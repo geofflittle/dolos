@@ -257,6 +257,50 @@ pub enum MempoolError {
 
     #[error("duplicate tx")]
     DuplicateTx,
+
+    #[error("mempool full: {0}")]
+    Full(PassedBound),
+}
+
+/// The most transactions, and the most payload bytes, a mempool holds before it
+/// refuses a submit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MempoolBound {
+    pub max_txs: usize,
+    pub max_bytes: usize,
+}
+
+impl MempoolBound {
+    /// Two endorser blocks of transactions at a `maxEndorserBlockTxsSize` of
+    /// 2000000 bytes.
+    pub const DEFAULT_MAX_BYTES: usize = 4_000_000;
+
+    /// The default byte bound over transactions of 200 bytes.
+    pub const DEFAULT_MAX_TXS: usize = 20_000;
+
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+impl Default for MempoolBound {
+    fn default() -> Self {
+        Self {
+            max_txs: Self::DEFAULT_MAX_TXS,
+            max_bytes: Self::DEFAULT_MAX_BYTES,
+        }
+    }
+}
+
+/// The limit of a [`MempoolBound`] that holding one more transaction would pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum PassedBound {
+    #[error("would hold {would_hold} transactions, past the bound of {bound}")]
+    Txs { bound: usize, would_hold: usize },
+
+    #[error("would hold {would_hold} payload bytes, past the bound of {bound}")]
+    Bytes { bound: usize, would_hold: usize },
 }
 
 /// Durable storage for the transaction submission lifecycle.
@@ -293,7 +337,8 @@ pub trait MempoolStore: Clone + Send + Sync + 'static {
     /// Implementors must persist the transaction and emit a `Pending` event
     /// via [`subscribe`](Self::subscribe). Returns
     /// [`DuplicateTx`](MempoolError::DuplicateTx) if a transaction with the
-    /// same hash is already pending.
+    /// same hash is already pending, and [`Full`](MempoolError::Full) if
+    /// holding it would pass the store's [`MempoolBound`].
     fn receive(&self, tx: MempoolTx) -> Result<(), MempoolError>;
 
     /// Returns `true` if there is at least one transaction in the pending
@@ -546,23 +591,58 @@ impl UnconfirmedIndex {
 pub struct UnconfirmedTxs<T> {
     txs: HashMap<TxHash, (T, MempoolTx)>,
     index: UnconfirmedIndex,
+    bound: MempoolBound,
+    bytes: usize,
 }
 
 impl<T> Default for UnconfirmedTxs<T> {
     fn default() -> Self {
-        Self {
-            txs: HashMap::new(),
-            index: UnconfirmedIndex::default(),
-        }
+        Self::bounded(MempoolBound::default())
     }
 }
 
+/// The payload bytes a transaction counts against a [`MempoolBound`].
+fn bound_bytes(tx: &MempoolTx) -> usize {
+    tx.payload().cbor().len()
+}
+
 impl<T> UnconfirmedTxs<T> {
+    pub fn bounded(bound: MempoolBound) -> Self {
+        Self {
+            txs: HashMap::new(),
+            index: UnconfirmedIndex::default(),
+            bound,
+            bytes: 0,
+        }
+    }
+
+    /// Refuses `tx` when holding it beside the transactions held would pass
+    /// the bound.
+    pub fn room_for(&self, tx: &MempoolTx) -> Result<(), MempoolError> {
+        let txs = self.txs.len() + 1;
+        if txs > self.bound.max_txs {
+            return Err(MempoolError::Full(PassedBound::Txs {
+                bound: self.bound.max_txs,
+                would_hold: txs,
+            }));
+        }
+        let bytes = self.bytes + bound_bytes(tx);
+        if bytes > self.bound.max_bytes {
+            return Err(MempoolError::Full(PassedBound::Bytes {
+                bound: self.bound.max_bytes,
+                would_hold: bytes,
+            }));
+        }
+        Ok(())
+    }
+
     /// Holds `tx` with `value`, replacing any transaction held under its hash.
     pub fn insert(&mut self, value: T, tx: MempoolTx) {
         self.index.insert(&tx);
+        self.bytes += bound_bytes(&tx);
         if let Some((_, replaced)) = self.txs.insert(tx.hash(), (value, tx)) {
             self.index.remove(&replaced);
+            self.bytes -= bound_bytes(&replaced);
         }
     }
 
@@ -570,6 +650,7 @@ impl<T> UnconfirmedTxs<T> {
     pub fn remove(&mut self, hash: &TxHash) -> Option<(T, MempoolTx)> {
         let (value, tx) = self.txs.remove(hash)?;
         self.index.remove(&tx);
+        self.bytes -= bound_bytes(&tx);
         Some((value, tx))
     }
 
