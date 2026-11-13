@@ -25,7 +25,7 @@ switches() {
 # The arms that plant a defect, each judged on the records plants/<arm>.records names.
 PLANTED_ARMS=$({
   switches "$HERE"/overlay/*.diff
-  for plant in "$HERE"/plants/*.diff "$HERE"/plants/*.deselect; do
+  for plant in "$HERE"/plants/*.deselect; do
     if [ -f "$plant" ]; then basename "$plant" | sed 's/\.[a-z]*$//'; fi
   done
 } | sort -u | paste -sd ' ' -)
@@ -55,11 +55,7 @@ overlay_arm() {
 
 # Whether an arm plants its defect in pallas.
 pallas_arm() {
-  if overlay_arm "$1"; then
-    switches "$HERE/overlay/pallas.diff" | grep -q -x -F "$1"
-  else
-    sed -n 's#^+++ b/##p' "$HERE/plants/$1.diff" 2>/dev/null | grep -q '^pallas'
-  fi
+  switches "$HERE/overlay/pallas.diff" | grep -q -x -F "$1"
 }
 
 # The cargo arguments of the crate test an arm runs in place of the judge, none for an arm the judge runs.
@@ -182,19 +178,13 @@ plant_files() {
   if overlay_arm "$1"; then
     awk -v call="oracle_plant(\"$1\")" '/^\+\+\+ b\// { file = substr($0, 7) } /^\+/ && index($0, call) { print file }' \
       "$HERE/overlay/dolos.diff" | sort -u
-    return
   fi
-  if deselect_arm "$1"; then
-    return
-  fi
-  sed -n 's#^+++ b/##p' "$HERE/plants/$1.diff"
 }
 
-# The Dolos files whose change puts an arm in the quick tier, its plant files, its plant or deselection, its records file and the source of its crate test.
+# The Dolos files whose change puts an arm in the quick tier, its plant files, its deselection, its records file and the source of its crate test.
 arm_files() {
   plant_files "$1"
-  if ! overlay_arm "$1"; then
-    echo "$BOX_PATH/plants/$1.diff"
+  if deselect_arm "$1"; then
     echo "$BOX_PATH/plants/$1.deselect"
   fi
   echo "$BOX_PATH/plants/$1.records"

@@ -104,7 +104,7 @@ overlay_built=$(
 )
 expect overlay_target "$overlay_built" "target=target/overlay scratch=scratch/dolos head=same overlay_units=2"
 
-# An overlay whose added lines switch a in pallas and b in Dolos, with c only on a context line and f only on a removed one, and plants of their own for d in pallas and e in Dolos.
+# An overlay whose added lines switch a in pallas and b in Dolos, with c only on a context line and f only on a removed one, and diffs under plants/ named for d and e.
 H=$W/arms
 rm -rf "$H"
 mkdir -p "$H/overlay" "$H/plants"
@@ -128,13 +128,13 @@ arms() {
   )
 }
 # Must fire for a and b, and must not for c, d, e and f, and b's quick tier files are the one file its switch is in.
-expect arms "$(arms)" "a:yy:Cargo.toml,Cargo.lock b:yn:src/one.rs c:nn: d:ny:Cargo.toml,Cargo.lock e:nn:crates/core/src/n.rs f:nn:"
-# Must name the overlay's switches and the arms with a plant of their own, and must not name c or f.
+expect arms "$(arms)" "a:yy:Cargo.toml,Cargo.lock b:yn:src/one.rs c:nn: d:nn: e:nn: f:nn:"
+# Must name the overlay's switches, and must not name c, f, or d and e, whose diffs under plants/ arm nothing.
 expect planted "$(
   HERE=$H
   . "$LIB"
   echo "$PLANTED_ARMS"
-)" "a b d e"
+)" "a b"
 
 # A manifest of catches, a records file for a, and a head log holding one line a's catch selects.
 printf '%s\n' '[dolos]' 'base = "0"' '' '[catches]' \
@@ -227,13 +227,14 @@ touched() {
 expect touched_changed "$(touched "$first")" "exit=0 b"
 expect touched_unlisted "$(touched 0000000000000000000000000000000000000000)" "exit=128"
 
-# Arms d, e, g and h with a plant of their own, cost-models with its crate test and k with a deselection, and a scratch tree whose second commit changes d's catch, e's records, the cost-models test source, k's deselection and the place of h's catch.
+# Arms d, e, g and h switched in Dolos, cost-models switched in Dolos with its crate test and k with a deselection, and a scratch tree whose second commit changes d's catch, e's records, the cost-models test source, k's deselection and the place of h's catch.
 A=$W/armfiles
 rm -rf "$A"
-mkdir -p "$A/box/plants" "$A/scratch/dolos/oracle/box/plants" "$A/scratch/dolos/crates/cardano/tests"
+mkdir -p "$A/box/overlay" "$A/box/plants" "$A/scratch/dolos/oracle/box/plants" "$A/scratch/dolos/crates/cardano/tests"
+: >"$A/box/overlay/pallas.diff"
 for arm in d e g h cost-models; do
-  printf '%s\n' '+++ b/crates/core/src/n.rs' >"$A/box/plants/$arm.diff"
-done
+  printf '%s\n' '+++ b/crates/core/src/n.rs' '@@ -1 +1,2 @@' ' fn n() {}' "+oracle_plant(\"$arm\")"
+done >"$A/box/overlay/dolos.diff"
 echo 'ic#1' >"$A/box/plants/k.deselect"
 echo 'ic#1' >"$A/scratch/dolos/oracle/box/plants/k.deselect"
 manifest() {

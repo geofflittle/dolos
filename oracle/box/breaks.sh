@@ -2,7 +2,7 @@
 # Judges the oracle branch head on both corpora, the control (the head on every arm's records) and each arm on the records plants/<arm>.records names, one oracle run each.
 # Usage: ROOT=dir [REV=ref] [ARMS="head control colret coin ..."] breaks.sh
 # The branch is read from the bare repository $ROOT/dolos.git.
-# An arm whose switch overlay/ adds runs on one build of the overlay with ORACLE_PLANT naming it, an arm with a plants/<arm>.deselect judges the coverage of the head's counts without the counts of the records it names, and any other arm builds its plants/<arm>.diff.
+# An arm whose switch overlay/ adds runs on one build of the overlay with ORACLE_PLANT naming it, and an arm with a plants/<arm>.deselect judges the coverage of the head's counts without the counts of the records it names.
 set -eu
 : "${ROOT:?}"
 export ROOT
@@ -26,12 +26,6 @@ for arm in $ARMS; do
     *) echo "unknown arm $arm" ; exit 2 ;;
   esac
 done
-for switch in $(switches "$HERE"/overlay/*.diff); do
-  if [ -f "$HERE/plants/$switch.diff" ]; then
-    echo "REFUSED arm $switch has both an overlay switch and plants/$switch.diff"
-    exit 2
-  fi
-done
 mismatches=$(arm_mismatches)
 if [ -n "$mismatches" ]; then
   echo "$mismatches"
@@ -44,42 +38,17 @@ pallas_source() {
     head -1 | sed -n 's/.*(\(.*\)).*/\1/p'
 }
 
-# Whether an arm runs on the overlay build, each switch but colret while COLRET_FIX names the commit whose revert plants it.
-switched() {
-  if [ "$1" = colret ] && [ -n "${COLRET_FIX:-}" ]; then
-    return 1
-  fi
-  overlay_arm "$1"
-}
-
-plant_colret_fix() {
-  git -C "$ROOT/$SCRATCH" diff "$COLRET_FIX^" "$COLRET_FIX" -- . ':(exclude)**/*tests*' |
-    git -C "$ROOT/$SCRATCH" apply -R
-}
-
-# Applies the named Dolos plant over the scratch tree.
-plant_dolos() {
-  git -C "$ROOT/$SCRATCH" apply "$HERE/plants/$1.diff"
-}
-
 # Runs the crate test of an arm with the executable $3, or one it builds over the scratch trees as they stand, its output in $2, failing when cargo refused the build.
 run_crate_test() {
   test_bin=${3:-}
   if [ -z "$test_bin" ]; then
-    if ! built=$(build_checked "$2.build" test --release $(crate_test "$1") --no-run $locked); then
+    if ! built=$(build_checked "$2.build" test --release $(crate_test "$1") --no-run --locked); then
       echo "BUILD_REFUSED $built" >"$2"
       return 1
     fi
     test_bin=$(executable "$2.build" "$(crate_test_target "$1")")
   fi
   RUST_BACKTRACE=0 sh "$IN_IMAGE" "$SCRATCH" "$test_bin" $(crate_test_filter "$1") --nocapture >"$2" 2>&1 || true
-}
-
-# Applies the named pallas plant over the pinned pallas commit.
-plant_pallas() {
-  pallas_tree "$pin" &&
-    pallas_paths "$ROOT/$SCRATCH" "$PALLAS" &&
-    git -C "$ROOT/$PALLAS" apply "$HERE/plants/$1.diff"
 }
 
 overlay=
@@ -265,7 +234,7 @@ held() {
 
 overlay_arms=
 for arm in $ARMS; do
-  if switched "$arm"; then
+  if overlay_arm "$arm"; then
     overlay_arms="$overlay_arms $arm"
   fi
 done
@@ -329,7 +298,7 @@ judge_batch() {
 head_result=SKIPPED
 verdicts=""
 for arm in $ARMS; do
-  if switched "$arm"; then
+  if overlay_arm "$arm"; then
     switched_batch="$switched_batch $arm"
     continue
   fi
@@ -338,39 +307,7 @@ for arm in $ARMS; do
   pin=$(pallas_pin)
   pin_short=$(echo "$pin" | cut -c1-7)
   dolos_rev=$(git -C "$ROOT/$SCRATCH" rev-parse --short HEAD)
-  locked=--locked
-  if pallas_arm "$arm"; then
-    locked=
-  fi
-  case $arm in
-    head | control) plant=true ;;
-    colret) plant=plant_colret_fix ;;
-    *)
-      if deselect_arm "$arm"; then
-        plant=true
-      elif pallas_arm "$arm"; then
-        plant="plant_pallas $arm"
-      else
-        plant="plant_dolos $arm"
-      fi
-      ;;
-  esac
-  if ! $plant >"$OUT/$arm.plant" 2>&1; then
-    echo "ARM $arm PLANT_FAILED log=$OUT/$arm.plant"
-    verdicts="$verdicts $arm=UNPLANTED"
-    continue
-  fi
-  source=$(pallas_source)
-  pallas_rev=$pin_short
-  if pallas_arm "$arm"; then
-    pallas_rev="$pin_short-$arm"
-  fi
-  if [ -z "$locked" ] && [ "$source" != "/w/$PALLAS/pallas-validate" ]; then
-    echo "ARM $arm REFUSED pallas_source=$source"
-    verdicts="$verdicts $arm=UNPLANTED"
-    continue
-  fi
-  echo "ARM $arm dolos=$dolos_rev pallas=$pallas_rev pallas_source=$source"
+  echo "ARM $arm dolos=$dolos_rev pallas=$pin_short pallas_source=$(pallas_source)"
   started=$(date +%s)
   if crate_test "$arm" >/dev/null; then
     if run_crate_test "$arm" "$OUT/$arm.log"; then
@@ -388,7 +325,7 @@ for arm in $ARMS; do
   if [ "$arm" = control ]; then
     joint=$(joint_packages $CRATE_ARMS)
   fi
-  if ! built=$(build_judge "$OUT/$arm.build" $joint $locked); then
+  if ! built=$(build_judge "$OUT/$arm.build" $joint --locked); then
     echo "ARM $arm BUILD_REFUSED $built"
     verdicts="$verdicts $arm=UNBUILT"
     continue
