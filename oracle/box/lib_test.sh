@@ -379,7 +379,7 @@ expect verdict_no_log "$(
 expect verdict_unreached "$(verdict_of 'ORACLE_PLANT reached ee' fires "$finished")" UNREACHED
 expect verdict_caught "$(verdict_of 'ORACLE_PLANT reached e' fires "$finished")" CAUGHT
 # Must find no script but lib.sh setting CAUGHT or MISSED, which arm_verdict sets only for a finished run.
-expect verdict_words "$(cat "$HERE/breaks.sh" "$HERE/value.sh" "$HERE/amaru.sh" "$HERE/run.sh" | grep -c -E 'CAUGHT|MISSED' || true)" 0
+expect verdict_words "$(cat "$HERE/breaks.sh" "$HERE/value.sh" "$HERE/amaru.sh" "$HERE/run.sh" "$HERE/regen.sh" | grep -c -E 'CAUGHT|MISSED' || true)" 0
 
 # A box dir whose served.txt holds the row $1 or none, and the verdicts served_check sets for a passing head, the arm a whose catch printed the lines after $1, the arm h held with nothing recorded and a missed arm m, with the SERVED lines it printed and the rows it added.
 S=$W/served
@@ -672,7 +672,7 @@ records_of() {
   )
 }
 arms_pass='head=PASS control=CLEAN colret=CAUGHT'
-# Must not fire: a done run that passes writes last-done alone, and a ship or live run whose live leg fails writes neither.
+# Must not fire: a done run that passes writes last-done alone, and a ship run whose live leg fails writes neither.
 expect ship_by_done "$(records_of done "$arms_pass")" "exit=0 last-done=c last-ship=absent"
 # Must not fire: every passing word a done run prints. Must fire: a verdict word the pass rule does not name.
 expect done_every_passing_word "$(records_of done "$arms_pass ctx=HELD fix-arms=PASS value=passed-on-these-inputs")" \
@@ -680,13 +680,9 @@ expect done_every_passing_word "$(records_of done "$arms_pass ctx=HELD fix-arms=
 expect done_unnamed_word "$(records_of done "$arms_pass coin=UNREACHED")" "exit=1 last-done=absent last-ship=absent"
 expect ship_live_failed "$(records_of ship "$arms_pass live-shift=CAUGHT live=FAIL")" "exit=1 last-done=absent last-ship=absent"
 expect ship_shift_missed "$(records_of ship "$arms_pass live-shift=MISSED live=PASS")" "exit=1 last-done=absent last-ship=absent"
-expect live_failed "$(records_of live 'live=FAIL live-shift=CAUGHT')" "exit=1 last-done=absent last-ship=absent"
-expect live_shift_missed "$(records_of live 'live=PASS live-shift=MISSED')" "exit=1 last-done=absent last-ship=absent"
-# Must fire: a ship run that passes writes both, and a live run that passes writes last-ship alone.
+# Must fire: a ship run that passes writes both.
 expect ship_passed "$(records_of ship "$arms_pass live-shift=CAUGHT live=PASS")" \
   "exit=0 last-done=c last-ship=commit=c tier=ship verdicts=\"$arms_pass live-shift=CAUGHT live=PASS\""
-expect live_passed "$(records_of live 'live=PASS live-shift=CAUGHT')" \
-  "exit=0 last-done=absent last-ship=commit=c tier=live verdicts=\"live=PASS live-shift=CAUGHT\""
 
 # Prints lock=free, lock=held when flock reports the lock taken, or the exit of any other flock failure, for the lock RUN_LOCK.
 LOCK_PROBE='status=0; flock -n -E 75 "$RUN_LOCK" true || status=$?; case $status in 0) state=free ;; 75) state=held ;; *) state=flock_exit_$status ;; esac'
@@ -882,6 +878,38 @@ named_run "$K" nothing "$full"
 expect named_rev_refused "$(run_out "$K")" "REFUSED REV=nothing names no commit in $K/dolos.git run-exit=2 exit=2"
 touch "$K/run.lock.go"
 wait "$holder" || true
+
+# Must fire: the entry run.sh and the entry regen.sh each hand the run to the script of the same name in the judged commit, with its arguments.
+lock_root entry-script
+mkdir -p "$K/old/oracle/box"
+for script in run.sh regen.sh; do
+  printf '%s\n' '#!/bin/sh' "echo \"script=$script args=\$*\" >\"\$ROOT/old.seen\"" >"$K/old/oracle/box/$script"
+done
+git -C "$K/old" init -q
+git -C "$K/old" add -A
+git -C "$K/old" -c user.name=t -c user.email=t@t commit -q -m old
+git clone -q --bare "$K/old" "$K/dolos.git"
+for script in run.sh regen.sh; do
+  (
+    REV=$(git -C "$K/dolos.git" rev-parse HEAD)
+    export REV
+    tier "$K" entry "$script" done
+  )
+  expect "entry_$script" "$(cat "$K/old.seen")" "script=$script args=done"
+done
+
+# Must not fire: run.sh given quick, done or ship goes on to the free space floor.
+for word in quick done ship; do
+  lock_root "tier-word-$word"
+  tier "$K" "" run.sh "$word"
+  expect "tier_word_$word" "$(run_out "$K")" "REFUSED free run-exit=2 exit=2"
+done
+# Must fire: run.sh given any other word prints the usage line naming the three tiers and exits 2.
+for word in live value regen quicker; do
+  lock_root "tier-word-$word"
+  tier "$K" "" run.sh "$word"
+  expect "tier_word_$word" "$(run_out "$K")" "usage: run.sh quick|done|ship run-exit=2 exit=2"
+done
 
 # Must fire: breaks.sh and candidate.sh, each run alone, hold the lock when they read free space, candidate.sh with a config to copy.
 lock_root lock-breaks
@@ -1385,14 +1413,14 @@ expect value_key "$(
   echo "$(value_key value-spend-redeemer) $(value_key emptyguards)"
 )" "value-spend-redeemer value-emptyguards"
 
-# Must not fire: run.sh and breaks.sh run in the oracle slice with its limits set go on to the free space floor without setting a limit or starting a scope, as the lock cases of each entry script show.
-for script in run.sh breaks.sh; do
+# Must not fire: run.sh, regen.sh and breaks.sh run in the oracle slice with its limits set go on to the free space floor without setting a limit or starting a scope, as the lock cases of each entry script show.
+for script in run.sh regen.sh breaks.sh; do
   lock_root "slice-in-$script"
   tier "$K" "" "$script"
-  expect "slice_in_$script" "$(run_out "$K")" "REFUSED free$([ "$script" = run.sh ] && echo ' run-exit=2') exit=2"
+  expect "slice_in_$script" "$(run_out "$K")" "REFUSED free$([ "$script" != breaks.sh ] && echo ' run-exit=2') exit=2"
 done
 # Must fire: each entry script run outside the slice with the box's ORACLE_MEMORY sets its limits and runs itself again in a scope of it, before taking the lock.
-for script in run.sh breaks.sh candidate.sh endorser-fixture.sh; do
+for script in run.sh regen.sh breaks.sh candidate.sh endorser-fixture.sh; do
   lock_root "slice-out-$script"
   slice_of "$K" /user.slice/user-0.slice 9999 max
   case $script in

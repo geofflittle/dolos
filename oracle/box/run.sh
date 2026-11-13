@@ -1,124 +1,23 @@
 #!/bin/sh
-# Runs the oracle on the build box, its quick, done or ship tier, its live leg alone or the regeneration of its committed manifests.
-# Usage: ROOT=dir [REV=ref] [BASE=ref] run.sh quick|done|ship|live|regen|value
-# The value tier runs the value leg of value.sh and the amaru leg of amaru.sh alone. The quick, done and ship tiers run each of them too when its inputs differ from those of its last passing run.
-# The quick tier judges the head on both corpora, the control and each arm whose plant changes a file that differs between BASE and REV, a pallas arm when the pallas entries of Cargo.toml or Cargo.lock differ. BASE defaults to the commit of the last done or ship run that passed, and when there is none every arm runs. The done tier, run per change, judges the head, the control and every arm, and fails on a fix commit that arms.toml gives neither an arm nor an exclusion. The ship tier, run before a rollout of the dolos-serve image, is the done tier while the live leg syncs a candidate from genesis. Only the ship tier and the live leg read the live node. The done and ship tiers record their commit in runs/last-done when they pass, and the ship tier and the live leg record theirs in runs/last-ship when the live leg passes.
-# The quick, done, ship and value tiers fail when a caught or held arm served other lines than its row of served.txt records, and a change that alters what an arm serves on purpose copies the arm's row from the run's served.txt into served.txt.
-# The live leg reads ENDPOINT, NODE, NODE_DB, GRPCURL, SERVE_CONFIG and CANDIDATE_GRPC from $LIVE_ENV.
+# Runs one tier of the oracle at REV, and oracle/README.md says what each tier checks and when to run it.
+# Usage: ROOT=dir [REV=ref] [BASE=ref] run.sh quick|done|ship
+# The quick tier judges the arms whose plants change a file that differs between BASE and REV, and BASE defaults to the commit of the last done or ship run that passed. The done and ship tiers record their commit in runs/last-done when they pass, and the ship tier records it in runs/last-ship too.
+# A tier fails when a caught or held arm served other lines than its row of served.txt records, and a change that alters what an arm serves on purpose copies the arm's row from the run's served.txt into served.txt.
 set -eu
-# Prints the run's exit status as its last line, after releasing the box lock when this run holds it.
-finish() {
-  status=$?
-  if command -v release_lock >/dev/null; then
-    release_lock
-  fi
-  echo "run-exit=$status"
-}
-trap finish EXIT
 : "${ROOT:?}"
 BASE=${BASE:-}
-CANDIDATE_NEED_G=${CANDIDATE_NEED_G:-12}
 LAST_DONE="$ROOT/runs/last-done"
 LAST_SHIP="$ROOT/runs/last-ship"
 HERE=$(cd "$(dirname "$0")" && pwd)
-LIVE_ENV=${LIVE_ENV:-$ROOT/live.env}
-REGEN_DIR=${REGEN_DIR:-$ROOT/regen}
 . "$HERE/lib.sh"
 . "$HERE/value.sh"
 . "$HERE/amaru.sh"
-case $OUT in
-  "$ROOT"/*) ;;
-  *) echo "REFUSED OUT=$OUT is outside $ROOT" ; exit 2 ;;
-esac
-case ${1:-} in
-  quick | done | ship | live | regen | value) ;;
-  *) echo "usage: run.sh quick|done|ship|live|regen|value" ; exit 2 ;;
-esac
-if [ -z "${JUDGED:-}" ]; then
-  REV=$(full_commit REV "$REV")
-  if [ -n "$BASE" ]; then
-    BASE=$(full_commit BASE "$BASE")
-  fi
-fi
-enter_slice "$0" "$@"
-take_lock
 trap finish EXIT
-# The tier runs the scripts and plants of the commit it judges, from that
-# commit's oracle/box in $OUT/box.
-if [ -z "${JUDGED:-}" ]; then
-  JUDGED=$REV
-  mkdir -p "$OUT/box"
-  git -C "$ROOT/dolos.git" archive "$JUDGED" oracle/box | tar -x -C "$OUT/box"
-  export JUDGED REV BASE ROOT OUT RUN_LOCK
-  exec sh "$OUT/box/oracle/box/run.sh" "$@"
-fi
-export ROOT REV MIN_FREE_G CANDIDATE_NEED_G OUT RUN_LOCK
-
-# Exits when the test of the box functions or of the field comparison fails.
-require_lib_test() {
-  mkdir -p "$OUT/lib-test" "$OUT/fields-test"
-  if ! sh "$HERE/lib_test.sh" "$OUT/lib-test" >"$OUT/lib-test.log" 2>&1; then
-    echo "REFUSED lib_test log=$OUT/lib-test.log"
-    exit 2
-  fi
-  if ! sh "$HERE/fields_test.sh" "$OUT/fields-test" >"$OUT/fields-test.log" 2>&1; then
-    echo "REFUSED fields_test log=$OUT/fields-test.log"
-    exit 2
-  fi
-}
-
-# Exports as BUILD_IMAGE the name of the build image of the files of images/dolos-build, building it when docker has none, and exits when that fails.
-require_build_image() {
-  if ! BUILD_IMAGE=$(build_image dolos-build 2>"$OUT/build-image.log"); then
-    echo "REFUSED build image log=$OUT/build-image.log"
-    exit 2
-  fi
-  export BUILD_IMAGE
-}
-
-# Builds Dolos from the scratch tree into $OUT/bin/dolos.
-build_candidate() {
-  mkdir -p "$OUT/bin"
-  if ! built=$(build_checked "$OUT/bin/dolos.build" build --release --locked --bin dolos); then
-    echo "LIVE-CANDIDATE build_failed $built"
-    return 1
-  fi
-  dolos=$(executable "$OUT/bin/dolos.build")
-  cp "$ROOT${dolos#/w}" "$OUT/bin/dolos"
-}
-
-# Builds the live judge from the scratch tree into $OUT/bin/judge.
-build_live_judge() {
-  mkdir -p "$OUT/bin"
-  if ! built=$(build_judge "$OUT/bin/judge.build" --locked); then
-    echo "LIVE-CANDIDATE judge_build_failed $built"
-    return 1
-  fi
-  judge=$(executable "$OUT/bin/judge.build")
-  cp "$ROOT${judge#/w}" "$OUT/bin/judge"
-}
-
-# Syncs the candidate in $OUT/bin/dolos from the node and compares its reads with the serving Dolos field by field, logging to $OUT/candidate.log.
-sync_candidate() {
-  set -a
-  . "$LIVE_ENV"
-  set +a
-  fields=0
-  CANDIDATE="$OUT/bin/dolos" COMMIT=$commit sh "$HERE/candidate.sh" "$OUT/live" \
-    >"$OUT/candidate.log" 2>&1 || fields=$?
-  grep -E '^(LIVE-CANDIDATE|LIVE-IO|LIVE-FIELD|LIVE-FIELD-SPENT|LIVE-FIELDS|LIVE) ' "$OUT/candidate.log" |
-    cut -c1-400 || true
-  return "$fields"
-}
-
-# Judges the candidate's reads against the node with $OUT/bin/judge, logging to $OUT/live.log.
-judge_live() {
-  # The judge runs in the run's own dir, since the arms check other commits out in the scratch tree meanwhile.
-  [ -f "$OUT/bin/judge" ] && [ -f "$OUT/live/candidate/image.txt" ] &&
-    LIVE_DIR="/w/${OUT#"$ROOT"/}/live/candidate" sh "$IN_IMAGE" "${OUT#"$ROOT"/}" \
-      "/w/${OUT#"$ROOT"/}/bin/judge" "$ORACLE_TESTS::live::live" --exact --ignored --nocapture \
-      >"$OUT/live.log" 2>&1
-}
+case ${1:-} in
+  quick | done | ship) ;;
+  *) echo "usage: run.sh quick|done|ship" ; exit 2 ;;
+esac
+start_run "$0" "$@"
 
 # Prints the live judge's verdict lines from $OUT/live.log.
 live_lines() {
@@ -150,33 +49,6 @@ shifted_times_differ() {
     grep -E "^LIVE-DIFF row=[^ ]* locus=era_summary tip $times" "$1"
 }
 
-# Builds the candidate and the live judge, syncs the candidate and judges its reads.
-live_leg() {
-  build_candidate && build_live_judge || return 1
-  fields=0
-  sync_candidate || fields=$?
-  judge_live && [ "$fields" -eq 0 ]
-}
-
-# Runs the live leg alone at REV, and records the commit in runs/last-ship when it passes.
-live_run() {
-  mkdir -p "$OUT"
-  require_free
-  require_lib_test
-  require_build_image
-  candidate_fsync >/dev/null || exit 2
-  reset_scratch
-  commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
-  live=FAIL
-  if live_leg; then
-    live=PASS
-  fi
-  live_lines
-  shift_verdict=$(live_shift | tail -1)
-  echo "LIVE-LEG live=$live $shift_verdict commit=$commit logs=$OUT"
-  record_pass live "$commit" "live=$live $shift_verdict"
-}
-
 # Judges the head, the control and the arms the change from BASE touches, every arm when no BASE is known.
 quick_run() {
   mkdir -p "$OUT"
@@ -199,7 +71,7 @@ quick_run() {
   echo "QUICK base=$base arms=\"$arms\""
   ARMS="head control${arms:+ $arms}" sh "$HERE/breaks.sh" | tee "$OUT/breaks.out"
   verdicts=$(sed -n 's/^ARMS \(.*\) logs=.*/\1/p' "$OUT/breaks.out")
-  verdicts="$verdicts $(value_verdicts due)"
+  verdicts="$verdicts $(value_verdicts)"
   echo "DONE tier=quick $verdicts base=$base commit=$commit logs=$OUT"
   passed "$verdicts"
 }
@@ -213,12 +85,12 @@ leg_verdicts() {
   fi
 }
 
-# Runs over a reset scratch tree the value leg and the amaru leg, each when $1 is all or its inputs differ from those of its last passing run, printing their lines and returning their verdicts on the last line, a leg not run as its name and passed-on-these-inputs.
+# Runs over a reset scratch tree the value leg and the amaru leg, each when its inputs differ from those of its last passing run, printing their lines and returning their verdicts on the last line, a leg not run as its name and passed-on-these-inputs.
 value_verdicts() {
   reset_scratch >&2
   pin=$(pallas_pin)
   inputs=$(value_inputs "$pin")
-  if [ "$1" = all ] || leg_due "$LAST_VALUE" "$inputs"; then
+  if leg_due "$LAST_VALUE" "$inputs"; then
     value_leg >"$OUT/value.out" 2>&1 || true
     leg_verdicts value 's/^VALUE \(value-head=.*\) pin=.*/\1/p' "$LAST_VALUE" "$inputs" >&2
     legs=$checked
@@ -228,7 +100,7 @@ value_verdicts() {
   fi
   pallas_history "$pin" >&2 || true
   inputs=$(amaru_inputs "$(amaru_pin "$pin")" "$(image_id "$BUILD_IMAGE")")
-  if [ "$1" = all ] || leg_due "$LAST_AMARU" "$inputs"; then
+  if leg_due "$LAST_AMARU" "$inputs"; then
     amaru_leg "$pin" >"$OUT/amaru.out" 2>&1 || true
     leg_verdicts amaru 's/^AMARU \(amaru-head=[A-Z]*\( amaru-[a-z0-9-]*=[A-Z]*\)*\).*/\1/p' "$LAST_AMARU" "$inputs" >&2
     legs="$legs $checked"
@@ -238,23 +110,6 @@ value_verdicts() {
   fi
   reset_scratch >&2
   echo "$legs"
-}
-
-# Judges the pinned pallas with the value leg alone.
-value_run() {
-  mkdir -p "$OUT"
-  require_free
-  require_lib_test
-  require_build_image
-  reset_scratch
-  commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
-  verdicts=$(value_verdicts all)
-  echo "DONE tier=value $verdicts commit=$commit logs=$OUT"
-  case " $verdicts " in
-    *" value-head=PASS "*) ;;
-    *) return 1 ;;
-  esac
-  passed "head=PASS $verdicts"
 }
 
 # Judges the head, the control and every arm, and records the commit when every verdict passes.
@@ -270,7 +125,7 @@ done_run() {
   cat "$OUT/fix-arms.out"
   sh "$HERE/breaks.sh" | tee "$OUT/breaks.out"
   verdicts=$(sed -n 's/^ARMS \(.*\) logs=.*/\1/p' "$OUT/breaks.out")
-  verdicts="$verdicts $fix_arms $(value_verdicts due)"
+  verdicts="$verdicts $fix_arms $(value_verdicts)"
   echo "DONE tier=done $verdicts commit=$commit logs=$OUT"
   record_pass done "$commit" "$verdicts"
 }
@@ -301,56 +156,11 @@ ship_run() {
   fi
   cat "$OUT/live-leg.out"
   verdicts=$(sed -n 's/^ARMS \(.*\) logs=.*/\1/p' "$OUT/breaks.out")
-  verdicts="$verdicts $(value_verdicts due)"
+  verdicts="$verdicts $(value_verdicts)"
   live_lines
   shift_verdict=$(live_shift | tail -1)
   echo "DONE tier=ship $verdicts $shift_verdict live=$live commit=$commit logs=$OUT"
   record_pass ship "$commit" "$verdicts $shift_verdict live=$live"
-}
-
-regen_run() {
-  mkdir -p "$OUT"
-  require_free
-  require_lib_test
-  require_build_image
-  candidate_fsync >/dev/null || exit 2
-  reset_scratch
-  commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
-  if ! built=$(build_judge "$OUT/head.build" --locked); then
-    echo "REGEN REFUSED the judge build $built"
-    exit 1
-  fi
-  sh "$IN_IMAGE" "$SCRATCH" "$(executable "$OUT/head.build")" "$ORACLE_TESTS::ledger_oracle" \
-    --exact --ignored --nocapture >"$OUT/head.log" 2>&1 || true
-  if ! grep -q '^RESULT ' "$OUT/head.log"; then
-    echo "REGEN REFUSED the head run printed no RESULT log=$OUT/head.log"
-    exit 1
-  fi
-  live_leg || true
-  if ! grep -q '^LIVE RESULT ' "$OUT/live.log"; then
-    echo "REGEN REFUSED the live leg printed no LIVE RESULT log=$OUT/live.log"
-    exit 1
-  fi
-  mkdir -p "$REGEN_DIR"
-  committed=test_data/ledger-oracle
-  manifests="expected-unsupported.txt known.txt eval-known.txt coverage.txt"
-  for file in $manifests; do
-    cat "$OUT/head.log" "$OUT/live.log" | sed -n "s/^CANDIDATE $file //p" >"$REGEN_DIR/$file"
-  done
-  changed=$(cd "$ROOT/$SCRATCH/$committed" && git status --porcelain -- $manifests)
-  if [ -n "$changed" ]; then
-    echo "REGEN FAIL the run changed a committed manifest: $changed"
-    exit 1
-  fi
-  for file in $manifests; do
-    lines=$(wc -l <"$REGEN_DIR/$file" | tr -dc 0-9)
-    if git diff --no-index -- "$ROOT/$SCRATCH/$committed/$file" "$REGEN_DIR/$file"; then
-      echo "REGEN $file lines=$lines same"
-    else
-      echo "REGEN $file lines=$lines differs"
-    fi
-  done
-  echo "REGEN tree=unchanged candidates=$REGEN_DIR logs=$OUT"
 }
 
 "${1}_run"

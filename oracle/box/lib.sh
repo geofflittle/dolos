@@ -1,4 +1,4 @@
-# Functions and defaults the oracle box scripts share, reading ROOT, SCRATCH, REV, MIN_FREE_G, OUT, HERE, TARGET, IN_IMAGE, LOCK_POLL_SECONDS, RUN_LOCK, LAST_DONE, LAST_SHIP, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_FSYNC, NODE, ENDPOINT, GRPCURL, the ORACLE_ slice settings, CGROUP_FILE, CGROUP_ROOT, the IO_ limits and VALUE_HARNESS_URL.
+# Functions and defaults the oracle box scripts share, reading ROOT, SCRATCH, REV, BASE, JUDGED, MIN_FREE_G, OUT, HERE, TARGET, LIVE_ENV, CANDIDATE_NEED_G, IN_IMAGE, LOCK_POLL_SECONDS, RUN_LOCK, LAST_DONE, LAST_SHIP, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_FSYNC, NODE, ENDPOINT, GRPCURL, the ORACLE_ slice settings, CGROUP_FILE, CGROUP_ROOT, the IO_ limits and VALUE_HARNESS_URL.
 
 PALLAS=${PALLAS:-scratch/pallas}
 SCRATCH=${SCRATCH:-scratch/dolos}
@@ -410,19 +410,13 @@ passed() {
   done
 }
 
-# Records the commit $2 of a run of the tier $1 whose verdicts $3 pass, in LAST_DONE for the done and ship tiers and in LAST_SHIP with the verdicts and the UTC time for the ship tier and the live leg.
+# Records the commit $2 of a run of the tier $1, done or ship, whose verdicts $3 pass, in LAST_DONE, and for the ship tier in LAST_SHIP with the verdicts and the UTC time.
 record_pass() {
-  case $1 in
-    done | ship) passed "$3" ;;
-    live) [ "$3" = "live=PASS live-shift=CAUGHT" ] ;;
-    *) false ;;
-  esac || return 1
-  case $1 in
-    done | ship) echo "$2" >"$LAST_DONE" ;;
-  esac
-  case $1 in
-    ship | live) echo "commit=$2 tier=$1 verdicts=\"$3\" time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$LAST_SHIP" ;;
-  esac
+  passed "$3" || return 1
+  echo "$2" >"$LAST_DONE"
+  if [ "$1" = ship ]; then
+    echo "commit=$2 tier=$1 verdicts=\"$3\" time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$LAST_SHIP"
+  fi
 }
 
 # The whole gibibytes free on the filesystem holding $1, rounded down.
@@ -574,6 +568,40 @@ enter_slice() {
       exit 2
       ;;
   esac
+}
+
+# Prints the run's exit status as its last line, after releasing the box lock when this run holds it.
+finish() {
+  status=$?
+  release_lock
+  echo "run-exit=$status"
+}
+
+# Starts a run of the entry script $1 with the arguments after it: exits 2 when OUT is outside ROOT or REV or BASE names no commit, enters the oracle slice, takes the box lock, and unless JUDGED is set runs the script as the commit REV names it, from that commit's oracle/box in $OUT/box.
+start_run() {
+  case $OUT in
+    "$ROOT"/*) ;;
+    *) echo "REFUSED OUT=$OUT is outside $ROOT" ; exit 2 ;;
+  esac
+  if [ -z "${JUDGED:-}" ]; then
+    REV=$(full_commit REV "$REV")
+    if [ -n "${BASE:-}" ]; then
+      BASE=$(full_commit BASE "$BASE")
+    fi
+  fi
+  enter_slice "$@"
+  take_lock
+  trap finish EXIT
+  if [ -z "${JUDGED:-}" ]; then
+    JUDGED=$REV
+    mkdir -p "$OUT/box"
+    git -C "$ROOT/dolos.git" archive "$JUDGED" oracle/box | tar -x -C "$OUT/box"
+    script=$(basename "$1")
+    shift
+    export JUDGED REV BASE ROOT OUT RUN_LOCK
+    exec sh "$OUT/box/oracle/box/$script" "$@"
+  fi
+  export ROOT REV MIN_FREE_G CANDIDATE_NEED_G OUT RUN_LOCK
 }
 
 # The memory in bytes one switched arm judge may use.
@@ -1107,4 +1135,74 @@ executable() {
   else
     cat "$1"
   fi | sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' | tail -1
+}
+
+# Exits when the test of the box functions or of the field comparison fails.
+require_lib_test() {
+  mkdir -p "$OUT/lib-test" "$OUT/fields-test"
+  if ! sh "$HERE/lib_test.sh" "$OUT/lib-test" >"$OUT/lib-test.log" 2>&1; then
+    echo "REFUSED lib_test log=$OUT/lib-test.log"
+    exit 2
+  fi
+  if ! sh "$HERE/fields_test.sh" "$OUT/fields-test" >"$OUT/fields-test.log" 2>&1; then
+    echo "REFUSED fields_test log=$OUT/fields-test.log"
+    exit 2
+  fi
+}
+
+# Exports as BUILD_IMAGE the name of the build image of the files of images/dolos-build, building it when docker has none, and exits when that fails.
+require_build_image() {
+  if ! BUILD_IMAGE=$(build_image dolos-build 2>"$OUT/build-image.log"); then
+    echo "REFUSED build image log=$OUT/build-image.log"
+    exit 2
+  fi
+  export BUILD_IMAGE
+}
+
+# The file the live leg reads ENDPOINT, NODE, NODE_DB, GRPCURL, SERVE_CONFIG and CANDIDATE_GRPC from, and the free gigabytes the candidate's store needs.
+LIVE_ENV=${LIVE_ENV:-$ROOT/live.env}
+CANDIDATE_NEED_G=${CANDIDATE_NEED_G:-12}
+
+# Builds Dolos from the scratch tree into $OUT/bin/dolos.
+build_candidate() {
+  mkdir -p "$OUT/bin"
+  if ! built=$(build_checked "$OUT/bin/dolos.build" build --release --locked --bin dolos); then
+    echo "LIVE-CANDIDATE build_failed $built"
+    return 1
+  fi
+  dolos=$(executable "$OUT/bin/dolos.build")
+  cp "$ROOT${dolos#/w}" "$OUT/bin/dolos"
+}
+
+# Builds the live judge from the scratch tree into $OUT/bin/judge.
+build_live_judge() {
+  mkdir -p "$OUT/bin"
+  if ! built=$(build_judge "$OUT/bin/judge.build" --locked); then
+    echo "LIVE-CANDIDATE judge_build_failed $built"
+    return 1
+  fi
+  judge=$(executable "$OUT/bin/judge.build")
+  cp "$ROOT${judge#/w}" "$OUT/bin/judge"
+}
+
+# Syncs the candidate in $OUT/bin/dolos from the node and compares its reads with the serving Dolos field by field, logging to $OUT/candidate.log.
+sync_candidate() {
+  set -a
+  . "$LIVE_ENV"
+  set +a
+  fields=0
+  CANDIDATE="$OUT/bin/dolos" COMMIT=$commit sh "$HERE/candidate.sh" "$OUT/live" \
+    >"$OUT/candidate.log" 2>&1 || fields=$?
+  grep -E '^(LIVE-CANDIDATE|LIVE-IO|LIVE-FIELD|LIVE-FIELD-SPENT|LIVE-FIELDS|LIVE) ' "$OUT/candidate.log" |
+    cut -c1-400 || true
+  return "$fields"
+}
+
+# Judges the candidate's reads against the node with $OUT/bin/judge, logging to $OUT/live.log.
+judge_live() {
+  # The judge runs in the run's own dir, since the arms check other commits out in the scratch tree meanwhile.
+  [ -f "$OUT/bin/judge" ] && [ -f "$OUT/live/candidate/image.txt" ] &&
+    LIVE_DIR="/w/${OUT#"$ROOT"/}/live/candidate" sh "$IN_IMAGE" "${OUT#"$ROOT"/}" \
+      "/w/${OUT#"$ROOT"/}/bin/judge" "$ORACLE_TESTS::live::live" --exact --ignored --nocapture \
+      >"$OUT/live.log" 2>&1
 }
