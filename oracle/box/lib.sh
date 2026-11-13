@@ -262,7 +262,7 @@ arm_verdict() {
   rm -f "$OUT/served/$name.printed"
 }
 
-# Writes the lines on stdin to $OUT/served/$1 as what the arm $1 served, in byte order, without the number libtest gives a panicking test's thread, and with each panic's line in a file of the scratch tree given as the name of the fn whose line is the nearest above it and the count of lines between them.
+# Writes the lines on stdin to $OUT/served/$1 as what the arm $1 served, in byte order, without the number libtest gives a panicking test's thread, and with each panic's line in a file of the scratch tree given as the name of the innermost fn whose braces hold it and the count of lines from its fn line.
 record_served() {
   mkdir -p "$OUT/served"
   sed "s/^\(thread '[^']*'\) ([0-9]*) panicked at /\1 panicked at /" |
@@ -271,20 +271,30 @@ record_served() {
         head = substr($0, 1, RSTART + 12)
         split(substr($0, RSTART + 13, RLENGTH - 14), site, ":")
         path = tree "/" site[1]
-        name = ""
+        line = site[2] + 0
+        # The fns open at the line read, innermost last, each with its name, its fn line, the brace depth before it and whether its body has opened.
+        top = 0
+        depth = 0
         read = 0
-        while (read < site[2] + 0 && (getline text <path) > 0) {
+        while (read < line && (getline text <path) > 0) {
           read++
-          if (text ~ /^[ \t]*(pub(\([^)]*\))?[ \t]+)?((const|async|unsafe)[ \t]+)*fn[ \t]+[A-Za-z_]/) {
+          if (text ~ /^[ \t]*(pub(\([^)]*\))?[ \t]+)?((const|async|unsafe)[ \t]+)*fn[ \t]+[A-Za-z_]/ && text !~ /;[ \t]*$/) {
             match(text, /fn[ \t]+[A-Za-z_][A-Za-z0-9_]*/)
-            name = substr(text, RSTART, RLENGTH)
-            sub(/^fn[ \t]+/, "", name)
-            at = read
+            top++
+            name[top] = substr(text, RSTART, RLENGTH)
+            sub(/^fn[ \t]+/, "", name[top])
+            at[top] = read
+            base[top] = depth
+            opened[top] = 0
           }
+          braces = gsub(/[{]/, "{", text)
+          depth += braces - gsub(/[}]/, "}", text)
+          if (top > 0 && braces > 0) opened[top] = 1
+          while (read < line && top > 0 && opened[top] && depth <= base[top]) top--
         }
         close(path)
-        if (read == site[2] + 0 && name != "") {
-          print head site[1] ":" name "+" (read - at) ":" site[3] ":"
+        if (read == line && top > 0) {
+          print head site[1] ":" name[top] "+" (read - at[top]) ":" site[3] ":"
           next
         }
       }

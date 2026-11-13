@@ -435,6 +435,13 @@ expect served_site_moved "$(served_of "$sited" "thread 'two' (5) panicked at src
 # Must fire when the panic moves to another line of its fn, or to another fn.
 expect served_site_other_line "$(served_of "$sited" "thread 'two' (5) panicked at src/c.rs:10:5:")" "head=PASS a=CHANGED h=UNRECORDED m=MISSED"
 expect served_site_other_fn "$(served_of "$sited" "thread 'two' (5) panicked at src/c.rs:3:1:")" "head=PASS a=CHANGED h=UNRECORDED m=MISSED"
+site_file '#[test]' 'fn two() {' '    fn helper() -> bool {' '        true' '    }' '    fn short() -> bool { true }' '    assert!(helper() && !short());' '}'
+# Must not name a helper declared inside a test for a panic in the test's own body after it.
+served_of "" "thread 'two' (3) panicked at src/c.rs:7:5:" >/dev/null
+expect served_site_nested "$(cat "$S/run/served/a")" "thread 'two' panicked at src/c.rs:two+5:5:"
+# Must name the helper for a panic inside its body.
+served_of "" "thread 'two' (3) panicked at src/c.rs:4:9:" >/dev/null
+expect served_site_in_helper "$(cat "$S/run/served/a")" "thread 'two' panicked at src/c.rs:helper+1:9:"
 rm -rf "$W/served-tree"
 
 # A work tree of a.rs, b.rs and c.rs, an overlay switching a in a.rs and b in b.rs and adding a call to c.rs, and plant_overlay's exit, printed switches and switched files after the files $1 change and the files $2 go.
