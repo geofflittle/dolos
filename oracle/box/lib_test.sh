@@ -2,15 +2,15 @@
 # Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, the overlay build's target dir, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the files a planted tree writes and whether git writes each diff as committed, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the reads the ship tier takes, the image read-live.sh syncs and that it builds nothing, the box lock, how many switched arms are judged at once, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier and which of its steps it reruns, the value control's verdict, the amaru pin, the amaru leg's verdicts, the build image's name by the harness's image scripts, the image in-image.sh runs and the endorser block endorser_fixture.py reads from each LeiosDb layout.
 # Usage: lib_test.sh <empty work dir>
 set -eu
-W=$(cd "$1" && pwd)
+lib_test_work=$(cd "$1" && pwd)
 # Each case names its own REV, BASE, slice limits and build image, so those of the run that calls the test are dropped.
 unset REV BASE ORACLE_SLICE ORACLE_MEMORY ORACLE_SWAP ARM_MEMORY BUILD_IMAGE
 HERE=$(cd "$(dirname "$0")" && pwd)
-LIB=$HERE/lib.sh
+lib_test_lib=$HERE/lib.sh
 
 # A fresh build root whose scratch tree holds a.rs, read by unit x, and b.rs, read by unit y.
 setup() {
-  ROOT=$W/$1
+  ROOT=$lib_test_work/$1
   rm -rf "$ROOT"
   mkdir -p "$ROOT/scratch/dolos" "$ROOT/target/release/deps"
   git -C "$ROOT/scratch/dolos" init -q
@@ -44,23 +44,40 @@ build() {
   done
   (
     SCRATCH=scratch/dolos IN_IMAGE=$ROOT/runner.sh
-    . "$LIB"
+    . "$lib_test_lib"
     status=0
     out=$(build_checked "$ROOT/build.json" build) || status=$?
     echo "exit=$status $out"
   )
 }
 
-failed=0
+lib_test_failed=0
 expect() {
   case $2 in
     "$3") echo "LIB-TEST $1 PASS" ;;
     *)
       echo "LIB-TEST $1 FAIL got=\"$2\" want=\"$3\""
-      failed=1
+      lib_test_failed=1
       ;;
   esac
 }
+
+# Prints the verdict of the cases run so far, and fails when one of them failed.
+verdict() {
+  if [ "$lib_test_failed" -eq 0 ]; then
+    echo "LIB-TEST RESULT PASS"
+  else
+    echo "LIB-TEST RESULT FAIL"
+    return 1
+  fi
+}
+
+# Must not fire: a passing case followed by data named failed.
+expect harness_names_pass "$( (expect planted_pass a a >/dev/null && failed=1 && verdict) || true)" \
+  "LIB-TEST RESULT PASS"
+# Must fire: a failing case followed by data named failed.
+expect harness_names_fail "$( (expect planted_fail a b >/dev/null && failed=0 && verdict) || true)" \
+  "LIB-TEST RESULT FAIL"
 
 # Must not fire: a unit rebuilt after its file changed, and a fresh unit whose file did not change.
 setup unchanged
@@ -96,7 +113,7 @@ mkdir -p "$ROOT/target/overlay"
 printf 'echo "$TARGET" >"%s/target-seen"\ncat "%s/messages"\n' "$ROOT" "$ROOT" >"$ROOT/runner.sh"
 overlay_built=$(
   SCRATCH=scratch/dolos IN_IMAGE=$ROOT/runner.sh
-  . "$LIB"
+  . "$lib_test_lib"
   in_overlay build_checked "$ROOT/overlay.json" build >/dev/null
   head=changed
   if [ "$(cat "$ROOT/target/built-units")" = "$head_record" ]; then head=same; fi
@@ -105,7 +122,7 @@ overlay_built=$(
 expect overlay_target "$overlay_built" "target=target/overlay scratch=scratch/dolos head=same overlay_units=2"
 
 # An overlay whose added lines switch a in pallas and b in Dolos, with c only on a context line and f only on a removed one, and diffs under plants/ named for d and e.
-H=$W/arms
+H=$lib_test_work/arms
 rm -rf "$H"
 mkdir -p "$H/overlay" "$H/plants"
 printf '%s\n' '+++ b/pallas-validate/src/x.rs' '@@ -1,2 +1,2 @@' ' oracle_plant("c")' '+oracle_plant("a")' '-oracle_plant("f")' \
@@ -117,7 +134,7 @@ printf '%s\n' '+++ b/crates/core/src/n.rs' >"$H/plants/e.diff"
 arms() {
   (
     HERE=$H
-    . "$LIB"
+    . "$lib_test_lib"
     for arm in a b c d e f; do
       overlay=n
       pallas=n
@@ -132,7 +149,7 @@ expect arms "$(arms)" "a:yy:Cargo.toml,Cargo.lock b:yn:src/one.rs c:nn: d:nn: e:
 # Must name the overlay's switches, and must not name c, f, or d and e, whose diffs under plants/ arm nothing.
 expect planted "$(
   HERE=$H
-  . "$LIB"
+  . "$lib_test_lib"
   echo "$PLANTED_ARMS"
 )" "a b"
 
@@ -162,7 +179,7 @@ printf '%s\n' \
 caught_by() {
   (
     HERE=$H ARMS_MANIFEST=$H/catches.toml
-    . "$LIB"
+    . "$lib_test_lib"
     verdict_catch "$1" "$H/arm.log" "$H/$1.records" "$H/head.log" 2>&1 | sed 's/.* outcome=disagree //; s/ ([0-9]*) panicked.*//' | paste -sd '|' -
   )
 }
@@ -173,7 +190,7 @@ expect caught_test "$(caught_by c)" "thread 'c_bootstrap'"
 expect caught_none "$(caught_by d)" "ARM d NO_CATCH"
 
 # An arm set whose switches, records files and catches agree.
-S=$W/armset
+S=$lib_test_work/armset
 rm -rf "$S"
 mkdir -p "$S/overlay" "$S/plants"
 printf '%s\n' '+++ b/src/one.rs' '+oracle_plant("a")' '+oracle_plant("b")' >"$S/overlay/dolos.diff"
@@ -184,7 +201,7 @@ printf '%s\n' 'a lines=1 sha256=01' 'b lines=1 sha256=02' >"$S/served.txt"
 mismatches() {
   (
     HERE=$S ARMS_MANIFEST=$S/arms.toml
-    . "$LIB"
+    . "$lib_test_lib"
     arm_mismatches | paste -sd '|' -
   )
 }
@@ -195,13 +212,13 @@ printf '%s\n' 'a lines=1 sha256=01' 'b lines=1 sha256=01' >"$S/served.txt"
 expect arm_served_twice "$(mismatches)" "REFUSED arms a b serve the same lines in served.txt"
 printf '%s\n' 'a lines=1 sha256=01' 'b lines=1 sha256=02' >"$S/served.txt"
 # Must not fire on the arms this tree plants.
-expect arm_set_committed "$( (. "$LIB" && arm_mismatches) | paste -sd '|' -)" ""
+expect arm_set_committed "$( (. "$lib_test_lib" && arm_mismatches) | paste -sd '|' -)" ""
 printf '%s\n' '+++ b/src/one.rs' '+oracle_plant("a")' >"$S/overlay/dolos.diff"
 # Must fire on the records file and the catch of an arm whose switch is gone.
 expect arm_switch_removed "$(mismatches)" "REFUSED plants/b.records names no planted arm|REFUSED the catch of b names no planted arm"
 
 # A scratch tree whose second commit adds src/one.rs, the file b's switch is in.
-T=$W/touched
+T=$lib_test_work/touched
 rm -rf "$T"
 mkdir -p "$T/scratch/dolos/src"
 git -C "$T/scratch/dolos" init -q
@@ -215,7 +232,7 @@ git -C "$T/scratch/dolos" -c user.name=t -c user.email=t@t commit -q -m t
 touched() {
   (
     ROOT=$T OUT=$T HERE=$H
-    . "$LIB"
+    . "$lib_test_lib"
     if touched_arms "$1" HEAD >"$T/arms" 2>/dev/null; then
       echo "exit=0 $(paste -sd ' ' - <"$T/arms")"
     else
@@ -228,7 +245,7 @@ expect touched_changed "$(touched "$first")" "exit=0 b"
 expect touched_unlisted "$(touched 0000000000000000000000000000000000000000)" "exit=128"
 
 # Arms d, e, g and h switched in Dolos, cost-models switched in Dolos with its crate test and k with a deselection, and a scratch tree whose second commit changes d's catch, e's records, the cost-models test source, k's deselection and the place of h's catch.
-A=$W/armfiles
+A=$lib_test_work/armfiles
 rm -rf "$A"
 mkdir -p "$A/box/overlay" "$A/box/plants" "$A/scratch/dolos/oracle/box/plants" "$A/scratch/dolos/crates/cardano/tests"
 : >"$A/box/overlay/pallas.diff"
@@ -256,24 +273,24 @@ git -C "$A/scratch/dolos" -c user.name=t -c user.email=t@t commit -q -m t
 # Must fire for the changed catch of d, the records of e, the test source of cost-models and the deselection of k, and must not for g, unchanged, or h, whose catch only moved.
 expect touched_arm_files "$(
   ROOT=$A OUT=$A HERE=$A/box
-  . "$LIB"
+  . "$lib_test_lib"
   touched_arms "$before" HEAD | paste -sd ' ' -
 )" "cost-models d e k"
 # Must name k a deselect arm with no plant files, and must not name d one.
 expect deselect_arm "$(
   HERE=$A/box
-  . "$LIB"
+  . "$lib_test_lib"
   echo "$PLANTED_ARMS|$(deselect_arm k && echo k)|$(deselect_arm d || echo not-d)|$(plant_files k)"
 )" "cost-models d e g h k|k|not-d|"
 # Must not move an arm of a list with no deselect arm, and must move k after head and before control.
 expect arm_order "$(
   HERE=$A/box
-  . "$LIB"
+  . "$lib_test_lib"
   echo "$(arm_order head control d e | paste -sd ' ' -)|$(arm_order head control d k e | paste -sd ' ' -)"
 )" "head control d e|head k control d e"
 
 # A head control log, the same log with another run time, and the same log with one record judged differently.
-L=$W/logs
+L=$lib_test_work/logs
 rm -rf "$L"
 mkdir -p "$L"
 printf '%s\n' 'AGREE tx=aa' 'AGREE tx=bb' 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.88s' >"$L/head"
@@ -282,7 +299,7 @@ printf '%s\n' 'AGREE tx=aa' 'DISAGREE tx=bb' 'test result: ok. 1 passed; 0 faile
 same() {
   (
     HERE=$H
-    . "$LIB"
+    . "$lib_test_lib"
     if same_log "$1" "$2"; then echo same; else echo differs; fi
   )
 }
@@ -305,7 +322,7 @@ printf '%s\n' 'test musashi_era_translation_keeps_the_published_v3_cost_model ..
 passed() {
   (
     HERE=$H
-    . "$LIB"
+    . "$lib_test_lib"
     if crate_test_passed "$1" "$2"; then echo passed; else echo failed; fi
   )
 }
@@ -324,7 +341,7 @@ printf '%s\n' "test serve::grpc::v1alpha::$watch ... ok" "test serve::grpc::v1be
 same_crate() {
   (
     HERE=$H
-    . "$LIB"
+    . "$lib_test_lib"
     if same_crate_log "$1" "$2"; then echo same; else echo differs; fi
   )
 }
@@ -346,7 +363,7 @@ printf '%s\n' 'ORACLE_PLANT reached e' "$panic" "$context bytes_equal=2 by_langu
 encoding() {
   (
     HERE=$H
-    . "$LIB"
+    . "$lib_test_lib"
     encoding_verdict "$1" "${2:-$L/unplanted}"
   )
 }
@@ -360,7 +377,7 @@ expect encoding_missed "$(encoding "$L/unmoved")" MISSED
 verdict_of() {
   (
     HERE=$H OUT=$L
-    . "$LIB"
+    . "$lib_test_lib"
     printf '%s\n' "$@" >"$L/verdict.log"
     arm_verdict e "$L/verdict.log" '^test result: ' e '^RESULT PASS judged=[1-9]' grep -q -x fires "$L/verdict.log"
     echo "$verdict"
@@ -374,7 +391,7 @@ expect verdict_missed "$(verdict_of 'ORACLE_PLANT reached e' "$finished")" MISSE
 expect verdict_unrun "$(verdict_of 'ORACLE_PLANT reached e' fires)" UNRUN
 expect verdict_no_log "$(
   HERE=$H OUT=$L
-  . "$LIB"
+  . "$lib_test_lib"
   arm_verdict e "$L/absent.log" '^test result: ' "" "" true
   echo "$verdict"
 )" UNRUN
@@ -390,7 +407,7 @@ expect verdict_unjudged_uncounted "$(verdict_of fires "$finished")" UNJUDGED
 reach_of() {
   (
     HERE=$H OUT=$L
-    . "$LIB"
+    . "$lib_test_lib"
     pattern=$1
     shift
     printf '%s\n' "$@" >"$L/reach.log"
@@ -398,8 +415,8 @@ reach_of() {
     echo "$verdict"
   )
 }
-crate_pattern=$(. "$LIB" && judged_pattern cost-models)
-judge_pattern=$(. "$LIB" && judged_pattern coin)
+crate_pattern=$(. "$lib_test_lib" && judged_pattern cost-models)
+judge_pattern=$(. "$lib_test_lib" && judged_pattern coin)
 # Must not fire on a crate test that passed a test or a judge that judged a record, and must fire on a crate test that passed none, on a judge's count read as a crate test's and on no pattern.
 expect reach_crate_passed "$(reach_of "$crate_pattern" 'test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.10s')" UNREACHED
 expect reach_judge_judged "$(reach_of "$judge_pattern" 'RESULT PASS judged=1231162' "$finished")" UNREACHED
@@ -411,8 +428,8 @@ expect reach_no_pattern "$(reach_of "" 'RESULT PASS judged=3' "$finished")" UNJU
 # The verdict live_shift_verdict sets for a live log of the lines given, and the arms it recorded as served.
 shift_of() {
   (
-    HERE=$H OUT=$L/shift ROOT=$W/shift-tree
-    . "$LIB"
+    HERE=$H OUT=$L/shift ROOT=$lib_test_work/shift-tree
+    . "$lib_test_lib"
     rm -rf "$OUT"
     mkdir -p "$OUT"
     printf '%s\n' "$@" >"$OUT/live-shift.log"
@@ -430,7 +447,7 @@ expect shift_caught "$(shift_of "$start_late" "$tip_late" "$failed_result")" "CA
 expect verdict_words "$(cat "$HERE/breaks.sh" "$HERE/value.sh" "$HERE/amaru.sh" "$HERE/run.sh" "$HERE/regen.sh" | grep -c -E 'CAUGHT|MISSED' || true)" 0
 
 # A box dir whose served.txt holds the row $1 or none, and the verdicts served_check sets for a passing head, the arm a whose catch printed the lines after $1, the arm h held with nothing recorded and a missed arm m, with the SERVED lines it printed and the rows it added.
-S=$W/served
+S=$lib_test_work/served
 served_of() {
   rm -rf "$S"
   mkdir -p "$S/box/overlay" "$S/run"
@@ -440,8 +457,8 @@ served_of() {
   fi
   shift
   (
-    HERE=$S/box OUT=$S/run ROOT=$W/served-tree
-    . "$LIB"
+    HERE=$S/box OUT=$S/run ROOT=$lib_test_work/served-tree
+    . "$lib_test_lib"
     printf '%s\n' "$finished" >"$OUT/a.log"
     printf '%s\n' "$@" >"$OUT/a.caught"
     arm_verdict a "$OUT/a.log" '^test result: ' "" "" grep . "$OUT/a.caught"
@@ -466,8 +483,8 @@ expect served_unrecorded_line "$(tail -1 "$S/run/served.out")" "SERVED h=UNRECOR
 
 # Writes src/c.rs of the scratch tree served_of reads with the lines given, one per argument.
 site_file() {
-  mkdir -p "$W/served-tree/scratch/dolos/src"
-  printf '%s\n' "$@" >"$W/served-tree/scratch/dolos/src/c.rs"
+  mkdir -p "$lib_test_work/served-tree/scratch/dolos/src"
+  printf '%s\n' "$@" >"$lib_test_work/served-tree/scratch/dolos/src/c.rs"
 }
 site_file 'fn helper() {}' '#[test]' 'fn two() {' '    assert!(' '        false' '    );' '    other();' '}'
 served_of "" "thread 'two' (3) panicked at src/c.rs:4:5:" >/dev/null
@@ -490,11 +507,11 @@ expect served_site_nested "$(cat "$S/run/served/a")" "thread 'two' panicked at s
 # Must name the helper for a panic inside its body.
 served_of "" "thread 'two' (3) panicked at src/c.rs:4:9:" >/dev/null
 expect served_site_in_helper "$(cat "$S/run/served/a")" "thread 'two' panicked at src/c.rs:helper+1:9:"
-rm -rf "$W/served-tree"
+rm -rf "$lib_test_work/served-tree"
 
 # A work tree of a.rs, b.rs and c.rs, an overlay switching a in a.rs and b in b.rs and adding a call to c.rs, and plant_overlay's exit, printed switches and switched files after the files $1 change and the files $2 go.
 plant_of() {
-  P=$W/plant
+  P=$lib_test_work/plant
   rm -rf "$P"
   git init -q "$P"
   for f in a b c; do printf '%s\n' "fn $f() {" '}' >"$P/$f.rs"; done
@@ -503,15 +520,15 @@ plant_of() {
   printf '%s\n' 'fn a() {' '    oracle_plant("a");' '}' >"$P/a.rs"
   printf '%s\n' 'fn b() {' '    pallas::crypto::oracle_plant("b");' '}' >"$P/b.rs"
   printf '%s\n' 'fn c() {' '    shared();' '}' >"$P/c.rs"
-  git -C "$P" diff >"$W/plant.diff"
+  git -C "$P" diff >"$lib_test_work/plant.diff"
   git -C "$P" checkout -q -- .
   for f in $1; do printf '%s\n' 'fn moved() {' '}' >"$P/$f"; done
   for f in ${2:-}; do rm "$P/$f"; done
   (
     HERE=$H
-    . "$LIB"
+    . "$lib_test_lib"
     status=0
-    out=$(plant_overlay "$W/plant.diff" "$P" 2>/dev/null) || status=$?
+    out=$(plant_overlay "$lib_test_work/plant.diff" "$P" 2>/dev/null) || status=$?
     echo "exit=$status $(echo $out) switched=$(cd "$P" && grep -l oracle_plant a.rs b.rs 2>/dev/null | paste -sd, -)"
   )
 }
@@ -524,7 +541,7 @@ expect plant_gone "$(plant_of '' a.rs)" "exit=1  switched=b.rs"
 expect plant_gone_beside_switch "$(plant_of b.rs c.rs)" "exit=1 b switched=a.rs"
 
 # A repository of a.rs, b.rs, a Cargo.toml pinning pallas by git and a submodule no clone checks out, a diff switching a in a.rs as git writes it, the same diff with longer blob names and a diff switching b in b.rs.
-T=$W/plant-tree
+T=$lib_test_work/plant-tree
 rm -rf "$T" "$H/tree"
 mkdir -p "$H/tree"
 git init -q "$T/src"
@@ -550,7 +567,7 @@ tree_stamp() {
 tree_plant() {
   (
     ROOT=$T HERE=$H
-    . "$LIB"
+    . "$lib_test_lib"
     status=0
     out=$(plant_tree built "$T/src" "$tree_base" scratch/pallas-x "$@" 2>"$T/plant.err") || status=$?
     kept=
@@ -579,9 +596,9 @@ expect tree_regen_differs "$(tree_plant "$H/tree/a-long.diff")" \
 # The free gibibytes of a filesystem holding $1 bytes free and require_free's verdict with a floor of $2, with a df that answers -B1 in bytes and -BG in gibibytes rounded up.
 free_of() {
   (
-    ROOT=$W/free MIN_FREE_G=$2
+    ROOT=$lib_test_work/free MIN_FREE_G=$2
     HERE=$H
-    . "$LIB"
+    . "$lib_test_lib"
     df() {
       echo Avail
       case $1 in
@@ -598,10 +615,10 @@ free_of() {
 # Must not fire: exactly 10 gibibytes free passes a 10 gibibyte floor.
 expect free_whole "$(free_of 10737418240 10)" "free=10 exit=0 "
 # Must fire: one byte short of 10 gibibytes is 9, which a 10 gibibyte floor refuses.
-expect free_short "$(free_of 10737418239 10)" "free=9 exit=2 REFUSED free=9G below 10G at $W/free"
+expect free_short "$(free_of 10737418239 10)" "free=9 exit=2 REFUSED free=9G below 10G at $lib_test_work/free"
 
 # Maps of a process with libeatmydata preloaded, of one without it, of one whose loader has mapped only itself, of one that has exited, and none at all.
-M=$W/maps
+M=$lib_test_work/maps
 rm -rf "$M"
 mkdir -p "$M"
 printf '%s\n' '7f00 r-xp 00000000 08:01 1 /usr/lib/x86_64-linux-gnu/libc.so.6' '7f01 r-xp 00000000 08:01 2 /opt/eatmydata.so' >"$M/preloaded"
@@ -611,7 +628,7 @@ printf '%s\n' '7f02 r-xp 00000000 08:01 3 /usr/lib/x86_64-linux-gnu/ld-linux-x86
 fsync_of() {
   (
     HERE=$H
-    . "$LIB"
+    . "$lib_test_lib"
     fsync_state "$1"
   )
 }
@@ -643,7 +660,7 @@ expect fsync_process_off "$(process_fsync /usr/lib/x86_64-linux-gnu/libeatmydata
 mode_of() {
   (
     HERE=$H
-    . "$LIB"
+    . "$lib_test_lib"
     status=0
     out=$(CANDIDATE_FSYNC=$1 candidate_fsync 2>&1) || status=$?
     echo "exit=$status $out"
@@ -660,7 +677,7 @@ expect mode_other "$(mode_of none)" "exit=2 LIVE-CANDIDATE REFUSED candidate_fsy
 streak_of() {
   (
     HERE=$H
-    . "$LIB"
+    . "$lib_test_lib"
     IO_NODE_LAG_S=60 IO_SERVE_LAG_SLOTS=40 IO_SERVE_MS=2000
     io_streak "$1" "$2"
   )
@@ -679,7 +696,7 @@ expect io_missing "$(streak_of 0 'LIVE-IO node_lag_s=5 serve_lag_slots=0')" 1
 guard_of() {
   (
     HERE=$H
-    . "$LIB"
+    . "$lib_test_lib"
     IO_NODE_LAG_S=60 IO_SERVE_LAG_SLOTS=40 IO_SERVE_MS=2000
     streak=0
     n=0
@@ -705,8 +722,8 @@ expect io_breach "$(guard_of "$under" "$over" "$over" "$over")" "breach sample=4
 records_of() {
   (
     HERE=$H
-    . "$LIB"
-    R=$W/records
+    . "$lib_test_lib"
+    R=$lib_test_work/records
     rm -rf "$R"
     mkdir -p "$R"
     LAST_DONE=$R/last-done LAST_SHIP=$R/last-ship
@@ -788,7 +805,7 @@ record_left() {
 
 # A fresh build root for a lock case.
 lock_root() {
-  K=$W/$1
+  K=$lib_test_work/$1
   rm -rf "$K"
   mkdir -p "$K"
 }
@@ -946,18 +963,18 @@ for script in run.sh regen.sh; do
   expect "entry_$script" "$(cat "$K/old.seen")" "script=$script args=done"
 done
 
-# A digest reference to an image, and the dir $W/reads-$1 of reads made from it at the commit $2 whose candidate verdict is $3.
+# A digest reference to an image, and the dir $lib_test_work/reads-$1 of reads made from it at the commit $2 whose candidate verdict is $3.
 IMAGE_REF=ghcr.io/o/dolos@sha256:$(printf '%064d' 0)
 reads_of() {
-  mkdir -p "$W/reads-$1"
-  echo "image=$IMAGE_REF commit=$2 candidate=$3" >"$W/reads-$1/reads.txt"
+  mkdir -p "$lib_test_work/reads-$1"
+  echo "image=$IMAGE_REF commit=$2 candidate=$3" >"$lib_test_work/reads-$1/reads.txt"
 }
 reads_of rev c PASS
 # Must not fire: run.sh given quick, done or ship goes on to the free space floor, ship given reads made at REV.
 for word in quick done ship; do
   lock_root "tier-word-$word"
   (
-    REV=c LIVE_READS=$W/reads-rev
+    REV=c LIVE_READS=$lib_test_work/reads-rev
     export REV LIVE_READS
     tier "$K" "" run.sh "$word"
   )
@@ -970,7 +987,7 @@ for word in live value regen quicker; do
   expect "tier_word_$word" "$(run_out "$K")" "usage: run.sh quick|done|ship run-exit=2 exit=2"
 done
 
-# The output of a ship run with REV c on the build root $W/ship-reads-$1, given the reads $2, or no reads when $2 is empty.
+# The output of a ship run with REV c on the build root $lib_test_work/ship-reads-$1, given the reads $2, or no reads when $2 is empty.
 ship_reads_of() {
   lock_root "ship-reads-$1"
   (
@@ -987,17 +1004,17 @@ ship_reads_of() {
 }
 # Must not fire: reads whose candidate failed reach the free space floor, since the live verdict fails on them later.
 reads_of failed c "FAIL exit=1"
-expect ship_reads_failed "$(ship_reads_of failed "$W/reads-failed")" "REFUSED free run-exit=2 exit=2"
+expect ship_reads_failed "$(ship_reads_of failed "$lib_test_work/reads-failed")" "REFUSED free run-exit=2 exit=2"
 # Must refuse: no reads, a dir that holds no record of them, and reads of an image built from another commit than REV.
 expect ship_reads_unset "$(ship_reads_of unset "")" "REFUSED LIVE_READS= holds no reads.txt run-exit=2 exit=2"
-mkdir -p "$W/reads-none"
-expect ship_reads_none "$(ship_reads_of none "$W/reads-none")" \
-  "REFUSED LIVE_READS=$W/reads-none holds no reads.txt run-exit=2 exit=2"
+mkdir -p "$lib_test_work/reads-none"
+expect ship_reads_none "$(ship_reads_of none "$lib_test_work/reads-none")" \
+  "REFUSED LIVE_READS=$lib_test_work/reads-none holds no reads.txt run-exit=2 exit=2"
 reads_of other d PASS
-expect ship_reads_other "$(ship_reads_of other "$W/reads-other")" \
-  "REFUSED LIVE_READS=$W/reads-other commit=d is not REV=c run-exit=2 exit=2"
+expect ship_reads_other "$(ship_reads_of other "$lib_test_work/reads-other")" \
+  "REFUSED LIVE_READS=$lib_test_work/reads-other commit=d is not REV=c run-exit=2 exit=2"
 
-# A build root $W/$1 whose dolos.git holds one commit of these box scripts, without read-live.sh when $2 is old, with a candidate.sh that records what it was handed in the root's candidate.seen and exits $3, and a docker that logs each call to the root's docker.log and answers image inspect with that commit's id, or with $4 when it is given.
+# A build root $lib_test_work/$1 whose dolos.git holds one commit of these box scripts, without read-live.sh when $2 is old, with a candidate.sh that records what it was handed in the root's candidate.seen and exits $3, and a docker that logs each call to the root's docker.log and answers image inspect with that commit's id, or with $4 when it is given.
 image_root() {
   lock_root "$1"
   mkdir -p "$K/src/oracle/box"
@@ -1106,14 +1123,14 @@ expect lock_candidate_released "$(record_left "$K")" released
 
 # A build root whose scratch Cargo.toml holds the lines after $1, and the pin pallas_pin reads from it.
 pin_of() {
-  V=$W/pin-$1
+  V=$lib_test_work/pin-$1
   rm -rf "$V"
   mkdir -p "$V/scratch/dolos"
   shift
   printf '%s\n' "$@" >"$V/scratch/dolos/Cargo.toml"
   (
     ROOT=$V SCRATCH=scratch/dolos
-    . "$LIB"
+    . "$lib_test_lib"
     echo "pin=$(pallas_pin)"
   )
 }
@@ -1123,17 +1140,17 @@ expect pin_validate "$(pin_of validate 'pallas-traverse = { git = "https://githu
 
 # A build root with no cargo git database whose scratch Cargo.toml pins pallas-validate to the commit $2 of the repository $1, and the scratch pallas head after pallas_tree.
 tree_of() {
-  T=$W/tree
+  T=$lib_test_work/tree
   rm -rf "$T"
   mkdir -p "$T/scratch/dolos"
   echo "pallas-validate = { git = \"$1\", rev = \"$2\" }" >"$T/scratch/dolos/Cargo.toml"
   (
     ROOT=$T SCRATCH=scratch/dolos PALLAS=scratch/pallas
-    . "$LIB"
+    . "$lib_test_lib"
     if pallas_tree "$2" >/dev/null 2>&1; then git -C "$T/scratch/pallas" rev-parse HEAD; else echo refused; fi
   )
 }
-P=$W/tree-src
+P=$lib_test_work/tree-src
 rm -rf "$P"
 git init -q "$P"
 git -C "$P" -c user.name=t -c user.email=t@t commit -q --allow-empty -m t
@@ -1143,7 +1160,7 @@ expect tree_absent "$(tree_of "$P" 0000000000000000000000000000000000000001)" re
 expect tree_fetch "$(tree_of "$P" "$src")" "$src"
 
 # A box dir with the value and amaru legs' files and a scratch tree with its corpora, and whether each leg is due before a pass, after one, after a changed pin, image, plant, corpus or seed.
-V=$W/value
+V=$lib_test_work/value
 rm -rf "$V"
 mkdir -p "$V/box/value" "$V/box/overlay" "$V/box/amaru" "$V/runs" "$V/scratch/dolos/test_data/ledger-oracle"
 cp "$HERE/lib.sh" "$HERE/value.sh" "$HERE/amaru.sh" "$V/box/"
@@ -1216,26 +1233,26 @@ expect value_due_amaru_row "$(due value aaa i1)" passed
 expect amaru_due_amaru_row "$(due amaru 'u r1' i1)" due
 
 # A build root whose branch pins pallas and holds the corpora, and a copy of this box dir whose arms, tests, image build and legs are stubs that count each leg run.
-Q=$W/quick
-rm -rf "$Q" "$W/quick-src" "$W/quick-box"
-mkdir -p "$Q/runs" "$W/quick-src/test_data/ledger-oracle"
+Q=$lib_test_work/quick
+rm -rf "$Q" "$lib_test_work/quick-src" "$lib_test_work/quick-box"
+mkdir -p "$Q/runs" "$lib_test_work/quick-src/test_data/ledger-oracle"
 git init -q --bare "$Q/dolos.git"
-git -C "$W/quick-src" init -q
-echo 'pallas-validate = { git = "https://github.com/a/pallas", rev = "abc" }' >"$W/quick-src/Cargo.toml"
-echo i >"$W/quick-src/test_data/ledger-oracle/ic.jsonl.gz"
-echo s >"$W/quick-src/test_data/ledger-oracle/supp.jsonl.gz"
-git -C "$W/quick-src" add -A
-git -C "$W/quick-src" -c user.name=t -c user.email=t@t commit -q -m t
-git -C "$W/quick-src" push -q "$Q/dolos.git" HEAD:refs/heads/b
-qrev=$(git -C "$W/quick-src" rev-parse HEAD)
-cp -R "$HERE" "$W/quick-box"
-echo 'echo "ARMS head=PASS control=CLEAN logs=x"' >"$W/quick-box/breaks.sh"
-echo 'exit 0' >"$W/quick-box/lib_test.sh"
-echo 'exit 0' >"$W/quick-box/fields_test.sh"
-echo 'build_image() { echo dolos-build:stub; }' >>"$W/quick-box/lib.sh"
-echo 'value_leg() { echo ran >>"$ROOT/legs"; echo "VALUE value-head=PASS value-control=CLEAN pin=x"; }' >>"$W/quick-box/value.sh"
+git -C "$lib_test_work/quick-src" init -q
+echo 'pallas-validate = { git = "https://github.com/a/pallas", rev = "abc" }' >"$lib_test_work/quick-src/Cargo.toml"
+echo i >"$lib_test_work/quick-src/test_data/ledger-oracle/ic.jsonl.gz"
+echo s >"$lib_test_work/quick-src/test_data/ledger-oracle/supp.jsonl.gz"
+git -C "$lib_test_work/quick-src" add -A
+git -C "$lib_test_work/quick-src" -c user.name=t -c user.email=t@t commit -q -m t
+git -C "$lib_test_work/quick-src" push -q "$Q/dolos.git" HEAD:refs/heads/b
+qrev=$(git -C "$lib_test_work/quick-src" rev-parse HEAD)
+cp -R "$HERE" "$lib_test_work/quick-box"
+echo 'echo "ARMS head=PASS control=CLEAN logs=x"' >"$lib_test_work/quick-box/breaks.sh"
+echo 'exit 0' >"$lib_test_work/quick-box/lib_test.sh"
+echo 'exit 0' >"$lib_test_work/quick-box/fields_test.sh"
+echo 'build_image() { echo dolos-build:stub; }' >>"$lib_test_work/quick-box/lib.sh"
+echo 'value_leg() { echo ran >>"$ROOT/legs"; echo "VALUE value-head=PASS value-control=CLEAN pin=x"; }' >>"$lib_test_work/quick-box/value.sh"
 printf '%s\n' 'amaru_leg() { echo ran >>"$ROOT/amaru-legs"; echo "AMARU amaru-head=PASS rev=x"; }' \
-  'amaru_pin() { cat "$ROOT/amaru-pin"; }' 'pallas_history() { :; }' 'image_id() { echo i1; }' >>"$W/quick-box/amaru.sh"
+  'amaru_pin() { cat "$ROOT/amaru-pin"; }' 'pallas_history() { :; }' 'image_id() { echo i1; }' >>"$lib_test_work/quick-box/amaru.sh"
 echo 'u r1' >"$Q/amaru-pin"
 slice_of "$Q" /dolos.slice/dolos-oracle.slice 2684354560 1073741824
 # The number of value and amaru leg runs after a quick run on the build root Q with BASE the judged commit.
@@ -1244,7 +1261,7 @@ quick_legs() {
     ROOT=$Q OUT=$Q/runs/q$1 JUDGED=t REV=$qrev BASE=$qrev MIN_FREE_G=0 RUN_LOCK=$Q/run.lock
     CGROUP_FILE=$Q/cgroup CGROUP_ROOT=$Q/cgroup-fs
     export ROOT OUT JUDGED REV BASE MIN_FREE_G RUN_LOCK CGROUP_FILE CGROUP_ROOT
-    timeout 30 sh "$W/quick-box/run.sh" quick >"$Q/q$1.out" 2>&1 || true
+    timeout 30 sh "$lib_test_work/quick-box/run.sh" quick >"$Q/q$1.out" 2>&1 || true
   )
   echo "value=$(cat "$Q/legs" 2>/dev/null | grep -c . || true) amaru=$(cat "$Q/amaru-legs" 2>/dev/null | grep -c . || true)"
 }
@@ -1259,15 +1276,15 @@ expect quick_amaru_rev "$(quick_legs 3)" "value=1 amaru=2"
 
 # The run of the value arm emptyguards with the tier output $2, the reached line $3 and the disagreement class $4, and value_verdict's verdict for it.
 value_verdict_of() {
-  V=$W/value-verdict-$1
+  V=$lib_test_work/value-verdict-$1
   rm -rf "$V"
   mkdir -p "$V/value/emptyguards"
   echo "$2" >"$V/value/emptyguards.out"
   echo "$3" >"$V/value/emptyguards/tx.given.reached"
   printf '{"cls": "%s", "key": "k"}\n' "$4" >"$V/value/emptyguards/tx.given.schema.dis.jsonl"
   (
-    ROOT=$W HERE=$HERE OUT=$V
-    . "$LIB"
+    ROOT=$lib_test_work HERE=$HERE OUT=$V
+    . "$lib_test_lib"
     . "$HERE/value.sh"
     value_verdict emptyguards
     echo "$verdict"
@@ -1284,12 +1301,12 @@ expect value_verdict_unreached "$(value_verdict_of unreached "$ran" '' "$class")
 expect value_verdict_other_plant "$(value_verdict_of other_plant "$ran" 'ORACLE_PLANT reached emptyguard' "$class")" UNREACHED
 expect value_verdict_both "$(value_verdict_of both "$ran" "$reached" "$class")" CAUGHT
 # Must record no line of another class, and must record each disagreement of the class with its file's name under the arm's verdict name.
-expect value_served_other_class "$(wc -l <"$W/value-verdict-other_class/served/value-emptyguards" | tr -dc 0-9)" 0
-expect value_served_both "$(cat "$W/value-verdict-both/served/value-emptyguards")" \
+expect value_served_other_class "$(wc -l <"$lib_test_work/value-verdict-other_class/served/value-emptyguards" | tr -dc 0-9)" 0
+expect value_served_both "$(cat "$lib_test_work/value-verdict-both/served/value-emptyguards")" \
   "tx.given.schema.dis.jsonl:{\"cls\": \"$class\", \"key\": \"k\"}"
 
 # A pallas tree whose pallas-validate Cargo.toml names an amaru-uplc entry, and the url and commit amaru_pin reads at its head.
-A=$W/amaru-pin
+A=$lib_test_work/amaru-pin
 rm -rf "$A"
 mkdir -p "$A/scratch/pallas/pallas-validate"
 git -C "$A/scratch/pallas" init -q
@@ -1308,10 +1325,10 @@ expect amaru_pin "$(
 # The verdict of amaru_passed on a test log whose result line is $2, with $1 generated tests.
 amaru_passed_of() {
   (
-    ROOT=$W HERE=$HERE
+    ROOT=$lib_test_work HERE=$HERE
     . "$HERE/amaru.sh"
-    printf '%s\n' "$2" | sed -n 's/^\(test result: .* filtered out; finished in\) [0-9.]*s$/\1/p' >"$W/amaru.log.result"
-    if amaru_passed "$W/amaru.log" "$1"; then echo pass; else echo fail; fi
+    printf '%s\n' "$2" | sed -n 's/^\(test result: .* filtered out; finished in\) [0-9.]*s$/\1/p' >"$lib_test_work/amaru.log.result"
+    if amaru_passed "$lib_test_work/amaru.log" "$1"; then echo pass; else echo fail; fi
   )
 }
 # Must not pass with a test short, a failed test, a filtered test or no generated test, and must pass with every test passed.
@@ -1324,7 +1341,7 @@ expect amaru_all "$(amaru_passed_of 1065 'test result: ok. 1065 passed; 0 failed
 # The count amaru_generated gives for a target holding a generated source of $2 tests at the build path $1 under debug/build, or none when $1 is empty.
 amaru_generated_of() {
   (
-    ROOT=$W/gen-count HERE=$HERE
+    ROOT=$lib_test_work/gen-count HERE=$HERE
     rm -rf "$ROOT"
     mkdir -p "$ROOT/t/debug/build/amaru-kernel-1/out"
     printf '#[test]\nfn k() {}\n' >"$ROOT/t/debug/build/amaru-kernel-1/out/generated_tests.rs"
@@ -1348,10 +1365,10 @@ expect amaru_generated_nested "$(amaru_generated_of amaru-uplc/1a2b 3)" 3
 # The verdict of amaru_caught for the name part divideinteger on a test log of the lines given, and the lines it printed.
 amaru_caught_of() {
   (
-    ROOT=$W HERE=$HERE
+    ROOT=$lib_test_work HERE=$HERE
     . "$HERE/amaru.sh"
-    printf '%s\n' "$@" >"$W/amaru-arm.log"
-    if lines=$(amaru_caught "$W/amaru-arm.log" divideinteger); then echo "caught $lines"; else echo "missed $lines"; fi
+    printf '%s\n' "$@" >"$lib_test_work/amaru-arm.log"
+    if lines=$(amaru_caught "$lib_test_work/amaru-arm.log" divideinteger); then echo "caught $lines"; else echo "missed $lines"; fi
   )
 }
 # Must not fire on another failed test or a passing divideInteger test, and must fire on a failed one, printing it.
@@ -1361,7 +1378,7 @@ expect amaru_caught_divide "$(amaru_caught_of 'test builtin_semantics_divideinte
 
 # A build root whose harness tier.sh runs tx:given and eb:arb unless handed pairs, logging each pair whose values it made and each it ran the probe $R/head on, which prints the line in probe-KIND before each value.
 tier_root() {
-  R=$W/tier
+  R=$lib_test_work/tier
   rm -rf "$R"
   mkdir -p "$R/value/gen/bin" "$R/scratch/dolos/test_data/ledger-oracle" "$R/scratch/pallas/test_data"
   touch "$R/scratch/dolos/test_data/ledger-oracle/ic.jsonl.gz" "$R/scratch/dolos/test_data/ledger-oracle/supp.jsonl.gz"
@@ -1456,7 +1473,7 @@ rm "$R/status-tx"
 
 # A head dir holding the values $2 and the head probe output $3 for the pair tx.given, and the verdict of value_control with a probe printing $4.
 control_of() {
-  R=$W/control-$1
+  R=$lib_test_work/control-$1
   rm -rf "$R"
   mkdir -p "$R/head"
   if [ -n "$2" ]; then
@@ -1466,7 +1483,7 @@ control_of() {
   printf '#!/bin/sh\nprintf "%%s\\n" "%s"\n' "$4" >"$R/probe"
   chmod +x "$R/probe"
   (
-    ROOT=$W HERE=$HERE
+    ROOT=$lib_test_work HERE=$HERE
     . "$HERE/value.sh"
     value_control "$R/head" "$R/control" "$R/probe" >/dev/null 2>&1
     echo "$control"
@@ -1480,7 +1497,7 @@ expect control_reached "$(control_of reached v 'ORACLE_PLANT reached x' 'ORACLE_
 
 # A repository of the section FIX_REPO, or dolos, with a base commit, a feature commit and the fix commits named in $1, and a manifest arms.toml whose rows are the remaining arguments.
 fixture() {
-  F=$W/fixes
+  F=$lib_test_work/fixes
   rm -rf "$F"
   git init -q "$F"
   git -C "$F" -c user.name=t -c user.email=t@t commit -q --allow-empty -m base
@@ -1514,8 +1531,8 @@ restack() {
 # The exit and lines of fix_arms over the fixture, with each commit hash left out.
 fix_arms_of() {
   (
-    ROOT=$W HERE=$HERE ARMS_MANIFEST=$F/arms.toml
-    . "$LIB"
+    ROOT=$lib_test_work HERE=$HERE ARMS_MANIFEST=$F/arms.toml
+    . "$lib_test_lib"
     PLANTED_ARMS="colret coin"
     out=$(fix_arms "$F" "${FIX_REPO:-dolos}" HEAD) && code=0 || code=$?
     echo "exit=$code $(echo "$out" | sed 's/commit=[0-9a-f]* //' | paste -sd '|' -)"
@@ -1546,11 +1563,11 @@ expect fixes_uncalled_unexplained "$(fixes_of 'a' 'a exclude = "uncalled"')" \
 expect fixes_unknown_reason "$(fixes_of 'a' 'a exclude = "later"')" \
   'exit=1 FIX-ARM repo=dolos row=exclude=later subject="fix: a"|FIX-ARMS repo=dolos fixes=1 armed=0 excluded=0 unarmed=0 failing=1'
 expect fixes_base_absent "$(
-  F=$W/fixes
+  F=$lib_test_work/fixes
   sed -i.bak 's/^base = .*/base = "0000000000000000000000000000000000000001"/' "$F/arms.toml"
   (
-    ROOT=$W HERE=$HERE ARMS_MANIFEST=$F/arms.toml
-    . "$LIB"
+    ROOT=$lib_test_work HERE=$HERE ARMS_MANIFEST=$F/arms.toml
+    . "$lib_test_lib"
     fix_arms "$F" dolos HEAD | paste -sd '|' -
   )
 )" "FIX-ARM repo=dolos base=0000000000000000000000000000000000000001 not-found|FIX-ARMS repo=dolos fixes=0 armed=0 excluded=0 unarmed=0 failing=1"
@@ -1569,12 +1586,12 @@ expect fixes_two_rows "$(fixes_of 'a' 'a arm = "colret"' 'a exclude = "conway"')
 
 # A pool of the width $1 over eight items, each line the item, whether four items had started within five seconds of its start, and whether at most four ran half a second later.
 pool_of() {
-  P=$W/pool-$1
+  P=$lib_test_work/pool-$1
   rm -rf "$P"
   mkdir -p "$P/started" "$P/running"
   (
-    ROOT=$W OUT=$P
-    . "$LIB"
+    ROOT=$lib_test_work OUT=$P
+    . "$lib_test_lib"
     seen() {
       touch "$P/started/$1" "$P/running/$1"
       t=0
@@ -1599,12 +1616,12 @@ expect pool_four "$(pool_of 4)" "a:met:ok b:met:ok c:met:ok d:met:ok e:met:ok f:
 # The crate test arms, the judge's added packages and the test targets of the arms given, and the executables a message file of two test binaries names.
 crate_of() {
   (
-    ROOT=$W
-    . "$LIB"
+    ROOT=$lib_test_work
+    . "$lib_test_lib"
     printf '%s\n' '{"reason":"compiler-artifact","target":{"kind":["lib"],"name":"dolos","src_path":"a"},"executable":"/w/target/release/deps/dolos-1"}' \
       '{"reason":"compiler-artifact","target":{"kind":["lib"],"name":"dolos_cardano","src_path":"b"},"executable":"/w/target/release/deps/dolos_cardano-2"}' \
-      '{"reason":"compiler-artifact","target":{"kind":["lib"],"name":"hex","src_path":"c"},"executable":null}' >"$W/two.build"
-    echo "arms=[$(crate_arms "$@")] joint=[$(joint_packages "$@")] targets=[$(for a in $(crate_arms "$@"); do crate_test_target "$a"; done | paste -sd ' ' -)] dolos=$(executable "$W/two.build" dolos) cardano=$(executable "$W/two.build" dolos_cardano) last=$(executable "$W/two.build")"
+      '{"reason":"compiler-artifact","target":{"kind":["lib"],"name":"hex","src_path":"c"},"executable":null}' >"$lib_test_work/two.build"
+    echo "arms=[$(crate_arms "$@")] joint=[$(joint_packages "$@")] targets=[$(for a in $(crate_arms "$@"); do crate_test_target "$a"; done | paste -sd ' ' -)] dolos=$(executable "$lib_test_work/two.build" dolos) cardano=$(executable "$lib_test_work/two.build" dolos_cardano) last=$(executable "$lib_test_work/two.build")"
   )
 }
 # Must name no crate test and add no package for arms the judge runs, must add dolos-cardano alone for the non-strict lib tests, and must pick each executable by its target.
@@ -1614,7 +1631,7 @@ expect crate_strict "$(crate_of cost-models endorser-tx-dropped | sed 's/ dolos=
 
 # Must keep a value switch's name and prefix an overlay switch's.
 expect value_key "$(
-  ROOT=$W HERE=$HERE
+  ROOT=$lib_test_work HERE=$HERE
   . "$HERE/value.sh"
   echo "$(value_key value-spend-redeemer) $(value_key emptyguards)"
 )" "value-spend-redeemer value-emptyguards"
@@ -1671,13 +1688,13 @@ expect slice_no_swap "$(run_out "$K")" "REFUSED slice=dolos-oracle.slice memory=
 
 # The number of switched arms judged at once in the oracle slice with the memory limit $1, for ARM_MEMORY $2 or its default when $2 is empty.
 arm_jobs_of() {
-  J=$W/arm-jobs-$1
+  J=$lib_test_work/arm-jobs-$1
   slice_of "$J" /dolos.slice/dolos-oracle.slice "$1" 1073741824
   (
     ROOT=$J CGROUP_FILE=$J/cgroup CGROUP_ROOT=$J/cgroup-fs
     unset ARM_MEMORY
     [ -z "$2" ] || ARM_MEMORY=$2
-    . "$LIB"
+    . "$lib_test_lib"
     arm_jobs
   )
 }
@@ -1689,7 +1706,7 @@ expect arm_jobs_one "$(arm_jobs_of 536870912 1073741824)" 1
 expect arm_jobs_box "$(arm_jobs_of 2684354560 '')" 1
 
 # The arguments the docker of the box scripts hands the docker it fronts for the arguments given, or its refusal and exit.
-D=$W/docker
+D=$lib_test_work/docker
 mkdir -p "$D"
 printf '%s\n' '#!/bin/sh' 'echo "$*"' >"$D/docker"
 chmod +x "$D/docker"
@@ -1713,14 +1730,14 @@ expect docker_builder_build "$(docker_of builder build -t name dir | paste -sd '
 expect docker_option "$(docker_of --host x run image | paste -sd ' ' -)" "REFUSED docker option --host before the command exit=2"
 # Must resolve to itself on the PATH lib.sh exports, so a bare docker in a box script or the harness it starts reaches it.
 expect docker_path "$(
-  ROOT=$W/docker-path
-  . "$LIB"
+  ROOT=$lib_test_work/docker-path
+  . "$lib_test_lib"
   command -v docker
 )" "$HERE/bin/docker"
 
-# Commits to the git repo $W/harness-src image scripts whose build-image.sh prints NAME:$1@DOCKERFILE for the image dir NAME of the images dir it is handed, and prints the commit.
+# Commits to the git repo $lib_test_work/harness-src image scripts whose build-image.sh prints NAME:$1@DOCKERFILE for the image dir NAME of the images dir it is handed, and prints the commit.
 harness_rule() {
-  H=$W/harness-src
+  H=$lib_test_work/harness-src
   [ -d "$H/.git" ] || git init -q "$H"
   mkdir -p "$H/conformance-value-oracle/gen"
   printf '#!/bin/sh\necho "$1:%s@$(cat "$2/$1/Dockerfile")"\n' "$1" >"$H/conformance-value-oracle/gen/build-image.sh"
@@ -1730,9 +1747,9 @@ harness_rule() {
   git -C "$H" rev-parse HEAD
 }
 
-# A copy at $W/$1 of the box scripts and overlay diffs whose build image dir holds the Dockerfile line $2 and whose harness.rev names the commit $3, with a docker in its bin that logs each call to docker.log.
+# A copy at $lib_test_work/$1 of the box scripts and overlay diffs whose build image dir holds the Dockerfile line $2 and whose harness.rev names the commit $3, with a docker in its bin that logs each call to docker.log.
 image_box() {
-  B=$W/$1
+  B=$lib_test_work/$1
   rm -rf "$B"
   mkdir -p "$B/bin" "$B/box/images/dolos-build" "$B/box/value"
   cp "$HERE"/*.sh "$B/box/"
@@ -1746,7 +1763,7 @@ image_box() {
 # The image in-image.sh of the copy $1 runs a command in.
 run_image() {
   : >"$1/docker.log"
-  PATH=$1/bin:$PATH ROOT=$W sh "$1/box/in-image.sh" tree true 2>/dev/null || echo "in-image exit=$?"
+  PATH=$1/bin:$PATH ROOT=$lib_test_work sh "$1/box/in-image.sh" tree true 2>/dev/null || echo "in-image exit=$?"
   sed -n 's|.* -w /w/tree \([^ ]*\) true$|\1|p' "$1/docker.log"
 }
 
@@ -1762,19 +1779,19 @@ build_name() {
 rule1=$(harness_rule rule1)
 image_box image-a a "$rule1"
 # Must name and build the build image by the image scripts of the harness at value/harness.rev, over this box's images dir.
-expect image_rule "$(build_name "$W/image-a" "$W/harness-src")" "dolos-build:rule1@a"
+expect image_rule "$(build_name "$lib_test_work/image-a" "$lib_test_work/harness-src")" "dolos-build:rule1@a"
 # Must fire: a harness commit whose rule differs names another image.
-echo "$(harness_rule rule2)" >"$W/image-a/box/value/harness.rev"
-expect image_rule_changed "$(build_name "$W/image-a" "$W/harness-src")" "dolos-build:rule2@a"
+echo "$(harness_rule rule2)" >"$lib_test_work/image-a/box/value/harness.rev"
+expect image_rule_changed "$(build_name "$lib_test_work/image-a" "$lib_test_work/harness-src")" "dolos-build:rule2@a"
 # Must not fire: a harness commit the build root holds is not fetched again.
-expect image_rule_held "$(build_name "$W/image-a" "$W/missing")" "dolos-build:rule2@a"
+expect image_rule_held "$(build_name "$lib_test_work/image-a" "$lib_test_work/missing")" "dolos-build:rule2@a"
 # Must run the image BUILD_IMAGE names, and must start no container when none is named.
-expect image_run_named "$(BUILD_IMAGE=named:1 run_image "$W/image-a")" named:1
-expect image_run_unnamed "$(run_image "$W/image-a" | sed 's/exit=[0-9]*/exit=N/') calls=$(grep -c . "$W/image-a/docker.log")" "in-image exit=N calls=0"
+expect image_run_named "$(BUILD_IMAGE=named:1 run_image "$lib_test_work/image-a")" named:1
+expect image_run_unnamed "$(run_image "$lib_test_work/image-a" | sed 's/exit=[0-9]*/exit=N/') calls=$(grep -c . "$lib_test_work/image-a/docker.log")" "in-image exit=N calls=0"
 
-# Commits to the git repo $W/gen-src a harness whose generator is named gen-$1 and whose build-generator.sh logs each call to $W/gen.log and makes that generator unless $2 is fail, and prints the commit.
+# Commits to the git repo $lib_test_work/gen-src a harness whose generator is named gen-$1 and whose build-generator.sh logs each call to $lib_test_work/gen.log and makes that generator unless $2 is fail, and prints the commit.
 harness_gen() {
-  H=$W/gen-src
+  H=$lib_test_work/gen-src
   G=$H/conformance-value-oracle/gen
   [ -d "$H/.git" ] || git init -q "$H"
   mkdir -p "$G"
@@ -1782,7 +1799,7 @@ harness_gen() {
   printf '#!/bin/sh\necho gen-%s\n' "$1" >"$G/generator-name.sh"
   cat >"$G/build-generator.sh" <<EOF
 #!/bin/sh
-echo "build work=\$1 out=\$2" >>"$W/gen.log"
+echo "build work=\$1 out=\$2" >>"$lib_test_work/gen.log"
 [ "$2" != fail ] || exit 1
 mkdir -p "\$2"
 printf '#!/bin/sh\n' >"\$2/gen-$1"
@@ -1794,32 +1811,32 @@ EOF
   git -C "$H" rev-parse HEAD
 }
 
-# What value_harness of the build root $W/gen-root prints for the harness commit $1 and the generator dir $W/gen-dir, and each build call it made.
+# What value_harness of the build root $lib_test_work/gen-root prints for the harness commit $1 and the generator dir $lib_test_work/gen-dir, and each build call it made.
 gen_of() {
-  B=$W/gen-box
-  rm -rf "$B" "$W/gen-root/value/gen"
-  mkdir -p "$B/value" "$W/gen-root/value"
+  B=$lib_test_work/gen-box
+  rm -rf "$B" "$lib_test_work/gen-root/value/gen"
+  mkdir -p "$B/value" "$lib_test_work/gen-root/value"
   cp "$HERE"/*.sh "$B/"
   echo "$1" >"$B/value/harness.rev"
-  : >"$W/gen.log"
+  : >"$lib_test_work/gen.log"
   (
-    ROOT=$W/gen-root OUT=$W/gen-root HERE=$B VALUE_HARNESS_URL=$W/gen-src VALUE_GEN_DIR=$W/gen-dir
+    ROOT=$lib_test_work/gen-root OUT=$lib_test_work/gen-root HERE=$B VALUE_HARNESS_URL=$lib_test_work/gen-src VALUE_GEN_DIR=$lib_test_work/gen-dir
     . "$B/lib.sh"
     . "$B/value.sh"
-    if rev=$(value_harness 2>"$W/gen.err"); then
+    if rev=$(value_harness 2>"$lib_test_work/gen.err"); then
       echo "rev=$([ "$rev" = "$1" ] && echo harness) bin=$(cat "$ROOT/value/gen/bin/conformance-gen" 2>/dev/null | wc -c | tr -dc 0-9)"
     else
-      echo "value_harness exit=$? $(grep -o 'VALUE REFUSED [a-z_]*=[a-z]*' "$W/gen.err")"
+      echo "value_harness exit=$? $(grep -o 'VALUE REFUSED [a-z_]*=[a-z]*' "$lib_test_work/gen.err")"
     fi
   )
-  sed "s|$W/||g" "$W/gen.log"
+  sed "s|$lib_test_work/||g" "$lib_test_work/gen.log"
 }
 
 # Must not fire: a generator the generator dir holds under the harness's name is used and not built.
 gen1=$(harness_gen g1 ok)
-mkdir -p "$W/gen-dir"
-printf '#!/bin/sh\n# held\n' >"$W/gen-dir/gen-g1"
-chmod +x "$W/gen-dir/gen-g1"
+mkdir -p "$lib_test_work/gen-dir"
+printf '#!/bin/sh\n# held\n' >"$lib_test_work/gen-dir/gen-g1"
+chmod +x "$lib_test_work/gen-dir/gen-g1"
 expect gen_held "$(gen_of "$gen1")" "rev=harness bin=17"
 # Must fire: a generator the dir lacks is built into the dir, with a work dir the build root keeps across builds.
 gen2=$(harness_gen g2 ok)
@@ -1830,9 +1847,9 @@ gen3=$(harness_gen g3 fail)
 expect gen_unbuilt "$(gen_of "$gen3")" "value_harness exit=1 VALUE REFUSED generator=unbuilt
 build work=gen-root/value/generator-work out=gen-dir"
 
-# Writes a docker at $W/node-cli/docker that answers inspect of a container with the image node:1, the user $1 and the environment A=1 and B=two words, and logs every other call and each line of the env file it is handed.
+# Writes a docker at $lib_test_work/node-cli/docker that answers inspect of a container with the image node:1, the user $1 and the environment A=1 and B=two words, and logs every other call and each line of the env file it is handed.
 node_docker() {
-  D=$W/node-cli
+  D=$lib_test_work/node-cli
   rm -rf "$D"
   mkdir -p "$D"
   cat >"$D/docker" <<EOF
@@ -1856,10 +1873,10 @@ EOF
 
 # The docker calls node-cli.sh makes for a tip query through the docker shim in front of the docker of node_docker.
 node_cli_of() {
-  : >"$W/node-cli/docker.log"
-  PATH=$HERE/bin:$PATH ORACLE_DOCKER=$W/node-cli/docker ORACLE_SLICE=dolos-oracle.slice NODE=n \
+  : >"$lib_test_work/node-cli/docker.log"
+  PATH=$HERE/bin:$PATH ORACLE_DOCKER=$lib_test_work/node-cli/docker ORACLE_SLICE=dolos-oracle.slice NODE=n \
     sh "$HERE/node-cli.sh" latest query tip || echo "node-cli exit=$?"
-  cat "$W/node-cli/docker.log"
+  cat "$lib_test_work/node-cli/docker.log"
 }
 
 # Must not fire: no box script runs a command in another container, whose memory the oracle slice does not bound.
@@ -1874,11 +1891,11 @@ expect node_cli_user "$(node_cli_of | head -1)" "run --cgroup-parent dolos-oracl
 
 # Writes the captured endorser block into a LeiosDb of a layout, a change and the schemas named, then prints node-eb's exit and either same, when it prints the line write_leiosdb.py says it must, or its refusal.
 node_eb_of() {
-  db=$W/leiosdb/$1.db
+  db=$lib_test_work/leiosdb/$1.db
   layout=$2
   change=$3
   shift 3
-  mkdir -p "$W/leiosdb"
+  mkdir -p "$lib_test_work/leiosdb"
   python3 -I "$HERE/leiosdb/write_leiosdb.py" "$db" "$layout" "$change" "$@" >"$db.want"
   status=0
   python3 -I "$HERE/endorser_fixture.py" node-eb "$db" 100000 600 \
@@ -1906,9 +1923,4 @@ expect leiosdb_closure_changed "$(node_eb_of closure-changed closure tx-changed 
 expect leiosdb_closure_body_changed "$(node_eb_of closure-body-changed closure body-changed rc-2026w45-imm)" \
   "exit=1 refused: the body of 17c497727d273e8dbd0bc188752ef8a7334f5fac6dc077324424a5410cc77fc0 does not hash to it"
 
-if [ "$failed" -eq 0 ]; then
-  echo "LIB-TEST RESULT PASS"
-else
-  echo "LIB-TEST RESULT FAIL"
-  exit 1
-fi
+verdict
