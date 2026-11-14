@@ -23,7 +23,7 @@ pub enum Error {
     #[error("invalid params: {0}")]
     InvalidParams(String),
 
-    #[error("only txs from Conway era are supported")]
+    #[error("only txs from the Conway and Dijkstra eras are supported")]
     UnsupportedTxEra,
 
     #[error("node can't resolve txs while running at era {era}")]
