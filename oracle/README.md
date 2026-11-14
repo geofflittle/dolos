@@ -26,13 +26,22 @@ The done tier, and the live judge over reads of the image being pinned, which th
 
 Run it once per dolos-serve rollout, on the image being pinned, in two steps.
 
-On musashi-aws, the box that reaches the node, `ROOT=/opt/build/ship OUT=/opt/build/ship/runs/<name> IMAGE=<repository>@sha256:<digest> sh oracle/box/read-live.sh` pulls the image, takes the commit from its `org.opencontainers.image.revision` label, runs that commit's `read-live.sh`, syncs the image and writes its reads, the serving Dolos's reads and a `reads.txt` naming the image, the commit and the candidate's verdict into `$OUT/live`. It builds nothing, and reads `NODE`, `NODE_DB`, `ENDPOINT`, `SERVE_CONFIG`, `CANDIDATE_GRPC` and `GRPCURL` from `$ROOT/live.env`. It refuses an image named by a tag, a label that is not a full commit id, a commit `$ROOT/dolos.git` lacks, and a commit whose `oracle/box` has no `read-live.sh`. `git -C /opt/build/ship/dolos.git fetch -q https://github.com/SundaeSwap-finance/dolos.git leios-musashi` adds the commits the branch the image was built from holds. It takes up to about 100 minutes, nearly all of it the sync (estimated from the ship runs on musashi-aws that also built the commit).
+On musashi-aws, the box that reaches the node, with the image's digest from the image workflow:
+
+```
+git -C /opt/build/ship/dolos.git fetch -q https://github.com/SundaeSwap-finance/dolos.git leios-musashi
+mkdir -p /opt/build/ship/work/launch
+git -C /opt/build/ship/dolos.git archive FETCH_HEAD oracle/box | tar -x -C /opt/build/ship/work/launch
+ROOT=/opt/build/ship OUT=/opt/build/ship/runs/<name> IMAGE=<repository>@sha256:<digest> sh /opt/build/ship/work/launch/oracle/box/read-live.sh
+```
+
+`read-live.sh` pulls the image, takes the commit from its `org.opencontainers.image.revision` label, runs that commit's `read-live.sh`, syncs the image beside the serving Dolos and writes the candidate's reads, the serving Dolos's reads and a `reads.txt` naming the image, the commit and the candidate's verdict into `$OUT/live`. It builds nothing, and reads `NODE`, `NODE_DB`, `ENDPOINT`, `SERVE_CONFIG`, `CANDIDATE_GRPC` and `GRPCURL` from `$ROOT/live.env`. It refuses an image named by a tag, a label that is not a full commit id, a commit `$ROOT/dolos.git` lacks, and a commit whose `oracle/box` has no `read-live.sh`. It takes up to about 100 minutes, nearly all of it the sync (estimated from the ship runs on musashi-aws that also built the commit).
 
 Then copy the reads to a builder box and run the tier there on the commit `reads.txt` names, which it refuses reads of any other commit for:
 
 ```
 ssh musashi-aws tar -C /opt/build/ship/runs/<name> -c live | ssh builder-1 'mkdir -p /opt/oracle/reads/<name> && tar -x -C /opt/oracle/reads/<name>'
-ssh builder-1 LIVE_READS=/opt/oracle/reads/<name>/live oracle-run ship <name> <commit>
+ssh builder-1 LIVE_READS=/opt/oracle/reads/<name>/live oracle-run ship <name> <commit> https://github.com/SundaeSwap-finance/dolos.git
 ```
 
 The tier records the commit in `runs/last-done` and `runs/last-ship`, and the image in `runs/last-ship`. It takes about as long as the done tier (estimated).
