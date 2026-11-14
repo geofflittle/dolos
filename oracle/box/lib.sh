@@ -1,4 +1,4 @@
-# Functions and defaults the oracle box scripts share, reading ROOT, SCRATCH, REV, BASE, JUDGED, MIN_FREE_G, OUT, HERE, TARGET, LIVE_ENV, LIVE_READS, CANDIDATE_NEED_G, IN_IMAGE, LOCK_POLL_SECONDS, RUN_LOCK, LAST_DONE, LAST_SHIP, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_FSYNC, NODE, ENDPOINT, GRPCURL, the ORACLE_ slice settings, CGROUP_FILE, CGROUP_ROOT, the IO_ limits and VALUE_HARNESS_URL.
+# Functions and defaults the oracle box scripts share, reading ROOT, SCRATCH, REV, BASE, JUDGED, MIN_FREE_G, OUT, HERE, TARGET, LIVE_ENV, LIVE_READS, SYNC_SLOTS_PER_S, IN_IMAGE, LOCK_POLL_SECONDS, RUN_LOCK, LAST_DONE, LAST_SHIP, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_FSYNC, NODE, ENDPOINT, GRPCURL, the ORACLE_ slice settings, CGROUP_FILE, CGROUP_ROOT, the IO_ limits and VALUE_HARNESS_URL.
 
 PALLAS=${PALLAS:-scratch/pallas}
 SCRATCH=${SCRATCH:-scratch/dolos}
@@ -448,6 +448,13 @@ free_g() {
   echo $(($(df -B1 --output=avail "$1" | tail -1 | tr -dc 0-9) / 1073741824))
 }
 
+# The whole gibibytes the store at $1 holds, rounded up, or a failure when du cannot read it.
+store_size_g() {
+  bytes=$(du -sb "$1") || return 1
+  bytes=${bytes%%[!0-9]*}
+  echo $(((bytes + 1073741823) / 1073741824))
+}
+
 # Exits when the build root has less than MIN_FREE_G gigabytes free.
 require_free() {
   free=$(free_g "$ROOT")
@@ -656,7 +663,7 @@ start_run() {
     export JUDGED REV BASE ROOT OUT RUN_LOCK
     exec sh "$OUT/box/oracle/box/$script" "$@"
   fi
-  export ROOT REV MIN_FREE_G CANDIDATE_NEED_G OUT RUN_LOCK
+  export ROOT REV MIN_FREE_G OUT RUN_LOCK
 }
 
 # The memory in bytes one switched arm judge may use.
@@ -714,6 +721,14 @@ wall_slot() {
   start=$(date -u -d "$start" +%s) || return 1
   length=$(jq -er .slotLength "$genesis") || return 1
   awk -v now="$(date +%s)" -v start="$start" -v len="$length" 'BEGIN { printf "%d\n", (now - start) / len }'
+}
+
+# The slots a second a candidate syncs from genesis beside the serving Dolos.
+SYNC_SLOTS_PER_S=${SYNC_SLOTS_PER_S:-291}
+
+# The minutes a sync to the node slot $1 may take at $2 slots a second, half again the projected time, rounded up.
+sync_minutes() {
+  echo $(((3 * $1 + 120 * $2 - 1) / (120 * $2)))
 }
 
 # The limits of the IO guard on the node's lag behind the wall clock, the serving Dolos's lag behind the node and its ReadTip time, and the run of samples over a limit that breaches it.
@@ -1234,9 +1249,8 @@ require_build_image() {
   export BUILD_IMAGE
 }
 
-# The file the live leg reads ENDPOINT, NODE, NODE_DB, GRPCURL, SERVE_CONFIG and CANDIDATE_GRPC from, and the free gigabytes the candidate's store needs.
+# The file the live leg reads ENDPOINT, NODE, NODE_DB, GRPCURL, SERVE_CONFIG and CANDIDATE_GRPC from.
 LIVE_ENV=${LIVE_ENV:-$ROOT/live.env}
-CANDIDATE_NEED_G=${CANDIDATE_NEED_G:-12}
 
 # Builds Dolos from the scratch tree into $OUT/bin/dolos.
 build_candidate() {
@@ -1278,7 +1292,18 @@ sync_candidate() {
   return "$fields"
 }
 
-# Sets image and candidate from the record of the reads in LIVE_READS, or exits 2 when it holds no record or the record names another commit than REV.
+# The candidate's verdict from the exit $1 of candidate.sh and its log $2, REFUSED only for an exit of 2 with a refusal line in the log.
+candidate_verdict() {
+  if [ "$1" -eq 0 ]; then
+    echo PASS
+  elif [ "$1" -eq 2 ] && grep -Eq '^(LIVE-CANDIDATE )?REFUSED ' "$2"; then
+    echo REFUSED
+  else
+    echo "FAIL exit=$1"
+  fi
+}
+
+# Sets image and candidate from the record of the reads in LIVE_READS, or exits 2 when it holds no record, the record names another commit than REV or its candidate refused to sync.
 require_reads() {
   if [ -z "${LIVE_READS:-}" ] || [ ! -f "$LIVE_READS/reads.txt" ]; then
     echo "REFUSED LIVE_READS=${LIVE_READS:-} holds no reads.txt"
@@ -1291,6 +1316,10 @@ require_reads() {
   fi
   image=$(sed -n 's/^image=\([^ ]*\) .*/\1/p' "$LIVE_READS/reads.txt")
   candidate=$(sed -n 's/.* candidate=\([A-Z]*\).*/\1/p' "$LIVE_READS/reads.txt")
+  if [ "$candidate" = REFUSED ]; then
+    echo "REFUSED LIVE_READS=$LIVE_READS candidate=REFUSED"
+    exit 2
+  fi
 }
 
 # Judges the candidate's reads against the node with $OUT/bin/judge, logging to $OUT/live.log.
