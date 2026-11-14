@@ -81,13 +81,13 @@ impl From<dolos_core::MempoolError> for Error {
         match error {
             MempoolError::PlutusNotSupported => Error::tx_not_accepted("Plutus not supported"),
             MempoolError::InvalidTx(x) => Error::tx_not_accepted(x),
+            x @ (MempoolError::DuplicateTx
+            | MempoolError::DecodeError(_)
+            | MempoolError::TraverseError(_)) => Error::tx_not_accepted(x),
             x @ MempoolError::Full(_) => Error::transient(x),
             x @ (MempoolError::Internal(_)
-            | MempoolError::TraverseError(_)
-            | MempoolError::DecodeError(_)
             | MempoolError::StateError(_)
-            | MempoolError::PParamsNotAvailable
-            | MempoolError::DuplicateTx) => Error::internal(x),
+            | MempoolError::PParamsNotAvailable) => Error::internal(x),
         }
     }
 }
@@ -145,6 +145,29 @@ mod tests {
         let error = submit_error(MempoolError::InvalidTx("bad witness".into()));
         assert_eq!(error.code(), CODE_TX_NOT_ACCEPTED);
         assert_eq!(error.message(), "tx was not accepted: bad witness");
+    }
+
+    #[test]
+    fn a_duplicate_transaction_answers_not_accepted() {
+        let error = submit_error(MempoolError::DuplicateTx);
+        assert_eq!(error.code(), CODE_TX_NOT_ACCEPTED);
+        assert_eq!(error.message(), "tx was not accepted: duplicate tx");
+    }
+
+    #[test]
+    fn undecodable_transaction_bytes_answer_not_accepted() {
+        let error = submit_error(MempoolError::DecodeError(
+            pallas::codec::minicbor::decode::Error::message("end of input bytes"),
+        ));
+        assert_eq!(error.code(), CODE_TX_NOT_ACCEPTED);
+    }
+
+    #[test]
+    fn bytes_of_no_known_era_answer_not_accepted() {
+        let error = submit_error(MempoolError::TraverseError(
+            pallas::ledger::traverse::Error::UnknownCbor("not a transaction".into()),
+        ));
+        assert_eq!(error.code(), CODE_TX_NOT_ACCEPTED);
     }
 
     #[test]
