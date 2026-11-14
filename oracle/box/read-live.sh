@@ -15,8 +15,13 @@ start_run "$0" "$@"
 mkdir -p "$OUT/live"
 candidate_fsync >/dev/null || exit 2
 commit=$REV
-candidate=PASS
-sync_candidate "$IMAGE" || candidate="FAIL exit=$?"
+status=0
+sync_candidate "$IMAGE" || status=$?
+candidate=$(candidate_verdict "$status" "$OUT/live/candidate.log")
 echo "image=$IMAGE commit=$commit candidate=$candidate" >"$OUT/live/reads.txt"
 echo "READS image=$IMAGE commit=$commit candidate=$candidate dir=$OUT/live"
-[ "$candidate" = PASS ]
+case $candidate in
+  PASS) ;;
+  REFUSED) exit 2 ;;
+  *) exit 1 ;;
+esac

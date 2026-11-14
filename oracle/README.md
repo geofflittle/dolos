@@ -32,12 +32,12 @@ On musashi-aws, the box that reaches the node, with the image's digest from the 
 git -C /opt/build/ship/dolos.git fetch -q https://github.com/SundaeSwap-finance/dolos.git leios-musashi
 mkdir -p /opt/build/ship/work/launch
 git -C /opt/build/ship/dolos.git archive FETCH_HEAD oracle/box | tar -x -C /opt/build/ship/work/launch
-ROOT=/opt/build/ship OUT=/opt/build/ship/runs/<name> IMAGE=<repository>@sha256:<digest> sh /opt/build/ship/work/launch/oracle/box/read-live.sh
+ORACLE_MEMORY=2400M ORACLE_SWAP=512M ROOT=/opt/build/ship OUT=/opt/build/ship/runs/<name> IMAGE=<repository>@sha256:<digest> sh /opt/build/ship/work/launch/oracle/box/read-live.sh
 ```
 
-`read-live.sh` pulls the image, takes the commit from its `org.opencontainers.image.revision` label, runs that commit's `read-live.sh`, syncs the image beside the serving Dolos and writes the candidate's reads, the serving Dolos's reads and a `reads.txt` naming the image, the commit and the candidate's verdict into `$OUT/live`. It builds nothing, and reads `NODE`, `NODE_DB`, `ENDPOINT`, `SERVE_CONFIG`, `CANDIDATE_GRPC` and `GRPCURL` from `$ROOT/live.env`. It refuses an image named by a tag, a label that is not a full commit id, a commit `$ROOT/dolos.git` lacks, and a commit whose `oracle/box` has no `read-live.sh`. It takes up to about 100 minutes, nearly all of it the sync (estimated from the ship runs on musashi-aws that also built the commit).
+`read-live.sh` pulls the image, takes the commit from its `org.opencontainers.image.revision` label, runs that commit's `read-live.sh`, syncs the image beside the serving Dolos and writes the candidate's reads, the serving Dolos's reads and a `reads.txt` naming the image, the commit and the candidate's verdict into `$OUT/live`. It builds nothing, and reads `NODE`, `NODE_DB`, `ENDPOINT`, `SERVE_CONFIG`, `CANDIDATE_GRPC` and `GRPCURL` from `$ROOT/live.env`. It refuses an image named by a tag, a label that is not a full commit id, a commit `$ROOT/dolos.git` lacks, and a commit whose `oracle/box` has no `read-live.sh`. `ORACLE_MEMORY` and `ORACLE_SWAP` bound the run's slice to about three quarters of the memory musashi-aws has available beside the node and the serving Dolos (3299 MB available, measured). The candidate refuses to start unless `$ROOT` has 3 GiB more free than the serving Dolos's store holds, and `reads.txt` then names its verdict `REFUSED` and the run exits 2. The sync stops at half again the time the node's tip takes at `SYNC_SLOTS_PER_S`. It takes up to about 100 minutes, nearly all of it the sync (estimated from the ship runs on musashi-aws that also built the commit).
 
-Then copy the reads to a builder box and run the tier there on the commit `reads.txt` names, which it refuses reads of any other commit for:
+Then copy the reads to a builder box and run the tier there on the commit `reads.txt` names, which it refuses reads of any other commit for, as it refuses reads whose candidate refused:
 
 ```
 ssh musashi-aws tar -C /opt/build/ship/runs/<name> -c live | ssh builder-1 'mkdir -p /opt/oracle/reads/<name> && tar -x -C /opt/oracle/reads/<name>'
