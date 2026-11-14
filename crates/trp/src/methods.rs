@@ -644,4 +644,31 @@ mod tests {
         let status = MempoolStore::check_status(context.domain.mempool(), &tx_hash);
         assert_eq!(status.stage, MempoolTxStage::Pending);
     }
+
+    #[tokio::test]
+    async fn undecodable_bytes_answer_not_accepted_with_or_without_witnesses() {
+        let context = setup_test_context().await;
+        let (sk, pk) = TestAddress::Carol.keypair();
+        let signature = sk.sign([0u8; 32]);
+        let witnesses = json!([{
+            "key": { "content": hex::encode(pk.as_ref()), "contentType": "hex" },
+            "signature": { "content": hex::encode(signature.as_ref()), "contentType": "hex" },
+            "type": "ed25519"
+        }]);
+        for witnesses in [json!([]), witnesses] {
+            let req = json!({
+                "tx": { "content": "deadbeef", "contentType": "hex" },
+                "witnesses": witnesses,
+            })
+            .to_string();
+            let error = trp_submit(Params::new(Some(req.as_str())), context.clone())
+                .await
+                .unwrap_err();
+            assert_eq!(
+                ErrorObjectOwned::from(error).code(),
+                tx3_resolver::trp::errors::CODE_TX_NOT_ACCEPTED,
+                "{witnesses}"
+            );
+        }
+    }
 }

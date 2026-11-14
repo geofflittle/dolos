@@ -35,7 +35,37 @@ pub fn submit_error_status(error: DomainError) -> Status {
 mod tests {
     use super::*;
     use dolos_core::PassedBound;
+    use dolos_testing::submit::wrong_answers;
     use tonic::Code;
+
+    fn answer(error: DomainError) -> Code {
+        submit_error_status(error).code()
+    }
+
+    #[test]
+    fn each_submit_error_answers_the_code_of_its_fault() {
+        let client = Code::InvalidArgument;
+        let wrong = wrong_answers(
+            &[
+                ("undecodable-bytes", client),
+                ("bytes-of-no-era", client),
+                ("trailing-bytes", client),
+                ("bytes-of-another-era", client),
+                ("duplicate", client),
+                ("invalid-tx", client),
+                ("phase-one-rejected", client),
+                ("phase-two-unevaluable", client),
+                ("script-failure", client),
+                ("mempool-full", Code::ResourceExhausted),
+                ("pparams-missing", Code::Internal),
+                ("store-failed", Code::Internal),
+                ("broken-invariant", Code::Internal),
+                ("no-active-epoch", Code::Internal),
+            ],
+            answer,
+        );
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
 
     #[test]
     fn a_refused_transaction_answers_invalid_argument() {

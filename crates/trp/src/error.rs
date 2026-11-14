@@ -133,11 +133,44 @@ impl From<Error> for jsonrpsee::types::ErrorObject<'_> {
 mod tests {
     use super::*;
     use dolos_core::{MempoolError, PassedBound};
+    use dolos_testing::submit::wrong_answers;
     use jsonrpsee::types::ErrorObjectOwned;
-    use tx3_resolver::trp::errors::{CODE_TRANSIENT_ERROR, CODE_TX_NOT_ACCEPTED};
+    use tx3_resolver::trp::errors::{
+        CODE_TRANSIENT_ERROR, CODE_TX_NOT_ACCEPTED, CODE_TX_SCRIPT_FAILURE,
+    };
 
     fn submit_error(error: MempoolError) -> ErrorObjectOwned {
         Error::from(DomainError::MempoolError(error)).into()
+    }
+
+    fn answer(error: DomainError) -> i32 {
+        ErrorObjectOwned::from(Error::from(error)).code()
+    }
+
+    #[test]
+    fn each_submit_error_answers_the_code_of_its_fault() {
+        let refused = CODE_TX_NOT_ACCEPTED;
+        let internal = ErrorCode::InternalError.code();
+        let wrong = wrong_answers(
+            &[
+                ("undecodable-bytes", refused),
+                ("bytes-of-no-era", refused),
+                ("trailing-bytes", refused),
+                ("bytes-of-another-era", refused),
+                ("duplicate", refused),
+                ("invalid-tx", refused),
+                ("phase-one-rejected", refused),
+                ("phase-two-unevaluable", refused),
+                ("script-failure", CODE_TX_SCRIPT_FAILURE),
+                ("mempool-full", CODE_TRANSIENT_ERROR),
+                ("pparams-missing", internal),
+                ("store-failed", internal),
+                ("broken-invariant", internal),
+                ("no-active-epoch", internal),
+            ],
+            answer,
+        );
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
     #[test]

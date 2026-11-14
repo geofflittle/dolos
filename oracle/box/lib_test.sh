@@ -62,6 +62,23 @@ expect() {
   esac
 }
 
+# Prints the verdict of the cases run so far, and fails when one of them failed.
+verdict() {
+  if [ "$failed" -eq 0 ]; then
+    echo "LIB-TEST RESULT PASS"
+  else
+    echo "LIB-TEST RESULT FAIL"
+    return 1
+  fi
+}
+
+# Must not fire: passing cases followed by data named like each harness variable.
+expect harness_names_pass "$( (expect planted_pass a a >/dev/null && failed=1 W= LIB= && verdict) || true)" \
+  "LIB-TEST RESULT PASS"
+# Must fire: a failing case followed by data named like each harness variable.
+expect harness_names_fail "$( (expect planted_fail a b >/dev/null && failed=0 W= LIB= && verdict) || true)" \
+  "LIB-TEST RESULT FAIL"
+
 # Must not fire: a unit rebuilt after its file changed, and a fresh unit whose file did not change.
 setup unchanged
 expect cold "$(build x=false y=false)" "exit=0 "
@@ -1906,9 +1923,4 @@ expect leiosdb_closure_changed "$(node_eb_of closure-changed closure tx-changed 
 expect leiosdb_closure_body_changed "$(node_eb_of closure-body-changed closure body-changed rc-2026w45-imm)" \
   "exit=1 refused: the body of 17c497727d273e8dbd0bc188752ef8a7334f5fac6dc077324424a5410cc77fc0 does not hash to it"
 
-if [ "$failed" -eq 0 ]; then
-  echo "LIB-TEST RESULT PASS"
-else
-  echo "LIB-TEST RESULT FAIL"
-  exit 1
-fi
+verdict
