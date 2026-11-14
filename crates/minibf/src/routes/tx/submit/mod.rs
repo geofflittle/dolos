@@ -86,6 +86,28 @@ mod tests {
         assert_eq!(StatusCode::TOO_EARLY.as_u16(), 425);
     }
 
+    #[tokio::test]
+    async fn a_full_mempool_answers_the_blockfrost_body() {
+        use axum::response::IntoResponse;
+        use http_body_util::BodyExt;
+
+        let full = MempoolError::Full(PassedBound::Bytes {
+            bound: 4_000_000,
+            would_hold: 4_000_100,
+        });
+        let response = submit_error_status(full.into()).into_response();
+        assert_eq!(response.status(), StatusCode::TOO_EARLY);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).ok(),
+            Some(serde_json::json!({
+                "status_code": 425,
+                "error": "Mempool Full",
+                "message": "Mempool is full, please try resubmitting again later.",
+            }))
+        );
+    }
+
     async fn assert_status(app: &TestApp, content_type: &str, body: Vec<u8>, expected: StatusCode) {
         let (status, _body) = app.post_bytes("/tx/submit", content_type, body).await;
         assert_eq!(status, expected);

@@ -148,6 +148,29 @@ mod tests {
     }
 
     #[test]
+    fn a_duplicate_transaction_answers_not_accepted() {
+        let error = submit_error(MempoolError::DuplicateTx);
+        assert_eq!(error.code(), CODE_TX_NOT_ACCEPTED);
+        assert_eq!(error.message(), "tx was not accepted: duplicate tx");
+    }
+
+    #[test]
+    fn undecodable_transaction_bytes_answer_not_accepted() {
+        let error = submit_error(MempoolError::DecodeError(
+            pallas::codec::minicbor::decode::Error::message("end of input bytes"),
+        ));
+        assert_eq!(error.code(), CODE_TX_NOT_ACCEPTED);
+    }
+
+    #[test]
+    fn bytes_of_no_known_era_answer_not_accepted() {
+        let error = submit_error(MempoolError::TraverseError(
+            pallas::ledger::traverse::Error::UnknownCbor("not a transaction".into()),
+        ));
+        assert_eq!(error.code(), CODE_TX_NOT_ACCEPTED);
+    }
+
+    #[test]
     fn a_missing_protocol_parameter_set_answers_internal_error() {
         let error = submit_error(MempoolError::PParamsNotAvailable);
         assert_eq!(error.code(), ErrorCode::InternalError.code());
