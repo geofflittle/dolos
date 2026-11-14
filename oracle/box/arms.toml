@@ -237,3 +237,6 @@ v1beta-as-output-dropped = ["judge=as-output entry=fetch_block:v1beta|dump_histo
 v1beta-submit-ref-zeroed = ["judge=submit entry=submit_tx:v1beta answer:submit"]
 watch-block-copied = ["test=serve::grpc::v1beta::watch::tests::the_transactions_of_one_block_share_its_bytes", "test=serve::grpc::v1alpha::watch::tests::the_transactions_of_one_block_share_its_bytes"]
 duplicate-scripts-accepted = ["judge=validation failure:disagree ledger:DecoderErrorDeserialiseFailure dolos:accepted"]
+tag-102-pair-unchecked = ["*"]
+decode-depth-uncapped = ["*"]
+nesting-past-64 = ["*"]

@@ -35,6 +35,20 @@ index eecd97a8..09381ec5 100644
                          $crate::utils::decode_array(d, |a| {
                              // Using the identifiers trivially to ensure repetition.
                              Ok($enum_name::$many_f($({ let $vars = a.decode_with(ctx)?; $vars }, )+ ))
+diff --git a/pallas-codec/src/tree.rs b/pallas-codec/src/tree.rs
+index b2ceffa7..beb566ed 100644
+--- a/pallas-codec/src/tree.rs
++++ b/pallas-codec/src/tree.rs
+@@ -130,7 +130,8 @@ where
+     let mut current = Frame::begin::<C, T>(d, ctx)?;
+     loop {
+         if current.expects_child(d)? {
+-            if parents.len() + 1 >= max_depth {
++            let _ = parents.len() + 1 >= 64 && crate::oracle_plant("nesting-past-64");
++            if parents.len() + 1 >= max_depth && !crate::oracle_plant("decode-depth-uncapped") {
+                 return Err(Error::message(
+                     "CBOR nesting exceeds the decode depth limit",
+                 ));
 diff --git a/pallas-codec/src/utils.rs b/pallas-codec/src/utils.rs
 index 14fd263e..2d167932 100644
 --- a/pallas-codec/src/utils.rs
@@ -139,6 +153,23 @@ index 3aa9341b..df94dc61 100644
                  pallas_codec::utils::decode_array(d, |a| {
                      let index: i64 = a.decode_with(ctx)?;
                      match index {
+diff --git a/pallas-primitives/src/plutus_data.rs b/pallas-primitives/src/plutus_data.rs
+index 11ae5d36..d5582489 100644
+--- a/pallas-primitives/src/plutus_data.rs
++++ b/pallas-primitives/src/plutus_data.rs
+@@ -197,7 +197,11 @@ impl Ord for PlutusData {
+ /// with exactly two elements, or indefinite. Returns whether it is
+ /// indefinite, in which case [`tag_102_pair_end`] must follow the fields.
+ fn tag_102_pair(d: &mut minicbor::Decoder<'_>) -> Result<bool, minicbor::decode::Error> {
+-    match d.array()? {
++    let header = d.array()?;
++    if header != Some(2) && pallas_codec::oracle_plant("tag-102-pair-unchecked") {
++        return Ok(false);
++    }
++    match header {
+         Some(2) => Ok(false),
+         None => Ok(true),
+         Some(_) => Err(minicbor::decode::Error::message(
 diff --git a/pallas-traverse/src/governance.rs b/pallas-traverse/src/governance.rs
 index f59e5493..63030674 100644
 --- a/pallas-traverse/src/governance.rs
