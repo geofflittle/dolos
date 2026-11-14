@@ -57,6 +57,9 @@ fixes = [
   { subject = "fix: prefix the lib_test harness names", exclude = "oracle" },
   { subject = "fix(core): classify submit errors once by fault", arm = "server-fault-as-client" },
   { subject = "fix: prefix the fields_test harness names", exclude = "oracle" },
+  { subject = "fix(cardano): class a stored decode as server", arm = "stored-decode-as-client" },
+  { subject = "fix(cardano): class an evaluation fault as server", arm = "evaluation-fault-as-client" },
+  { subject = "fix(trp): apply witnesses to Dijkstra txs", arm = "dijkstra-witnesses-refused" },
 ]
 
 [pallas]
@@ -245,3 +248,6 @@ v1beta-submit-ref-zeroed = ["judge=submit entry=submit_tx:v1beta answer:submit"]
 watch-block-copied = ["test=serve::grpc::v1beta::watch::tests::the_transactions_of_one_block_share_its_bytes", "test=serve::grpc::v1alpha::watch::tests::the_transactions_of_one_block_share_its_bytes"]
 duplicate-scripts-accepted = ["judge=validation failure:disagree ledger:DecoderErrorDeserialiseFailure dolos:accepted"]
 server-fault-as-client = ["test=serve::grpc::convert::tests::each_submit_error_answers_the_code_of_its_fault"]
+stored-decode-as-client = ["test=validate::evaluation_tests::a_stored_output_that_fails_to_decode_is_a_server_fault", "test=validate::evaluation_tests::a_stored_output_of_an_unknown_era_is_a_server_fault"]
+evaluation-fault-as-client = ["test=validate::evaluation_tests::an_evaluation_the_server_cannot_build_is_a_server_fault"]
+dijkstra-witnesses-refused = ["test=methods::tests::a_dijkstra_submission_takes_its_witnesses"]

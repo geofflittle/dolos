@@ -66,6 +66,9 @@ crate_test() {
     unsupported-untyped) echo "-p dolos-cardano --lib" ;;
     watch-block-copied) echo "-p dolos --lib" ;;
     server-fault-as-client) echo "-p dolos --lib" ;;
+    stored-decode-as-client) echo "-p dolos-cardano --lib" ;;
+    evaluation-fault-as-client) echo "-p dolos-cardano --lib" ;;
+    dijkstra-witnesses-refused) echo "-p dolos-trp --lib" ;;
     *) return 1 ;;
   esac
 }
@@ -78,6 +81,9 @@ crate_test_source() {
     unsupported-untyped) echo crates/cardano/src/validate.rs ;;
     watch-block-copied) printf '%s\n' src/serve/grpc/v1beta/watch.rs src/serve/grpc/v1alpha/watch.rs ;;
     server-fault-as-client) echo src/serve/grpc/convert.rs ;;
+    stored-decode-as-client) echo crates/cardano/src/validate.rs ;;
+    evaluation-fault-as-client) echo crates/cardano/src/validate.rs ;;
+    dijkstra-witnesses-refused) echo crates/trp/src/methods.rs ;;
   esac
 }
 
@@ -89,6 +95,9 @@ crate_test_filter() {
     unsupported-untyped) echo "validate::evaluation_tests::an_unsupported_evaluation_keeps_its_label --exact" ;;
     watch-block-copied) echo "serve::grpc::v1beta::watch::tests::the_transactions_of_one_block_share_its_bytes serve::grpc::v1alpha::watch::tests::the_transactions_of_one_block_share_its_bytes --exact" ;;
     server-fault-as-client) echo "serve::grpc::convert::tests::each_submit_error_answers_the_code_of_its_fault --exact" ;;
+    stored-decode-as-client) echo "validate::evaluation_tests::a_stored_output_that_fails_to_decode_is_a_server_fault validate::evaluation_tests::a_stored_output_of_an_unknown_era_is_a_server_fault --exact" ;;
+    evaluation-fault-as-client) echo "validate::evaluation_tests::an_evaluation_the_server_cannot_build_is_a_server_fault --exact" ;;
+    dijkstra-witnesses-refused) echo "methods::tests::a_dijkstra_submission_takes_its_witnesses --exact" ;;
   esac
 }
 

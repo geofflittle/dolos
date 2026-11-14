@@ -93,7 +93,7 @@ index 340a6ece..d8296f8f 100644
                  delta
                      .produced_utxo
 diff --git a/crates/cardano/src/validate.rs b/crates/cardano/src/validate.rs
-index 63501aaf..4b336b98 100644
+index 186cc4b9..1db910c6 100644
 --- a/crates/cardano/src/validate.rs
 +++ b/crates/cardano/src/validate.rs
 @@ -69,6 +69,11 @@ pub fn validate_tx<D: Domain>(
@@ -119,7 +119,21 @@ index 63501aaf..4b336b98 100644
      Ok(utxos.get_utxos(tx.requires().iter().map(From::from).collect())?)
  }
  
-@@ -203,6 +212,9 @@ pub fn redeemer_arguments<D: Domain>(
+@@ -145,7 +154,12 @@ pub fn phase_one_utxos(matches: &UtxoMap) -> Result<pallas_validate::utils::UTxO
+             Cow::Owned(tx_in),
+         ));
+ 
+-        let output = MultiEraOutput::try_from(eracbor.as_ref()).map_err(StateError::from)?;
++        let output = MultiEraOutput::try_from(eracbor.as_ref());
++        let output = if pallas::crypto::oracle_plant("stored-decode-as-client") {
++            output?
++        } else {
++            output.map_err(StateError::from)?
++        };
+ 
+         pallas_utxos.insert(input, output);
+     }
+@@ -203,6 +217,9 @@ pub fn redeemer_arguments<D: Domain>(
      let active = crate::load_effective_pparams::<D>(utxos.state())?;
      let tx = decode_submission(submission_era(active.ensure_protocol_version()?)?, cbor)?;
      let pparams = validation_parameters(&active)?;
@@ -129,7 +143,7 @@ index 63501aaf..4b336b98 100644
      let (utxos, _, time) = evaluation_inputs::<D>(&tx, utxos, genesis, None)?;
      let time = time.ok_or(evaluation_error(
          pallas_validate::phase2::error::Error::WrongEra(),
-@@ -244,6 +256,9 @@ fn evaluate_decoded<D: Domain>(
+@@ -244,6 +261,9 @@ fn evaluate_decoded<D: Domain>(
          let estimates = estimate_decoded::<D>(tx, utxos, genesis, pparams, admission_time)?;
          return Ok(estimates.into_iter().map(|(result, _)| result).collect());
      }
@@ -139,7 +153,7 @@ index 63501aaf..4b336b98 100644
      let (utxos, slot_config, time) = evaluation_inputs::<D>(tx, utxos, genesis, admission_time)?;
      if let Some(time) = time {
          pallas_validate::phase2::evaluate_tx_with_time(tx, pparams, &utxos, &time)
-@@ -260,6 +275,18 @@ fn estimate_decoded<D: Domain>(
+@@ -260,6 +280,18 @@ fn estimate_decoded<D: Domain>(
      pparams: &MultiEraProtocolParameters,
      admission_time: Option<&pallas_validate::utils::DijkstraTimeContext>,
  ) -> Result<Vec<(MultiEraTxEvalResult, Vec<Builtin>)>, ChainError> {
@@ -158,15 +172,38 @@ index 63501aaf..4b336b98 100644
      let (utxos, slot_config, time) = evaluation_inputs::<D>(tx, utxos, genesis, admission_time)?;
      if let Some(time) = time {
          pallas_validate::phase2::estimate_tx_calls_with_time(tx, pparams, &utxos, &time)
-@@ -325,13 +352,45 @@ fn evaluation_inputs<D: Domain>(
+@@ -317,7 +349,12 @@ fn evaluation_utxos(matches: UtxoMap) -> Result<pallas_validate::utils::UtxoMap,
+     matches
+         .into_iter()
+         .map(|(TxoRef(a, b), eracbor)| {
+-            let era = Era::try_from(eracbor.era()).map_err(StateError::from)?;
++            let era = Era::try_from(eracbor.era());
++            let era = if pallas::crypto::oracle_plant("stored-decode-as-client") {
++                era?
++            } else {
++                era.map_err(StateError::from)?
++            };
+ 
+             Ok::<_, ChainError>((
+                 pallas_validate::utils::TxoRef::from((a, b)),
+@@ -330,16 +367,54 @@ fn evaluation_utxos(matches: UtxoMap) -> Result<pallas_validate::utils::UtxoMap,
  /// The chain error for a phase two evaluation pallas could not complete.
  fn evaluation_error(error: pallas_validate::phase2::error::Error) -> ChainError {
      match error {
--        pallas_validate::phase2::error::Error::DijkstraUnsupported(unsupported) => {
-+        pallas_validate::phase2::error::Error::DijkstraUnsupported(unsupported)
-+            if !pallas::crypto::oracle_plant("unsupported-untyped") =>
++        error @ pallas_validate::phase2::error::Error::DijkstraUnsupported(_)
++            if pallas::crypto::oracle_plant("unsupported-untyped") =>
 +        {
++            ChainError::Phase2EvaluationError(error.to_string())
++        }
+         pallas_validate::phase2::error::Error::DijkstraUnsupported(unsupported) => {
              ChainError::Phase2EvaluationUnsupported(unsupported)
+         }
+-        error if from_node_inputs(&error) => {
++        error
++            if from_node_inputs(&error)
++                && !pallas::crypto::oracle_plant("evaluation-fault-as-client") =>
++        {
+             ChainError::Phase2EvaluationInternal(error.to_string())
          }
          error => ChainError::Phase2EvaluationError(error.to_string()),
      }
@@ -202,10 +239,10 @@ index 63501aaf..4b336b98 100644
 +        || (pallas::crypto::oracle_plant("missing-script-refusal-reverted") && !redeemers && !guards)
 +}
 +
- /// Submission has no era tag in its signed envelope. Only known protocol
- /// versions select an era; unknown future versions must not inherit this
- /// subset.
-@@ -700,7 +759,11 @@ fn admit_unconfirmed<S, F>(
+ /// Whether an evaluation error comes from the inputs the node assembled for the
+ /// evaluation.
+ fn from_node_inputs(error: &pallas_validate::phase2::error::Error) -> bool {
+@@ -752,7 +827,11 @@ fn admit_unconfirmed<S, F>(
  /// The mempool transactions, inflight before pending, each once.
  fn unconfirmed_txs<D: Domain>(utxos: &MempoolAwareUtxoStore<D>) -> Vec<MempoolTx> {
      let pending = utxos.pending();
@@ -218,7 +255,7 @@ index 63501aaf..4b336b98 100644
      // Relay can move a transaction between these two reads. Count it once.
      let mut seen = std::collections::HashSet::new();
      inflight
-@@ -719,6 +782,9 @@ fn unconfirmed_txs<D: Domain>(utxos: &MempoolAwareUtxoStore<D>) -> Vec<MempoolTx
+@@ -771,6 +850,9 @@ fn unconfirmed_txs<D: Domain>(utxos: &MempoolAwareUtxoStore<D>) -> Vec<MempoolTx
  }
  
  fn decode_submission(era: Era, cbor: &[u8]) -> Result<MultiEraTx<'_>, ChainError> {
@@ -258,7 +295,7 @@ index c98dcfa3..56a88b5d 100644
  
      fn committee(&self) -> Result<Option<BTreeMap<StakeCredential, Epoch>>, ValidationError> {
 diff --git a/crates/core/src/submit.rs b/crates/core/src/submit.rs
-index 7c5cc964..d1c6753b 100644
+index 519e927a..2eb12435 100644
 --- a/crates/core/src/submit.rs
 +++ b/crates/core/src/submit.rs
 @@ -113,6 +113,9 @@ pub trait SubmitExt: Domain {
@@ -297,6 +334,19 @@ index f501516c..aaa23f63 100644
      if let Err(e) = domain.revalidate_pending(chain) {
          warn!(?e, "mempool revalidation failed");
      }
+diff --git a/crates/trp/src/methods.rs b/crates/trp/src/methods.rs
+index 5e6fce3a..5385088b 100644
+--- a/crates/trp/src/methods.rs
++++ b/crates/trp/src/methods.rs
+@@ -115,7 +115,7 @@ fn apply_witnesses(era: Era, original: &[u8], witnesses: &[TxWitness]) -> Result
+             tx.transaction_witness_set = KeepRaw::from(witness_set);
+             Ok(minicbor::to_vec(&tx).unwrap())
+         }
+-        Era::Dijkstra => {
++        Era::Dijkstra if !pallas::crypto::oracle_plant("dijkstra-witnesses-refused") => {
+             let mut tx: dijkstra::MempoolTransaction =
+                 minicbor::decode(original).map_err(|x| invalid_bytes(&x))?;
+             let mut witness_set = tx.transaction_witness_set.unwrap();
 diff --git a/src/adapters/mod.rs b/src/adapters/mod.rs
 index 541f6ba4..700721ee 100644
 --- a/src/adapters/mod.rs

@@ -1,0 +1,2 @@
+'validate::evaluation_tests::a_stored_output_that_fails_to_decode_is_a_server_fault'
+'validate::evaluation_tests::a_stored_output_of_an_unknown_era_is_a_server_fault'
