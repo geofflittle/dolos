@@ -246,9 +246,6 @@ pub enum MempoolError {
     #[error(transparent)]
     StateError(#[from] StateError),
 
-    #[error("plutus not supported")]
-    PlutusNotSupported,
-
     #[error("invalid tx: {0}")]
     InvalidTx(String),
 

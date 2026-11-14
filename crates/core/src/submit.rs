@@ -216,7 +216,6 @@ fn from_mempool(error: MempoolError) -> SubmitError {
         MempoolError::Full(x) => ClientFault::MempoolFull(x),
         x @ (MempoolError::Internal(_)
         | MempoolError::StateError(_)
-        | MempoolError::PlutusNotSupported
         | MempoolError::PParamsNotAvailable) => return SubmitError::Server(x.into()),
     };
     fault.into()
