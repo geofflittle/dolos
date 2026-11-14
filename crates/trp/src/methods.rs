@@ -1,7 +1,10 @@
 use jsonrpsee::types::Params;
 use pallas::{
     codec::utils::NonEmptySet,
-    ledger::primitives::conway::{VKeyWitness, WitnessSet},
+    ledger::{
+        primitives::conway::{VKeyWitness, WitnessSet},
+        traverse::Era,
+    },
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -51,7 +54,11 @@ pub async fn trp_resolve<D: Domain>(
     })
 }
 
-fn apply_witnesses(original: &[u8], witnesses: &[TxWitness]) -> Result<Vec<u8>, Error> {
+fn apply_witnesses(
+    _era: Era,
+    original: &[u8],
+    witnesses: &[TxWitness],
+) -> Result<Vec<u8>, Error> {
     let tx = pallas::ledger::traverse::MultiEraTx::decode(original)
         .map_err(|x| SubmitError::from(ClientFault::InvalidBytes(x.to_string())))?;
 
@@ -105,7 +112,10 @@ pub async fn trp_submit<D: Domain + SubmitExt>(
     let mut bytes = Vec::<u8>::from(params.tx);
 
     if !params.witnesses.is_empty() {
-        bytes = apply_witnesses(&bytes, &params.witnesses)?;
+        let protocol = dolos_cardano::load_effective_pparams::<D>(context.domain.state())?
+            .ensure_protocol_version()?;
+        let era = dolos_cardano::validate::submission_era(protocol)?;
+        bytes = apply_witnesses(era, &bytes, &params.witnesses)?;
     }
 
     let chain = context.domain.read_chain();
@@ -650,6 +660,48 @@ mod tests {
         let tx_hash: pallas::crypto::hash::Hash<32> = tx_hash_bytes.as_slice().into();
         let status = MempoolStore::check_status(context.domain.mempool(), &tx_hash);
         assert_eq!(status.stage, MempoolTxStage::Pending);
+    }
+
+    /// A Dijkstra submission the Musashi node admitted, with one key witness.
+    fn captured_dijkstra_submission() -> Vec<u8> {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test_data/musashi-native-submission/control.mempool.hex"
+        );
+        hex::decode(std::fs::read_to_string(path).unwrap().trim()).unwrap()
+    }
+
+    #[test]
+    fn a_dijkstra_submission_takes_its_witnesses() {
+        use pallas::codec::{minicbor, utils::KeepRaw};
+        use pallas::ledger::primitives::dijkstra::MempoolTransaction;
+
+        let signed = captured_dijkstra_submission();
+        let tx: MempoolTransaction = minicbor::decode(&signed).unwrap();
+        let raw_witness_set = tx.transaction_witness_set.raw_cbor().to_vec();
+        let mut unsigned = tx.clone();
+        let mut witness_set = unsigned.transaction_witness_set.unwrap();
+        let vkeys = witness_set.vkeywitness.take().unwrap().to_vec();
+        assert_eq!(vkeys.len(), 1);
+        unsigned.transaction_witness_set = KeepRaw::from(witness_set);
+        let unsigned = minicbor::to_vec(&unsigned).unwrap();
+        assert_ne!(unsigned, signed);
+
+        let signature: TxWitness = serde_json::from_value(json!({
+            "key": { "content": hex::encode(vkeys[0].vkey.as_slice()), "contentType": "hex" },
+            "signature": { "content": hex::encode(vkeys[0].signature.as_slice()), "contentType": "hex" },
+            "type": "ed25519"
+        }))
+        .unwrap();
+        let raw: TxWitness = serde_json::from_value(json!({
+            "content": hex::encode(raw_witness_set),
+            "contentType": "hex"
+        }))
+        .unwrap();
+        for witness in [signature, raw] {
+            let applied = apply_witnesses(Era::Dijkstra, &unsigned, &[witness]).unwrap();
+            assert_eq!(hex::encode(applied), hex::encode(&signed));
+        }
     }
 
     #[tokio::test]
