@@ -1094,7 +1094,7 @@ expect read_live_builds_nothing "$(cat "$K/docker.log")" "$(image_calls "$IMAGE_
   : >"$K/docker.log"
   build_candidate >/dev/null 2>&1 || true
 )
-expect read_live_build_seen "$(cut -d ' ' -f 1-4 "$K/docker.log" | sed -n 1p)" "run --cgroup-parent dolos-oracle.slice --rm"
+expect read_live_build_seen "$(cut -d ' ' -f 1-6 "$K/docker.log" | sed -n 1p)" "run --cgroup-parent dolos-oracle.slice --oom-score-adj 1000 --rm"
 # Must fire: a candidate that fails is recorded as failed and fails the run.
 image_root read-live-failed new 1
 sha=$(git -C "$K/dolos.git" rev-parse HEAD)
@@ -1791,11 +1791,12 @@ docker_of() {
 # Must not fire on a command that starts no container.
 expect docker_inspect "$(docker_of inspect -f x n | paste -sd ' ' -)" "inspect -f x n exit=0"
 expect docker_exec "$(docker_of exec n cardano-cli | paste -sd ' ' -)" "exec n cardano-cli exit=0"
-# Must place each container a run or a create starts in the slice.
-expect docker_run "$(docker_of run --rm -i image cmd | paste -sd ' ' -)" "run --cgroup-parent dolos-oracle.slice --rm -i image cmd exit=0"
-expect docker_create "$(docker_of create image | paste -sd ' ' -)" "create --cgroup-parent dolos-oracle.slice image exit=0"
-expect docker_container_run "$(docker_of container run -d image | paste -sd ' ' -)" "container run --cgroup-parent dolos-oracle.slice -d image exit=0"
-# Must place the container of each step a build runs in the slice.
+# Must place each container a run or a create starts in the slice, as the kernel's first choice when the box runs out of memory.
+expect docker_run "$(docker_of run --rm -i image cmd | paste -sd ' ' -)" "run --cgroup-parent dolos-oracle.slice --oom-score-adj 1000 --rm -i image cmd exit=0"
+expect docker_create "$(docker_of create image | paste -sd ' ' -)" "create --cgroup-parent dolos-oracle.slice --oom-score-adj 1000 image exit=0"
+expect docker_container_run "$(docker_of container run -d image | paste -sd ' ' -)" "container run --cgroup-parent dolos-oracle.slice --oom-score-adj 1000 -d image exit=0"
+expect docker_container_create "$(docker_of container create image | paste -sd ' ' -)" "container create --cgroup-parent dolos-oracle.slice --oom-score-adj 1000 image exit=0"
+# Must place the container of each step a build runs in the slice, with no out of memory score, an option docker build does not take.
 expect docker_build "$(docker_of build -t name dir | paste -sd ' ' -)" "build --cgroup-parent dolos-oracle.slice -t name dir exit=0"
 expect docker_image_build "$(docker_of image build -t name dir | paste -sd ' ' -)" "image build --cgroup-parent dolos-oracle.slice -t name dir exit=0"
 expect docker_builder_build "$(docker_of builder build -t name dir | paste -sd ' ' -)" "builder build --cgroup-parent dolos-oracle.slice -t name dir exit=0"
@@ -1956,11 +1957,11 @@ node_cli_of() {
 expect node_cli_no_exec "$(cd "$HERE" && grep -l 'docker exec' -- *.sh | grep -v '^lib_test.sh$')" ""
 # Must run cardano-cli in a container of the node's image, user, environment and volumes that the shim places in the slice.
 node_docker ""
-expect node_cli_root "$(node_cli_of)" "run --cgroup-parent dolos-oracle.slice --rm --network none --volumes-from n --env-file F --user 0 --entrypoint cardano-cli node:1 latest query tip
+expect node_cli_root "$(node_cli_of)" "run --cgroup-parent dolos-oracle.slice --oom-score-adj 1000 --rm --network none --volumes-from n --env-file F --user 0 --entrypoint cardano-cli node:1 latest query tip
 env A=1
 env B=two words"
 node_docker 1000:1000
-expect node_cli_user "$(node_cli_of | head -1)" "run --cgroup-parent dolos-oracle.slice --rm --network none --volumes-from n --env-file F --user 1000:1000 --entrypoint cardano-cli node:1 latest query tip"
+expect node_cli_user "$(node_cli_of | head -1)" "run --cgroup-parent dolos-oracle.slice --oom-score-adj 1000 --rm --network none --volumes-from n --env-file F --user 1000:1000 --entrypoint cardano-cli node:1 latest query tip"
 
 # Writes the captured endorser block into a LeiosDb of a layout, a change and the schemas named, then prints node-eb's exit and either same, when it prints the line write_leiosdb.py says it must, or its refusal.
 node_eb_of() {

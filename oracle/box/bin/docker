@@ -1,5 +1,5 @@
 #!/bin/sh
-# Runs ORACLE_DOCKER with the arguments given, placing each container a run, create or build starts in the slice ORACLE_SLICE.
+# Runs ORACLE_DOCKER with the arguments given, placing each container a run, create or build starts in the slice ORACLE_SLICE, and making each container a run or create starts the kernel's first choice when the box runs out of memory.
 set -eu
 : "${ORACLE_DOCKER:?}" "${ORACLE_SLICE:?}"
 if [ "$ORACLE_DOCKER" -ef "$0" ]; then
@@ -7,18 +7,26 @@ if [ "$ORACLE_DOCKER" -ef "$0" ]; then
   exit 2
 fi
 case ${1:-} in
-  run | create | build)
+  run | create)
     command=$1
     shift
-    exec "$ORACLE_DOCKER" "$command" --cgroup-parent "$ORACLE_SLICE" "$@"
+    exec "$ORACLE_DOCKER" "$command" --cgroup-parent "$ORACLE_SLICE" --oom-score-adj 1000 "$@"
+    ;;
+  build)
+    shift
+    exec "$ORACLE_DOCKER" build --cgroup-parent "$ORACLE_SLICE" "$@"
     ;;
   container | image | builder)
     case "$1 ${2:-}" in
-      "container run" | "container create" | "image build" | "builder build")
-        group=$1
+      "container run" | "container create")
         command=$2
         shift 2
-        exec "$ORACLE_DOCKER" "$group" "$command" --cgroup-parent "$ORACLE_SLICE" "$@"
+        exec "$ORACLE_DOCKER" container "$command" --cgroup-parent "$ORACLE_SLICE" --oom-score-adj 1000 "$@"
+        ;;
+      "image build" | "builder build")
+        group=$1
+        shift 2
+        exec "$ORACLE_DOCKER" "$group" build --cgroup-parent "$ORACLE_SLICE" "$@"
         ;;
     esac
     ;;
