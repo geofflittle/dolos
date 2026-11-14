@@ -6,8 +6,8 @@ set -eu
 : "${ROOT:?}" "${IMAGE:?}"
 HERE=$(cd "$(dirname "$0")" && pwd)
 # The oracle slice's memory and swap on musashi-aws, the box this script runs on.
-ORACLE_MEMORY=${ORACLE_MEMORY:-2400M}
-ORACLE_SWAP=${ORACLE_SWAP:-512M}
+ORACLE_MEMORY=2400M
+ORACLE_SWAP=512M
 . "$HERE/lib.sh"
 trap finish EXIT
 if [ -z "${JUDGED:-}" ]; then
