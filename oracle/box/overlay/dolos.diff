@@ -258,7 +258,7 @@ index c98dcfa3..56a88b5d 100644
  
      fn committee(&self) -> Result<Option<BTreeMap<StakeCredential, Epoch>>, ValidationError> {
 diff --git a/crates/core/src/submit.rs b/crates/core/src/submit.rs
-index 7c5cc964..e048cd68 100644
+index 7c5cc964..d1c6753b 100644
 --- a/crates/core/src/submit.rs
 +++ b/crates/core/src/submit.rs
 @@ -113,6 +113,9 @@ pub trait SubmitExt: Domain {
@@ -272,7 +272,7 @@ index 7c5cc964..e048cd68 100644
                  Err(error) => {
                      debug!(tx.hash = %tx.hash(), %error, "pending tx refused on revalidation");
 @@ -178,6 +181,11 @@ impl From<DomainError> for SubmitError {
-
+ 
  fn from_chain(error: ChainError) -> SubmitError {
      let fault = match error {
 +        ChainError::BrokenInvariant(x)
@@ -365,7 +365,7 @@ index b3a5af22..6236592f 100644
      // If the output has a datum hash, try to fetch the datum value from storage
      if let Some(DatumOption::Hash(datum_hash)) = parsed_output.datum() {
 diff --git a/src/serve/grpc/v1/submit.rs b/src/serve/grpc/v1/submit.rs
-index 41894d95..84838efe 100644
+index affa0775..518fc1fc 100644
 --- a/src/serve/grpc/v1/submit.rs
 +++ b/src/serve/grpc/v1/submit.rs
 @@ -111,6 +111,9 @@ fn tx_eval_to_u5c(
@@ -379,7 +379,7 @@ index 41894d95..84838efe 100644
              other => return unrepresentable(format!("{other:?}[{}]", entry.index)),
          };
 diff --git a/src/serve/grpc/v1alpha/submit.rs b/src/serve/grpc/v1alpha/submit.rs
-index 3e73ef26..30588920 100644
+index 514591f4..fc49e696 100644
 --- a/src/serve/grpc/v1alpha/submit.rs
 +++ b/src/serve/grpc/v1alpha/submit.rs
 @@ -132,9 +132,16 @@ fn tx_eval_to_u5c(
@@ -420,7 +420,7 @@ index b3f07291..d4ed3362 100644
                  .clone()
                  .map(u5c::watch::any_chain_block::Chain::Cardano),
 diff --git a/src/serve/grpc/v1beta/submit.rs b/src/serve/grpc/v1beta/submit.rs
-index f8b49fbe..f30f7f45 100644
+index 4d711d8e..fcb8b16e 100644
 --- a/src/serve/grpc/v1beta/submit.rs
 +++ b/src/serve/grpc/v1beta/submit.rs
 @@ -133,9 +133,16 @@ fn tx_eval_to_u5c(
