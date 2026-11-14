@@ -51,8 +51,7 @@ PRELOAD=
 if [ "$FSYNC" = off ]; then
   PRELOAD="-v /usr/lib/x86_64-linux-gnu/libeatmydata.so.1:/opt/eatmydata.so:ro -e LD_PRELOAD=/opt/eatmydata.so"
 fi
-docker run -d --name "$NAME" --network host --log-opt max-size=100m --log-opt max-file=2 $PRELOAD \
-  -v "$STORE:/run-dolos" -w /run-dolos $ENTRY "$IMAGE" -c dolos.toml daemon >/dev/null
+start_candidate "$NAME" "$IMAGE" "$STORE" "$PRELOAD $ENTRY" >/dev/null
 echo "LIVE-CANDIDATE started name=$NAME commit=$COMMIT candidate=$CANDIDATE grpc=$CANDIDATE_GRPC"
 pid=$(docker inspect -f '{{.State.Pid}}' "$NAME")
 state=$(fsync_state "/proc/$pid/maps")
@@ -83,8 +82,8 @@ streak=0
 while :; do
   slot=$(candidate_slot || true)
   slot=${slot:-0}
-  node=$(node_slot)
-  if [ "$slot" -ge $((node - 100)) ]; then
+  node=$(node_slot || true)
+  if candidate_synced "$slot" "$node"; then
     break
   fi
   if [ "$(free_g "$ROOT")" -lt 3 ]; then

@@ -631,6 +631,41 @@ expect deadline_whole "$(deadline_of 2328000 291)" 200
 expect deadline_over "$(deadline_of 2328001 291)" 201
 expect deadline_tip "$(deadline_of 2345162 291)" 202
 
+# Whether candidate_synced counts the candidate slot $1 as synced to the node read $2.
+synced_of() {
+  (
+    HERE=$H
+    . "$lib_test_lib"
+    if candidate_synced "$1" "$2"; then echo synced; else echo behind; fi
+  )
+}
+# Must not fire: a node read that is empty, null or not a slot, as while the node restarts, and a candidate more than 100 slots back.
+expect synced_node_empty "$(synced_of 505961 '')" behind
+expect synced_node_null "$(synced_of 505961 null)" behind
+expect synced_node_word "$(synced_of 505961 'x1')" behind
+expect synced_behind "$(synced_of 2355999 2356100)" behind
+# Must fire: a candidate 100 slots back or nearer.
+expect synced_at_limit "$(synced_of 2356000 2356100)" synced
+expect synced_ahead "$(synced_of 2356200 2356100)" synced
+
+# The docker run start_candidate makes for the container $1 of the image $2 on the store $3 with the options $4, through a docker that logs its arguments.
+start_of() {
+  D=$lib_test_work/start-candidate
+  rm -rf "$D"
+  mkdir -p "$D"
+  printf '%s\n' '#!/bin/sh' "echo \"\$*\" >'$D/docker.log'" >"$D/docker"
+  chmod +x "$D/docker"
+  (
+    ORACLE_DOCKER=$D/docker
+    . "$lib_test_lib"
+    start_candidate "$@"
+  )
+  cat "$D/docker.log"
+}
+# Must fire: the candidate runs in the slice as the user of the run, which can then remove the store it writes.
+expect start_candidate_user "$(start_of n i /s '--entrypoint /run-dolos/d')" \
+  "run --cgroup-parent dolos-oracle.slice --oom-score-adj 1000 -d --name n --user $(id -u):$(id -g) --network host --log-opt max-size=100m --log-opt max-file=2 --entrypoint /run-dolos/d -v /s:/run-dolos -w /run-dolos i -c dolos.toml daemon"
+
 # Maps of a process with libeatmydata preloaded, of one without it, of one whose loader has mapped only itself, of one that has exited, and none at all.
 M=$lib_test_work/maps
 rm -rf "$M"

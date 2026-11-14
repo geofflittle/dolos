@@ -765,6 +765,21 @@ sync_minutes() {
   echo $(((3 * $1 + 120 * $2 - 1) / (120 * $2)))
 }
 
+# Whether the candidate slot $1 is within 100 slots of the node read $2, which holds only when that read is a slot.
+candidate_synced() {
+  case $2 in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  [ "$1" -ge $(($2 - 100)) ]
+}
+
+# Starts the candidate container $1 of the image $2 on the store $3 as the user of the run, which can then remove what it writes, with the docker run options $4 split into words.
+start_candidate() {
+  # shellcheck disable=SC2086
+  docker run -d --name "$1" --user "$(id -u):$(id -g)" --network host --log-opt max-size=100m --log-opt max-file=2 $4 \
+    -v "$3:/run-dolos" -w /run-dolos "$2" -c dolos.toml daemon
+}
+
 # The limits of the IO guard on the node's lag behind the wall clock, the serving Dolos's lag behind the node and its ReadTip time, and the run of samples over a limit that breaches it.
 IO_NODE_LAG_S=${IO_NODE_LAG_S:-120}
 IO_SERVE_LAG_SLOTS=${IO_SERVE_LAG_SLOTS:-60}
@@ -1283,7 +1298,7 @@ require_build_image() {
   export BUILD_IMAGE
 }
 
-# The file the live leg reads ENDPOINT, NODE, NODE_DB, GRPCURL, SERVE_CONFIG and CANDIDATE_GRPC from.
+# The file the live leg reads ENDPOINT, NODE, NODE_DB, GRPCURL, SERVE_CONFIG, CANDIDATE_GRPC and CANDIDATE_NEED_G from.
 LIVE_ENV=${LIVE_ENV:-$ROOT/live.env}
 
 # Builds Dolos from the scratch tree into $OUT/bin/dolos.
