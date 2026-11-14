@@ -35,18 +35,11 @@ live_shift() {
     LIVE_DIR="/w/${OUT#"$ROOT"/}/live/shifted" sh "$IN_IMAGE" "${OUT#"$ROOT"/}" \
       "/w/${OUT#"$ROOT"/}/bin/judge" "$ORACLE_TESTS::live::live" --exact --ignored --nocapture \
       >"$OUT/live-shift.log" 2>&1 || true
-    arm_verdict "$OUT/live-shift.log" '^test result: ' "" "" shifted_times_differ "$OUT/live-shift.log"
+    live_shift_verdict "$OUT/live-shift.log"
   else
     verdict=UNPLANTED
   fi
   echo "live-shift=$verdict"
-}
-
-# Whether the live log $1 holds the served era start and the tip each disagreeing with the node on its time.
-shifted_times_differ() {
-  times='slot=[0-9]+ time=[0-9]+ node_slot=[0-9]+ '
-  grep -E "^LIVE-DIFF row=[^ ]* locus=era_summary era=[a-z]+ start_time $times" "$1" &&
-    grep -E "^LIVE-DIFF row=[^ ]* locus=era_summary tip $times" "$1"
 }
 
 # Judges the head, the control and the arms the change from BASE touches, every arm when no BASE is known.

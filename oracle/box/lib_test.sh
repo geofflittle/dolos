@@ -407,6 +407,25 @@ expect reach_crate_none "$(reach_of "$crate_pattern" 'test result: ok. 0 passed;
 expect reach_crate_failed "$(reach_of "$crate_pattern" 'test result: FAILED. 2 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s')" UNJUDGED
 expect reach_judge_as_crate "$(reach_of "$crate_pattern" 'RESULT PASS judged=3' "$failed_result")" UNJUDGED
 expect reach_no_pattern "$(reach_of "" 'RESULT PASS judged=3' "$finished")" UNJUDGED
+
+# The verdict live_shift_verdict sets for a live log of the lines given, and the arms it recorded as served.
+shift_of() {
+  (
+    HERE=$H OUT=$L/shift ROOT=$W/shift-tree
+    . "$LIB"
+    rm -rf "$OUT"
+    mkdir -p "$OUT"
+    printf '%s\n' "$@" >"$OUT/live-shift.log"
+    live_shift_verdict "$OUT/live-shift.log"
+    echo "$verdict $(ls "$OUT/served" 2>/dev/null || true)"
+  )
+}
+start_late='LIVE-DIFF row=S15 locus=era_summary era=dijkstra start_time slot=0 time=1001 node_slot=1 node_slot_before=0'
+tip_late='LIVE-DIFF row=S16 locus=era_summary tip slot=9 time=1010 node_slot=8 node_slot_before=9'
+# Must not fire on a finished run with only the era start late, must name a run that did not finish, and must fire on a finished run with both late, recording what it served as live-shift.
+expect shift_missed "$(shift_of "$start_late" "$failed_result")" "MISSED live-shift"
+expect shift_unrun "$(shift_of "$start_late" "$tip_late")" "UNRUN "
+expect shift_caught "$(shift_of "$start_late" "$tip_late" "$failed_result")" "CAUGHT live-shift"
 # Must find no script but lib.sh setting CAUGHT or MISSED, which arm_verdict sets only for a finished run.
 expect verdict_words "$(cat "$HERE/breaks.sh" "$HERE/value.sh" "$HERE/amaru.sh" "$HERE/run.sh" "$HERE/regen.sh" | grep -c -E 'CAUGHT|MISSED' || true)" 0
 
