@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs one tier of the oracle at REV, and oracle/README.md says what each tier checks and when to run it.
-# Usage: ROOT=dir [REV=ref] [BASE=ref] run.sh quick|done|ship
-# The quick tier judges the arms whose plants change a file that differs between BASE and REV, and BASE defaults to the commit of the last done or ship run that passed. The done and ship tiers record their commit in runs/last-done when they pass, and the ship tier records it in runs/last-ship too.
+# Usage: ROOT=dir [REV=ref] [BASE=ref] [LIVE_READS=dir] run.sh quick|done|ship
+# The quick tier judges the arms whose plants change a file that differs between BASE and REV, and BASE defaults to the commit of the last done or ship run that passed. The ship tier also judges LIVE_READS, the reads read-live.sh made of the image of REV. The done and ship tiers record their commit in runs/last-done when they pass, and the ship tier records it and the image in runs/last-ship too.
 # A tier fails when a caught or held arm served other lines than its row of served.txt records, and a change that alters what an arm serves on purpose copies the arm's row from the run's served.txt into served.txt.
 set -eu
 : "${ROOT:?}"
@@ -112,6 +112,16 @@ value_verdicts() {
   echo "$legs"
 }
 
+# Judges the fix arms, the head, the control and every arm, prints their lines and sets verdicts to their verdicts and those of the value and amaru legs.
+judge_arms() {
+  fix_arms=fix-arms=PASS
+  fix_arms_both >"$OUT/fix-arms.out" 2>&1 || fix_arms=fix-arms=FAIL
+  cat "$OUT/fix-arms.out"
+  sh "$HERE/breaks.sh" | tee "$OUT/breaks.out"
+  verdicts=$(sed -n 's/^ARMS \(.*\) logs=.*/\1/p' "$OUT/breaks.out")
+  verdicts="$verdicts $fix_arms $(value_verdicts)"
+}
+
 # Judges the head, the control and every arm, and records the commit when every verdict passes.
 done_run() {
   mkdir -p "$OUT"
@@ -120,47 +130,34 @@ done_run() {
   require_build_image
   reset_scratch
   commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
-  fix_arms=fix-arms=PASS
-  fix_arms_both >"$OUT/fix-arms.out" 2>&1 || fix_arms=fix-arms=FAIL
-  cat "$OUT/fix-arms.out"
-  sh "$HERE/breaks.sh" | tee "$OUT/breaks.out"
-  verdicts=$(sed -n 's/^ARMS \(.*\) logs=.*/\1/p' "$OUT/breaks.out")
-  verdicts="$verdicts $fix_arms $(value_verdicts)"
+  judge_arms
   echo "DONE tier=done $verdicts commit=$commit logs=$OUT"
   record_pass done "$commit" "$verdicts"
 }
 
-# Builds the candidate, syncs it while the arms run, judges its reads, and records the commit in runs/last-done and runs/last-ship when every verdict passes.
+# Judges what the done tier judges and a copy of the reads LIVE_READS, and records the commit in runs/last-done and runs/last-ship, and the image in runs/last-ship, when every verdict passes.
 ship_run() {
   mkdir -p "$OUT"
+  require_reads
   require_free
   require_lib_test
   require_build_image
-  candidate_fsync >/dev/null || exit 2
   reset_scratch
   commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
-  sync=
-  if build_candidate >"$OUT/live-leg.out" 2>&1; then
-    sync_candidate >>"$OUT/live-leg.out" 2>&1 &
-    sync=$!
-  fi
-  build_live_judge >>"$OUT/live-leg.out" 2>&1 || true
-  sh "$HERE/breaks.sh" | tee "$OUT/breaks.out"
-  fields=1
-  if [ -n "$sync" ] && wait "$sync"; then
-    fields=0
-  fi
+  rm -rf "$OUT/live"
+  cp -R "$LIVE_READS" "$OUT/live"
+  build_live_judge >"$OUT/live-leg.out" 2>&1 || true
+  judge_arms
   live=FAIL
-  if judge_live && [ "$fields" -eq 0 ]; then
+  if judge_live && [ "$candidate" = PASS ]; then
     live=PASS
   fi
   cat "$OUT/live-leg.out"
-  verdicts=$(sed -n 's/^ARMS \(.*\) logs=.*/\1/p' "$OUT/breaks.out")
-  verdicts="$verdicts $(value_verdicts)"
+  candidate_lines "$OUT/live"
   live_lines
   shift_verdict=$(live_shift | tail -1)
-  echo "DONE tier=ship $verdicts $shift_verdict live=$live commit=$commit logs=$OUT"
-  record_pass ship "$commit" "$verdicts $shift_verdict live=$live"
+  echo "DONE tier=ship $verdicts $shift_verdict live=$live image=$image commit=$commit logs=$OUT"
+  record_pass ship "$commit" "$verdicts $shift_verdict live=$live" "$image"
 }
 
 "${1}_run"

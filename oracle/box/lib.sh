@@ -1,4 +1,4 @@
-# Functions and defaults the oracle box scripts share, reading ROOT, SCRATCH, REV, BASE, JUDGED, MIN_FREE_G, OUT, HERE, TARGET, LIVE_ENV, CANDIDATE_NEED_G, IN_IMAGE, LOCK_POLL_SECONDS, RUN_LOCK, LAST_DONE, LAST_SHIP, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_FSYNC, NODE, ENDPOINT, GRPCURL, the ORACLE_ slice settings, CGROUP_FILE, CGROUP_ROOT, the IO_ limits and VALUE_HARNESS_URL.
+# Functions and defaults the oracle box scripts share, reading ROOT, SCRATCH, REV, BASE, JUDGED, MIN_FREE_G, OUT, HERE, TARGET, LIVE_ENV, LIVE_READS, CANDIDATE_NEED_G, IN_IMAGE, LOCK_POLL_SECONDS, RUN_LOCK, LAST_DONE, LAST_SHIP, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_FSYNC, NODE, ENDPOINT, GRPCURL, the ORACLE_ slice settings, CGROUP_FILE, CGROUP_ROOT, the IO_ limits and VALUE_HARNESS_URL.
 
 PALLAS=${PALLAS:-scratch/pallas}
 SCRATCH=${SCRATCH:-scratch/dolos}
@@ -410,12 +410,12 @@ passed() {
   done
 }
 
-# Records the commit $2 of a run of the tier $1, done or ship, whose verdicts $3 pass, in LAST_DONE, and for the ship tier in LAST_SHIP with the verdicts and the UTC time.
+# Records the commit $2 of a run of the tier $1, done or ship, whose verdicts $3 pass, in LAST_DONE, and for the ship tier in LAST_SHIP with the image $4, the verdicts and the UTC time.
 record_pass() {
   passed "$3" || return 1
   echo "$2" >"$LAST_DONE"
   if [ "$1" = ship ]; then
-    echo "commit=$2 tier=$1 verdicts=\"$3\" time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$LAST_SHIP"
+    echo "commit=$2 image=$4 tier=$1 verdicts=\"$3\" time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$LAST_SHIP"
   fi
 }
 
@@ -457,6 +457,33 @@ build_image() {
   git -C "$ROOT/value/harness.git" archive "$rev" conformance-value-oracle/gen/image-name.sh conformance-value-oracle/gen/build-image.sh |
     tar -x -C "$ROOT/value/image-scripts" --strip-components 2 || return
   sh "$ROOT/value/image-scripts/build-image.sh" "$1" "$HERE/images"
+}
+
+# Prints the commit the image $1 was built from, its revision label, after pulling it, or exits 2 with a REFUSED line when $1 is not a repository and a digest with no tag or the label is not a full commit id.
+image_commit() {
+  case $1 in
+    *[[:space:]]*) named=no ;;
+    *) named=$(printf '%s\n' "$1" | grep -E -c '^([^@/]+/)*[^@/:]+@sha256:[0-9a-f]{64}$') || true ;;
+  esac
+  if [ "$named" != 1 ]; then
+    echo "REFUSED IMAGE=$1 is not <repository>@sha256:<64 hex digits> with no tag" >&2
+    exit 2
+  fi
+  if ! docker pull -q --platform linux/amd64 "$1" >/dev/null; then
+    echo "REFUSED IMAGE=$1 pull failed" >&2
+    exit 2
+  fi
+  revision=$(docker image inspect --platform linux/amd64 \
+    -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$1") || revision=
+  case $revision in
+    *[!0-9a-f]* | "") ;;
+    ????????????????????????????????????????)
+      echo "$revision"
+      return
+      ;;
+  esac
+  echo "REFUSED IMAGE=$1 revision=$revision is not a full commit id" >&2
+  exit 2
 }
 
 # Prints the full sha of the commit the ref $2 names in $ROOT/dolos.git, or exits 2 with a REFUSED line naming the variable $1 when it names none.
@@ -577,7 +604,7 @@ finish() {
   echo "run-exit=$status"
 }
 
-# Starts a run of the entry script $1 with the arguments after it: exits 2 when OUT is outside ROOT or REV or BASE names no commit, enters the oracle slice, takes the box lock, and unless JUDGED is set runs the script as the commit REV names it, from that commit's oracle/box in $OUT/box.
+# Starts a run of the entry script $1 with the arguments after it: exits 2 when OUT is outside ROOT, REV or BASE names no commit or REV holds no script of that name, enters the oracle slice, takes the box lock, and unless JUDGED is set runs the script as the commit REV names it, from that commit's oracle/box in $OUT/box.
 start_run() {
   case $OUT in
     "$ROOT"/*) ;;
@@ -587,6 +614,10 @@ start_run() {
     REV=$(full_commit REV "$REV")
     if [ -n "${BASE:-}" ]; then
       BASE=$(full_commit BASE "$BASE")
+    fi
+    if ! git -C "$ROOT/dolos.git" rev-parse --verify --quiet "$REV:$BOX_PATH/$(basename "$1")" >/dev/null; then
+      echo "REFUSED REV=$REV holds no $BOX_PATH/$(basename "$1")"
+      exit 2
     fi
   fi
   enter_slice "$@"
@@ -1185,17 +1216,37 @@ build_live_judge() {
   cp "$ROOT${judge#/w}" "$OUT/bin/judge"
 }
 
-# Syncs the candidate in $OUT/bin/dolos from the node and compares its reads with the serving Dolos field by field, logging to $OUT/candidate.log.
+# Prints the verdict lines of the candidate's log in the reads dir $1.
+candidate_lines() {
+  grep -E '^(LIVE-CANDIDATE|LIVE-IO|LIVE-FIELD|LIVE-FIELD-SPENT|LIVE-FIELDS|LIVE) ' "$1/candidate.log" |
+    cut -c1-400 || true
+}
+
+# Syncs the candidate $1, a binary path or an image, of the commit $commit from the node and compares its reads with the serving Dolos field by field, reading into $OUT/live and logging to $OUT/live/candidate.log.
 sync_candidate() {
   set -a
   . "$LIVE_ENV"
   set +a
+  mkdir -p "$OUT/live"
   fields=0
-  CANDIDATE="$OUT/bin/dolos" COMMIT=$commit sh "$HERE/candidate.sh" "$OUT/live" \
-    >"$OUT/candidate.log" 2>&1 || fields=$?
-  grep -E '^(LIVE-CANDIDATE|LIVE-IO|LIVE-FIELD|LIVE-FIELD-SPENT|LIVE-FIELDS|LIVE) ' "$OUT/candidate.log" |
-    cut -c1-400 || true
+  CANDIDATE=$1 COMMIT=$commit sh "$HERE/candidate.sh" "$OUT/live" >"$OUT/live/candidate.log" 2>&1 || fields=$?
+  candidate_lines "$OUT/live"
   return "$fields"
+}
+
+# Sets image and candidate from the record of the reads in LIVE_READS, or exits 2 when it holds no record or the record names another commit than REV.
+require_reads() {
+  if [ -z "${LIVE_READS:-}" ] || [ ! -f "$LIVE_READS/reads.txt" ]; then
+    echo "REFUSED LIVE_READS=${LIVE_READS:-} holds no reads.txt"
+    exit 2
+  fi
+  read_commit=$(sed -n 's/^image=[^ ]* commit=\([^ ]*\) .*/\1/p' "$LIVE_READS/reads.txt")
+  if [ "$read_commit" != "$REV" ]; then
+    echo "REFUSED LIVE_READS=$LIVE_READS commit=$read_commit is not REV=$REV"
+    exit 2
+  fi
+  image=$(sed -n 's/^image=\([^ ]*\) .*/\1/p' "$LIVE_READS/reads.txt")
+  candidate=$(sed -n 's/.* candidate=\([A-Z]*\).*/\1/p' "$LIVE_READS/reads.txt")
 }
 
 # Judges the candidate's reads against the node with $OUT/bin/judge, logging to $OUT/live.log.

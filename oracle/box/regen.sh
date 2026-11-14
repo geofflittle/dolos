@@ -14,7 +14,7 @@ start_run "$0" "$@"
 live_leg() {
   build_candidate && build_live_judge || return 1
   fields=0
-  sync_candidate || fields=$?
+  sync_candidate "$OUT/bin/dolos" || fields=$?
   judge_live && [ "$fields" -eq 0 ]
 }
 

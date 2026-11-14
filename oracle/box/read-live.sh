@@ -1,0 +1,22 @@
+#!/bin/sh
+# Syncs the image IMAGE as a candidate beside the serving Dolos, reads the candidate, the serving Dolos and the node into $OUT/live, and records there the image, the commit its revision label names and the candidate's verdict, which the ship tier judges.
+# Usage: ROOT=dir IMAGE=<repository>@sha256:<64 hex digits> read-live.sh
+# Runs where the node is reachable, as the commit the label names it, and builds nothing.
+set -eu
+: "${ROOT:?}" "${IMAGE:?}"
+HERE=$(cd "$(dirname "$0")" && pwd)
+. "$HERE/lib.sh"
+trap finish EXIT
+if [ -z "${JUDGED:-}" ]; then
+  REV=$(image_commit "$IMAGE")
+fi
+start_run "$0" "$@"
+
+mkdir -p "$OUT/live"
+candidate_fsync >/dev/null || exit 2
+commit=$REV
+candidate=PASS
+sync_candidate "$IMAGE" || candidate="FAIL exit=$?"
+echo "image=$IMAGE commit=$commit candidate=$candidate" >"$OUT/live/reads.txt"
+echo "READS image=$IMAGE commit=$commit candidate=$candidate dir=$OUT/live"
+[ "$candidate" = PASS ]

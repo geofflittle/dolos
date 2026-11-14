@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, the overlay build's target dir, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the files a planted tree writes and whether git writes each diff as committed, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the box lock, how many switched arms are judged at once, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier and which of its steps it reruns, the value control's verdict, the amaru pin, the amaru leg's verdicts, the build image's name by the harness's image scripts, the image in-image.sh runs and the endorser block endorser_fixture.py reads from each LeiosDb layout.
+# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, the overlay build's target dir, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the files a planted tree writes and whether git writes each diff as committed, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the reads the ship tier takes, the image read-live.sh syncs and that it builds nothing, the box lock, how many switched arms are judged at once, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier and which of its steps it reruns, the value control's verdict, the amaru pin, the amaru leg's verdicts, the build image's name by the harness's image scripts, the image in-image.sh runs and the endorser block endorser_fixture.py reads from each LeiosDb layout.
 # Usage: lib_test.sh <empty work dir>
 set -eu
 W=$(cd "$1" && pwd)
@@ -653,7 +653,7 @@ expect io_recovers "$(guard_of "$over" "$over" "$under")" "clear streak=0"
 # Must fire: three samples over in a row.
 expect io_breach "$(guard_of "$under" "$over" "$over" "$over")" "breach sample=4"
 
-# The exit of record_pass for a run of the tier $1 of commit c with the verdicts $2, and what it leaves in last-done and in last-ship but for the time.
+# The exit of record_pass for a run of the tier $1 of commit c and image i with the verdicts $2, and what it leaves in last-done and in last-ship but for the time.
 records_of() {
   (
     HERE=$H
@@ -663,7 +663,7 @@ records_of() {
     mkdir -p "$R"
     LAST_DONE=$R/last-done LAST_SHIP=$R/last-ship
     status=0
-    record_pass "$1" c "$2" || status=$?
+    record_pass "$1" c "$2" i || status=$?
     last_done=absent
     last_ship=absent
     if [ -f "$LAST_DONE" ]; then last_done=$(cat "$LAST_DONE"); fi
@@ -682,7 +682,7 @@ expect ship_live_failed "$(records_of ship "$arms_pass live-shift=CAUGHT live=FA
 expect ship_shift_missed "$(records_of ship "$arms_pass live-shift=MISSED live=PASS")" "exit=1 last-done=absent last-ship=absent"
 # Must fire: a ship run that passes writes both.
 expect ship_passed "$(records_of ship "$arms_pass live-shift=CAUGHT live=PASS")" \
-  "exit=0 last-done=c last-ship=commit=c tier=ship verdicts=\"$arms_pass live-shift=CAUGHT live=PASS\""
+  "exit=0 last-done=c last-ship=commit=c image=i tier=ship verdicts=\"$arms_pass live-shift=CAUGHT live=PASS\""
 
 # Prints lock=free, lock=held when flock reports the lock taken, or the exit of any other flock failure, for the lock RUN_LOCK.
 LOCK_PROBE='status=0; flock -n -E 75 "$RUN_LOCK" true || status=$?; case $status in 0) state=free ;; 75) state=held ;; *) state=flock_exit_$status ;; esac'
@@ -898,10 +898,21 @@ for script in run.sh regen.sh; do
   expect "entry_$script" "$(cat "$K/old.seen")" "script=$script args=done"
 done
 
-# Must not fire: run.sh given quick, done or ship goes on to the free space floor.
+# A digest reference to an image, and the dir $W/reads-$1 of reads made from it at the commit $2 whose candidate verdict is $3.
+IMAGE_REF=ghcr.io/o/dolos@sha256:$(printf '%064d' 0)
+reads_of() {
+  mkdir -p "$W/reads-$1"
+  echo "image=$IMAGE_REF commit=$2 candidate=$3" >"$W/reads-$1/reads.txt"
+}
+reads_of rev c PASS
+# Must not fire: run.sh given quick, done or ship goes on to the free space floor, ship given reads made at REV.
 for word in quick done ship; do
   lock_root "tier-word-$word"
-  tier "$K" "" run.sh "$word"
+  (
+    REV=c LIVE_READS=$W/reads-rev
+    export REV LIVE_READS
+    tier "$K" "" run.sh "$word"
+  )
   expect "tier_word_$word" "$(run_out "$K")" "REFUSED free run-exit=2 exit=2"
 done
 # Must fire: run.sh given any other word prints the usage line naming the three tiers and exits 2.
@@ -910,6 +921,122 @@ for word in live value regen quicker; do
   tier "$K" "" run.sh "$word"
   expect "tier_word_$word" "$(run_out "$K")" "usage: run.sh quick|done|ship run-exit=2 exit=2"
 done
+
+# The output of a ship run with REV c on the build root $W/ship-reads-$1, given the reads $2, or no reads when $2 is empty.
+ship_reads_of() {
+  lock_root "ship-reads-$1"
+  (
+    REV=c
+    export REV
+    unset LIVE_READS
+    if [ -n "$2" ]; then
+      LIVE_READS=$2
+      export LIVE_READS
+    fi
+    tier "$K" "" run.sh ship
+  )
+  run_out "$K"
+}
+# Must not fire: reads whose candidate failed reach the free space floor, since the live verdict fails on them later.
+reads_of failed c "FAIL exit=1"
+expect ship_reads_failed "$(ship_reads_of failed "$W/reads-failed")" "REFUSED free run-exit=2 exit=2"
+# Must refuse: no reads, a dir that holds no record of them, and reads of an image built from another commit than REV.
+expect ship_reads_unset "$(ship_reads_of unset "")" "REFUSED LIVE_READS= holds no reads.txt run-exit=2 exit=2"
+mkdir -p "$W/reads-none"
+expect ship_reads_none "$(ship_reads_of none "$W/reads-none")" \
+  "REFUSED LIVE_READS=$W/reads-none holds no reads.txt run-exit=2 exit=2"
+reads_of other d PASS
+expect ship_reads_other "$(ship_reads_of other "$W/reads-other")" \
+  "REFUSED LIVE_READS=$W/reads-other commit=d is not REV=c run-exit=2 exit=2"
+
+# A build root $W/$1 whose dolos.git holds one commit of these box scripts, without read-live.sh when $2 is old, with a candidate.sh that records what it was handed in the root's candidate.seen and exits $3, and a docker that logs each call to the root's docker.log and answers image inspect with that commit's id, or with $4 when it is given.
+image_root() {
+  lock_root "$1"
+  mkdir -p "$K/src/oracle/box"
+  cp "$HERE"/*.sh "$K/src/oracle/box/"
+  cp -R "$HERE/bin" "$HERE/overlay" "$K/src/oracle/box/"
+  if [ "$2" = old ]; then
+    rm -f "$K/src/oracle/box/read-live.sh"
+  fi
+  printf '%s\n' '#!/bin/sh' "echo \"candidate=\$CANDIDATE commit=\$COMMIT dir=\$1\" >'$K/candidate.seen'" "exit $3" \
+    >"$K/src/oracle/box/candidate.sh"
+  git -C "$K/src" init -q
+  git -C "$K/src" add -A
+  git -C "$K/src" -c user.name=t -c user.email=t@t commit -q -m box
+  git clone -q --bare "$K/src" "$K/dolos.git"
+  revision=${4-$(git -C "$K/dolos.git" rev-parse HEAD)}
+  printf '%s\n' '#!/bin/sh' "echo \"\$*\" >>'$K/docker.log'" \
+    "if [ \"\$1 \$2\" = 'image inspect' ]; then echo '$revision'; fi" >"$K/docker"
+  chmod +x "$K/docker"
+  : >"$K/docker.log"
+  : >"$K/live.env"
+}
+
+# The output of read-live.sh run as an entry on the build root of image_root with the image $1, a build image named so that any build reaches the docker, and no harness to fetch a build image's scripts from.
+read_live_of() {
+  (
+    IMAGE=$1 ORACLE_DOCKER=$K/docker BUILD_IMAGE=b VALUE_HARNESS_URL=$K/missing
+    export IMAGE ORACLE_DOCKER BUILD_IMAGE VALUE_HARNESS_URL
+    tier "$K" entry read-live.sh
+  )
+  run_out "$K"
+}
+
+# The docker calls the image check makes for the image $1.
+image_calls() {
+  printf '%s\n' "pull -q --platform linux/amd64 $1" \
+    "image inspect --platform linux/amd64 -f {{index .Config.Labels \"org.opencontainers.image.revision\"}} $1"
+}
+
+# Must not fire: an image named by digest whose revision label is a commit holding read-live.sh hands the run to that commit's read-live.sh, which syncs the image as the candidate and records the image, the commit and the candidate's verdict.
+image_root read-live new 0
+sha=$(git -C "$K/dolos.git" rev-parse HEAD)
+expect read_live_runs "$(read_live_of "$IMAGE_REF")" \
+  "READS image=$IMAGE_REF commit=$sha candidate=PASS dir=$K/runs/t/live run-exit=0 exit=0"
+expect read_live_candidate "$(cat "$K/candidate.seen" 2>&1)" "candidate=$IMAGE_REF commit=$sha dir=$K/runs/t/live"
+expect read_live_record "$(cat "$K/runs/t/live/reads.txt" 2>&1)" "image=$IMAGE_REF commit=$sha candidate=PASS"
+# Must not fire: the run builds nothing, so its only docker calls are the image check's, though a build would reach this docker.
+expect read_live_builds_nothing "$(cat "$K/docker.log")" "$(image_calls "$IMAGE_REF")"
+# Must fire: a build on the same root reaches the docker, so read_live_builds_nothing would see one.
+(
+  ROOT=$K HERE=$K/src/oracle/box OUT=$K/runs/control BUILD_IMAGE=b ORACLE_DOCKER=$K/docker SCRATCH=scratch PALLAS=scratch
+  export ROOT BUILD_IMAGE
+  . "$K/src/oracle/box/lib.sh"
+  : >"$K/docker.log"
+  build_candidate >/dev/null 2>&1 || true
+)
+expect read_live_build_seen "$(cut -d ' ' -f 1-4 "$K/docker.log" | sed -n 1p)" "run --cgroup-parent dolos-oracle.slice --rm"
+# Must fire: a candidate that fails is recorded as failed and fails the run.
+image_root read-live-failed new 1
+sha=$(git -C "$K/dolos.git" rev-parse HEAD)
+expect read_live_failed "$(read_live_of "$IMAGE_REF")" \
+  "READS image=$IMAGE_REF commit=$sha candidate=FAIL exit=1 dir=$K/runs/t/live run-exit=1 exit=1"
+# Must refuse before any docker call: an image named by a tag, or by a tag and a digest.
+image_root read-live-tag new 0
+expect read_live_tag "$(read_live_of ghcr.io/o/dolos:sha-c)" \
+  "REFUSED IMAGE=ghcr.io/o/dolos:sha-c is not <repository>@sha256:<64 hex digits> with no tag run-exit=2 exit=2"
+expect read_live_tag_and_digest "$(read_live_of "ghcr.io/o/dolos:sha-c@sha256:$(printf '%064d' 0)")" \
+  "REFUSED IMAGE=ghcr.io/o/dolos:sha-c@sha256:$(printf '%064d' 0) is not <repository>@sha256:<64 hex digits> with no tag run-exit=2 exit=2"
+expect read_live_tag_calls "$(cat "$K/docker.log")" ""
+# Must refuse: an image whose revision label is empty, missing, or not a full commit id.
+for label in empty none short; do
+  case $label in
+    empty) value= ;;
+    none) value='<no value>' ;;
+    short) value=$(echo "$sha" | cut -c1-7) ;;
+  esac
+  image_root "read-live-label-$label" new 0 "$value"
+  expect "read_live_label_$label" "$(read_live_of "$IMAGE_REF")" \
+    "REFUSED IMAGE=$IMAGE_REF revision=$value is not a full commit id run-exit=2 exit=2"
+done
+# Must refuse: a revision label naming a commit the build root lacks, and one naming a commit older than read-live.sh.
+image_root read-live-absent new 0 "$(printf '%040d' 1)"
+expect read_live_absent "$(read_live_of "$IMAGE_REF")" \
+  "REFUSED REV=$(printf '%040d' 1) names no commit in $K/dolos.git run-exit=2 exit=2"
+image_root read-live-old old 0
+sha=$(git -C "$K/dolos.git" rev-parse HEAD)
+expect read_live_old "$(read_live_of "$IMAGE_REF")" \
+  "REFUSED REV=$sha holds no oracle/box/read-live.sh run-exit=2 exit=2"
 
 # Must fire: breaks.sh and candidate.sh, each run alone, hold the lock when they read free space, candidate.sh with a config to copy.
 lock_root lock-breaks
