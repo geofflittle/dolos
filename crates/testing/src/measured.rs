@@ -238,9 +238,12 @@ impl<Inner: ArchiveStore> ArchiveStore for MeasuredArchive<Inner> {
         self.inner.slot_by_block_hash(hash)
     }
 
-    fn slot_by_tx_hash(&self, hash: &[u8]) -> Result<Option<BlockSlot>, ArchiveError> {
+    fn tx_location_by_hash(
+        &self,
+        hash: &[u8],
+    ) -> Result<Option<dolos_core::TxLocation>, ArchiveError> {
         self.counters.exact_lookups.fetch_add(1, Ordering::Relaxed);
-        self.inner.slot_by_tx_hash(hash)
+        self.inner.tx_location_by_hash(hash)
     }
 
     fn slot_by_block_number(&self, number: u64) -> Result<Option<BlockSlot>, ArchiveError> {

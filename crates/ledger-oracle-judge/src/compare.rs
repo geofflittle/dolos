@@ -19,7 +19,8 @@ pub enum ByteVerdict {
 }
 
 impl ByteVerdict {
-    /// Compares the ledger's bytes with the node's, either side possibly absent.
+    /// Compares the ledger's bytes with the node's, either side possibly
+    /// absent.
     pub fn of(ledger: Option<&[u8]>, node: Option<&[u8]>) -> Option<Self> {
         match (ledger, node) {
             (None, None) => None,
@@ -513,7 +514,8 @@ impl StateTallies {
         self.roll_fail.iter().map(|r| r.records).sum()
     }
 
-    /// Adds the served output comparisons of each record, passing a known record while it still disagrees.
+    /// Adds the served output comparisons of each record, passing a known
+    /// record while it still disagrees.
     pub fn settle_as_output(
         &mut self,
         kind: CorpusKind,
@@ -523,7 +525,8 @@ impl StateTallies {
         self.settle(Locus::AsOutput, |s| &mut s.as_output, kind, checks, known);
     }
 
-    /// Adds the account comparisons of each record, passing a known record while it still disagrees.
+    /// Adds the account comparisons of each record, passing a known record
+    /// while it still disagrees.
     pub fn settle_accounts(
         &mut self,
         kind: CorpusKind,

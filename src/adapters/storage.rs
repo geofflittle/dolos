@@ -272,15 +272,17 @@ pub fn check_state_revision(store: &StateStoreBackend) -> Result<(), Error> {
 pub fn open_mempool_store(config: &RootConfig) -> Result<MempoolBackend, Error> {
     check_storage_version(&config.storage.version)?;
 
+    let bound = config.submit.mempool_bound;
+
     match &config.storage.mempool {
         MempoolStoreConfig::InMemory => Ok(MempoolBackend::Ephemeral(
-            dolos_core::builtin::EphemeralMempool::new(),
+            dolos_core::builtin::EphemeralMempool::bounded(bound),
         )),
         MempoolStoreConfig::Redb(cfg) => {
             let path = config.storage.mempool_path().unwrap_or_default();
             ensure_store_path(&path)?;
             Ok(MempoolBackend::Redb(
-                dolos_redb3::mempool::RedbMempool::open(path, cfg)?,
+                dolos_redb3::mempool::RedbMempool::open(path, cfg, bound)?,
             ))
         }
     }
@@ -1231,12 +1233,15 @@ impl CoreArchiveStore for ArchiveStoreBackend {
         }
     }
 
-    fn slot_by_tx_hash(&self, hash: &[u8]) -> Result<Option<BlockSlot>, ArchiveError> {
+    fn tx_location_by_hash(
+        &self,
+        hash: &[u8],
+    ) -> Result<Option<dolos_core::TxLocation>, ArchiveError> {
         match self {
-            Self::Memory(s) => CoreArchiveStore::slot_by_tx_hash(s, hash),
-            Self::LogsOnly(inner) => CoreArchiveStore::slot_by_tx_hash(inner.as_ref(), hash),
-            Self::Fjall(s) => CoreArchiveStore::slot_by_tx_hash(s, hash),
-            Self::NoOp(s) => CoreArchiveStore::slot_by_tx_hash(s, hash),
+            Self::Memory(s) => CoreArchiveStore::tx_location_by_hash(s, hash),
+            Self::LogsOnly(inner) => CoreArchiveStore::tx_location_by_hash(inner.as_ref(), hash),
+            Self::Fjall(s) => CoreArchiveStore::tx_location_by_hash(s, hash),
+            Self::NoOp(s) => CoreArchiveStore::tx_location_by_hash(s, hash),
         }
     }
 

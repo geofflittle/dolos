@@ -47,7 +47,7 @@ use pallas::ledger::traverse::MultiEraBlock;
 use crate::archive::{ArchiveError, ArchiveStore, ArchiveWriter, LogKey, Skippable};
 use crate::indexes::{
     key_hash, ArchiveIndexDelta, ExactKind, ExactRecord, IndexRecord, KeyHash, TagDimension,
-    TagRecord, MAX_EXACT_KEY_LEN,
+    TagRecord, TxLocation, TxRange, MAX_EXACT_KEY_LEN,
 };
 use crate::{
     BlockBody, BlockSlot, ChainPoint, EntityValue, Namespace, RawBlock, StateSchema, TemporalKey,
@@ -90,7 +90,7 @@ struct Tables {
     archive_tags: BTreeSet<ArchiveTag>,
     /// Keyed on the record's own inline key rather than a `Vec`, so
     /// `iter_exact_records` copies rather than allocates per record.
-    exact: BTreeMap<(ExactKind, ExactKey), BlockSlot>,
+    exact: BTreeMap<(ExactKind, ExactKey), (BlockSlot, Option<TxRange>)>,
 }
 
 /// A single mutation, recorded by a writer and replayed at commit.
@@ -104,7 +104,7 @@ enum Op {
     Undo(ChainPoint),
     InsertArchiveTag(ArchiveTag),
     RemoveArchiveTag(ArchiveTag),
-    InsertExact(ExactKind, ExactKey, BlockSlot),
+    InsertExact(ExactKind, ExactKey, BlockSlot, Option<TxRange>),
     RemoveExact(ExactKind, ExactKey),
 }
 
@@ -193,25 +193,31 @@ impl MemoryArchiveWriter {
     /// omits it looks complete.
     fn exact_keys_of(
         block: &ArchiveIndexDelta,
-    ) -> impl Iterator<Item = Result<(ExactKind, ExactKey), ArchiveError>> + '_ {
-        let hash = (!block.block_hash.is_empty())
-            .then_some((ExactKind::BlockHash, block.block_hash.as_slice()));
+    ) -> impl Iterator<Item = Result<(ExactKind, ExactKey, Option<TxRange>), ArchiveError>> + '_
+    {
+        let hash = (!block.block_hash.is_empty()).then_some((
+            ExactKind::BlockHash,
+            block.block_hash.as_slice(),
+            None,
+        ));
 
         let number = block.block_number.map(|n| (ExactKind::BlockNumber, n));
 
         let txs = block
-            .tx_hashes
+            .txs
             .iter()
-            .map(|hash| (ExactKind::TxHash, hash.as_slice()));
+            .map(|tx| (ExactKind::TxHash, tx.hash.as_slice(), tx.range.clone()));
 
-        let hashes = hash.into_iter().chain(txs).map(|(kind, key)| {
-            exact_key(kind, key).map(|key| (kind, key)).ok_or_else(|| {
-                ArchiveError::InternalError(format!(
-                    "exact entry of kind {kind} has a {}-byte key, expected {}",
-                    key.len(),
-                    kind.key_len(),
-                ))
-            })
+        let hashes = hash.into_iter().chain(txs).map(|(kind, key, range)| {
+            exact_key(kind, key)
+                .map(|key| (kind, key, range))
+                .ok_or_else(|| {
+                    ArchiveError::InternalError(format!(
+                        "exact entry of kind {kind} has a {}-byte key, expected {}",
+                        key.len(),
+                        kind.key_len(),
+                    ))
+                })
         });
 
         // A block number is type-enforced eight bytes, so it cannot be
@@ -220,6 +226,7 @@ impl MemoryArchiveWriter {
             Ok((
                 kind,
                 exact_key(kind, &n.to_be_bytes()).expect("a u64 is the block-number key width"),
+                None,
             ))
         });
 
@@ -237,8 +244,8 @@ impl ArchiveWriter for MemoryArchiveWriter {
 
         for block in deltas {
             for entry in Self::exact_keys_of(block) {
-                let (kind, key) = entry?;
-                ops.push(Op::InsertExact(kind, key, block.slot));
+                let (kind, key, range) = entry?;
+                ops.push(Op::InsertExact(kind, key, block.slot, range));
             }
 
             for tag in Self::archive_tags_of(block) {
@@ -256,7 +263,7 @@ impl ArchiveWriter for MemoryArchiveWriter {
 
         for block in deltas.iter().rev() {
             for entry in Self::exact_keys_of(block) {
-                let (kind, key) = entry?;
+                let (kind, key, _) = entry?;
                 ops.push(Op::RemoveExact(kind, key));
             }
 
@@ -287,6 +294,7 @@ impl ArchiveWriter for MemoryArchiveWriter {
                     exact.kind,
                     exact_key(exact.kind, exact.key()).expect("a record's key is its kind's width"),
                     exact.slot,
+                    None,
                 )),
             }
         }
@@ -353,8 +361,8 @@ impl ArchiveWriter for MemoryArchiveWriter {
                 Op::RemoveArchiveTag(tag) => {
                     tables.archive_tags.remove(&tag);
                 }
-                Op::InsertExact(kind, key, slot) => {
-                    tables.exact.insert((kind, key), slot);
+                Op::InsertExact(kind, key, slot, range) => {
+                    tables.exact.insert((kind, key), (slot, range));
                 }
                 Op::RemoveExact(kind, key) => {
                     tables.exact.remove(&(kind, key));
@@ -631,7 +639,7 @@ impl ArchiveStore for MemoryArchiveStore {
         tables
             .archive_tags
             .retain(|(_, _, slot)| *slot >= prune_before);
-        tables.exact.retain(|_, slot| *slot >= prune_before);
+        tables.exact.retain(|_, (slot, _)| *slot >= prune_before);
 
         Ok(done)
     }
@@ -662,7 +670,7 @@ impl ArchiveStore for MemoryArchiveStore {
         };
 
         let tables = self.tables.read().map_err(|_| poisoned())?;
-        Ok(tables.exact.get(&(ExactKind::BlockHash, key)).copied())
+        Ok(tables.exact.get(&(ExactKind::BlockHash, key)).map(|x| x.0))
     }
 
     fn slot_by_block_number(&self, number: u64) -> Result<Option<BlockSlot>, ArchiveError> {
@@ -671,10 +679,13 @@ impl ArchiveStore for MemoryArchiveStore {
             .expect("a u64 is the block-number key width");
 
         let tables = self.tables.read().map_err(|_| poisoned())?;
-        Ok(tables.exact.get(&(ExactKind::BlockNumber, key)).copied())
+        Ok(tables
+            .exact
+            .get(&(ExactKind::BlockNumber, key))
+            .map(|x| x.0))
     }
 
-    fn slot_by_tx_hash(&self, hash: &[u8]) -> Result<Option<BlockSlot>, ArchiveError> {
+    fn tx_location_by_hash(&self, hash: &[u8]) -> Result<Option<TxLocation>, ArchiveError> {
         // A key that could not have been stored cannot be found, so a
         // wrong-width query is a miss rather than an error.
         let Some(key) = exact_key(ExactKind::TxHash, hash) else {
@@ -682,7 +693,13 @@ impl ArchiveStore for MemoryArchiveStore {
         };
 
         let tables = self.tables.read().map_err(|_| poisoned())?;
-        Ok(tables.exact.get(&(ExactKind::TxHash, key)).copied())
+        Ok(tables
+            .exact
+            .get(&(ExactKind::TxHash, key))
+            .map(|(slot, range)| TxLocation {
+                slot: *slot,
+                range: range.clone(),
+            }))
     }
 
     fn slots_by_tag(
@@ -752,8 +769,8 @@ impl ArchiveStore for MemoryArchiveStore {
         let records: Vec<ExactRecord> = tables
             .exact
             .iter()
-            .filter(|(_, slot)| slots.contains(slot))
-            .map(|((kind, key), slot)| {
+            .filter(|(_, (slot, _))| slots.contains(slot))
+            .map(|((kind, key), (slot, _))| {
                 ExactRecord::new(*kind, &key[..kind.key_len()], *slot)
                     .map_err(|e| ArchiveError::InternalError(e.to_string()))
             })

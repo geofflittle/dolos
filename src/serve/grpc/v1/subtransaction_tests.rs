@@ -1,5 +1,6 @@
 //! Paired test with sundae-sync-v2's real follower and filters. All stores and
-//! the RPC listener belong to this test; no running node or AWS service is used.
+//! the RPC listener belong to this test; no running node or AWS service is
+//! used.
 use std::{sync::Arc, time::Duration};
 
 use dolos_core::{
@@ -39,9 +40,9 @@ async fn sundae_sync_consumes_child_inputs_over_v1() {
             slot: block.slot(),
             block_hash: block.hash().to_vec(),
             block_number: Some(block.number()),
-            tx_hashes: dolos_core::applied_txs(&block)
+            txs: dolos_core::applied_txs(&block)
                 .iter()
-                .map(|(_, tx)| tx.hash().to_vec())
+                .map(|(_, tx)| dolos_core::IndexedTx::unplaced(tx.hash().to_vec()))
                 .collect(),
             tags: vec![],
         }])

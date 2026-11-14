@@ -9,11 +9,14 @@ use itertools::Itertools as _;
 
 use tokio::sync::Semaphore;
 
-use pallas::ledger::traverse::{MultiEraBlock, MultiEraHeader, MultiEraTx};
+use pallas::ledger::traverse::{
+    probe::{self, Outcome},
+    Era, MultiEraBlock, MultiEraHeader, MultiEraTx,
+};
 
 use crate::{
     archive::ArchiveStore, ArchiveError, BlockBody, BlockHash, BlockHeight, BlockSlot, ChainError,
-    ChainPoint, Domain, DomainError, TagDimension, TxCbor, TxHash, TxOrder,
+    ChainPoint, Domain, DomainError, TagDimension, TxCbor, TxHash, TxOrder, TxRange,
 };
 
 /// Lightweight block metadata for a transaction, extracted via a single decode.
@@ -76,6 +79,23 @@ pub fn tx_in<'b>(txs: &[MultiEraTx<'b>], hash: &[u8]) -> Option<(TxOrder, MultiE
         });
         found.err().map(|tx| (index, tx))
     })
+}
+
+/// The top level transaction the bytes `range` of the Dijkstra block `block`
+/// span, with its transaction whose hash is `hash`, a sub transaction
+/// included.
+pub fn tx_in_range<'b>(
+    block: &'b [u8],
+    range: &TxRange,
+    hash: &[u8],
+) -> Option<(MultiEraTx<'b>, MultiEraTx<'b>)> {
+    let Outcome::Matched(Era::Dijkstra) = probe::block_era(block) else {
+        return None;
+    };
+    let bytes = block.get(range.start as usize..range.end as usize)?;
+    let tx = MultiEraTx::decode_for_era(Era::Dijkstra, bytes).ok()?;
+    let (_, applied) = tx_in(std::slice::from_ref(&tx), hash)?;
+    Some((tx, applied))
 }
 
 /// Maximum number of metadata entries, including misses, retained between
@@ -393,6 +413,22 @@ where
                 return Ok(None);
             };
             Ok(domain.archive().get_block_by_slot(&slot)?)
+        })
+        .await
+    }
+
+    /// The body of the block the index records for a transaction hash, with
+    /// the bytes of it the transaction spans when the index holds them.
+    pub async fn block_body_and_tx_range_by_tx_hash(
+        &self,
+        tx_hash: Vec<u8>,
+    ) -> Result<Option<(BlockBody, Option<TxRange>)>, DomainError> {
+        self.run_blocking(move |domain| {
+            let Some(location) = domain.archive().tx_location_by_hash(&tx_hash)? else {
+                return Ok(None);
+            };
+            let body = domain.archive().get_block_by_slot(&location.slot)?;
+            Ok(body.map(|body| (body, location.range)))
         })
         .await
     }

@@ -115,15 +115,16 @@ impl Domain for DomainAdapter {
         // TODO: do a more thorough analysis to understand if this approach is
         // susceptible to race conditions. Things to explore:
         // - a mutex to block the sending of events while gathering the replay.
-        // - storing the previous block hash in the db to use for consistency checks.
+        // - storing the previous block hash in the db to use for consistency
+        //   checks.
 
-        // We first create the receiver so that the subscriber internal ring-buffer
-        // position is defined.
+        // We first create the receiver so that the subscriber internal
+        // ring-buffer position is defined.
         let receiver = self.tip_broadcast.subscribe();
 
-        // We then collect any gap between the from point and the current tip. This
-        // assumes that no event will be sent between the creation of the receiver and
-        // the collection of the replay.
+        // We then collect any gap between the from point and the current tip.
+        // This assumes that no event will be sent between the creation
+        // of the receiver and the collection of the replay.
         let blocks = self.wal().iter_blocks(from.clone(), None)?;
         let replay = dolos_core::wal::blocks_after(from.as_ref(), blocks).collect::<VecDeque<_>>();
 
@@ -178,24 +179,42 @@ fn resolve_archive_inputs<A: dolos_core::ArchiveStore>(
     archive: &A,
     refs: &[pallas::interop::utxorpc::TxoRef],
 ) -> pallas::interop::utxorpc::UtxoMap {
+    use dolos_core::TxRange;
     use pallas::interop::utxorpc::{TxHash, TxoRef, UtxoMap};
     let start = std::time::Instant::now();
     let mut by_tx: HashMap<TxHash, Vec<TxoRef>> = HashMap::new();
     for r in refs {
         by_tx.entry(r.0).or_default().push(*r);
     }
-    let mut by_slot: HashMap<u64, HashMap<TxHash, Vec<TxoRef>>> = HashMap::new();
+    type Located = (TxHash, Vec<TxoRef>, Option<TxRange>);
+    let mut by_slot: HashMap<u64, Vec<Located>> = HashMap::new();
     for (hash, refs) in by_tx {
-        if let Ok(Some(slot)) = archive.slot_by_tx_hash(hash.as_ref()) {
-            by_slot.entry(slot).or_default().insert(hash, refs);
+        if let Ok(Some(location)) = archive.tx_location_by_hash(hash.as_ref()) {
+            by_slot
+                .entry(location.slot)
+                .or_default()
+                .push((hash, refs, location.range));
         }
     }
     let source_blocks = by_slot.len();
     let mut result = UtxoMap::new();
-    for (slot, mut wanted) in by_slot {
+    for (slot, located) in by_slot {
         let Ok(Some(bytes)) = archive.get_block_by_slot(&slot) else {
             continue;
         };
+        let mut wanted: HashMap<TxHash, Vec<TxoRef>> = HashMap::new();
+        for (hash, refs, range) in located {
+            let found =
+                range.and_then(|range| dolos_core::tx_in_range(&bytes, &range, hash.as_ref()));
+            let Some((_, tx)) = found else {
+                wanted.insert(hash, refs);
+                continue;
+            };
+            insert_named_outputs(&mut result, tx.era(), &tx, refs);
+        }
+        if wanted.is_empty() {
+            continue;
+        }
         let Ok(block) = MultiEraBlock::decode(&bytes) else {
             continue;
         };
@@ -203,12 +222,7 @@ fn resolve_archive_inputs<A: dolos_core::ArchiveStore>(
             let Some(refs) = wanted.remove(&tx.hash()) else {
                 continue;
             };
-            let outputs: HashMap<usize, _> = tx.produces().into_iter().collect();
-            for r in refs {
-                if let Some(output) = outputs.get(&(r.1 as usize)) {
-                    result.insert(r, (block.era(), output.encode()));
-                }
-            }
+            insert_named_outputs(&mut result, block.era(), &tx, refs);
             if wanted.is_empty() {
                 break;
             }
@@ -217,6 +231,21 @@ fn resolve_archive_inputs<A: dolos_core::ArchiveStore>(
     tracing::trace!(requested = refs.len(), resolved = result.len(), source_blocks,
         elapsed = ?start.elapsed(), "Resolved archived inputs");
     result
+}
+
+/// Inserts into `result` each output `tx` produces that one of `refs` names.
+fn insert_named_outputs(
+    result: &mut pallas::interop::utxorpc::UtxoMap,
+    era: pallas::ledger::traverse::Era,
+    tx: &pallas::ledger::traverse::MultiEraTx,
+    refs: Vec<pallas::interop::utxorpc::TxoRef>,
+) {
+    let outputs: HashMap<usize, _> = tx.produces().into_iter().collect();
+    for r in refs {
+        if let Some(output) = outputs.get(&(r.1 as usize)) {
+            result.insert(r, (era, output.encode()));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -247,7 +276,10 @@ mod input_resolution_tests {
                 slot: block.slot(),
                 block_hash: block.hash().to_vec(),
                 block_number: Some(block.number()),
-                tx_hashes: txs.iter().map(|(_, tx)| tx.hash().to_vec()).collect(),
+                txs: txs
+                    .iter()
+                    .map(|(_, tx)| dolos_core::IndexedTx::unplaced(tx.hash().to_vec()))
+                    .collect(),
                 tags: vec![],
             }])
             .unwrap();
@@ -310,7 +342,7 @@ mod input_resolution_tests {
             writer
                 .apply_index(&[ArchiveIndexDelta {
                     slot,
-                    tx_hashes: vec![hash.to_vec()],
+                    txs: vec![dolos_core::IndexedTx::unplaced(hash.to_vec())],
                     ..Default::default()
                 }])
                 .unwrap();
@@ -358,5 +390,41 @@ mod input_resolution_tests {
         let refs: Vec<_> = expected.keys().copied().collect();
         assert_eq!(resolve_archive_inputs(archive, &refs), expected);
         assert_eq!(archive.counters.snapshot().block_reads, 1);
+    }
+
+    /// Outputs of a transaction the index locates resolve while every other
+    /// transaction of its block is bytes that do not decode.
+    #[test]
+    fn resolves_a_located_transaction_alone() {
+        let fixture = crate::tests::musashi::sub_transaction_block();
+        let archive = fixture.domain.archive();
+        let stored = archive.get_block_by_slot(&fixture.slot).unwrap().unwrap();
+        let block = MultiEraBlock::decode(&stored).unwrap();
+        let expected: pallas::interop::utxorpc::UtxoMap = dolos_core::applied_txs(&block)
+            .iter()
+            .filter(|(_, tx)| [fixture.parent, fixture.sub].contains(&tx.hash()))
+            .flat_map(|(_, tx)| {
+                tx.produces()
+                    .into_iter()
+                    .map(|(i, o)| ((tx.hash(), i as u32), (block.era(), o.encode())))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let refs: Vec<_> = expected.keys().copied().collect();
+        assert!(refs.iter().any(|r| r.0 == fixture.parent));
+        assert!(refs.iter().any(|r| r.0 == fixture.sub));
+
+        let damaged = crate::tests::musashi::only_one_tx_decodes(&stored, fixture.parent);
+        assert!(MultiEraBlock::decode(&damaged).is_err());
+        let writer = archive.start_writer().unwrap();
+        writer
+            .apply(
+                &ChainPoint::Specific(block.slot(), block.hash()),
+                &Arc::new(damaged),
+            )
+            .unwrap();
+        writer.commit().unwrap();
+
+        assert_eq!(resolve_archive_inputs(archive, &refs), expected);
     }
 }

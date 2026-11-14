@@ -29,9 +29,17 @@ pub async fn route<D: Domain + SubmitExt>(
     }
 
     let chain = domain.read_chain();
-    let result = domain.inner.receive_tx("minibf", &chain, &cbor);
+    let hash = domain
+        .inner
+        .receive_tx("minibf", &chain, &cbor)
+        .map_err(submit_error_status)?;
 
-    let hash = result.map_err(|e| match e {
+    Ok(hex::encode(hash))
+}
+
+/// The status a submit answers when receiving its transaction fails.
+fn submit_error_status(error: DomainError) -> StatusCode {
+    match error {
         DomainError::ChainError(x) => match x {
             ChainError::BrokenInvariant(_) => StatusCode::BAD_REQUEST,
             ChainError::DecodingError(_) => StatusCode::BAD_REQUEST,
@@ -50,17 +58,33 @@ pub async fn route<D: Domain + SubmitExt>(
             MempoolError::StateError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             MempoolError::PParamsNotAvailable => StatusCode::INTERNAL_SERVER_ERROR,
             MempoolError::DuplicateTx => StatusCode::CONFLICT,
+            MempoolError::Full(_) => StatusCode::TOO_EARLY,
         },
         _ => StatusCode::INTERNAL_SERVER_ERROR,
-    })?;
-
-    Ok(hex::encode(hash))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::{TestApp, TestFault};
+    use dolos_core::PassedBound;
+
+    #[test]
+    fn a_duplicate_transaction_answers_conflict() {
+        let status = submit_error_status(MempoolError::DuplicateTx.into());
+        assert_eq!(status, StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn a_full_mempool_answers_too_early() {
+        let full = MempoolError::Full(PassedBound::Txs {
+            bound: 2,
+            would_hold: 3,
+        });
+        assert_eq!(submit_error_status(full.into()), StatusCode::TOO_EARLY);
+        assert_eq!(StatusCode::TOO_EARLY.as_u16(), 425);
+    }
 
     async fn assert_status(app: &TestApp, content_type: &str, body: Vec<u8>, expected: StatusCode) {
         let (status, _body) = app.post_bytes("/tx/submit", content_type, body).await;

@@ -816,7 +816,8 @@ async fn into_u5c_utxo<S: Domain>(
     })
 }
 
-/// The fraction closest to `stake` over `total` whose denominator fits a signed 32 bit integer.
+/// The fraction closest to `stake` over `total` whose denominator fits a signed
+/// 32 bit integer.
 fn stake_fraction(stake: u64, total: u64) -> u5c::cardano::RationalNumber {
     const MAX: u128 = i32::MAX as u128;
 
@@ -857,7 +858,8 @@ fn stake_fraction(stake: u64, total: u64) -> u5c::cardano::RationalNumber {
     }
 }
 
-/// The stake distribution of the listed pools, or of every pool when none is listed.
+/// The stake distribution of the listed pools, or of every pool when none is
+/// listed.
 fn pool_distribution(
     stakes: &dolos_cardano::pool_stakes::PoolStakes,
     pool_keyhashes: &[bytes::Bytes],
@@ -1184,7 +1186,8 @@ where
         let chain_summary = dolos_cardano::load_era_summary::<D>(state)
             .map_err(|e| Status::internal(format!("failed to load era summary: {e}")))?;
 
-        // the distribution in force for an epoch is the snapshot taken at the end of the epoch two before it
+        // the distribution in force for an epoch is the snapshot taken at the
+        // end of the epoch two before it
         let epoch = current_epoch.saturating_sub(2);
         let protocol = chain_summary.era_for_epoch(epoch).protocol.into();
 

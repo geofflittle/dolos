@@ -224,9 +224,9 @@ pub fn setup_tracing(config: &LoggingConfig, telemetry: &TelemetryConfig) -> mie
             .init();
     }
 
-    // Initialize the log-to-tracing bridge AFTER the tracing subscriber is set up.
-    // This allows crates using the `log` crate (like fjall) to have their messages
-    // forwarded to the tracing subscriber.
+    // Initialize the log-to-tracing bridge AFTER the tracing subscriber is set
+    // up. This allows crates using the `log` crate (like fjall) to have
+    // their messages forwarded to the tracing subscriber.
     tracing_log::LogTracer::init().ok();
 
     Ok(())

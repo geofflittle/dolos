@@ -1679,7 +1679,8 @@ mod tests {
         let err = select_state(&inscription(short)).unwrap_err();
         assert!(matches!(err, Error::IncompleteStele(_)), "{err:?}");
 
-        // An absent kind: tip completeness is all seventeen, not "what's there".
+        // An absent kind: tip completeness is all seventeen, not "what's
+        // there".
         let absent: Vec<LayerDescriptor> = state_layers()
             .into_iter()
             .filter(|layer| layer.kind != "state-epochs")

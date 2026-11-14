@@ -1180,7 +1180,10 @@ impl CoreArchiveStore for ArchiveStore {
         exact::get_by_block_number(&snapshot, &self.exact, number).map_err(ArchiveError::from)
     }
 
-    fn slot_by_tx_hash(&self, tx_hash: &[u8]) -> Result<Option<BlockSlot>, ArchiveError> {
+    fn tx_location_by_hash(
+        &self,
+        tx_hash: &[u8],
+    ) -> Result<Option<dolos_core::TxLocation>, ArchiveError> {
         let snapshot = self.db.snapshot();
         exact::get_by_tx_hash(&snapshot, &self.exact, tx_hash).map_err(ArchiveError::from)
     }

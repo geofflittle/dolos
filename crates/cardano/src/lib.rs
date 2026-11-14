@@ -379,9 +379,10 @@ impl dolos_core::ChainLogic for CardanoLogic {
 
         // Use randomness_stability_window (4k/f) for the RUPD trigger boundary.
         // The Haskell ledger's startStep fires at randomnessStabilisationWindow
-        // into the epoch, capturing addrsRew (registered accounts) for the pre-Babbage
-        // prefilter. Using 4k/f instead of 3k/f ensures the state at RUPD time includes
-        // all deregistrations up to the correct threshold.
+        // into the epoch, capturing addrsRew (registered accounts) for the
+        // pre-Babbage prefilter. Using 4k/f instead of 3k/f ensures the
+        // state at RUPD time includes all deregistrations up to the
+        // correct threshold.
         let stability_window = utils::randomness_stability_window(genesis);
 
         Ok(Self {
@@ -519,7 +520,7 @@ impl dolos_core::ChainLogic for CardanoLogic {
 
         // The archive entries the block wrote, rebuilt the way the apply path
         // built them, so `undo_index` removes exactly what `apply_index` added.
-        builder.index_block(blockv, &decoded_inputs);
+        builder.index_block(&blockd, &decoded_inputs);
 
         let (utxo_index_delta, archive_index_deltas) = builder.into_parts();
 
@@ -559,7 +560,7 @@ impl dolos_core::ChainLogic for CardanoLogic {
         builder.add_utxo_tags_from_delta(&utxo_delta);
 
         // Archive indexes (shared logic)
-        builder.index_block(blockv, &decoded_inputs);
+        builder.index_block(&blockd, &decoded_inputs);
 
         let (utxo_index_delta, archive_index_deltas) = builder.into_parts();
 

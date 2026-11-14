@@ -132,7 +132,8 @@ pub(super) fn account_key(stake: &StakeCredential) -> EntityKey {
         .into()
 }
 
-/// Registers each ledger account at the slot, holding its balance as unwithdrawn rewards and its delegations in the epoch.
+/// Registers each ledger account at the slot, holding its balance as
+/// unwithdrawn rewards and its delegations in the epoch.
 fn seed_accounts(domain: &DomainAdapter, slot: u64, epoch: u64, accounts: &LedgerAccounts) {
     let writer = domain.state().start_writer().unwrap();
     for (credential, ledger) in accounts {
@@ -180,7 +181,9 @@ pub(super) struct Seeded {
     _toy: ToyDomain,
 }
 
-/// Seeds a domain with the given parameters, outputs and accounts, and the record's pools, votes, governance and treasury, at the first slot of the epoch.
+/// Seeds a domain with the given parameters, outputs and accounts, and the
+/// record's pools, votes, governance and treasury, at the first slot of the
+/// epoch.
 pub(super) fn seed(
     genesis: &Arc<Genesis>,
     epoch: u64,
@@ -210,7 +213,8 @@ pub(super) fn seed(
     let mut state = dolos_cardano::load_epoch::<ToyDomain>(toy.state()).unwrap();
     state.number = epoch;
     let live = state.pparams.unwrap_live_mut();
-    // The ledger holds a cost model only for the languages it names, so the seed starts from none.
+    // The ledger holds a cost model only for the languages it names, so the
+    // seed starts from none.
     for kind in [
         PParamKind::CostModelsPlutusV1,
         PParamKind::CostModelsPlutusV2,

@@ -46,7 +46,8 @@ pub fn show_ledger(outcome: &LedgerOutcome) -> String {
     }
 }
 
-/// The outcome of a refusal by both sides, which agrees when the node's class is one of the ledger's.
+/// The outcome of a refusal by both sides, which agrees when the node's class
+/// is one of the ledger's.
 fn refusal_outcome(
     failure_names: &NonEmpty<FailurePath>,
     ledger: String,
@@ -113,7 +114,8 @@ pub enum Fail {
     },
 }
 
-/// The one answer Dolos gave for a record submitted with the earlier records pending and again with them inflight.
+/// The one answer Dolos gave for a record submitted with the earlier records
+/// pending and again with them inflight.
 pub fn one_answer<'v>(
     held: &'v DolosVerdict,
     inflight: &'v DolosVerdict,
@@ -204,7 +206,8 @@ impl fmt::Display for Fail {
     }
 }
 
-/// A record Dolos refused for its inputs that spends outputs failing makers in its group did not leave, made only by `with_failing_makers`.
+/// A record Dolos refused for its inputs that spends outputs failing makers in
+/// its group did not leave, made only by `with_failing_makers`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cascade {
     makers: NonEmpty<FailingMaker>,
@@ -226,7 +229,8 @@ pub enum Outcome {
     Cascade(Cascade),
 }
 
-/// The outcome of one record from the ledger's answer under a true flag, Dolos's answer and the feature it is declared unsupported for.
+/// The outcome of one record from the ledger's answer under a true flag,
+/// Dolos's answer and the feature it is declared unsupported for.
 pub fn outcome(
     ledger: &LedgerOutcome,
     dolos: &DolosVerdict,
@@ -297,7 +301,8 @@ pub fn outcome(
     }
 }
 
-/// The feature a record would be declared unsupported for, from a Dolos that named it unsupported.
+/// The feature a record would be declared unsupported for, from a Dolos that
+/// named it unsupported.
 pub fn declares(dolos: &DolosVerdict) -> Option<Feature> {
     match dolos {
         DolosVerdict::Phase2Unsupported(label) | DolosVerdict::Unsupported(label) => {
@@ -309,7 +314,8 @@ pub fn declares(dolos: &DolosVerdict) -> Option<Feature> {
     }
 }
 
-/// The outcome of a record on the known list, which passes only while the record still fails and keeps an unknown refusal failing.
+/// The outcome of a record on the known list, which passes only while the
+/// record still fails and keeps an unknown refusal failing.
 pub fn with_known(outcome: Outcome, row: Option<&Row>) -> Outcome {
     match (row, outcome) {
         (None, outcome) | (Some(_), outcome @ Outcome::Fail(Fail::UnknownRefusal { .. })) => {
@@ -327,7 +333,8 @@ pub fn with_known(outcome: Outcome, row: Option<&Row>) -> Outcome {
     }
 }
 
-/// A record whose outputs are seeded for the records that spend them, made only by `maker`.
+/// A record whose outputs are seeded for the records that spend them, made only
+/// by `maker`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SeedingMaker(RecordId);
 
@@ -337,7 +344,8 @@ impl Borrow<RecordId> for SeedingMaker {
     }
 }
 
-/// A record Dolos did not take whose outcome does not pass, made only by `maker`.
+/// A record Dolos did not take whose outcome does not pass, made only by
+/// `maker`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FailingMaker(RecordId);
 
@@ -347,7 +355,8 @@ impl Borrow<RecordId> for FailingMaker {
     }
 }
 
-/// A record as the maker of outputs that later records in its group spend, by whether Dolos took it and whether it passed.
+/// A record as the maker of outputs that later records in its group spend, by
+/// whether Dolos took it and whether it passed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Maker {
     Taken,
@@ -377,7 +386,8 @@ pub fn maker(id: RecordId, dolos: &DolosVerdict, outcome: &Outcome) -> Maker {
     }
 }
 
-/// The outcome of a record that spends outputs of the failing makers, a cascade of them when it fails and Dolos refused it for its inputs.
+/// The outcome of a record that spends outputs of the failing makers, a cascade
+/// of them when it fails and Dolos refused it for its inputs.
 pub fn with_failing_makers(
     outcome: Outcome,
     dolos: &DolosVerdict,
@@ -406,7 +416,8 @@ pub fn with_failing_makers(
     }
 }
 
-/// The validation outcomes of one arm, with the records behind each one that is printed.
+/// The validation outcomes of one arm, with the records behind each one that is
+/// printed.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ValidationTally {
     pub dependent: Vec<(RecordId, BTreeSet<RecordId>)>,

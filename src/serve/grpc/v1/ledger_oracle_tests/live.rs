@@ -40,7 +40,8 @@ fn read<T: DeserializeOwned>(dir: &Path, name: &str) -> T {
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("LIVE {} {e}", path.display()))
 }
 
-/// The files in the reads directory whose names start with the prefix, in name order.
+/// The files in the reads directory whose names start with the prefix, in name
+/// order.
 fn files(dir: &Path, prefix: &str) -> Vec<String> {
     let entries = fs::read_dir(dir).unwrap_or_else(|e| panic!("LIVE {} {e}", dir.display()));
     let mut names: Vec<String> = entries
@@ -99,7 +100,8 @@ fn node_eras(dir: &Path) -> Vec<NodeEra> {
     cbor::era_history(&raw).unwrap_or_else(|e| panic!("LIVE node-era-history.json {e}"))
 }
 
-/// The node's slot at each second it was asked to translate, keyed by the second.
+/// The node's slot at each second it was asked to translate, keyed by the
+/// second.
 fn node_slots(dir: &Path) -> BTreeMap<u64, NodeSlot> {
     let names = files(dir, "node-slot-");
     let answers = names.iter().filter_map(|name| {
@@ -112,7 +114,8 @@ fn node_slots(dir: &Path) -> BTreeMap<u64, NodeSlot> {
     answers.collect()
 }
 
-/// The hashes of the transactions in a served block that contain sub transactions.
+/// The hashes of the transactions in a served block that contain sub
+/// transactions.
 fn batch_hashes(block: &s::AnyChainBlock) -> Vec<[u8; 32]> {
     let Some(any_chain_block::Chain::Cardano(block)) = &block.chain else {
         panic!("LIVE a served block is a Cardano block");
@@ -138,7 +141,8 @@ fn presence(output: Option<&Option<ServedOutput>>) -> &'static str {
     }
 }
 
-/// Counts each input FetchBlock serves for a batch transaction against the output ReadTx serves for it.
+/// Counts each input FetchBlock serves for a batch transaction against the
+/// output ReadTx serves for it.
 fn compare_children(dir: &Path, tally: &mut Tally) {
     let mut read_tx = Served::new();
     for name in files(dir, "tx-") {

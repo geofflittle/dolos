@@ -60,7 +60,8 @@ async fn peer_block(peer: &mut PeerClient, point: Point) -> Result<BlockBody, Wo
     peer.blockfetch().fetch_single(point).await.or_restart()
 }
 
-/// The announcement of `parent` that `header` certifies, with the parent's slot.
+/// The announcement of `parent` that `header` certifies, with the parent's
+/// slot.
 pub(crate) fn announced_by(
     parent: Option<&MultiEraHeader<'_>>,
     header: &MultiEraHeader<'_>,
@@ -318,9 +319,10 @@ impl Worker {
     /// certifying block's body arrives.
     ///
     /// A peer that does not hold the endorser block answers with a well formed
-    /// empty body rather than an error, and `EndorserBlockBody::decode_announced`
-    /// refuses that answer by the hash the announcement committed to. It
-    /// surfaces here as a retry rather than as a block with no transactions.
+    /// empty body rather than an error, and
+    /// `EndorserBlockBody::decode_announced` refuses that answer by the
+    /// hash the announcement committed to. It surfaces here as a retry
+    /// rather than as a block with no transactions.
     ///
     /// A failed fetch drops the Leios connection and builds a new one, because
     /// a session that has ended cannot serve the next request either. The
@@ -370,7 +372,8 @@ impl Worker {
     /// A fetch that fails leaves its certification recorded and reconnects, so
     /// the next pass tries again and the batch cannot be flushed in the
     /// meantime. That is what turns a peer that stopped answering into a sync
-    /// that pauses rather than a ledger that is quietly short an endorser block.
+    /// that pauses rather than a ledger that is quietly short an endorser
+    /// block.
     async fn fetch_outstanding(&mut self, stage: &mut Stage) -> Result<(), WorkerError> {
         let Some(client) = self.leios.as_mut() else {
             return Ok(());
@@ -453,9 +456,9 @@ impl Worker {
         debug!(len = blocks.len(), "block batch pulled from peer");
 
         // Each payload is attached to the block of the slot that certified it,
-        // never to a position in the batch, so a short or reordered batch cannot
-        // move one block's endorsed transactions onto another. A payload no
-        // block claimed is refused rather than dropped.
+        // never to a position in the batch, so a short or reordered batch
+        // cannot move one block's endorsed transactions onto another. A
+        // payload no block claimed is refused rather than dropped.
         let blocks = self.payloads.apply(blocks).map_err(|err| {
             warn!(%err, "resolving a certified block failed");
             WorkerError::Panic
@@ -572,11 +575,12 @@ impl gasket::framework::Worker<Stage> for Worker {
         match self.pull_headers(max_headers, stage).await? {
             PullResult::Blocks(points) => self.fetch_and_flush(&points, stage).await?,
             PullResult::Rollback(point) => {
-                // A rollback invalidates anything fetched for a block that is no
-                // longer on the chain, and the next header names the block
-                // stored at the rollback point as its parent. The endorser
-                // transactions of a rolled back block are undone with it,
-                // because they are part of the block bytes the log holds.
+                // A rollback invalidates anything fetched for a block that is
+                // no longer on the chain, and the next header
+                // names the block stored at the rollback point
+                // as its parent. The endorser transactions of a
+                // rolled back block are undone with it, because
+                // they are part of the block bytes the log holds.
                 self.payloads = PendingPayloads::default();
                 self.outstanding.clear();
 
@@ -807,8 +811,8 @@ mod tests {
     }
 
     /// A certificate owes the fetch of its parent's announcement, at the
-    /// parent's slot, whether the parent was delivered by chainsync or read back
-    /// from the store, and whatever else is held after it.
+    /// parent's slot, whether the parent was delivered by chainsync or read
+    /// back from the store, and whatever else is held after it.
     #[test]
     fn a_certificate_owes_the_fetch_of_its_parents_announcement() {
         let parent = announce_with_txs();

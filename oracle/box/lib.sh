@@ -803,17 +803,20 @@ FIX_EXCLUSIONS=$(echo "$FIX_EXCLUSION_REASONS" | awk 'NF { printf "%s ", $1 }')
 # The reasons of FIX_EXCLUSION_REASONS whose row must also carry a why.
 FIX_EXCLUSIONS_WITH_WHY=$(echo "$FIX_EXCLUSION_REASONS" | awk '$2 == "why" { printf "%s ", $1 }')
 
-# The rows of the section $1 of the arms manifest, a line base=<commit> and then one line per fix commit, its commit, arm=<arm> or exclude=<reason>, and why when the row has one.
+# The rows of the section $1 of the arms manifest, a line base=<commit> and then one line per fix, its subject, arm=<arm> or exclude=<reason>, and why when the row has one, separated by tabs.
 manifest_rows() {
   awk -v section="[$1]" '
     /^\[/ { inside = ($0 == section); next }
     !inside { next }
     /^base = / { gsub(/"/, "", $3); print "base=" $3 }
-    /^  \{ commit = / {
+    /^  \{ subject = "/ {
       line = $0
-      gsub(/[{},"]/, "", line)
-      split(line, w, " ")
-      print w[3], w[4] "=" w[6], (w[7] == "why" && w[9] != "" ? "why" : "")
+      sub(/^  \{ subject = "/, "", line)
+      end = index(line, "\", ")
+      rest = substr(line, end + 3)
+      gsub(/[{},"]/, "", rest)
+      split(rest, w, " ")
+      print substr(line, 1, end - 1) "\t" w[1] "=" w[3] "\t" (w[4] == "why" && w[6] != "" ? "why" : "")
     }' "$ARMS_MANIFEST"
 }
 
@@ -932,7 +935,7 @@ verdict_catch() {
     }' "$3" "$4" "$2"
 }
 
-# Prints a FIX-ARM line for each fix subject commit of the repository $1 from the base of the manifest section $2 to the commit $3 that the section gives no arm of PLANTED_ARMS and no known exclusion, then a FIX-ARMS line of counts, and fails when it printed a FIX-ARM line.
+# Prints a FIX-ARM line for each fix subject commit of the repository $1 from the base of the manifest section $2 to the commit $3 that the section gives no arm of PLANTED_ARMS and no known exclusion, or that two rows name, and for each row whose subject no such commit has, then a FIX-ARMS line of counts, and fails when it printed a FIX-ARM line.
 fix_arms() {
   rows=$(manifest_rows "$2")
   base=$(echo "$rows" | sed -n 's/^base=//p')
@@ -941,12 +944,20 @@ fix_arms() {
     echo "FIX-ARMS repo=$2 fixes=0 armed=0 excluded=0 unarmed=0 failing=1"
     return 1
   fi
-  fixes=0 armed=0 excluded=0 unarmed=0 failing=0
+  fixes=0 armed=0 excluded=0 unarmed=0 failing=0 subjects=
   while read -r sha subject; do
     case $subject in fix*) ;; *) continue ;; esac
     fixes=$((fixes + 1))
-    row=$(echo "$rows" | awk -v sha="$sha" 'index(sha, $1) == 1 && length($1) >= 7 { print $2; exit }')
-    why=$(echo "$rows" | awk -v sha="$sha" 'index(sha, $1) == 1 && length($1) >= 7 { print $3; exit }')
+    subjects="$subjects$subject
+"
+    read -r named row why <<ROW
+$(echo "$rows" | SUBJECT=$subject awk -F '\t' '$1 == ENVIRON["SUBJECT"] { if (!n++) { row = $2; why = $3 } } END { print n + 0, row, why }')
+ROW
+    if [ "$named" -gt 1 ]; then
+      failing=$((failing + 1))
+      echo "FIX-ARM repo=$2 commit=$(echo "$sha" | cut -c1-10) row=$row rows=$named subject=\"$subject\""
+      continue
+    fi
     case $row in
       arm=*)
         if echo " $PLANTED_ARMS " | grep -q -F " ${row#arm=} "; then
@@ -967,6 +978,15 @@ fix_arms() {
     echo "FIX-ARM repo=$2 commit=$(echo "$sha" | cut -c1-10) row=${row:-none} subject=\"$subject\""
   done <<EOF
 $(git -C "$1" log --no-merges --format='%H %s' "$base..$3")
+EOF
+  while IFS='	' read -r row subject; do
+    [ -n "$row" ] || continue
+    failing=$((failing + 1))
+    echo "FIX-ARM repo=$2 row=$row matches=0 subject=\"$subject\""
+  done <<EOF
+$(echo "$rows" | SUBJECTS=$subjects awk -F '\t' '
+  BEGIN { n = split(ENVIRON["SUBJECTS"], s, "\n"); for (i = 1; i <= n; i++) if (s[i] != "") fix[s[i]] = 1 }
+  NF > 1 && !($1 in fix) { print $2 "\t" $1 }')
 EOF
   echo "FIX-ARMS repo=$2 fixes=$fixes armed=$armed excluded=$excluded unarmed=$unarmed failing=$failing"
   [ "$failing" -eq 0 ]

@@ -3,7 +3,7 @@ use std::{marker::PhantomData, ops::Range};
 use thiserror::Error;
 
 use crate::{
-    indexes::{ArchiveIndexDelta, ExactRecord, IndexRecord, TagDimension, TagRecord},
+    indexes::{ArchiveIndexDelta, ExactRecord, IndexRecord, TagDimension, TagRecord, TxLocation},
     state::KEY_SIZE,
     BlockBody, BlockSlot, BrokenInvariant, ChainPoint, Entity, EntityKey, EntityValue, Namespace,
     RawBlock,
@@ -85,8 +85,8 @@ impl From<(TemporalKey, EntityKey)> for LogKey {
 
 impl From<TemporalKey> for LogKey {
     fn from(value: TemporalKey) -> Self {
-        // Safe to unwrap, we know the length matches. We extend the key with 0 to match
-        // length.
+        // Safe to unwrap, we know the length matches. We extend the key with 0
+        // to match length.
         let bytes: [u8; LOG_KEY_SIZE] = [value.as_ref(), &[0; KEY_SIZE]]
             .concat()
             .try_into()
@@ -380,8 +380,13 @@ pub trait ArchiveStore: Clone + Send + Sync + 'static {
     /// Get the slot for a block by its number/height (exact lookup).
     fn slot_by_block_number(&self, number: u64) -> Result<Option<BlockSlot>, ArchiveError>;
 
+    /// Get the location of a transaction by its hash (exact lookup).
+    fn tx_location_by_hash(&self, hash: &[u8]) -> Result<Option<TxLocation>, ArchiveError>;
+
     /// Get the slot containing a transaction by its hash (exact lookup).
-    fn slot_by_tx_hash(&self, hash: &[u8]) -> Result<Option<BlockSlot>, ArchiveError>;
+    fn slot_by_tx_hash(&self, hash: &[u8]) -> Result<Option<BlockSlot>, ArchiveError> {
+        Ok(self.tx_location_by_hash(hash)?.map(|x| x.slot))
+    }
 
     /// Query slots by tag dimension and key within a slot range.
     ///

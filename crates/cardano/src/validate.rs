@@ -69,32 +69,25 @@ pub fn validate_tx<D: Domain>(
                 .to_pallas_time_context(env.block_slot, crate::utils::stability_window(genesis))?;
             let stored = ledger::StoredLedger::<D>::new(utxos.state())?;
             let unconfirmed = unconfirmed_txs(utxos);
-            let cursor = utxos.state().read_cursor()?;
-            let kept = held.lock().unwrap().take();
-            let effects = UnconfirmedEffects::fold(
-                kept,
-                cursor.clone(),
+            let validated = validate_over_unconfirmed(
+                held,
+                || Ok(utxos.state().read_cursor()?),
                 env.network_id,
                 &stored,
                 &unconfirmed,
                 |tx, state| dijkstra_ledger_effects(tx, pp, env.network_id, state),
+                |state| {
+                    validate_dijkstra_tx_with_time(
+                        native,
+                        &pallas_utxos,
+                        pp,
+                        &env.block_slot,
+                        &env.network_id,
+                        state,
+                        &time,
+                    )
+                },
             )?;
-            let (effects, validated) = effects.over(&stored, |state| {
-                validate_dijkstra_tx_with_time(
-                    native,
-                    &pallas_utxos,
-                    pp,
-                    &env.block_slot,
-                    &env.network_id,
-                    state,
-                    &time,
-                )
-            });
-            // A rollback commits without the chain lock, so effects folded
-            // across one are not kept.
-            if utxos.state().read_cursor()? == cursor {
-                *held.lock().unwrap() = Some(effects);
-            }
             validated?;
             Some(time)
         }
@@ -129,7 +122,8 @@ pub fn validate_tx<D: Domain>(
     Ok(tx)
 }
 
-/// The outputs the inputs of a transaction name, from the state and the mempool.
+/// The outputs the inputs of a transaction name, from the state and the
+/// mempool.
 pub fn required_utxos<D: Domain>(
     tx: &MultiEraTx<'_>,
     utxos: &MempoolAwareUtxoStore<D>,
@@ -170,10 +164,11 @@ pub fn evaluate_tx<D: Domain>(
     evaluate_decoded::<D>(&tx, utxos, genesis, &pparams, false, None)
 }
 
-/// Estimate native script costs independently of signatures and declared budgets.
-/// Earlier eras retain their existing phase-two evaluation behavior. Successful
-/// per-script estimates may sum above the transaction limit; admission still
-/// requires phase one and budget-enforcing phase two through `validate_tx`.
+/// Estimate native script costs independently of signatures and declared
+/// budgets. Earlier eras retain their existing phase-two evaluation behavior.
+/// Successful per-script estimates may sum above the transaction limit;
+/// admission still requires phase one and budget-enforcing phase two through
+/// `validate_tx`.
 pub fn estimate_tx<D: Domain>(
     cbor: &[u8],
     utxos: &MempoolAwareUtxoStore<D>,
@@ -185,7 +180,8 @@ pub fn estimate_tx<D: Domain>(
     evaluate_decoded::<D>(&tx, utxos, genesis, &pparams, true, None)
 }
 
-/// [`estimate_tx`] of a Dijkstra transaction, with the builtins each redeemer's evaluation called in order of first call.
+/// [`estimate_tx`] of a Dijkstra transaction, with the builtins each redeemer's
+/// evaluation called in order of first call.
 pub fn estimate_tx_calls<D: Domain>(
     cbor: &[u8],
     utxos: &MempoolAwareUtxoStore<D>,
@@ -197,7 +193,8 @@ pub fn estimate_tx_calls<D: Domain>(
     estimate_decoded::<D>(&tx, utxos, genesis, &pparams, None)
 }
 
-/// The arguments each redeemer's script of a Dijkstra transaction is applied to, with the script's language.
+/// The arguments each redeemer's script of a Dijkstra transaction is applied
+/// to, with the script's language.
 pub fn redeemer_arguments<D: Domain>(
     cbor: &[u8],
     utxos: &MempoolAwareUtxoStore<D>,
@@ -272,7 +269,8 @@ fn estimate_decoded<D: Domain>(
     .map_err(evaluation_error)
 }
 
-/// The resolved inputs and historical time mappings a phase two evaluation reads.
+/// The resolved inputs and historical time mappings a phase two evaluation
+/// reads.
 fn evaluation_inputs<D: Domain>(
     tx: &MultiEraTx<'_>,
     utxos: &MempoolAwareUtxoStore<D>,
@@ -347,7 +345,8 @@ pub fn submission_era(protocol: (u64, u64)) -> Result<Era, ChainError> {
     }
 }
 
-/// The era whose major protocol versions, by the ledger's bounds, include `major`.
+/// The era whose major protocol versions, by the ledger's bounds, include
+/// `major`.
 pub fn protocol_era(major: u64) -> Option<Era> {
     match major {
         0..=1 => Some(Era::Byron),
@@ -552,6 +551,44 @@ pub fn validation_parameters(
     }))
 }
 
+/// Runs `validate` over the effects of `unconfirmed` folded from those `held`,
+/// and keeps the effects in `held` when `read_cursor` reads the same cursor
+/// after the fold as before it.
+fn validate_over_unconfirmed<S, F, R>(
+    held: &Mutex<Option<UnconfirmedEffects>>,
+    mut read_cursor: impl FnMut() -> Result<Option<ChainPoint>, ChainError>,
+    network_id: u8,
+    stored: &S,
+    unconfirmed: &[MempoolTx],
+    effects: F,
+    validate: impl FnOnce(&DijkstraLedgerOverlay<'_, S>) -> R,
+) -> Result<R, ChainError>
+where
+    S: DijkstraLedgerState + ?Sized,
+    F: FnMut(
+        &BlockTransaction<'_>,
+        &DijkstraLedgerOverlay<'_, S>,
+    ) -> Result<DijkstraLedgerDelta, ValidationError>,
+{
+    let cursor = read_cursor()?;
+    let kept = held.lock().unwrap().take();
+    let folded = UnconfirmedEffects::fold(
+        kept,
+        cursor.clone(),
+        network_id,
+        stored,
+        unconfirmed,
+        effects,
+    )?;
+    let (folded, validated) = folded.over(stored, validate);
+    // A rollback commits without the chain lock, so effects folded across one
+    // are not kept.
+    if read_cursor()? == cursor {
+        *held.lock().unwrap() = Some(folded);
+    }
+    Ok(validated)
+}
+
 /// The combined effects of a sequence of unconfirmed transactions over the
 /// stored state at one cursor.
 pub struct UnconfirmedEffects {
@@ -727,12 +764,15 @@ mod pending_tests {
         StakeCredential::AddrKeyhash(Hash::new([byte; 28]))
     }
 
-    /// A Dijkstra transaction in mempool form whose body carries these certificates.
+    /// A Dijkstra transaction in mempool form whose body carries these
+    /// certificates.
     fn tx_with(certs: Vec<dijkstra::Certificate>) -> Vec<u8> {
         tx_moving(certs, &[], &[])
     }
 
-    /// A Dijkstra transaction in mempool form with these certificates, withdrawals and direct deposits, each account named by its credential byte.
+    /// A Dijkstra transaction in mempool form with these certificates,
+    /// withdrawals and direct deposits, each account named by its credential
+    /// byte.
     fn tx_moving(
         certs: Vec<dijkstra::Certificate>,
         withdrawals: &[(u8, u64)],
@@ -784,7 +824,8 @@ mod pending_tests {
         dijkstra::Certificate::UnReg(credential(byte), 2_000_000)
     }
 
-    /// A stored state at epoch 7 in which account 1 holds 5 lovelace, account 2 holds none and accounts 3 and 4 are unregistered.
+    /// A stored state at epoch 7 in which account 1 holds 5 lovelace, account 2
+    /// holds none and accounts 3 and 4 are unregistered.
     fn stored() -> DijkstraLedgerSnapshot {
         let mut state = DijkstraLedgerSnapshot {
             epoch: 7,
@@ -884,6 +925,41 @@ mod pending_tests {
         assert_eq!(count, 2);
     }
 
+    /// The transactions whose effects a validation keeps when the cursor reads
+    /// `before` ahead of the fold and `after` once it ends.
+    fn kept_across(before: u64, after: u64) -> Option<Vec<TxHash>> {
+        let txs = mempool_txs(&[withdrawing(2)]);
+        let pp = params();
+        let held = Mutex::new(None);
+        let mut reads = [before, after].into_iter();
+        let validated = validate_over_unconfirmed(
+            &held,
+            || Ok(reads.next().map(ChainPoint::Slot)),
+            0,
+            &stored(),
+            &txs,
+            |tx, state| dijkstra_ledger_effects(tx, &pp, 0, state),
+            |state| state.account(&credential(1)),
+        )
+        .unwrap();
+        assert_eq!(validated.unwrap(), holding(3));
+        assert_eq!(reads.next(), None);
+        held.into_inner()
+            .unwrap()
+            .map(|effects| effects.txs().to_vec())
+    }
+
+    #[test]
+    fn effects_folded_while_the_cursor_holds_are_kept() {
+        let txs = mempool_txs(&[withdrawing(2)]);
+        assert_eq!(kept_across(1, 1), Some(vec![txs[0].hash()]));
+    }
+
+    #[test]
+    fn effects_folded_across_a_cursor_move_are_not_kept() {
+        assert_eq!(kept_across(1, 2), None);
+    }
+
     #[test]
     fn effects_held_for_a_sequence_the_new_one_does_not_extend_are_folded_again() {
         let txs = mempool_txs(&[withdrawing(2), depositing(4), withdrawing(1)]);
@@ -972,7 +1048,8 @@ mod pending_tests {
         assert_eq!(account_after(&txs, 1), holding(9));
     }
 
-    /// A synced account registered in epoch 7 with 5 lovelace of rewards and none withdrawn.
+    /// A synced account registered in epoch 7 with 5 lovelace of rewards and
+    /// none withdrawn.
     fn registered(byte: u8) -> crate::model::AccountState {
         use crate::model::{EpochValue, Stake};
         crate::model::AccountState {

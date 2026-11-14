@@ -16,10 +16,12 @@ use super::output::ServedOutput;
 /// How long a stream read waits for its next response.
 pub(super) const NEXT: Duration = Duration::from_secs(10);
 
-/// The output one route serves for each input a transaction names, by transaction hash.
+/// The output one route serves for each input a transaction names, by
+/// transaction hash.
 pub(super) type Served = BTreeMap<[u8; 32], Vec<(TxIn, Option<ServedOutput>)>>;
 
-/// What one route at one version serves for the inputs of the transactions it serves.
+/// What one route at one version serves for the inputs of the transactions it
+/// serves.
 #[derive(Debug)]
 pub(super) struct RouteServed {
     pub(super) route: OutputRoute,
@@ -29,10 +31,12 @@ pub(super) struct RouteServed {
     pub(super) served: Served,
 }
 
-/// What ReadTx at one version serves for a transaction hash, nothing when it answers not found, or the status it answers with otherwise.
+/// What ReadTx at one version serves for a transaction hash, nothing when it
+/// answers not found, or the status it answers with otherwise.
 pub(super) struct TxFound {
     pub(super) version: Version,
-    /// Whether the version states sub transactions, so answers the hash of one with the transaction that lists it.
+    /// Whether the version states sub transactions, so answers the hash of one
+    /// with the transaction that lists it.
     pub(super) subs: bool,
     pub(super) answer: Result<Option<super::ServedTx>, tonic::Code>,
 }
@@ -634,7 +638,8 @@ impl Streams {
         ])
     }
 
-    /// The inputs every stream serves for the next blocks and transactions of the event.
+    /// The inputs every stream serves for the next blocks and transactions of
+    /// the event.
     pub(super) async fn read(self, event: Event, blocks: usize, txs: usize) -> Vec<RouteServed> {
         let mut served = Vec::new();
         for streams in self.0 {
@@ -656,7 +661,8 @@ pub(super) async fn read_utxos(
     ]
 }
 
-/// The output SearchUtxos serves at every version for each input it finds at any of the addresses.
+/// The output SearchUtxos serves at every version for each input it finds at
+/// any of the addresses.
 pub(super) async fn search_utxos(
     domain: &crate::adapters::DomainAdapter,
     addresses: &[&[u8]],
@@ -679,7 +685,8 @@ pub(super) async fn read_params(
     ]
 }
 
-/// What FetchBlock, DumpHistory and ReadTx serve at every version for the blocks and transactions.
+/// What FetchBlock, DumpHistory and ReadTx serve at every version for the
+/// blocks and transactions.
 pub(super) async fn fetched(
     domain: &crate::adapters::DomainAdapter,
     blocks: &[BlockHash],

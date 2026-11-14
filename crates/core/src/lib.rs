@@ -685,7 +685,8 @@ pub trait ChainLogic: Sized + Send + Sync {
     }
 
     /// Estimate script execution costs without requiring admission validation.
-    /// A successful report does not establish that the transaction can be submitted.
+    /// A successful report does not establish that the transaction can be
+    /// submitted.
     fn estimate_tx<D: Domain>(
         &self,
         cbor: &[u8],

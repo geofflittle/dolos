@@ -64,8 +64,8 @@ impl<D: Domain> SyncExt for D {
     fn roll_forward(&self, block: RawBlock) -> Result<BlockSlot, DomainError> {
         let mut chain = self.write_chain();
 
-        // Drain first in case there's previous work that needs to be applied (eg:
-        // initialization)
+        // Drain first in case there's previous work that needs to be applied
+        // (eg: initialization)
         drain_pending_work::<D>(&mut *chain, self)?;
 
         let last = chain.receive_block(block)?;

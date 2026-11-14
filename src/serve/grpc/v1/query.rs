@@ -3,7 +3,7 @@ use itertools::Itertools as _;
 use pallas::interop::utxorpc::v1::spec::query::any_utxo_pattern::UtxoPattern;
 use pallas::interop::utxorpc::v1::{self as interop, spec as u5c};
 use pallas::interop::utxorpc::LedgerContext;
-use pallas::ledger::traverse::{MultiEraBlock, MultiEraOutput};
+use pallas::ledger::traverse::{MultiEraBlock, MultiEraHeader, MultiEraOutput};
 use std::collections::HashSet;
 use tonic::{Request, Response, Status};
 use tracing::{info, warn};
@@ -1085,21 +1085,41 @@ where
         let tx_hash = message.hash;
 
         let query = dolos_core::AsyncQueryFacade::new(self.domain.clone());
-        let block_bytes = query
-            .block_body_by_tx_hash(tx_hash.to_vec())
+        let (block_bytes, range) = query
+            .block_body_and_tx_range_by_tx_hash(tx_hash.to_vec())
             .await
             .map_err(|e| Status::internal(e.to_string()))?
             .ok_or_else(|| Status::not_found("tx hash not found"))?;
 
-        let block = MultiEraBlock::decode(&block_bytes)
-            .map_err(|e| Status::internal(format!("failed to decode block: {e}")))?;
+        let located =
+            range.and_then(|range| dolos_core::tx_in_range(&block_bytes, &range, &tx_hash));
 
-        let txs = BlockTxs::of(&block);
-        let tx = last_including(txs.applied_hashes(), &tx_hash)
-            .and_then(|index| txs.at(index))
-            .ok_or_else(|| Status::not_found("tx hash not found"))?;
-
-        let native_bytes = tx.tx().encode().into();
+        let (native_bytes, mapped, (slot, hash, height)) = match located {
+            Some((tx, _)) => {
+                let header = MultiEraHeader::decode_from_block(&block_bytes)
+                    .map_err(|e| Status::internal(format!("failed to decode header: {e}")))?;
+                let context = BlockContext::for_lone_tx(self.domain.clone(), &tx);
+                (
+                    tx.encode(),
+                    interop::Mapper::new(context).map_tx(&tx),
+                    (header.slot(), header.hash(), header.number()),
+                )
+            }
+            None => {
+                let block = MultiEraBlock::decode(&block_bytes)
+                    .map_err(|e| Status::internal(format!("failed to decode block: {e}")))?;
+                let txs = BlockTxs::of(&block);
+                let tx = last_including(txs.applied_hashes(), &tx_hash)
+                    .and_then(|index| txs.at(index))
+                    .ok_or_else(|| Status::not_found("tx hash not found"))?;
+                let context = BlockContext::for_tx(self.domain.clone(), &tx);
+                (
+                    tx.tx().encode(),
+                    interop::Mapper::new(context).map_tx(tx.tx()),
+                    (block.slot(), block.hash(), block.header().number()),
+                )
+            }
+        };
 
         let cursor = self
             .domain
@@ -1111,21 +1131,18 @@ where
 
         let mut response = u5c::query::ReadTxResponse {
             tx: Some(u5c::query::AnyChainTx {
-                native_bytes,
+                native_bytes: native_bytes.into(),
                 block_ref: Some(u5c::query::ChainPoint {
-                    slot: block.slot(),
-                    hash: block.hash().to_vec().into(),
-                    height: block.header().number(),
+                    slot,
+                    hash: hash.to_vec().into(),
+                    height,
                     timestamp: self
                         .domain
-                        .slot_timestamp(block.slot())
+                        .slot_timestamp(slot)
                         .map(|s| s * 1000)
                         .unwrap_or(0),
                 }),
-                chain: Some(u5c::query::any_chain_tx::Chain::Cardano(
-                    interop::Mapper::new(BlockContext::for_tx(self.domain.clone(), &tx))
-                        .map_tx(tx.tx()),
-                )),
+                chain: Some(u5c::query::any_chain_tx::Chain::Cardano(mapped)),
             }),
             ledger_tip: cursor,
         };
@@ -1230,8 +1247,8 @@ where
         let chain_summary = dolos_cardano::load_era_summary::<D>(state)
             .map_err(|e| Status::internal(format!("failed to load era summary: {e}")))?;
 
-        // the distribution in force for an epoch is the snapshot taken at the end of
-        // the epoch two before it
+        // the distribution in force for an epoch is the snapshot taken at the
+        // end of the epoch two before it
         let epoch = current_epoch.saturating_sub(2);
         let protocol = chain_summary.era_for_epoch(epoch).protocol.into();
 
@@ -1409,7 +1426,8 @@ mod tests {
     /// The BLS public key the node's pool state query answers for that pool.
     const CHAIN_POOL_BLS_PUBKEY: &str = "8d5e3e9901dbfa64a9c5d9f9949ecb7491b4e35656963bbf6e478c4e53d329f3d1209ed5924c228305d4fcff8a4935d40d508fe3ec6cb8e892d8a00b22c789669336e852d0a10eb2340ea1becf7c87e76eaeacfa5a847104354c5b095b84e2b4";
 
-    /// The BLS possession proof the node's pool state query answers for that pool.
+    /// The BLS possession proof the node's pool state query answers for that
+    /// pool.
     const CHAIN_POOL_BLS_PROOF: &str = "805438cd07ebc6fd19f424401fd0395dc801a8561302bd1ae7bcc48cbdbe664d3a4dfb8fa5dc3a0bc69045b0cd9f9a4c";
 
     /// The registration of `CHAIN_POOL` as the slot 132 block holds it.
@@ -1900,6 +1918,152 @@ mod tests {
                 ),
                 "read of {hash}"
             );
+        }
+    }
+
+    /// A read decodes the one transaction it answers, so it is answered while
+    /// every other transaction of its block is bytes that do not decode.
+    #[tokio::test]
+    async fn read_tx_decodes_only_the_transaction_it_answers() {
+        let fixture = crate::tests::musashi::sub_transaction_block();
+        let archive = fixture.domain.archive();
+        let stored = archive.get_block_by_slot(&fixture.slot).unwrap().unwrap();
+        let block = MultiEraBlock::decode(&stored).unwrap();
+        let point = ChainPoint::Specific(block.slot(), block.hash());
+        let damaged = crate::tests::musashi::only_one_tx_decodes(&stored, fixture.parent);
+        assert!(MultiEraBlock::decode(&damaged).is_err());
+        assert!(block.txs().len() > 200);
+
+        let writer = archive.start_writer().unwrap();
+        writer.apply(&point, &Arc::new(damaged)).unwrap();
+        writer.commit().unwrap();
+
+        let service = QueryServiceImpl::new(fixture.domain.clone());
+        let parent = fixture.parent.to_vec();
+
+        for hash in [fixture.sub, fixture.parent] {
+            let (common, native, _, slot) =
+                read_tx_answer(&service, hash.as_slice()).await.unwrap();
+
+            assert_eq!(
+                (common, native, slot),
+                (parent.clone(), Some(parent.clone()), Some(fixture.slot)),
+                "read of {hash}"
+            );
+        }
+    }
+
+    /// A read whose index entry holds no range, or the range of another
+    /// transaction, answers with the transaction it was asked for.
+    #[tokio::test]
+    async fn read_tx_without_the_right_range_answers_from_the_whole_block() {
+        let fixture = crate::tests::musashi::sub_transaction_block();
+        let archive = fixture.domain.archive();
+        let stored = archive.get_block_by_slot(&fixture.slot).unwrap().unwrap();
+        let owned = dolos_cardano::owned::OwnedMultiEraBlock::decode(Arc::new(stored)).unwrap();
+        let block = owned.view();
+        let other = block
+            .txs()
+            .iter()
+            .position(|tx| tx.hash() != fixture.parent)
+            .unwrap();
+        let other = owned.tx_ranges().unwrap()[other].clone();
+        let service = QueryServiceImpl::new(fixture.domain.clone());
+        let parent = fixture.parent.to_vec();
+
+        for range in [None, Some(other)] {
+            let entry = |hash: &[u8]| dolos_core::IndexedTx {
+                hash: hash.to_vec(),
+                range: range.clone(),
+            };
+            let writer = archive.start_writer().unwrap();
+            writer
+                .apply_index(&[dolos_core::ArchiveIndexDelta {
+                    slot: block.slot(),
+                    block_hash: block.hash().to_vec(),
+                    block_number: Some(block.number()),
+                    txs: vec![
+                        entry(fixture.parent.as_slice()),
+                        entry(fixture.sub.as_slice()),
+                    ],
+                    tags: Vec::new(),
+                }])
+                .unwrap();
+            writer.commit().unwrap();
+
+            for hash in [fixture.sub, fixture.parent] {
+                let (common, native, _, slot) =
+                    read_tx_answer(&service, hash.as_slice()).await.unwrap();
+
+                assert_eq!(
+                    (common, native, slot),
+                    (parent.clone(), Some(parent.clone()), Some(fixture.slot)),
+                    "read of {hash} with range {range:?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "a timing, run by hand"]
+    async fn time_read_tx_against_the_size_of_its_block() {
+        use pallas::codec::{minicbor, utils::MaybeIndefArray};
+        use pallas::ledger::primitives::dijkstra;
+        use std::time::Instant;
+
+        let fixture = crate::tests::musashi::sub_transaction_block();
+        let archive = fixture.domain.archive();
+        let stored = archive.get_block_by_slot(&fixture.slot).unwrap().unwrap();
+        let (_, source): (u16, dijkstra::Block) = minicbor::decode(&stored).unwrap();
+        let service = QueryServiceImpl::new(fixture.domain.clone());
+        let calls = 100;
+
+        for count in [10, 100, 1000] {
+            let (era, mut sized): (u16, dijkstra::Block) = minicbor::decode(&stored).unwrap();
+            let txs = source.block_body.transactions.iter().cycle().take(count);
+            sized.block_body.transactions = MaybeIndefArray::Def(txs.cloned().collect());
+            let raw = minicbor::to_vec((era, sized)).unwrap();
+            let owned =
+                dolos_cardano::owned::OwnedMultiEraBlock::decode(Arc::new(raw.clone())).unwrap();
+            let block = owned.view();
+            let first = block.txs()[0].hash();
+            let located = owned.tx_ranges().unwrap()[0].clone();
+            let writer = archive.start_writer().unwrap();
+            writer
+                .apply(
+                    &ChainPoint::Specific(block.slot(), block.hash()),
+                    &Arc::new(raw.clone()),
+                )
+                .unwrap();
+            writer.commit().unwrap();
+
+            for (arm, range) in [("whole-block", None), ("located", Some(located))] {
+                let writer = archive.start_writer().unwrap();
+                writer
+                    .apply_index(&[dolos_core::ArchiveIndexDelta {
+                        slot: block.slot(),
+                        block_hash: block.hash().to_vec(),
+                        block_number: Some(block.number()),
+                        txs: vec![dolos_core::IndexedTx {
+                            hash: first.to_vec(),
+                            range,
+                        }],
+                        tags: Vec::new(),
+                    }])
+                    .unwrap();
+                writer.commit().unwrap();
+                read_tx_answer(&service, first.as_slice()).await.unwrap();
+
+                let start = Instant::now();
+                for _ in 0..calls {
+                    read_tx_answer(&service, first.as_slice()).await.unwrap();
+                }
+                println!(
+                    "READTX arm={arm} txs={count} bytes={} us_per_call={}",
+                    raw.len(),
+                    start.elapsed().as_micros() / calls
+                );
+            }
         }
     }
 

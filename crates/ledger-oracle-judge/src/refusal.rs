@@ -6,7 +6,8 @@ use crate::{
     judgement::{Axis, CellKey},
 };
 
-/// The rule a refusal names, shared by the ledger's failure leaves and the node's refusal kinds.
+/// The rule a refusal names, shared by the ledger's failure leaves and the
+/// node's refusal kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RefusalClass {
     Inputs,
@@ -24,7 +25,8 @@ pub enum RefusalClass {
     Decoding,
 }
 
-/// The reach of a leaf row, counted unless the row names why no record can raise it.
+/// The reach of a leaf row, counted unless the row names why no record can
+/// raise it.
 macro_rules! leaf_reach {
     () => {
         Reach::Counted
@@ -37,7 +39,8 @@ macro_rules! leaf_reach {
     };
 }
 
-/// Declares the ledger failure leaves, each with its refusal class, what an evaluation answers under it, and why no record can raise it when none can.
+/// Declares the ledger failure leaves, each with its refusal class, what an
+/// evaluation answers under it, and why no record can raise it when none can.
 macro_rules! ledger_leaves {
     ($($leaf:ident: $class:ident, $eval:ident $(, excluded $reason:literal, $command:literal)?;)*) => {
         /// A ledger failure leaf, by its constructor name.
@@ -294,7 +297,8 @@ impl fmt::Display for RefusalClass {
     }
 }
 
-/// The class of a node refusal by its error variant, unknown for a variant the class table does not name.
+/// The class of a node refusal by its error variant, unknown for a variant the
+/// class table does not name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DolosClass {
     Rule(RefusalClass),
@@ -325,7 +329,8 @@ mod tests {
         text.lines().filter_map(|l| l.split(' ').next()).collect()
     }
 
-    /// The names of the leaves a ledger rule raises, every leaf but the decoder's.
+    /// The names of the leaves a ledger rule raises, every leaf but the
+    /// decoder's.
     fn rule_leaves() -> BTreeSet<&'static str> {
         let rules = LedgerLeaf::ALL
             .iter()

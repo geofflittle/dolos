@@ -117,7 +117,8 @@ impl fmt::Display for Canon {
     }
 }
 
-/// The first place two parameter values differ, as a dotted path and both values.
+/// The first place two parameter values differ, as a dotted path and both
+/// values.
 pub fn first_difference(path: &str, ledger: &Canon, served: &Canon) -> Option<String> {
     match (ledger, served) {
         (Canon::Map(l), Canon::Map(s)) => l.keys().chain(s.keys()).find_map(|k| {

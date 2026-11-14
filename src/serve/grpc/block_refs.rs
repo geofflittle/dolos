@@ -171,7 +171,7 @@ mod tests {
                 slot,
                 block_hash: vec![0xee; 32],
                 block_number: Some(block.number()),
-                tx_hashes: vec![tx.to_vec()],
+                txs: vec![dolos_core::IndexedTx::unplaced(tx.to_vec())],
                 tags: Vec::new(),
             }])
             .unwrap();

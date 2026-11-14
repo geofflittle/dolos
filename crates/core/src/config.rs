@@ -4,7 +4,7 @@ use pallas::ledger::primitives::Epoch;
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr};
 
-use crate::{Cbor, Era, TxoRef};
+use crate::{Cbor, Era, MempoolBound, TxoRef};
 
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
@@ -53,10 +53,11 @@ pub struct PeerConfig {
     /// ranking blocks certify endorser blocks.
     ///
     /// On such a chain most transactions are never in a ranking block, so a
-    /// client that follows only chainsync and blockfetch builds a ledger that is
-    /// silently short. Set this and the pull stage fetches every certified
-    /// endorser block over leios-fetch and resolves the certifying block against
-    /// it. Leave it unset and the chain is followed as an ordinary Praos chain.
+    /// client that follows only chainsync and blockfetch builds a ledger that
+    /// is silently short. Set this and the pull stage fetches every
+    /// certified endorser block over leios-fetch and resolves the
+    /// certifying block against it. Leave it unset and the chain is
+    /// followed as an ordinary Praos chain.
     ///
     /// It is a separate address because leios-fetch lives in the newer
     /// networking stack, so it cannot ride the chainsync connection.
@@ -99,10 +100,11 @@ pub struct SyncConfig {
     /// any specification. On the Musashi Leios devnet a certified endorser
     /// block's transactions are applied by the producing node with validation
     /// switched off, and the chain that follows depends on what that does. A
-    /// transaction whose input does not exist consumes nothing and still creates
-    /// its outputs, and a transaction carried a second time re-creates outputs
-    /// that were spent in between. A follower applying the ledger rules strictly
-    /// computes a different UTxO set and stops on an input the network holds.
+    /// transaction whose input does not exist consumes nothing and still
+    /// creates its outputs, and a transaction carried a second time
+    /// re-creates outputs that were spent in between. A follower applying
+    /// the ledger rules strictly computes a different UTxO set and stops on
+    /// an input the network holds.
     ///
     /// With this on, every transaction of every block is applied in wire order,
     /// an input that is not there is left unconsumed and counted rather than
@@ -139,11 +141,14 @@ fn default_pull_batch_size() -> usize {
 pub struct SubmitConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prune_height: Option<u64>,
+
+    #[serde(default, skip_serializing_if = "MempoolBound::is_default")]
+    pub mempool_bound: MempoolBound,
 }
 
 impl SubmitConfig {
     pub fn is_default(&self) -> bool {
-        self.prune_height.is_none()
+        self.prune_height.is_none() && self.mempool_bound.is_default()
     }
 }
 
@@ -1269,6 +1274,26 @@ mod tests {
 
         assert!(json.get("archive").is_none());
         assert!(json.get("state").is_none());
+    }
+
+    #[test]
+    fn a_mempool_bound_given_in_part_keeps_the_default_for_the_rest() {
+        use serde_json::json;
+
+        let default: SubmitConfig = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(default.mempool_bound, MempoolBound::default());
+        assert_eq!(serde_json::to_value(&default).unwrap(), json!({}));
+
+        let given: SubmitConfig =
+            serde_json::from_value(json!({"mempool_bound": {"max_bytes": 100}})).unwrap();
+        assert_eq!(
+            given.mempool_bound,
+            MempoolBound {
+                max_txs: MempoolBound::DEFAULT_MAX_TXS,
+                max_bytes: 100,
+            }
+        );
+        assert!(!given.is_default());
     }
 
     #[test]

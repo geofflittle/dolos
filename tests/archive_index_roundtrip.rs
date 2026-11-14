@@ -33,7 +33,7 @@ use std::ops::Range;
 use dolos_cardano::indexes::{archive_dimensions, CardanoArchiveIndexExt};
 use dolos_core::{
     builtin::MemoryArchiveStore, ArchiveIndexDelta, ArchiveStore as CoreArchiveStore,
-    ArchiveWriter as CoreArchiveWriter, BlockSlot, ExactKind, ExactRecord, IndexRecord,
+    ArchiveWriter as CoreArchiveWriter, BlockSlot, ExactKind, ExactRecord, IndexRecord, IndexedTx,
     StateSchema, Tag, TagDimension, TagRecord,
 };
 
@@ -208,7 +208,7 @@ fn seed_deltas(spec: &SeedSpec, sink: &mut impl FnMut(Vec<ArchiveIndexDelta>)) -
                     slot,
                     block_hash: hash32(0x01, epoch, b),
                     block_number: Some(epoch * 1_000_000 + b),
-                    tx_hashes,
+                    txs: tx_hashes.into_iter().map(IndexedTx::unplaced).collect(),
                     tags,
                 });
             }
@@ -382,8 +382,8 @@ impl Seeded {
                 block.slot,
             ));
 
-            for hash in &block.tx_hashes {
-                self.txs.push((hash.clone(), block.slot));
+            for tx in &block.txs {
+                self.txs.push((tx.hash.clone(), block.slot));
             }
 
             for tag in &block.tags {
@@ -424,7 +424,7 @@ fn slots_by_tag_are_ordered_in_both_directions<B: Backend>() {
             slot,
             block_hash: hash32(0x0A, slot, 0),
             block_number: Some(slot),
-            tx_hashes: Vec::new(),
+            txs: Vec::new(),
             tags: vec![Tag::new(archive_dimensions::POLICY, policy.clone())],
         })
         .collect();
@@ -1339,7 +1339,7 @@ fn malformed_exact_keys_are_refused<B: Backend>() {
             slot: 100,
             block_hash: vec![0xAB; width],
             block_number: Some(1),
-            tx_hashes: vec![vec![0xCD; 32]],
+            txs: vec![IndexedTx::unplaced(vec![0xCD; 32])],
             tags: Vec::new(),
         }];
 
@@ -1376,7 +1376,7 @@ fn malformed_exact_keys_are_refused<B: Backend>() {
             slot: 100,
             block_hash: vec![0x01; 32],
             block_number: Some(1),
-            tx_hashes: vec![vec![0xEF; width]],
+            txs: vec![IndexedTx::unplaced(vec![0xEF; width])],
             tags: Vec::new(),
         }];
 

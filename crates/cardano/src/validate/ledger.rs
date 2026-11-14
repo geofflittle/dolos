@@ -113,7 +113,8 @@ pub(crate) fn account_balance(
         .ok_or_else(|| unavailable("recorded withdrawals exceed rewards"))
 }
 
-/// The registered pool a stored pool is, by the VRF key hashes of its live and scheduled parameters.
+/// The registered pool a stored pool is, by the VRF key hashes of its live and
+/// scheduled parameters.
 pub(crate) fn registered_pool(pool: &PoolState) -> Option<DijkstraPool> {
     let live = pool.snapshot.live().filter(|x| !x.is_retired)?;
     Some(DijkstraPool {

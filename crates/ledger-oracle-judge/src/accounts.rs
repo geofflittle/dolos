@@ -159,7 +159,8 @@ impl fmt::Display for Account {
     }
 }
 
-/// Counts each account either side holds after record `id` against the other side's account for that credential.
+/// Counts each account either side holds after record `id` against the other
+/// side's account for that credential.
 pub fn compare(
     id: RecordId,
     ledger: &LedgerAccounts,
@@ -185,7 +186,8 @@ pub fn compare(
     }
 }
 
-/// The cells of a disagreement over one account: which side holds it, and when both do, each field they differ at.
+/// The cells of a disagreement over one account: which side holds it, and when
+/// both do, each field they differ at.
 fn cells(ledger: Option<&Account>, dolos: Option<&Account>) -> Vec<CellKey> {
     let (ledger, dolos) = match (ledger, dolos) {
         (Some(ledger), Some(dolos)) => (ledger, dolos),

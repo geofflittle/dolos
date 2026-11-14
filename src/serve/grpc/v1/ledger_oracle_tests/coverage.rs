@@ -1,5 +1,5 @@
-//! The members of the coverage table and the cells a transaction the ledger accepted touches on
-//! its transaction axes.
+//! The members of the coverage table and the cells a transaction the ledger
+//! accepted touches on its transaction axes.
 
 use std::collections::BTreeSet;
 
@@ -29,8 +29,8 @@ use pallas::{
 /// chain code in an address root preimage.
 const BOOTSTRAP_ROOT_HEADER: [u8; 6] = [0x83, 0x00, 0x82, 0x00, 0x58, 0x40];
 
-/// Defines the name of every field of a struct and the names of the fields one value holds, from
-/// a destructure that names every field.
+/// Defines the name of every field of a struct and the names of the fields one
+/// value holds, from a destructure that names every field.
 macro_rules! keys {
     ($every:ident, $held:ident, $ty:ident { $($required:ident),* ; $($optional:ident),* $(,)? }) => {
         /// The name of every field.
@@ -50,8 +50,8 @@ macro_rules! keys {
     };
 }
 
-/// Defines the name of every variant of an enum and the name of one value's variant, from a match
-/// that names every variant.
+/// Defines the name of every variant of an enum and the name of one value's
+/// variant, from a match that names every variant.
 macro_rules! kinds {
     ($every:ident, $kind:ident, $ty:ty { $($pattern:pat => $name:literal),* $(,)? }) => {
         /// The name of every variant.
@@ -203,7 +203,8 @@ impl Depth {
     }
 }
 
-/// The parts of the top level body or of one sub transaction body that the transaction axes read.
+/// The parts of the top level body or of one sub transaction body that the
+/// transaction axes read.
 struct Level<'a> {
     depth: Depth,
     keys: Vec<&'static str>,
@@ -368,7 +369,8 @@ fn actions(proposals: &Option<NonEmptySet<ProposalProcedure>>) -> Vec<&GovAction
     proposals.map(|p| &p.gov_action).collect()
 }
 
-/// Whether the levels of one transaction show the request shape by their content, never for a shape a judge gives by deriving its request.
+/// Whether the levels of one transaction show the request shape by their
+/// content, never for a shape a judge gives by deriving its request.
 fn shows(shape: RequestShape, levels: &[Level]) -> bool {
     let mut levels = levels.iter();
     match shape {
@@ -395,7 +397,8 @@ pub(super) fn cells_of_tx(tx: &[u8]) -> Result<BTreeSet<CellKey>, minicbor::deco
     Ok(levels(&tx)?.iter().flat_map(Level::cells).collect())
 }
 
-/// The top level body and each sub transaction body of the Dijkstra transaction `tx`.
+/// The top level body and each sub transaction body of the Dijkstra transaction
+/// `tx`.
 fn levels<'a>(tx: &'a MultiEraTx) -> Result<Vec<Level<'a>>, minicbor::decode::Error> {
     let Some(tx) = tx.as_dijkstra() else {
         return Err(minicbor::decode::Error::message(
@@ -549,7 +552,8 @@ mod tests {
 
     use super::*;
 
-    /// The method names, in snake case, of every service the descriptor sets of one version declare.
+    /// The method names, in snake case, of every service the descriptor sets of
+    /// one version declare.
     fn spec_methods(sets: [&[u8]; 4]) -> BTreeSet<String> {
         use prost::Message as _;
         let decoded = sets.into_iter().map(prost_types::FileDescriptorSet::decode);
@@ -761,7 +765,9 @@ mod tests {
         );
     }
 
-    /// A witness set with a key witness when `signed`, one redeemer of the tag `tag` with `units` memory and steps when `tag` is some, and one V3 script when `scripted`.
+    /// A witness set with a key witness when `signed`, one redeemer of the tag
+    /// `tag` with `units` memory and steps when `tag` is some, and one V3
+    /// script when `scripted`.
     fn redeemed(
         signed: bool,
         tag: Option<u8>,
