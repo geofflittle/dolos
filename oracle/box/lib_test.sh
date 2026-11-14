@@ -356,28 +356,57 @@ expect encoding_interleaved "$(encoding "$L/interleaved" "$L/unplanted-failing")
 expect encoding_fired "$(encoding "$L/revalued")" FIRED
 expect encoding_missed "$(encoding "$L/unmoved")" MISSED
 
-# The verdict arm_verdict sets for a log of the lines given with the plant e, whose catch selects the line fires.
+# The verdict arm_verdict sets for a log of the lines given with the plant e judged as the judge's arm, whose catch selects the line fires.
 verdict_of() {
   (
     HERE=$H OUT=$L
     . "$LIB"
     printf '%s\n' "$@" >"$L/verdict.log"
-    arm_verdict e "$L/verdict.log" '^test result: ' e grep -q -x fires "$L/verdict.log"
+    arm_verdict e "$L/verdict.log" '^test result: ' e '^RESULT PASS judged=[1-9]' grep -q -x fires "$L/verdict.log"
     echo "$verdict"
   )
 }
 finished='test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s'
+panicked="thread 'ledger_oracle_records' panicked at src/serve/grpc/v1/ledger_oracle_tests/mod.rs:9:5:"
+failed_result='test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s'
 # Must not fire on a finished run whose catch selects nothing, must name a run that did not finish, wrote no log or did not reach its plant, and must fire on a finished run that reached its plant and holds the line.
 expect verdict_missed "$(verdict_of 'ORACLE_PLANT reached e' "$finished")" MISSED
 expect verdict_unrun "$(verdict_of 'ORACLE_PLANT reached e' fires)" UNRUN
 expect verdict_no_log "$(
   HERE=$H OUT=$L
   . "$LIB"
-  arm_verdict e "$L/absent.log" '^test result: ' "" true
+  arm_verdict e "$L/absent.log" '^test result: ' "" "" true
   echo "$verdict"
 )" UNRUN
-expect verdict_unreached "$(verdict_of 'ORACLE_PLANT reached ee' fires "$finished")" UNREACHED
+expect verdict_unreached "$(verdict_of 'ORACLE_PLANT reached ee' fires 'RESULT PASS judged=3' "$finished")" UNREACHED
 expect verdict_caught "$(verdict_of 'ORACLE_PLANT reached e' fires "$finished")" CAUGHT
+# Must name a run that did not reach its plant and judged no record, one that panicked, one that judged none, one whose judge failed and one with no judged count, and must not call any of them UNREACHED.
+expect verdict_unjudged_panicked "$(verdict_of "$panicked" "$failed_result")" UNJUDGED
+expect verdict_unjudged_none "$(verdict_of 'RESULT PASS judged=0' "$finished")" UNJUDGED
+expect verdict_unjudged_failing "$(verdict_of 'RESULT FAIL failing=2' "$panicked" "$failed_result")" UNJUDGED
+expect verdict_unjudged_uncounted "$(verdict_of fires "$finished")" UNJUDGED
+
+# The verdict arm_ran sets for a log of the lines given that did not reach the plant e, judged by the pattern $1.
+reach_of() {
+  (
+    HERE=$H OUT=$L
+    . "$LIB"
+    pattern=$1
+    shift
+    printf '%s\n' "$@" >"$L/reach.log"
+    arm_ran "$L/reach.log" '^test result: ' e "$pattern" || true
+    echo "$verdict"
+  )
+}
+crate_pattern=$(. "$LIB" && judged_pattern cost-models)
+judge_pattern=$(. "$LIB" && judged_pattern coin)
+# Must not fire on a crate test that passed a test or a judge that judged a record, and must fire on a crate test that passed none, on a judge's count read as a crate test's and on no pattern.
+expect reach_crate_passed "$(reach_of "$crate_pattern" 'test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.10s')" UNREACHED
+expect reach_judge_judged "$(reach_of "$judge_pattern" 'RESULT PASS judged=1231162' "$finished")" UNREACHED
+expect reach_crate_none "$(reach_of "$crate_pattern" 'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s')" UNJUDGED
+expect reach_crate_failed "$(reach_of "$crate_pattern" 'test result: FAILED. 2 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s')" UNJUDGED
+expect reach_judge_as_crate "$(reach_of "$crate_pattern" 'RESULT PASS judged=3' "$failed_result")" UNJUDGED
+expect reach_no_pattern "$(reach_of "" 'RESULT PASS judged=3' "$finished")" UNJUDGED
 # Must find no script but lib.sh setting CAUGHT or MISSED, which arm_verdict sets only for a finished run.
 expect verdict_words "$(cat "$HERE/breaks.sh" "$HERE/value.sh" "$HERE/amaru.sh" "$HERE/run.sh" "$HERE/regen.sh" | grep -c -E 'CAUGHT|MISSED' || true)" 0
 
@@ -396,7 +425,7 @@ served_of() {
     . "$LIB"
     printf '%s\n' "$finished" >"$OUT/a.log"
     printf '%s\n' "$@" >"$OUT/a.caught"
-    arm_verdict a "$OUT/a.log" '^test result: ' "" grep . "$OUT/a.caught"
+    arm_verdict a "$OUT/a.log" '^test result: ' "" "" grep . "$OUT/a.caught"
     served_check "head=PASS a=$verdict h=HELD m=MISSED" >"$OUT/served.out"
     echo "$checked"
   )

@@ -35,7 +35,7 @@ live_shift() {
     LIVE_DIR="/w/${OUT#"$ROOT"/}/live/shifted" sh "$IN_IMAGE" "${OUT#"$ROOT"/}" \
       "/w/${OUT#"$ROOT"/}/bin/judge" "$ORACLE_TESTS::live::live" --exact --ignored --nocapture \
       >"$OUT/live-shift.log" 2>&1 || true
-    arm_verdict "$OUT/live-shift.log" '^test result: ' "" shifted_times_differ "$OUT/live-shift.log"
+    arm_verdict "$OUT/live-shift.log" '^test result: ' "" "" shifted_times_differ "$OUT/live-shift.log"
   else
     verdict=UNPLANTED
   fi
