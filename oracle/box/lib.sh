@@ -65,6 +65,7 @@ crate_test() {
     endorser-tx-dropped) echo "-p dolos --lib" ;;
     unsupported-untyped) echo "-p dolos-cardano --lib" ;;
     watch-block-copied) echo "-p dolos --lib" ;;
+    server-fault-as-client) echo "-p dolos --lib" ;;
     *) return 1 ;;
   esac
 }
@@ -76,6 +77,7 @@ crate_test_source() {
     endorser-tx-dropped) echo src/serve/grpc/v1/ledger_oracle_tests/endorser.rs ;;
     unsupported-untyped) echo crates/cardano/src/validate.rs ;;
     watch-block-copied) printf '%s\n' src/serve/grpc/v1beta/watch.rs src/serve/grpc/v1alpha/watch.rs ;;
+    server-fault-as-client) echo src/serve/grpc/convert.rs ;;
   esac
 }
 
@@ -86,6 +88,7 @@ crate_test_filter() {
     endorser-tx-dropped) echo "$ORACLE_TESTS::endorser::served_endorser_transactions_are_the_nodes --exact" ;;
     unsupported-untyped) echo "validate::evaluation_tests::an_unsupported_evaluation_keeps_its_label --exact" ;;
     watch-block-copied) echo "serve::grpc::v1beta::watch::tests::the_transactions_of_one_block_share_its_bytes serve::grpc::v1alpha::watch::tests::the_transactions_of_one_block_share_its_bytes --exact" ;;
+    server-fault-as-client) echo "serve::grpc::convert::tests::each_submit_error_answers_the_code_of_its_fault --exact" ;;
   esac
 }
 

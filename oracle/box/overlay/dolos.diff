@@ -258,7 +258,7 @@ index c98dcfa3..56a88b5d 100644
  
      fn committee(&self) -> Result<Option<BTreeMap<StakeCredential, Epoch>>, ValidationError> {
 diff --git a/crates/core/src/submit.rs b/crates/core/src/submit.rs
-index b14f72c4..c1c0a95f 100644
+index 7c5cc964..e048cd68 100644
 --- a/crates/core/src/submit.rs
 +++ b/crates/core/src/submit.rs
 @@ -113,6 +113,9 @@ pub trait SubmitExt: Domain {
@@ -271,6 +271,18 @@ index b14f72c4..c1c0a95f 100644
                  Ok(_) => kept.push(tx),
                  Err(error) => {
                      debug!(tx.hash = %tx.hash(), %error, "pending tx refused on revalidation");
+@@ -178,6 +181,11 @@ impl From<DomainError> for SubmitError {
+
+ fn from_chain(error: ChainError) -> SubmitError {
+     let fault = match error {
++        ChainError::BrokenInvariant(x)
++            if pallas::crypto::oracle_plant("server-fault-as-client") =>
++        {
++            ClientFault::InvalidTx(x.to_string())
++        }
+         ChainError::DecodingError(x) => ClientFault::InvalidBytes(x.to_string()),
+         ChainError::CborDecodingError(x) => ClientFault::InvalidBytes(x.to_string()),
+         ChainError::AddressDecoding(x) => ClientFault::InvalidBytes(x.to_string()),
 diff --git a/crates/core/src/sync.rs b/crates/core/src/sync.rs
 index f501516c..aaa23f63 100644
 --- a/crates/core/src/sync.rs
