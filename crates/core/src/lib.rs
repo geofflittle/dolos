@@ -47,7 +47,7 @@ pub mod work_unit;
 
 pub use bootstrap::BootstrapExt;
 pub use import::{seed_wal_from_state, ImportExt, ReplayProgress, WalSeed, WalSeedError};
-pub use submit::SubmitExt;
+pub use submit::{ClientFault, SubmitError, SubmitExt};
 pub use sync::SyncExt;
 pub use work_unit::{MempoolUpdate, WorkUnit};
 
@@ -576,6 +576,9 @@ pub enum ChainError {
 
     #[error("couldn't evaluate phase-2 script: {0}")]
     Phase2EvaluationUnsupported(pallas::ledger::validate::phase2::error::Unsupported),
+
+    #[error("couldn't evaluate phase-2 script: {0}")]
+    Phase2EvaluationInternal(String),
 
     #[error("phase-2 script rejected the transaction")]
     Phase2ValidationRejected(Phase2Log),

@@ -174,7 +174,7 @@ where
         let hash = self
             .domain
             .receive_tx("grpc", &chain, tx_bytes.as_ref())
-            .map_err(crate::serve::grpc::convert::submit_error_status)?;
+            .map_err(|error| crate::serve::grpc::convert::submit_error_status(error.into()))?;
 
         info!(tx.hash = %hash, "accepted grpc transaction into mempool");
         Ok(Response::new(SubmitTxResponse {

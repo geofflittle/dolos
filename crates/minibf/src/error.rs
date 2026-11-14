@@ -3,7 +3,9 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use dolos_core::{ClientFault, SubmitError};
 use serde::Serialize;
+use std::borrow::Cow;
 
 use crate::pagination::PaginationError;
 
@@ -30,24 +32,57 @@ pub enum Error {
     ScanBudgetExceeded,
     InvalidCertIndex,
     InvalidGovActionId,
-    MempoolFull,
+    InvalidContentType,
+    Submit(SubmitError),
 }
 
 #[derive(Serialize)]
 struct ErrorBody {
     status_code: u16,
     error: &'static str,
-    message: &'static str,
+    message: Cow<'static, str>,
 }
 
 impl ErrorBody {
-    fn new(status_code: u16, error: &'static str, message: &'static str) -> Self {
+    fn new(status_code: u16, error: &'static str, message: impl Into<Cow<'static, str>>) -> Self {
         Self {
             status_code,
             error,
-            message,
+            message: message.into(),
         }
     }
+}
+
+/// The response a submit answers when receiving its transaction fails.
+fn submit_response(error: SubmitError) -> Response {
+    let message = error.to_string();
+    let (status, body) = match error {
+        SubmitError::Client(
+            ClientFault::InvalidBytes(_)
+            | ClientFault::InvalidTx(_)
+            | ClientFault::ScriptFailure(_),
+        ) => (
+            StatusCode::BAD_REQUEST,
+            ErrorBody::new(400, "Bad Request", message),
+        ),
+        SubmitError::Client(ClientFault::Duplicate) => (
+            StatusCode::CONFLICT,
+            ErrorBody::new(409, "Conflict", message),
+        ),
+        SubmitError::Client(ClientFault::MempoolFull(_)) => (
+            StatusCode::TOO_EARLY,
+            ErrorBody::new(
+                425,
+                "Mempool Full",
+                "Mempool is full, please try resubmitting again later.",
+            ),
+        ),
+        SubmitError::Server(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorBody::new(500, "Internal Server Error", message),
+        ),
+    };
+    (status, Json(body)).into_response()
 }
 
 impl IntoResponse for Error {
@@ -195,15 +230,16 @@ impl IntoResponse for Error {
                 )),
             )
                 .into_response(),
-            Error::MempoolFull => (
-                StatusCode::TOO_EARLY,
+            Error::InvalidContentType => (
+                StatusCode::BAD_REQUEST,
                 Json(ErrorBody::new(
-                    425,
-                    "Mempool Full",
-                    "Mempool is full, please try resubmitting again later.",
+                    400,
+                    "Bad Request",
+                    "Content-Type must be application/cbor.",
                 )),
             )
                 .into_response(),
+            Error::Submit(error) => submit_response(error),
         }
     }
 }
@@ -216,5 +252,11 @@ impl From<PaginationError> for Error {
 impl From<StatusCode> for Error {
     fn from(value: StatusCode) -> Self {
         Self::Code(value)
+    }
+}
+
+impl From<SubmitError> for Error {
+    fn from(value: SubmitError) -> Self {
+        Self::Submit(value)
     }
 }
