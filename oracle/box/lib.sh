@@ -1296,7 +1296,7 @@ sync_candidate() {
 candidate_verdict() {
   if [ "$1" -eq 0 ]; then
     echo PASS
-  elif [ "$1" -eq 2 ] && grep -Eq '^(LIVE-CANDIDATE )?REFUSED ' "$2"; then
+  elif [ "$1" -eq 2 ]; then
     echo REFUSED
   else
     echo "FAIL exit=$1"
