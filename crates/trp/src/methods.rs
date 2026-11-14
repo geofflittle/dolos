@@ -13,7 +13,10 @@ use tx3_resolver::trp::{
     TxStatus, TxWitness,
 };
 
-use dolos_core::{Domain, MempoolAwareUtxoStore, MempoolStore as _, StateStore as _, SubmitExt};
+use dolos_core::{
+    ClientFault, Domain, MempoolAwareUtxoStore, MempoolStore as _, StateStore as _, SubmitError,
+    SubmitExt,
+};
 
 use crate::{compiler::load_compiler, utxos::UtxoStoreAdapter};
 
@@ -49,7 +52,8 @@ pub async fn trp_resolve<D: Domain>(
 }
 
 fn apply_witnesses(original: &[u8], witnesses: &[TxWitness]) -> Result<Vec<u8>, Error> {
-    let tx = pallas::ledger::traverse::MultiEraTx::decode(original)?;
+    let tx = pallas::ledger::traverse::MultiEraTx::decode(original)
+        .map_err(|x| SubmitError::from(ClientFault::InvalidBytes(x.to_string())))?;
 
     let mut tx = tx.as_conway().ok_or(Error::UnsupportedTxEra)?.to_owned();
 
@@ -106,7 +110,10 @@ pub async fn trp_submit<D: Domain + SubmitExt>(
 
     let chain = context.domain.read_chain();
 
-    let hash = context.domain.receive_tx("trp", &chain, &bytes)?;
+    let hash = context
+        .domain
+        .receive_tx("trp", &chain, &bytes)
+        .map_err(SubmitError::from)?;
 
     Ok(SubmitResponse {
         hash: hash.to_string(),
@@ -643,5 +650,32 @@ mod tests {
         let tx_hash: pallas::crypto::hash::Hash<32> = tx_hash_bytes.as_slice().into();
         let status = MempoolStore::check_status(context.domain.mempool(), &tx_hash);
         assert_eq!(status.stage, MempoolTxStage::Pending);
+    }
+
+    #[tokio::test]
+    async fn undecodable_bytes_answer_not_accepted_with_or_without_witnesses() {
+        let context = setup_test_context().await;
+        let (sk, pk) = TestAddress::Carol.keypair();
+        let signature = sk.sign([0u8; 32]);
+        let witnesses = json!([{
+            "key": { "content": hex::encode(pk.as_ref()), "contentType": "hex" },
+            "signature": { "content": hex::encode(signature.as_ref()), "contentType": "hex" },
+            "type": "ed25519"
+        }]);
+        for witnesses in [json!([]), witnesses] {
+            let req = json!({
+                "tx": { "content": "deadbeef", "contentType": "hex" },
+                "witnesses": witnesses,
+            })
+            .to_string();
+            let error = trp_submit(Params::new(Some(req.as_str())), context.clone())
+                .await
+                .unwrap_err();
+            assert_eq!(
+                ErrorObjectOwned::from(error).code(),
+                tx3_resolver::trp::errors::CODE_TX_NOT_ACCEPTED,
+                "{witnesses}"
+            );
+        }
     }
 }

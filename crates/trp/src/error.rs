@@ -1,4 +1,4 @@
-use dolos_core::DomainError;
+use dolos_core::{ClientFault, SubmitError};
 use jsonrpsee::types::ErrorCode;
 use serde_json::Value;
 use tx3_resolver::trp::errors::TrpError as _;
@@ -75,43 +75,24 @@ impl Error {
     }
 }
 
-impl From<dolos_core::MempoolError> for Error {
-    fn from(error: dolos_core::MempoolError) -> Self {
-        use dolos_core::MempoolError;
+impl From<SubmitError> for Error {
+    fn from(error: SubmitError) -> Self {
         match error {
-            MempoolError::PlutusNotSupported => Error::tx_not_accepted("Plutus not supported"),
-            MempoolError::InvalidTx(x) => Error::tx_not_accepted(x),
-            x @ (MempoolError::DuplicateTx
-            | MempoolError::DecodeError(_)
-            | MempoolError::TraverseError(_)) => Error::tx_not_accepted(x),
-            x @ MempoolError::Full(_) => Error::transient(x),
-            x @ (MempoolError::Internal(_)
-            | MempoolError::StateError(_)
-            | MempoolError::PParamsNotAvailable) => Error::internal(x),
+            SubmitError::Client(
+                x @ (ClientFault::InvalidBytes(_)
+                | ClientFault::Duplicate
+                | ClientFault::InvalidTx(_)),
+            ) => Error::tx_not_accepted(x),
+            SubmitError::Client(ClientFault::ScriptFailure(logs)) => Error::tx_script_failure(logs),
+            SubmitError::Client(x @ ClientFault::MempoolFull(_)) => Error::transient(x),
+            SubmitError::Server(x) => Error::internal(x),
         }
     }
 }
 
 impl From<dolos_core::ChainError> for Error {
     fn from(error: dolos_core::ChainError) -> Self {
-        match error {
-            dolos_core::ChainError::BrokenInvariant(x) => Error::tx_not_accepted(x),
-            dolos_core::ChainError::DecodingError(x) => Error::tx_not_accepted(x),
-            dolos_core::ChainError::CborDecodingError(x) => Error::tx_not_accepted(x),
-            dolos_core::ChainError::Phase1ValidationRejected(x) => Error::tx_not_accepted(x),
-            dolos_core::ChainError::Phase2ValidationRejected(x) => Error::tx_script_failure(x),
-            x => Error::internal(x),
-        }
-    }
-}
-
-impl From<DomainError> for Error {
-    fn from(error: DomainError) -> Self {
-        match error {
-            dolos_core::DomainError::ChainError(e) => Error::from(e),
-            dolos_core::DomainError::MempoolError(e) => Error::from(e),
-            _ => Error::internal(error),
-        }
+        Error::internal(error)
     }
 }
 
@@ -132,12 +113,45 @@ impl From<Error> for jsonrpsee::types::ErrorObject<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dolos_core::{MempoolError, PassedBound};
+    use dolos_core::{DomainError, MempoolError, PassedBound};
+    use dolos_testing::submit::wrong_answers;
     use jsonrpsee::types::ErrorObjectOwned;
-    use tx3_resolver::trp::errors::{CODE_TRANSIENT_ERROR, CODE_TX_NOT_ACCEPTED};
+    use tx3_resolver::trp::errors::{
+        CODE_TRANSIENT_ERROR, CODE_TX_NOT_ACCEPTED, CODE_TX_SCRIPT_FAILURE,
+    };
 
     fn submit_error(error: MempoolError) -> ErrorObjectOwned {
-        Error::from(DomainError::MempoolError(error)).into()
+        Error::from(SubmitError::from(DomainError::MempoolError(error))).into()
+    }
+
+    fn answer(error: DomainError) -> i32 {
+        ErrorObjectOwned::from(Error::from(SubmitError::from(error))).code()
+    }
+
+    #[test]
+    fn each_submit_error_answers_the_code_of_its_fault() {
+        let refused = CODE_TX_NOT_ACCEPTED;
+        let internal = ErrorCode::InternalError.code();
+        let wrong = wrong_answers(
+            &[
+                ("undecodable-bytes", refused),
+                ("bytes-of-no-era", refused),
+                ("trailing-bytes", refused),
+                ("bytes-of-another-era", refused),
+                ("duplicate", refused),
+                ("invalid-tx", refused),
+                ("phase-one-rejected", refused),
+                ("phase-two-unevaluable", refused),
+                ("script-failure", CODE_TX_SCRIPT_FAILURE),
+                ("mempool-full", CODE_TRANSIENT_ERROR),
+                ("pparams-missing", internal),
+                ("store-failed", internal),
+                ("broken-invariant", internal),
+                ("no-active-epoch", internal),
+            ],
+            answer,
+        );
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
     #[test]

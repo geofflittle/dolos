@@ -1,9 +1,9 @@
 use axum::{
     body::Bytes,
     extract::State,
-    http::{header, HeaderMap, StatusCode},
+    http::{header, HeaderMap},
 };
-use dolos_core::{ChainError, Domain, DomainError, MempoolError, SubmitExt};
+use dolos_core::{Domain, SubmitError, SubmitExt};
 
 use crate::{error::Error, Facade};
 
@@ -25,52 +25,84 @@ pub async fn route<D: Domain + SubmitExt>(
     cbor: Bytes,
 ) -> Result<String, Error> {
     if !is_valid_cbor_content_type(&headers) {
-        return Err(StatusCode::BAD_REQUEST.into());
+        return Err(Error::InvalidContentType);
     }
 
     let chain = domain.read_chain();
     let hash = domain
         .inner
         .receive_tx("minibf", &chain, &cbor)
-        .map_err(submit_error)?;
+        .map_err(SubmitError::from)?;
 
     Ok(hex::encode(hash))
-}
-
-/// The error a submit answers when receiving its transaction fails.
-fn submit_error(error: DomainError) -> Error {
-    let status = match error {
-        DomainError::ChainError(x) => match x {
-            ChainError::BrokenInvariant(_) => StatusCode::BAD_REQUEST,
-            ChainError::DecodingError(_) => StatusCode::BAD_REQUEST,
-            ChainError::CborDecodingError(_) => StatusCode::BAD_REQUEST,
-            ChainError::AddressDecoding(_) => StatusCode::BAD_REQUEST,
-            ChainError::Phase1ValidationRejected(_) => StatusCode::BAD_REQUEST,
-            ChainError::Phase2ValidationRejected(_) => StatusCode::BAD_REQUEST,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
-        },
-        DomainError::MempoolError(x) => match x {
-            MempoolError::TraverseError(_) => StatusCode::BAD_REQUEST,
-            MempoolError::InvalidTx(_) => StatusCode::BAD_REQUEST,
-            MempoolError::DecodeError(_) => StatusCode::BAD_REQUEST,
-            MempoolError::PlutusNotSupported => StatusCode::BAD_REQUEST,
-            MempoolError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            MempoolError::StateError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            MempoolError::PParamsNotAvailable => StatusCode::INTERNAL_SERVER_ERROR,
-            MempoolError::DuplicateTx => StatusCode::CONFLICT,
-            MempoolError::Full(_) => return Error::MempoolFull,
-        },
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    status.into()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::{TestApp, TestFault};
-    use axum::response::IntoResponse;
-    use dolos_core::PassedBound;
+    use axum::{http::StatusCode, response::IntoResponse};
+    use dolos_core::{DomainError, MempoolError, PassedBound};
+    use dolos_testing::submit::wrong_answers;
+
+    fn submit_error(error: DomainError) -> Error {
+        SubmitError::from(error).into()
+    }
+
+    /// The status and the `status_code` and `error` of the Blockfrost body,
+    /// when the body has all three fields and a message.
+    fn blockfrost_answer(status: StatusCode, body: &[u8]) -> (u16, Option<(u64, String)>) {
+        let body = serde_json::from_slice::<serde_json::Value>(body).ok();
+        let fields = body.as_ref().and_then(|body| {
+            let message = body.get("message")?.as_str()?;
+            (!message.is_empty()).then_some(())?;
+            Some((
+                body.get("status_code")?.as_u64()?,
+                body.get("error")?.as_str()?.to_string(),
+            ))
+        });
+        (status.as_u16(), fields)
+    }
+
+    fn answer(error: DomainError) -> (u16, Option<(u64, String)>) {
+        use http_body_util::BodyExt;
+
+        let response = submit_error(error).into_response();
+        let status = response.status();
+        let body = futures::executor::block_on(response.into_body().collect())
+            .unwrap()
+            .to_bytes();
+        blockfrost_answer(status, &body)
+    }
+
+    #[test]
+    fn each_submit_error_answers_the_status_and_body_of_its_fault() {
+        let client = (400, Some((400, "Bad Request".to_string())));
+        let server = (500, Some((500, "Internal Server Error".to_string())));
+        let wrong = wrong_answers(
+            &[
+                ("undecodable-bytes", client.clone()),
+                ("bytes-of-no-era", client.clone()),
+                ("trailing-bytes", client.clone()),
+                ("bytes-of-another-era", client.clone()),
+                ("duplicate", (409, Some((409, "Conflict".to_string())))),
+                ("invalid-tx", client.clone()),
+                ("phase-one-rejected", client.clone()),
+                ("phase-two-unevaluable", client.clone()),
+                ("script-failure", client),
+                (
+                    "mempool-full",
+                    (425, Some((425, "Mempool Full".to_string()))),
+                ),
+                ("pparams-missing", server.clone()),
+                ("store-failed", server.clone()),
+                ("broken-invariant", server.clone()),
+                ("no-active-epoch", server),
+            ],
+            answer,
+        );
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
 
     #[test]
     fn a_duplicate_transaction_answers_conflict() {
@@ -110,9 +142,18 @@ mod tests {
         );
     }
 
+    /// Posts a submit and asserts its status and a Blockfrost body naming the
+    /// same status.
     async fn assert_status(app: &TestApp, content_type: &str, body: Vec<u8>, expected: StatusCode) {
-        let (status, _body) = app.post_bytes("/tx/submit", content_type, body).await;
-        assert_eq!(status, expected);
+        let (status, body) = app.post_bytes("/tx/submit", content_type, body).await;
+        let (status, fields) = blockfrost_answer(status, &body);
+        assert_eq!(status, expected.as_u16());
+        assert_eq!(
+            fields.map(|(code, _)| code),
+            Some(u64::from(expected.as_u16())),
+            "{}",
+            String::from_utf8_lossy(&body)
+        );
     }
 
     #[tokio::test]

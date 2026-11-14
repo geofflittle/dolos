@@ -6,8 +6,8 @@
 use tracing::{debug, instrument};
 
 use crate::{
-    ChainLogic, Domain, DomainError, MempoolAwareUtxoStore, MempoolStore, MempoolTx, StateStore,
-    TxHash,
+    ChainError, ChainLogic, Domain, DomainError, MempoolAwareUtxoStore, MempoolError, MempoolStore,
+    MempoolTx, PassedBound, Phase2Log, StateStore, TxHash,
 };
 
 /// Extension trait for transaction submission operations.
@@ -128,3 +128,96 @@ pub trait SubmitExt: Domain {
 }
 
 impl<D: Domain> SubmitExt for D {}
+
+/// A failed submit, split by whose fault it is.
+#[derive(Debug, thiserror::Error)]
+pub enum SubmitError {
+    #[error(transparent)]
+    Client(#[from] ClientFault),
+
+    #[error(transparent)]
+    Server(DomainError),
+}
+
+/// A submit the client can correct or retry.
+#[derive(Debug, thiserror::Error)]
+pub enum ClientFault {
+    #[error("{0}")]
+    InvalidBytes(String),
+
+    #[error("duplicate tx")]
+    Duplicate,
+
+    #[error("{0}")]
+    InvalidTx(String),
+
+    #[error("phase-2 script rejected the transaction")]
+    ScriptFailure(Phase2Log),
+
+    #[error("mempool full: {0}")]
+    MempoolFull(PassedBound),
+}
+
+impl From<DomainError> for SubmitError {
+    fn from(error: DomainError) -> Self {
+        match error {
+            DomainError::ChainError(x) => from_chain(x),
+            DomainError::MempoolError(x) => from_mempool(x),
+            x @ (DomainError::WalError(_)
+            | DomainError::StateError(_)
+            | DomainError::ArchiveError(_)
+            | DomainError::InconsistentState { .. }
+            | DomainError::Internal(_)
+            | DomainError::WalIsEmpty
+            | DomainError::RollbackTargetNotInWal(_)
+            | DomainError::ArchiveWalGap(_)
+            | DomainError::StopEpochReached) => SubmitError::Server(x),
+        }
+    }
+}
+
+fn from_chain(error: ChainError) -> SubmitError {
+    let fault = match error {
+        ChainError::DecodingError(x) => ClientFault::InvalidBytes(x.to_string()),
+        ChainError::CborDecodingError(x) => ClientFault::InvalidBytes(x.to_string()),
+        ChainError::AddressDecoding(x) => ClientFault::InvalidBytes(x.to_string()),
+        ChainError::Phase1ValidationRejected(x) => ClientFault::InvalidTx(x.to_string()),
+        x @ ChainError::Phase2EvaluationError(_) => ClientFault::InvalidTx(x.to_string()),
+        ChainError::Phase2ValidationRejected(x) => ClientFault::ScriptFailure(x),
+        x @ (ChainError::CantReceiveBlock(_)
+        | ChainError::BrokenInvariant(_)
+        | ChainError::InvalidNamespace(_)
+        | ChainError::StateError(_)
+        | ChainError::ArchiveError(_)
+        | ChainError::GenesisFieldMissing(_)
+        | ChainError::InvalidConfig(_)
+        | ChainError::PParamsNotFound(_)
+        | ChainError::NoActiveEpoch
+        | ChainError::MissingGovState
+        | ChainError::EraNotFound
+        | ChainError::EpochValueVersionNotFound(_)
+        | ChainError::PoolSnapshotLagging { .. }
+        | ChainError::MissingRewards
+        | ChainError::InvalidPoolParams
+        | ChainError::InvalidProposalParams
+        | ChainError::UnrecordableProposalPart(_)
+        | ChainError::Phase2EvaluationUnsupported(_)
+        | ChainError::Consensus(_)) => return SubmitError::Server(x.into()),
+    };
+    fault.into()
+}
+
+fn from_mempool(error: MempoolError) -> SubmitError {
+    let fault = match error {
+        MempoolError::TraverseError(x) => ClientFault::InvalidBytes(x.to_string()),
+        MempoolError::DecodeError(x) => ClientFault::InvalidBytes(x.to_string()),
+        MempoolError::DuplicateTx => ClientFault::Duplicate,
+        MempoolError::InvalidTx(x) => ClientFault::InvalidTx(x),
+        MempoolError::Full(x) => ClientFault::MempoolFull(x),
+        x @ (MempoolError::Internal(_)
+        | MempoolError::StateError(_)
+        | MempoolError::PlutusNotSupported
+        | MempoolError::PParamsNotAvailable) => return SubmitError::Server(x.into()),
+    };
+    fault.into()
+}

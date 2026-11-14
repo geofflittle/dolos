@@ -47,7 +47,7 @@ pub mod work_unit;
 
 pub use bootstrap::BootstrapExt;
 pub use import::{seed_wal_from_state, ImportExt, ReplayProgress, WalSeed, WalSeedError};
-pub use submit::SubmitExt;
+pub use submit::{ClientFault, SubmitError, SubmitExt};
 pub use sync::SyncExt;
 pub use work_unit::{MempoolUpdate, WorkUnit};
 
