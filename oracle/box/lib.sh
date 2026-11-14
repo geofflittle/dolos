@@ -1,4 +1,4 @@
-# Functions and defaults the oracle box scripts share, reading ROOT, SCRATCH, REV, BASE, JUDGED, MIN_FREE_G, OUT, HERE, TARGET, LIVE_ENV, LIVE_READS, SYNC_SLOTS_PER_S, IN_IMAGE, LOCK_POLL_SECONDS, RUN_LOCK, LAST_DONE, LAST_SHIP, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_FSYNC, NODE, ENDPOINT, GRPCURL, the ORACLE_ slice settings, CGROUP_FILE, CGROUP_ROOT, the IO_ limits and VALUE_HARNESS_URL.
+# Functions and defaults the oracle box scripts share, reading ROOT, SCRATCH, REV, BASE, JUDGED, MIN_FREE_G, OUT, HERE, TARGET, LIVE_ENV, IMAGE_REPOSITORY, NODE_WAIT_MINUTES, SYNC_SLOTS_PER_S, IN_IMAGE, LOCK_POLL_SECONDS, RUN_LOCK, LAST_DONE, LAST_SHIP, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_FSYNC, NODE, ENDPOINT, GRPCURL, the ORACLE_ slice settings, CGROUP_FILE, CGROUP_ROOT, the IO_ limits and VALUE_HARNESS_URL.
 
 PALLAS=${PALLAS:-scratch/pallas}
 SCRATCH=${SCRATCH:-scratch/dolos}
@@ -460,13 +460,6 @@ free_g() {
   echo $(($(df -B1 --output=avail "$1" | tail -1 | tr -dc 0-9) / 1073741824))
 }
 
-# The whole gibibytes the store at $1 holds, rounded up, or a failure when du cannot read it.
-store_size_g() {
-  bytes=$(du -sb "$1") || return 1
-  bytes=${bytes%%[!0-9]*}
-  echo $(((bytes + 1073741823) / 1073741824))
-}
-
 # Exits when the build root has less than MIN_FREE_G gigabytes free.
 require_free() {
   free=$(free_g "$ROOT")
@@ -527,6 +520,35 @@ image_commit() {
   esac
   echo "REFUSED IMAGE=$1 revision=$revision is not a full commit id" >&2
   exit 2
+}
+
+# The repository the image workflow pushes each commit's image to, tagged sha- and the commit's first seven hex digits.
+IMAGE_REPOSITORY=${IMAGE_REPOSITORY:-ghcr.io/sundaeswap-finance/dolos}
+
+# Prints the digest reference of the image IMAGE_REPOSITORY tags with the commit $1, after pulling it, or exits 2 with a REFUSED line when the pull fails or names no digest.
+commit_image() {
+  tag=$IMAGE_REPOSITORY:sha-$(echo "$1" | cut -c1-7)
+  if ! docker pull -q --platform linux/amd64 "$tag" >/dev/null; then
+    echo "REFUSED IMAGE=$tag pull failed" >&2
+    exit 2
+  fi
+  digest=$(docker image inspect -f "{{range .RepoDigests}}{{println .}}{{end}}" "$tag" |
+    awk -v prefix="$IMAGE_REPOSITORY@" 'index($0, prefix) == 1 { print; exit }') || digest=
+  if [ -z "$digest" ]; then
+    echo "REFUSED IMAGE=$tag names no digest" >&2
+    exit 2
+  fi
+  echo "$digest"
+}
+
+# Sets image to the digest reference of REV's image, or exits 2 with a REFUSED line when there is none or its revision label names another commit.
+require_image() {
+  image=$(commit_image "$REV") || exit 2
+  label=$(image_commit "$image") || exit 2
+  if [ "$label" != "$REV" ]; then
+    echo "REFUSED IMAGE=$image commit=$label is not REV=$REV"
+    exit 2
+  fi
 }
 
 # Prints the full sha of the commit the ref $2 names in $ROOT/dolos.git, or exits 2 with a REFUSED line naming the variable $1 when it names none.
@@ -1292,11 +1314,16 @@ candidate_lines() {
     cut -c1-400 || true
 }
 
-# Syncs the candidate $1, a binary path or an image, of the commit $commit from the node and compares its reads with the serving Dolos field by field, reading into $OUT/live and logging to $OUT/live/candidate.log.
-sync_candidate() {
+# Exports the keys LIVE_ENV sets.
+live_env() {
   set -a
   . "$LIVE_ENV"
   set +a
+}
+
+# Syncs the candidate $1, a binary path or an image, of the commit $commit from the node and compares its reads with the serving Dolos field by field, reading into $OUT/live and logging to $OUT/live/candidate.log.
+sync_candidate() {
+  live_env
   mkdir -p "$OUT/live"
   fields=0
   CANDIDATE=$1 COMMIT=$commit sh "$HERE/candidate.sh" "$OUT/live" >"$OUT/live/candidate.log" 2>&1 || fields=$?
@@ -1315,21 +1342,44 @@ candidate_verdict() {
   fi
 }
 
-# Sets image and candidate from the record of the reads in LIVE_READS, or exits 2 when it holds no record, the record names another commit than REV or its candidate refused to sync.
-require_reads() {
-  if [ -z "${LIVE_READS:-}" ] || [ ! -f "$LIVE_READS/reads.txt" ]; then
-    echo "REFUSED LIVE_READS=${LIVE_READS:-} holds no reads.txt"
-    exit 2
-  fi
-  read_commit=$(sed -n 's/^image=[^ ]* commit=\([^ ]*\) .*/\1/p' "$LIVE_READS/reads.txt")
-  if [ "$read_commit" != "$REV" ]; then
-    echo "REFUSED LIVE_READS=$LIVE_READS commit=$read_commit is not REV=$REV"
-    exit 2
-  fi
-  image=$(sed -n 's/^image=\([^ ]*\) .*/\1/p' "$LIVE_READS/reads.txt")
-  candidate=$(sed -n 's/.* candidate=\([A-Z]*\).*/\1/p' "$LIVE_READS/reads.txt")
+# The minutes the ship tier waits for the node to catch up with the wall clock.
+NODE_WAIT_MINUTES=${NODE_WAIT_MINUTES:-60}
+
+# Whether the LIVE-IO sample $1 has the node's tip within IO_NODE_LAG_S of the wall clock.
+node_caught_up() {
+  lag=$(echo " $1 " | sed -n 's/.* node_lag_s=\([^ ]*\) .*/\1/p')
+  case ${lag#-} in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  [ "$lag" -le "$IO_NODE_LAG_S" ]
+}
+
+# Samples the node every 30 seconds until node_caught_up holds, or exits 2 with a REFUSED line naming the last sample after NODE_WAIT_MINUTES.
+require_node() {
+  deadline=$(($(date +%s) + NODE_WAIT_MINUTES * 60))
+  while :; do
+    sample=$(io_line)
+    if node_caught_up "$sample"; then
+      echo "LIVE-NODE caught_up $sample"
+      return
+    fi
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "REFUSED node behind the wall clock after $NODE_WAIT_MINUTES minutes, $sample"
+      exit 2
+    fi
+    sleep 30
+  done
+}
+
+# Syncs image as the candidate of commit once the node has caught up, setting candidate to its verdict, or exits 2 when the candidate refused to sync.
+read_candidate() {
+  live_env
+  require_node
+  status=0
+  sync_candidate "$image" || status=$?
+  candidate=$(candidate_verdict "$status" "$OUT/live/candidate.log")
   if [ "$candidate" = REFUSED ]; then
-    echo "REFUSED LIVE_READS=$LIVE_READS candidate=REFUSED"
+    echo "REFUSED candidate=REFUSED"
     exit 2
   fi
 }

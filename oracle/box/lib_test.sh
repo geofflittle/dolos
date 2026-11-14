@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, the overlay build's target dir, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the files a planted tree writes and whether git writes each diff as committed, the free space floor, the space the candidate's store needs, the sync deadline, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the reads the ship tier takes, the image read-live.sh syncs, that it builds nothing and its candidate's verdict, the box lock, the slice limits read-live.sh sets on musashi-aws, how many switched arms are judged at once, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier and which of its steps it reruns, the value control's verdict, the amaru pin, the amaru leg's verdicts, the build image's name by the harness's image scripts, the image in-image.sh runs and the endorser block endorser_fixture.py reads from each LeiosDb layout.
+# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, the overlay build's target dir, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the files a planted tree writes and whether git writes each diff as committed, the free space floor, the space the candidate's store needs, the sync deadline, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, when the node has caught up, the image the ship tier syncs and its candidate's verdict, the box lock, how many switched arms are judged at once, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier and which of its steps it reruns, the value control's verdict, the amaru pin, the amaru leg's verdicts, the build image's name by the harness's image scripts, the image in-image.sh runs and the endorser block endorser_fixture.py reads from each LeiosDb layout.
 # Usage: lib_test.sh <empty work dir>
 set -eu
 lib_test_work=$(cd "$1" && pwd)
@@ -617,29 +617,6 @@ expect free_whole "$(free_of 10737418240 10)" "free=10 exit=0 "
 # Must fire: one byte short of 10 gibibytes is 9, which a 10 gibibyte floor refuses.
 expect free_short "$(free_of 10737418239 10)" "free=9 exit=2 REFUSED free=9G below 10G at $lib_test_work/free"
 
-# The exit and output of store_size_g for a store whose du answers $1 bytes, or fails when $1 is empty.
-need_of() {
-  (
-    HERE=$H
-    . "$lib_test_lib"
-    du() {
-      [ -n "$DU_BYTES" ] || return 1
-      printf '%s\t%s\n' "$DU_BYTES" "$2"
-    }
-    DU_BYTES=$1
-    status=0
-    out=$(store_size_g "$lib_test_work/store") || status=$?
-    echo "exit=$status $out"
-  )
-}
-# Must not fire: a store of whole gibibytes needs that many.
-expect need_whole "$(need_of 19327352832)" "exit=0 18"
-# Must fire: any bytes past a whole gibibyte round up.
-expect need_over "$(need_of 19327352833)" "exit=0 19"
-expect need_serving "$(need_of 19251746715)" "exit=0 18"
-# Must fail: a store du cannot read.
-expect need_unread "$(need_of '')" "exit=1 "
-
 # The minutes sync_minutes allows a sync to the node slot $1 at $2 slots a second.
 deadline_of() {
   (
@@ -1000,19 +977,12 @@ for script in run.sh regen.sh; do
   expect "entry_$script" "$(cat "$K/old.seen")" "script=$script args=done"
 done
 
-# A digest reference to an image, and the dir $lib_test_work/reads-$1 of reads made from it at the commit $2 whose candidate verdict is $3.
-IMAGE_REF=ghcr.io/o/dolos@sha256:$(printf '%064d' 0)
-reads_of() {
-  mkdir -p "$lib_test_work/reads-$1"
-  echo "image=$IMAGE_REF commit=$2 candidate=$3" >"$lib_test_work/reads-$1/reads.txt"
-}
-reads_of rev c PASS
-# Must not fire: run.sh given quick, done or ship goes on to the free space floor, ship given reads made at REV.
+# Must not fire: run.sh given quick, done or ship goes on to the free space floor.
 for word in quick done ship; do
   lock_root "tier-word-$word"
   (
-    REV=c LIVE_READS=$lib_test_work/reads-rev
-    export REV LIVE_READS
+    REV=c
+    export REV
     tier "$K" "" run.sh "$word"
   )
   expect "tier_word_$word" "$(run_out "$K")" "REFUSED free run-exit=2 exit=2"
@@ -1024,179 +994,142 @@ for word in live value regen quicker; do
   expect "tier_word_$word" "$(run_out "$K")" "usage: run.sh quick|done|ship run-exit=2 exit=2"
 done
 
-# The output of a ship run with REV c on the build root $lib_test_work/ship-reads-$1, given the reads $2, or no reads when $2 is empty.
-ship_reads_of() {
-  lock_root "ship-reads-$1"
+# The exit of node_caught_up for the LIVE-IO sample $1, with a limit of 120 s of node lag.
+caught_up_of() {
   (
-    REV=c
-    export REV
-    unset LIVE_READS
-    if [ -n "$2" ]; then
-      LIVE_READS=$2
-      export LIVE_READS
-    fi
-    tier "$K" "" run.sh ship
+    HERE=$H
+    . "$lib_test_lib"
+    IO_NODE_LAG_S=120
+    status=0
+    node_caught_up "$1" || status=$?
+    echo "exit=$status"
   )
-  run_out "$K"
 }
-# Must not fire: reads whose candidate failed reach the free space floor, since the live verdict fails on them later.
-reads_of failed c "FAIL exit=1"
-expect ship_reads_failed "$(ship_reads_of failed "$lib_test_work/reads-failed")" "REFUSED free run-exit=2 exit=2"
-# Must refuse: reads whose candidate refused to sync, which hold no candidate reads to judge.
-reads_of refused c REFUSED
-expect ship_reads_refused "$(ship_reads_of refused "$lib_test_work/reads-refused")" \
-  "REFUSED LIVE_READS=$lib_test_work/reads-refused candidate=REFUSED run-exit=2 exit=2"
-# Must refuse: no reads, a dir that holds no record of them, and reads of an image built from another commit than REV.
-expect ship_reads_unset "$(ship_reads_of unset "")" "REFUSED LIVE_READS= holds no reads.txt run-exit=2 exit=2"
-mkdir -p "$lib_test_work/reads-none"
-expect ship_reads_none "$(ship_reads_of none "$lib_test_work/reads-none")" \
-  "REFUSED LIVE_READS=$lib_test_work/reads-none holds no reads.txt run-exit=2 exit=2"
-reads_of other d PASS
-expect ship_reads_other "$(ship_reads_of other "$lib_test_work/reads-other")" \
-  "REFUSED LIVE_READS=$lib_test_work/reads-other commit=d is not REV=c run-exit=2 exit=2"
+# Must not fire: a node at the limit, and a node ahead of the wall clock while the serving Dolos fails to answer.
+expect node_at_limit "$(caught_up_of 'LIVE-IO node_lag_s=120 serve_lag_slots=0 serve_ms=80')" exit=0
+expect node_ahead "$(caught_up_of 'LIVE-IO node_lag_s=-3 serve_lag_slots=failed serve_ms=failed')" exit=0
+# Must fire: a node one second over, a failed node read and a missing node value.
+expect node_over "$(caught_up_of 'LIVE-IO node_lag_s=121 serve_lag_slots=0 serve_ms=80')" exit=1
+expect node_failed "$(caught_up_of 'LIVE-IO node_lag_s=failed serve_lag_slots=failed serve_ms=80')" exit=1
+expect node_missing "$(caught_up_of 'LIVE-IO serve_lag_slots=0 serve_ms=80')" exit=1
 
-# A build root $lib_test_work/$1 whose dolos.git holds one commit of these box scripts, without read-live.sh when $2 is old, with a candidate.sh that records what it was handed in the root's candidate.seen, prints the root's candidate.says when it exists and exits $3, and a docker that logs each call to the root's docker.log and answers image inspect with that commit's id, or with $4 when it is given.
-image_root() {
-  lock_root "$1"
-  mkdir -p "$K/src/oracle/box"
-  cp "$HERE"/*.sh "$K/src/oracle/box/"
-  cp -R "$HERE/bin" "$HERE/overlay" "$K/src/oracle/box/"
-  if [ "$2" = old ]; then
-    rm -f "$K/src/oracle/box/read-live.sh"
-  fi
-  printf '%s\n' '#!/bin/sh' "echo \"candidate=\$CANDIDATE commit=\$COMMIT dir=\$1\" >'$K/candidate.seen'" \
-    "cat '$K/candidate.says' 2>/dev/null || true" "exit $3" >"$K/src/oracle/box/candidate.sh"
-  git -C "$K/src" init -q
-  git -C "$K/src" add -A
-  git -C "$K/src" -c user.name=t -c user.email=t@t commit -q -m box
-  git clone -q --bare "$K/src" "$K/dolos.git"
-  revision=${4-$(git -C "$K/dolos.git" rev-parse HEAD)}
-  printf '%s\n' '#!/bin/sh' "echo \"\$*\" >>'$K/docker.log'" \
-    "if [ \"\$1 \$2\" = 'image inspect' ]; then echo '$revision'; fi" >"$K/docker"
-  chmod +x "$K/docker"
-  : >"$K/docker.log"
-  : >"$K/live.env"
-}
-
-# The output of read-live.sh run as an entry on the build root of image_root with the image $1, a build image named so that any build reaches the docker, and no harness to fetch a build image's scripts from.
-read_live_of() {
+# The output and exit of read_candidate on the dir $lib_test_work/read-candidate with a NODE_WAIT_MINUTES of $4, a node whose samples are the lines of $1 in turn, and a sync that writes $2 to its log and returns $3, then the syncs it started and the candidate's verdict.
+read_candidate_of() {
+  R=$lib_test_work/read-candidate
+  rm -rf "$R"
+  mkdir -p "$R/out/live"
+  printf '%s\n' "$1" >"$R/samples"
+  : >"$R/live.env"
   (
-    IMAGE=$1 ORACLE_DOCKER=$K/docker BUILD_IMAGE=b VALUE_HARNESS_URL=$K/missing
-    export IMAGE ORACLE_DOCKER BUILD_IMAGE VALUE_HARNESS_URL
-    tier "$K" entry read-live.sh
+    HERE=$H
+    . "$lib_test_lib"
+    OUT=$R/out LIVE_ENV=$R/live.env IO_NODE_LAG_S=120 NODE_WAIT_MINUTES=$4 image=i
+    sync_log=$2 sync_status=$3
+    io_line() {
+      sed -n 1p "$R/samples"
+      sed -i 1d "$R/samples"
+    }
+    sleep() { :; }
+    sync_candidate() {
+      echo "sync $1" >>"$R/syncs"
+      echo "$sync_log" >"$OUT/live/candidate.log"
+      return "$sync_status"
+    }
+    status=0
+    out=$( (read_candidate && echo "candidate=$candidate") 2>&1) || status=$?
+    echo "exit=$status $out" | paste -sd ' ' -
+    echo "syncs=$(paste -sd ' ' - <"$R/syncs" 2>/dev/null)"
+  ) | paste -sd ' ' -
+}
+caught='LIVE-IO node_lag_s=5 serve_lag_slots=0 serve_ms=80'
+behind='LIVE-IO node_lag_s=900 serve_lag_slots=0 serve_ms=80'
+# Must not fire: a node behind on its first sample and caught up on its second is waited for, and a candidate that fails is judged rather than refused.
+expect read_candidate_waits "$(read_candidate_of "$behind
+$caught" 'LIVE-CANDIDATE synced' 0 60)" "exit=0 LIVE-NODE caught_up $caught candidate=PASS syncs=sync i"
+expect read_candidate_failed "$(read_candidate_of "$caught" 'LIVE-CANDIDATE sync_timeout' 1 60)" \
+  "exit=0 LIVE-NODE caught_up $caught candidate=FAIL exit=1 syncs=sync i"
+# Must refuse: a node still behind when the wait ends starts no sync, and a candidate that refused to sync stops the run.
+expect read_candidate_node_behind "$(read_candidate_of "$behind" 'LIVE-CANDIDATE synced' 0 0)" \
+  "exit=2 REFUSED node behind the wall clock after 0 minutes, $behind syncs="
+expect read_candidate_refused "$(read_candidate_of "$caught" 'LIVE-CANDIDATE REFUSED free=1G root_free=40G need=25G' 2 60)" \
+  "exit=2 LIVE-NODE caught_up $caught REFUSED candidate=REFUSED syncs=sync i"
+# Must not fire: an exit of 2 with no refusal line, and a refusal line with an exit of 1, are failures.
+expect read_candidate_exit_2 "$(read_candidate_of "$caught" 'LIVE-CANDIDATE synced' 2 60)" \
+  "exit=0 LIVE-NODE caught_up $caught candidate=FAIL exit=2 syncs=sync i"
+expect read_candidate_refusal_exit_1 "$(read_candidate_of "$caught" 'LIVE-CANDIDATE REFUSED free=1G root_free=40G need=25G' 1 60)" \
+  "exit=0 LIVE-NODE caught_up $caught candidate=FAIL exit=1 syncs=sync i"
+
+# The output and exit of require_image for the REV $2, then its docker calls, with a docker at $lib_test_work/image-$1 that pulls the references $3, answers the repo digests of a tag with the lines of $4 and the revision label of a digest reference with $5.
+image_of() {
+  D=$lib_test_work/image-$1
+  rm -rf "$D"
+  mkdir -p "$D"
+  printf '%s\n' $3 >"$D/pulls"
+  printf '%s\n' "$4" >"$D/digests"
+  echo "$5" >"$D/label"
+  printf '%s\n' '#!/bin/sh' "echo \"\$*\" >>'$D/docker.log'" 'case "$1 $2" in' \
+    "  'pull -q') grep -qxF \"\$5\" '$D/pulls' ;;" \
+    "  'image inspect') case \$* in *RepoDigests*) cat '$D/digests' ;; *) cat '$D/label' ;; esac ;;" \
+    'esac' >"$D/docker"
+  chmod +x "$D/docker"
+  : >"$D/docker.log"
+  (
+    ORACLE_DOCKER=$D/docker IMAGE_REPOSITORY=ghcr.io/o/dolos REV=$2
+    . "$lib_test_lib"
+    status=0
+    out=$( (require_image && echo "image=$image") 2>&1) || status=$?
+    echo "exit=$status $out"
   )
-  run_out "$K"
+  sed 's/^/docker /' "$D/docker.log"
 }
-
-# The docker calls the image check makes for the image $1.
-image_calls() {
-  printf '%s\n' "pull -q --platform linux/amd64 $1" \
-    "image inspect --platform linux/amd64 -f {{index .Config.Labels \"org.opencontainers.image.revision\"}} $1"
-}
-
-# Must not fire: an image named by digest whose revision label is a commit holding read-live.sh hands the run to that commit's read-live.sh, which syncs the image as the candidate and records the image, the commit and the candidate's verdict.
-image_root read-live new 0
-sha=$(git -C "$K/dolos.git" rev-parse HEAD)
-expect read_live_runs "$(read_live_of "$IMAGE_REF")" \
-  "READS image=$IMAGE_REF commit=$sha candidate=PASS dir=$K/runs/t/live run-exit=0 exit=0"
-expect read_live_candidate "$(cat "$K/candidate.seen" 2>&1)" "candidate=$IMAGE_REF commit=$sha dir=$K/runs/t/live"
-expect read_live_record "$(cat "$K/runs/t/live/reads.txt" 2>&1)" "image=$IMAGE_REF commit=$sha candidate=PASS"
-# Must not fire: the run builds nothing, so its only docker calls are the image check's, though a build would reach this docker.
-expect read_live_builds_nothing "$(cat "$K/docker.log")" "$(image_calls "$IMAGE_REF")"
-# Must fire: a build on the same root reaches the docker, so read_live_builds_nothing would see one.
-(
-  ROOT=$K HERE=$K/src/oracle/box OUT=$K/runs/control BUILD_IMAGE=b ORACLE_DOCKER=$K/docker SCRATCH=scratch PALLAS=scratch
-  export ROOT BUILD_IMAGE
-  . "$K/src/oracle/box/lib.sh"
-  : >"$K/docker.log"
-  build_candidate >/dev/null 2>&1 || true
-)
-expect read_live_build_seen "$(cut -d ' ' -f 1-6 "$K/docker.log" | sed -n 1p)" "run --cgroup-parent dolos-oracle.slice --oom-score-adj 1000 --rm"
-# Must fire: a candidate that fails is recorded as failed and fails the run.
-image_root read-live-failed new 1
-sha=$(git -C "$K/dolos.git" rev-parse HEAD)
-expect read_live_failed "$(read_live_of "$IMAGE_REF")" \
-  "READS image=$IMAGE_REF commit=$sha candidate=FAIL exit=1 dir=$K/runs/t/live run-exit=1 exit=1"
-# Must fire: a candidate that exits 2 with a refusal is recorded as refused and the run exits 2.
-refusal='LIVE-CANDIDATE REFUSED free=14G root_free=40G need=21G'
-image_root read-live-refused new 2
-sha=$(git -C "$K/dolos.git" rev-parse HEAD)
-echo "$refusal" >"$K/candidate.says"
-expect read_live_refused "$(read_live_of "$IMAGE_REF")" \
-  "$refusal READS image=$IMAGE_REF commit=$sha candidate=REFUSED dir=$K/runs/t/live run-exit=2 exit=2"
-expect read_live_refused_record "$(cat "$K/runs/t/live/reads.txt" 2>&1)" "image=$IMAGE_REF commit=$sha candidate=REFUSED"
-# Must not fire: an exit of 2 with no refusal, and a refusal with an exit of 1, are failures.
-image_root read-live-exit-2 new 2
-sha=$(git -C "$K/dolos.git" rev-parse HEAD)
-expect read_live_exit_2 "$(read_live_of "$IMAGE_REF")" \
-  "READS image=$IMAGE_REF commit=$sha candidate=FAIL exit=2 dir=$K/runs/t/live run-exit=1 exit=1"
-image_root read-live-refusal-exit-1 new 1
-sha=$(git -C "$K/dolos.git" rev-parse HEAD)
-echo "$refusal" >"$K/candidate.says"
-expect read_live_refusal_exit_1 "$(read_live_of "$IMAGE_REF")" \
-  "$refusal READS image=$IMAGE_REF commit=$sha candidate=FAIL exit=1 dir=$K/runs/t/live run-exit=1 exit=1"
-# Must refuse before any docker call: an image named by a tag, or by a tag and a digest.
-image_root read-live-tag new 0
-expect read_live_tag "$(read_live_of ghcr.io/o/dolos:sha-c)" \
-  "REFUSED IMAGE=ghcr.io/o/dolos:sha-c is not <repository>@sha256:<64 hex digits> with no tag run-exit=2 exit=2"
-expect read_live_tag_and_digest "$(read_live_of "ghcr.io/o/dolos:sha-c@sha256:$(printf '%064d' 0)")" \
-  "REFUSED IMAGE=ghcr.io/o/dolos:sha-c@sha256:$(printf '%064d' 0) is not <repository>@sha256:<64 hex digits> with no tag run-exit=2 exit=2"
-expect read_live_tag_calls "$(cat "$K/docker.log")" ""
-# Must refuse: an image whose revision label is empty, missing, or not a full commit id.
-for label in empty none short; do
-  case $label in
-    empty) value= ;;
-    none) value='<no value>' ;;
-    short) value=$(echo "$sha" | cut -c1-7) ;;
-  esac
-  image_root "read-live-label-$label" new 0 "$value"
-  expect "read_live_label_$label" "$(read_live_of "$IMAGE_REF")" \
-    "REFUSED IMAGE=$IMAGE_REF revision=$value is not a full commit id run-exit=2 exit=2"
-done
-# Must refuse: a revision label naming a commit the build root lacks, and one naming a commit older than read-live.sh.
-image_root read-live-absent new 0 "$(printf '%040d' 1)"
-expect read_live_absent "$(read_live_of "$IMAGE_REF")" \
-  "REFUSED REV=$(printf '%040d' 1) names no commit in $K/dolos.git run-exit=2 exit=2"
-image_root read-live-old old 0
-sha=$(git -C "$K/dolos.git" rev-parse HEAD)
-expect read_live_old "$(read_live_of "$IMAGE_REF")" \
-  "REFUSED REV=$sha holds no oracle/box/read-live.sh run-exit=2 exit=2"
+image_rev=$(printf 'c%.0s' $(seq 40))
+image_other=$(printf 'd%.0s' $(seq 40))
+image_tag=ghcr.io/o/dolos:sha-ccccccc
+image_digest=ghcr.io/o/dolos@sha256:$(printf '%064d' 0)
+image_mirror=mirror.io/ghcr.io/o/dolos@sha256:$(printf '%064d' 1)
+# Must not fire: the tag of REV names a digest of the repository among those of a mirror, which is pulled and whose label names REV.
+expect image_of_rev "$(image_of rev "$image_rev" "$image_tag $image_digest" "$image_mirror
+$image_digest" "$image_rev")" "exit=0 image=$image_digest
+docker pull -q --platform linux/amd64 $image_tag
+docker image inspect -f {{range .RepoDigests}}{{println .}}{{end}} $image_tag
+docker pull -q --platform linux/amd64 $image_digest
+docker image inspect --platform linux/amd64 -f {{index .Config.Labels \"org.opencontainers.image.revision\"}} $image_digest"
+# Must refuse: no image tagged for REV, a tag that names no digest of the repository, a label naming another commit, and a label that is not a full commit id.
+expect image_of_untagged "$(image_of untagged "$image_rev" "" "" "" | sed -n 1p)" "exit=2 REFUSED IMAGE=$image_tag pull failed"
+expect image_of_mirror_only "$(image_of mirror-only "$image_rev" "$image_tag $image_mirror" "$image_mirror" "$image_rev" | sed -n 1p)" \
+  "exit=2 REFUSED IMAGE=$image_tag names no digest"
+expect image_of_other "$(image_of other "$image_rev" "$image_tag $image_digest" "$image_digest" "$image_other" | sed -n 1p)" \
+  "exit=2 REFUSED IMAGE=$image_digest commit=$image_other is not REV=$image_rev"
+expect image_of_short "$(image_of short "$image_rev" "$image_tag $image_digest" "$image_digest" ccccccc | sed -n 1p)" \
+  "exit=2 REFUSED IMAGE=$image_digest revision=ccccccc is not a full commit id"
 
 # Must fire: breaks.sh and candidate.sh, each run alone, hold the lock when they read free space, candidate.sh with a config to copy.
 lock_root lock-breaks
 tier "$K" judged breaks.sh
 expect lock_breaks "$(run_out "$K")" "REFUSED free exit=2"
 expect lock_breaks_held "$(paste -sd ' ' - <"$K/df.seen")" lock=held
-# A build root $lib_test_work/$1 holding a serving config to copy, the candidate.sh run on it with that config, and a du that answers $2 bytes for the serving store, or none when $2 is empty.
+# A build root $lib_test_work/$1 holding a serving config to copy, and the candidate.sh run on it with that config and a store need of $2 gibibytes.
 candidate_root() {
   lock_root "$1"
-  mkdir -p "$K/config" "$K/dir" "$K/bin"
+  mkdir -p "$K/config" "$K/dir"
   for file in dolos.toml byron-genesis.json shelley-genesis.json alonzo-genesis.json conway-genesis.json dijkstra-genesis.json; do
     : >"$K/config/$file"
   done
-  if [ -n "$2" ]; then
-    printf '%s\n' '#!/bin/sh' "printf '%s\t%s\n' $2 \"\$2\"" >"$K/bin/du"
-    chmod +x "$K/bin/du"
-  fi
   (
-    CANDIDATE=c COMMIT=c NODE=n ENDPOINT=e SERVE_CONFIG=$K/config CANDIDATE_GRPC=g
-    export CANDIDATE COMMIT NODE ENDPOINT SERVE_CONFIG CANDIDATE_GRPC
+    CANDIDATE=c COMMIT=c NODE=n ENDPOINT=e SERVE_CONFIG=$K/config CANDIDATE_GRPC=g CANDIDATE_NEED_G=$2
+    export CANDIDATE COMMIT NODE ENDPOINT SERVE_CONFIG CANDIDATE_GRPC CANDIDATE_NEED_G
     tier "$K" judged candidate.sh "$K/dir"
   )
 }
 # The refusal lines of the candidate.sh run on the build root $1, its free space shortened.
 candidate_refusal() {
-  sed -n 's/^LIVE-CANDIDATE REFUSED free=[0-9]*G root_free=[0-9]*G /LIVE-CANDIDATE REFUSED free /p
-    /^LIVE-CANDIDATE REFUSED serve_store/p' "$1/run.out"
+  sed -n 's/^LIVE-CANDIDATE REFUSED free=[0-9]*G root_free=[0-9]*G /LIVE-CANDIDATE REFUSED free /p' "$1/run.out"
 }
-# Must fire: a serving store of a million gibibytes needs three more than that free.
-candidate_root lock-candidate 1073741824000000
+# Must fire: a store need of a million gibibytes needs three more than that free.
+candidate_root lock-candidate 1000000
 expect lock_candidate_held "$(sed -n 1p "$K/df.seen")" lock=held
 expect lock_candidate_released "$(record_left "$K")" released
 expect candidate_need_store "$(candidate_refusal "$K")" "LIVE-CANDIDATE REFUSED free need=1000003G"
-# Must refuse: a serving store du cannot read.
-candidate_root candidate-store-unread ""
-expect candidate_store_unread "$(candidate_refusal "$K")" "LIVE-CANDIDATE REFUSED serve_store=$K/config/data unreadable"
 
 # A build root whose scratch Cargo.toml holds the lines after $1, and the pin pallas_pin reads from it.
 pin_of() {
@@ -1729,9 +1662,9 @@ for script in run.sh regen.sh breaks.sh candidate.sh endorser-fixture.sh; do
     *) arg=done ;;
   esac
   (
-    CANDIDATE=c COMMIT=c NODE=n ENDPOINT=e SERVE_CONFIG=$K/config CANDIDATE_GRPC=g
+    CANDIDATE=c COMMIT=c NODE=n ENDPOINT=e SERVE_CONFIG=$K/config CANDIDATE_GRPC=g CANDIDATE_NEED_G=1
     TREE=t GRPCURL=g PEER=p LEIOS_DB=l ORACLE_MEMORY=24G
-    export CANDIDATE COMMIT NODE ENDPOINT SERVE_CONFIG CANDIDATE_GRPC TREE GRPCURL PEER LEIOS_DB ORACLE_MEMORY
+    export CANDIDATE COMMIT NODE ENDPOINT SERVE_CONFIG CANDIDATE_GRPC CANDIDATE_NEED_G TREE GRPCURL PEER LEIOS_DB ORACLE_MEMORY
     tier "$K" "" "$script" "$([ "$arg" = done ] && echo done || echo "$K/$arg")"
   )
   expect "slice_out_$script" "$(run_out "$K" | sed -e "s#$HERE/##g" -e "s#$K/##g")" \
@@ -1753,27 +1686,6 @@ slice_of "$K" /user.slice/user-0.slice 9999 max
 )
 expect slice_lowered "$(run_out "$K" | sed -e "s#$HERE/##g")" \
   "systemctl set-property --runtime dolos-oracle.slice MemoryMax=1536M MemorySwapMax=1G systemd-run --scope --quiet --collect --slice=dolos-oracle.slice sh run.sh done exit=0"
-# The output of read-live.sh run outside the oracle slice on the build root slice-launch-$1, given the ORACLE_ settings after $1.
-launch_of() {
-  lock_root "slice-launch-$1"
-  shift
-  slice_of "$K" /user.slice/user-0.slice 9999 max
-  (
-    IMAGE=i
-    export IMAGE
-    for word in "$@"; do
-      export "${word?}"
-    done
-    tier "$K" "" read-live.sh
-  )
-  run_out "$K" | sed -e "s#$HERE/##g"
-}
-# Must fire: read-live.sh given no ORACLE_ settings bounds the slice by musashi-aws's memory before it runs again in a scope of it.
-expect slice_launch "$(launch_of box)" \
-  "systemctl set-property --runtime dolos-oracle.slice MemoryMax=2400M MemorySwapMax=512M systemd-run --scope --quiet --collect --slice=dolos-oracle.slice sh read-live.sh done exit=0"
-# Must not fire: the ORACLE_ settings a launch gives replace the box's bound.
-expect slice_launch_given "$(launch_of given ORACLE_MEMORY=1G ORACLE_SWAP=256M)" \
-  "systemctl set-property --runtime dolos-oracle.slice MemoryMax=1G MemorySwapMax=256M systemd-run --scope --quiet --collect --slice=dolos-oracle.slice sh read-live.sh done exit=0"
 # Must refuse a run in the oracle slice when the slice has no memory limit or no swap limit.
 lock_root slice-unbounded
 slice_of "$K" /dolos.slice/dolos-oracle.slice max 1073741824

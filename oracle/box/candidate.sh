@@ -1,11 +1,11 @@
 #!/bin/sh
 # Syncs a candidate Dolos from the node beside the serving one, reads both and the node, prints each field the two serve differently, and removes the candidate.
 # Usage: CANDIDATE=<binary path or image reference> COMMIT=sha candidate.sh <dir>
-# Reads ROOT, RUN_LOCK, NODE, NODE_DB, ENDPOINT, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_FSYNC, the IO_ limits, SYNC_SLOTS_PER_S, SAMPLE_MINUTES and GRPCURL from the environment, and BUILD_IMAGE when CANDIDATE is a binary path.
+# Reads ROOT, RUN_LOCK, NODE, NODE_DB, ENDPOINT, SERVE_CONFIG, CANDIDATE_GRPC, CANDIDATE_NEED_G, CANDIDATE_FSYNC, the IO_ limits, SYNC_SLOTS_PER_S, SAMPLE_MINUTES and GRPCURL from the environment, and BUILD_IMAGE when CANDIDATE is a binary path.
 set -eu
 DIR=$1
 : "${CANDIDATE:?}" "${COMMIT:?}" "${ROOT:?}" "${NODE:?}" "${ENDPOINT:?}" "${SERVE_CONFIG:?}"
-: "${CANDIDATE_GRPC:?}"
+: "${CANDIDATE_GRPC:?}" "${CANDIDATE_NEED_G:?}"
 HERE=$(cd "$(dirname "$0")" && pwd)
 NAME=${CANDIDATE_NAME:-dolos-candidate-1028}
 SAMPLE_MINUTES=${SAMPLE_MINUTES:-5}
@@ -19,11 +19,7 @@ FSYNC=$(candidate_fsync) || exit 2
 mkdir -p "$DIR/config"
 write_config "$DIR/config"
 
-# The candidate's store holds the same chain as the serving one, which is the data dir of its config.
-if ! NEED_G=$(store_size_g "$SERVE_CONFIG/data"); then
-  echo "LIVE-CANDIDATE REFUSED serve_store=$SERVE_CONFIG/data unreadable"
-  exit 2
-fi
+NEED_G=$CANDIDATE_NEED_G
 if [ "$(free_g "$ROOT")" -lt $((NEED_G + 3)) ] || [ "$(free_g /)" -lt 10 ]; then
   echo "LIVE-CANDIDATE REFUSED free=$(free_g "$ROOT")G root_free=$(free_g /)G need=$((NEED_G + 3))G"
   exit 2

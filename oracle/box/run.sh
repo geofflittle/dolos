@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs one tier of the oracle at REV, and oracle/README.md says what each tier checks and when to run it.
-# Usage: ROOT=dir [REV=ref] [BASE=ref] [LIVE_READS=dir] run.sh quick|done|ship
-# The quick tier judges the arms whose plants change a file that differs between BASE and REV, and BASE defaults to the commit of the last done or ship run that passed. The ship tier also judges LIVE_READS, the reads read-live.sh made of the image of REV. The done and ship tiers record their commit in runs/last-done when they pass, and the ship tier records it and the image in runs/last-ship too.
+# Usage: ROOT=dir [REV=ref] [BASE=ref] run.sh quick|done|ship
+# The quick tier judges the arms whose plants change a file that differs between BASE and REV, and BASE defaults to the commit of the last done or ship run that passed. The ship tier also syncs the image of REV from genesis against the node and judges its reads. The done and ship tiers record their commit in runs/last-done when they pass, and the ship tier records it and the image in runs/last-ship too.
 # A tier fails when a caught or held arm served other lines than its row of served.txt records, and a change that alters what an arm serves on purpose copies the arm's row from the run's served.txt into served.txt.
 set -eu
 : "${ROOT:?}"
@@ -128,17 +128,17 @@ done_run() {
   record_pass done "$commit" "$verdicts"
 }
 
-# Judges what the done tier judges and a copy of the reads LIVE_READS, and records the commit in runs/last-done and runs/last-ship, and the image in runs/last-ship, when every verdict passes.
+# Judges what the done tier judges and the reads of REV's image synced from genesis against the node, and records the commit in runs/last-done and runs/last-ship, and the image in runs/last-ship, when every verdict passes.
 ship_run() {
   mkdir -p "$OUT"
-  require_reads
   require_free
+  require_image
   require_lib_test
   require_build_image
   reset_scratch
   commit=$(git -C "$ROOT/$SCRATCH" rev-parse HEAD)
   rm -rf "$OUT/live"
-  cp -R "$LIVE_READS" "$OUT/live"
+  read_candidate
   build_live_judge >"$OUT/live-leg.out" 2>&1 || true
   judge_arms
   live=FAIL
