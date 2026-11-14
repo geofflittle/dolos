@@ -234,24 +234,36 @@ encoding_verdict() {
   fi
 }
 
-# Sets verdict to UNRUN and fails when no line of the output $1 holds the pattern $2 that a finished run prints, and to UNREACHED when $3 names a plant and no line of the output is its reached line.
+# Sets verdict to UNRUN and fails when no line of the output $1 holds the pattern $2 that a finished run prints, and when $3 names a plant and no line of the output is its reached line, fails with UNREACHED when a line holds the pattern $4 that a passing run which judged a record prints and with UNJUDGED when none does.
 arm_ran() {
   if ! grep -q -e "$2" "$1" 2>/dev/null; then
     verdict=UNRUN
     return 1
   fi
   if [ -n "$3" ] && ! grep -q -x -F "ORACLE_PLANT reached $3" "$1"; then
-    verdict=UNREACHED
+    verdict=UNJUDGED
+    if [ -n "$4" ] && grep -q -e "$4" "$1"; then
+      verdict=UNREACHED
+    fi
     return 1
   fi
 }
 
-# Sets verdict for the arm $1 whose run wrote the output $2 to what arm_ran sets when the output lacks the pattern $3 or the plant $4, else to CAUGHT when the command after $4 succeeds and MISSED when it fails, recording the lines the command prints as what the arm served.
+# The pattern a passing run of the arm $1 that judged a record prints, a count of passed tests for a crate test and of judged records for the judge.
+judged_pattern() {
+  if crate_test "$1" >/dev/null; then
+    echo '^test result: ok\. [1-9][0-9]* passed'
+  else
+    echo '^RESULT PASS judged=[1-9]'
+  fi
+}
+
+# Sets verdict for the arm $1 whose run wrote the output $2 to what arm_ran sets when the output lacks the pattern $3 or the plant $4, judged by the pattern $5, else to CAUGHT when the command after $5 succeeds and MISSED when it fails, recording the lines the command prints as what the arm served.
 arm_verdict() {
   name=$1
   shift
-  arm_ran "$1" "$2" "$3" || return 0
-  shift 3
+  arm_ran "$1" "$2" "$3" "$4" || return 0
+  shift 4
   mkdir -p "$OUT/served"
   if "$@" >"$OUT/served/$name.printed"; then
     verdict=CAUGHT

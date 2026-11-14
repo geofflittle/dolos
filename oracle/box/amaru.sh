@@ -78,7 +78,7 @@ amaru_leg() {
     arm=$(basename "$plant" .diff)
     if git -C "$ROOT/$AMARU" apply "$plant" >"$OUT/amaru/$arm.plant" 2>&1; then
       amaru_run "$OUT/amaru/$arm.log"
-      arm_verdict "amaru-$arm" "$OUT/amaru/$arm.log" '^test result: ' "" amaru_caught "$OUT/amaru/$arm.log" "$(sed -n 's/^# test: //p' "$plant")"
+      arm_verdict "amaru-$arm" "$OUT/amaru/$arm.log" '^test result: ' "" "" amaru_caught "$OUT/amaru/$arm.log" "$(sed -n 's/^# test: //p' "$plant")"
     else
       verdict=UNPLANTED
     fi

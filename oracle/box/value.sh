@@ -64,7 +64,7 @@ value_caught() {
 # Sets verdict for the value arm $1 from its tier output and its probes' reached lines, which $OUT/value/$1.ran collects.
 value_verdict() {
   cat "$OUT/value/$1.out" "$OUT/value/$1"/*.reached >"$OUT/value/$1.ran" 2>/dev/null || true
-  arm_verdict "$(value_key "$1")" "$OUT/value/$1.ran" '^DECODE-ORACLE values=[1-9]' "$1" value_caught "$OUT/value/$1" "$(value_class "$1")"
+  arm_verdict "$(value_key "$1")" "$OUT/value/$1.ran" '^DECODE-ORACLE values=[1-9]' "$1" '^DECODE-ORACLE values=[1-9]' value_caught "$OUT/value/$1" "$(value_class "$1")"
 }
 
 # Puts the harness of value/harness.rev in $ROOT/value/gen and the generator of its oracle sources, ledger commit and image in its bin, building the image when docker has none and the generator when VALUE_GEN_DIR has none of its name.
