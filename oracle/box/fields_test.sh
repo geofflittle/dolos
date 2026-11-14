@@ -44,6 +44,23 @@ expect() {
   esac
 }
 
+# Prints the verdict of the cases run so far, and fails when one of them failed.
+verdict() {
+  if [ "$failed" -eq 0 ]; then
+    echo "FIELDS-TEST RESULT PASS"
+  else
+    echo "FIELDS-TEST RESULT FAIL"
+    return 1
+  fi
+}
+
+# Must not fire: a passing case followed by data named failed.
+expect harness_names_pass "$( (expect planted_pass a a >/dev/null && failed=1 && verdict) || true)" \
+  "FIELDS-TEST RESULT PASS"
+# Must fire: a failing case followed by data named failed.
+expect harness_names_fail "$( (expect planted_fail a b >/dev/null && failed=0 && verdict) || true)" \
+  "FIELDS-TEST RESULT FAIL"
+
 # Must not fire: the same reads, and a current era name where the candidate holds the node's era.
 expect same "$(fields same '["dijkstra"]' '["dijkstra"]' Dijkstra Dijkstra)" \
   "exit=0 LIVE-FIELDS compared=2 differing=0 "
@@ -60,9 +77,4 @@ expect earlier "$(fields earlier '["dijkstra","dijkstra"]' '["unknown","dijkstra
 expect params "$(fields params '["dijkstra"]' '["dijkstra"]' Dijkstra Dijkstra '{"minFeeCoefficient":"44"}')" \
   "exit=1 LIVE-FIELD params.json minFeeCoefficient LIVE-FIELDS compared=3 differing=1 "
 
-if [ "$failed" -eq 0 ]; then
-  echo "FIELDS-TEST RESULT PASS"
-else
-  echo "FIELDS-TEST RESULT FAIL"
-  exit 1
-fi
+verdict
