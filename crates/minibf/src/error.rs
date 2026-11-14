@@ -30,6 +30,7 @@ pub enum Error {
     ScanBudgetExceeded,
     InvalidCertIndex,
     InvalidGovActionId,
+    MempoolFull,
 }
 
 #[derive(Serialize)]
@@ -191,6 +192,15 @@ impl IntoResponse for Error {
                     400,
                     "Bad Request",
                     "Invalid or malformed gov action id.",
+                )),
+            )
+                .into_response(),
+            Error::MempoolFull => (
+                StatusCode::TOO_EARLY,
+                Json(ErrorBody::new(
+                    425,
+                    "Mempool Full",
+                    "Mempool is full, please try resubmitting again later.",
                 )),
             )
                 .into_response(),

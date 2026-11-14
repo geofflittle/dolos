@@ -5,7 +5,7 @@ use axum::{
 };
 use dolos_core::{ChainError, Domain, DomainError, MempoolError, SubmitExt};
 
-use crate::Facade;
+use crate::{error::Error, Facade};
 
 fn is_valid_cbor_content_type(headers: &HeaderMap) -> bool {
     let Some(content_type) = headers.get(header::CONTENT_TYPE) else {
@@ -23,23 +23,23 @@ pub async fn route<D: Domain + SubmitExt>(
     State(domain): State<Facade<D>>,
     headers: HeaderMap,
     cbor: Bytes,
-) -> Result<String, StatusCode> {
+) -> Result<String, Error> {
     if !is_valid_cbor_content_type(&headers) {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(StatusCode::BAD_REQUEST.into());
     }
 
     let chain = domain.read_chain();
     let hash = domain
         .inner
         .receive_tx("minibf", &chain, &cbor)
-        .map_err(submit_error_status)?;
+        .map_err(submit_error)?;
 
     Ok(hex::encode(hash))
 }
 
-/// The status a submit answers when receiving its transaction fails.
-fn submit_error_status(error: DomainError) -> StatusCode {
-    match error {
+/// The error a submit answers when receiving its transaction fails.
+fn submit_error(error: DomainError) -> Error {
+    let status = match error {
         DomainError::ChainError(x) => match x {
             ChainError::BrokenInvariant(_) => StatusCode::BAD_REQUEST,
             ChainError::DecodingError(_) => StatusCode::BAD_REQUEST,
@@ -58,22 +58,24 @@ fn submit_error_status(error: DomainError) -> StatusCode {
             MempoolError::StateError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             MempoolError::PParamsNotAvailable => StatusCode::INTERNAL_SERVER_ERROR,
             MempoolError::DuplicateTx => StatusCode::CONFLICT,
-            MempoolError::Full(_) => StatusCode::TOO_EARLY,
+            MempoolError::Full(_) => return Error::MempoolFull,
         },
         _ => StatusCode::INTERNAL_SERVER_ERROR,
-    }
+    };
+    status.into()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::{TestApp, TestFault};
+    use axum::response::IntoResponse;
     use dolos_core::PassedBound;
 
     #[test]
     fn a_duplicate_transaction_answers_conflict() {
-        let status = submit_error_status(MempoolError::DuplicateTx.into());
-        assert_eq!(status, StatusCode::CONFLICT);
+        let response = submit_error(MempoolError::DuplicateTx.into()).into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
     }
 
     #[test]
@@ -82,8 +84,30 @@ mod tests {
             bound: 2,
             would_hold: 3,
         });
-        assert_eq!(submit_error_status(full.into()), StatusCode::TOO_EARLY);
+        let response = submit_error(full.into()).into_response();
+        assert_eq!(response.status(), StatusCode::TOO_EARLY);
         assert_eq!(StatusCode::TOO_EARLY.as_u16(), 425);
+    }
+
+    #[tokio::test]
+    async fn a_full_mempool_answers_the_blockfrost_body() {
+        use http_body_util::BodyExt;
+
+        let full = MempoolError::Full(PassedBound::Bytes {
+            bound: 4_000_000,
+            would_hold: 4_000_100,
+        });
+        let response = submit_error(full.into()).into_response();
+        assert_eq!(response.status(), StatusCode::TOO_EARLY);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).ok(),
+            Some(serde_json::json!({
+                "status_code": 425,
+                "error": "Mempool Full",
+                "message": "Mempool is full, please try resubmitting again later.",
+            }))
+        );
     }
 
     async fn assert_status(app: &TestApp, content_type: &str, body: Vec<u8>, expected: StatusCode) {
