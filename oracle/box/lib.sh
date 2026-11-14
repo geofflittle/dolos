@@ -1349,7 +1349,6 @@ require_reads() {
 judge_live() {
   # The judge runs in the run's own dir, since the arms check other commits out in the scratch tree meanwhile.
   [ -f "$OUT/bin/judge" ] && [ -f "$OUT/live/candidate/image.txt" ] &&
-    LIVE_DIR="/w/${OUT#"$ROOT"/}/live/candidate" sh "$IN_IMAGE" "${OUT#"$ROOT"/}" \
-      "/w/${OUT#"$ROOT"/}/bin/judge" "$ORACLE_TESTS::live::live" --exact --ignored --nocapture \
-      >"$OUT/live.log" 2>&1
+    run_into_log "$OUT/live.log" env LIVE_DIR="/w/${OUT#"$ROOT"/}/live/candidate" sh "$IN_IMAGE" "${OUT#"$ROOT"/}" \
+      "/w/${OUT#"$ROOT"/}/bin/judge" "$ORACLE_TESTS::live::live" --exact --ignored --nocapture
 }
