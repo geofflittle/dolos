@@ -1275,8 +1275,8 @@ expect control_none "$(control_of none '' '' 'out')" UNRUN
 expect control_differs "$(control_of differs v 'out' 'other')" FIRED
 expect control_reached "$(control_of reached v 'ORACLE_PLANT reached x' 'ORACLE_PLANT reached x')" FIRED
 
-# A repository with a base commit, a feature commit and the fix commits named in $1, a manifest arms.toml whose dolos rows are the remaining arguments, and the exit and lines of fix_arms over it.
-fixes_of() {
+# A repository of the section FIX_REPO, or dolos, with a base commit, a feature commit and the fix commits named in $1, and a manifest arms.toml whose rows are the remaining arguments.
+fixture() {
   F=$W/fixes
   rm -rf "$F"
   git init -q "$F"
@@ -1288,22 +1288,41 @@ fixes_of() {
   done
   shift
   {
-    echo '[dolos]'
+    echo "[${FIX_REPO:-dolos}]"
     echo "base = \"$base\""
     echo 'fixes = ['
     for row in "$@"; do
-      sha=$(git -C "$F" log -1 --format=%h --abbrev=9 --grep="^fix: ${row%% *}\$")
-      echo "  { commit = \"$sha\", ${row#* } },"
+      echo "  { subject = \"fix: ${row%% *}\", ${row#* } },"
     done
     echo ']'
   } >"$F/arms.toml"
+}
+
+# Rebuilds every commit after the fixture's base on a new upstream commit, so each one changes its hash, with the fix commits named in $1 in place of the old ones.
+restack() {
+  git -C "$F" checkout -q --detach "$base"
+  git -C "$F" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "chore: upstream moved"
+  git -C "$F" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "feat: a feature"
+  for subject in $1; do
+    git -C "$F" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "fix: $subject"
+  done
+}
+
+# The exit and lines of fix_arms over the fixture, with each commit hash left out.
+fix_arms_of() {
   (
     ROOT=$W HERE=$HERE ARMS_MANIFEST=$F/arms.toml
     . "$LIB"
     PLANTED_ARMS="colret coin"
-    out=$(fix_arms "$F" dolos HEAD) && code=0 || code=$?
+    out=$(fix_arms "$F" "${FIX_REPO:-dolos}" HEAD) && code=0 || code=$?
     echo "exit=$code $(echo "$out" | sed 's/commit=[0-9a-f]* //' | paste -sd '|' -)"
   )
+}
+
+# The exit and lines of fix_arms over a fixture of the fix commits named in $1 and the rows given after it.
+fixes_of() {
+  fixture "$@"
+  fix_arms_of
 }
 # Must not fire on a feature commit with no row, an armed fix and an excluded one, and must fire on a fix with no row, an arm outside PLANTED_ARMS, an unknown reason, the retired reason unarmed, a gap or unrevertable row with no why and a base the repository lacks.
 expect fixes_none "$(fixes_of '')" "exit=0 FIX-ARMS repo=dolos fixes=0 armed=0 excluded=0 unarmed=0 failing=0"
@@ -1332,6 +1351,18 @@ expect fixes_base_absent "$(
     fix_arms "$F" dolos HEAD | paste -sd '|' -
   )
 )" "FIX-ARM repo=dolos base=0000000000000000000000000000000000000001 not-found|FIX-ARMS repo=dolos fixes=0 armed=0 excluded=0 unarmed=0 failing=1"
+
+# Must not fire on a pallas history whose every commit after the base a restack rewrote, and must fire on a fix the restack renamed or dropped.
+expect fixes_restacked "$(FIX_REPO=pallas fixture 'a b' 'a arm = "colret"' 'b exclude = "conway"' && restack 'a b' && FIX_REPO=pallas fix_arms_of)" \
+  "exit=0 FIX-ARMS repo=pallas fixes=2 armed=1 excluded=1 unarmed=0 failing=0"
+expect fixes_restack_renamed "$(FIX_REPO=pallas fixture 'a b' 'a arm = "colret"' 'b exclude = "conway"' && restack 'a c' && FIX_REPO=pallas fix_arms_of)" \
+  'exit=1 FIX-ARM repo=pallas row=none subject="fix: c"|FIX-ARM repo=pallas row=exclude=conway matches=0 subject="fix: b"|FIX-ARMS repo=pallas fixes=2 armed=1 excluded=0 unarmed=0 failing=2'
+expect fixes_restack_dropped "$(FIX_REPO=pallas fixture 'a b' 'a arm = "colret"' 'b exclude = "conway"' && restack 'a' && FIX_REPO=pallas fix_arms_of)" \
+  'exit=1 FIX-ARM repo=pallas row=exclude=conway matches=0 subject="fix: b"|FIX-ARMS repo=pallas fixes=1 armed=1 excluded=0 unarmed=0 failing=1'
+# Must not fire on two commits of one subject and one row, and must fire on a commit two rows name.
+expect fixes_twins "$(fixes_of 'a a' 'a arm = "colret"')" "exit=0 FIX-ARMS repo=dolos fixes=2 armed=2 excluded=0 unarmed=0 failing=0"
+expect fixes_two_rows "$(fixes_of 'a' 'a arm = "colret"' 'a exclude = "conway"')" \
+  'exit=1 FIX-ARM repo=dolos row=arm=colret rows=2 subject="fix: a"|FIX-ARMS repo=dolos fixes=1 armed=0 excluded=0 unarmed=0 failing=1'
 
 # A pool of the width $1 over eight items, each line the item, whether four items had started within five seconds of its start, and whether at most four ran half a second later.
 pool_of() {
