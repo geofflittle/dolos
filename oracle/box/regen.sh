@@ -29,8 +29,8 @@ if ! built=$(build_judge "$OUT/head.build" --locked); then
   echo "REGEN REFUSED the judge build $built"
   exit 1
 fi
-sh "$IN_IMAGE" "$SCRATCH" "$(executable "$OUT/head.build")" "$ORACLE_TESTS::ledger_oracle" \
-  --exact --ignored --nocapture >"$OUT/head.log" 2>&1 || true
+run_into_log "$OUT/head.log" sh "$IN_IMAGE" "$SCRATCH" "$(executable "$OUT/head.build")" "$ORACLE_TESTS::ledger_oracle" \
+  --exact --ignored --nocapture || true
 if ! grep -q '^RESULT ' "$OUT/head.log"; then
   echo "REGEN REFUSED the head run printed no RESULT log=$OUT/head.log"
   exit 1

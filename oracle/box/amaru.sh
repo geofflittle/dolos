@@ -53,7 +53,7 @@ amaru_tree() {
 
 # Runs the test into the log $1 and writes its result line, without the run time, to $1.result.
 amaru_run() {
-  TARGET=target/amaru sh "$IN_IMAGE" "$AMARU" $AMARU_TEST >"$1" 2>&1 || true
+  run_into_log "$1" env TARGET=target/amaru sh "$IN_IMAGE" "$AMARU" $AMARU_TEST || true
   sed -n 's/^\(test result: .* filtered out; finished in\) [0-9.]*s$/\1/p' "$1" >"$1.result"
 }
 

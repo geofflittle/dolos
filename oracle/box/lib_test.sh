@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, the overlay build's target dir, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the files a planted tree writes and whether git writes each diff as committed, the free space floor, the space the candidate's store needs, the sync deadline, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the reads the ship tier takes, the image read-live.sh syncs, that it builds nothing and its candidate's verdict, the box lock, the slice limits read-live.sh sets on musashi-aws, how many switched arms are judged at once, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier and which of its steps it reruns, the value control's verdict, the amaru pin, the amaru leg's verdicts, the build image's name by the harness's image scripts, the image in-image.sh runs and the endorser block endorser_fixture.py reads from each LeiosDb layout.
+# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, the overlay build's target dir, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, the log run_into_log writes of a run that writes to both outputs, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the files a planted tree writes and whether git writes each diff as committed, the free space floor, the space the candidate's store needs, the sync deadline, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the reads the ship tier takes, the image read-live.sh syncs, that it builds nothing and its candidate's verdict, the box lock, the slice limits read-live.sh sets on musashi-aws, how many switched arms are judged at once, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier and which of its steps it reruns, the value control's verdict, the amaru pin, the amaru leg's verdicts, the build image's name by the harness's image scripts, the image in-image.sh runs and the endorser block endorser_fixture.py reads from each LeiosDb layout.
 # Usage: lib_test.sh <empty work dir>
 set -eu
 lib_test_work=$(cd "$1" && pwd)
@@ -402,6 +402,54 @@ expect verdict_unjudged_panicked "$(verdict_of "$panicked" "$failed_result")" UN
 expect verdict_unjudged_none "$(verdict_of 'RESULT PASS judged=0' "$finished")" UNJUDGED
 expect verdict_unjudged_failing "$(verdict_of 'RESULT FAIL failing=2' "$panicked" "$failed_result")" UNJUDGED
 expect verdict_unjudged_uncounted "$(verdict_of fires "$finished")" UNJUDGED
+
+# A runner that writes its first argument to its error output, its second to its output and its third to its error output, in that order.
+printf '%s\n' '#!/bin/sh' 'printf "%s" "$1" >&2' 'printf "%s" "$2"' 'printf "%s" "$3" >&2' >"$L/streams.sh"
+nl='
+'
+# The verdict and served lines of the arm $1, caught when a catch selects a line of the log run_into_log writes of the runner given $2, $3 and $4.
+logged_of() {
+  (
+    HERE=$H OUT=$L/logged ARMS_MANIFEST=$H/catches.toml ROOT=$lib_test_work/logged-tree
+    . "$lib_test_lib"
+    rm -rf "$OUT"
+    mkdir -p "$OUT"
+    run_into_log "$OUT/$1.log" sh "$L/streams.sh" "$2" "$3" "$4" || true
+    selected() {
+      verdict_catch "$1" "$OUT/$1.log" "$H/$1.records" "$H/head.log" >"$OUT/$1.selected" || return
+      cat "$OUT/$1.selected"
+      [ -s "$OUT/$1.selected" ]
+    }
+    arm_verdict "$1" "$OUT/$1.log" '^test result: ' "" "" selected "$1"
+    echo "$verdict|$(cat "$OUT/served/$1" 2>/dev/null || true)"
+  )
+}
+backtrace_head="${nl}thread 'ledger_oracle_records' (7) panicked at src/serve/grpc/v1/ledger_oracle_tests/mod.rs:2270:5:${nl}assertion failed${nl}stack backtrace:${nl}   4: dolos::serve::grpc::v1::ledger_oracle_tests::ledger_oracle_records::{closure#0}"
+backtrace_tail="${nl}   5: tokio::runtime::context::runtime::enter_runtime${nl}"
+fires_line="$v record=ic#1 cells=failure:disagree,ledger:accepted,dolos:CborDecodingError outcome=disagree fires"
+other_line="$v record=ic#3 cells=failure:disagree,ledger:accepted,dolos:CborDecodingError outcome=disagree another record"
+# Must not fire on a verdict line no catch selects written while the backtrace was written, must fire on one a catch selects, and must name a run that wrote only a backtrace.
+expect logged_missed "$(logged_of a "$backtrace_head" "$other_line${nl}RESULT FAIL failing=1${nl}$failed_result${nl}" "$backtrace_tail")" "MISSED|"
+expect logged_caught "$(logged_of a "$backtrace_head" "$fires_line${nl}RESULT FAIL failing=1${nl}$failed_result${nl}" "$backtrace_tail")" "CAUGHT|$fires_line"
+expect logged_unrun "$(logged_of a "$backtrace_head" "" "$backtrace_tail")" "UNRUN|"
+# Must not fire on another test's panic written while the test harness wrote its result, and must fire on the planted test's.
+expect logged_panic_other "$(logged_of c "${nl}thread 'c_oth" "test c_other ... FAILED${nl}$failed_result${nl}" "er' (9) panicked at x.rs:1:1:${nl}")" "MISSED|"
+expect logged_panic "$(logged_of c "${nl}thread 'c_boot" "test c_bootstrap ... FAILED${nl}$failed_result${nl}" "strap' (9) panicked at x.rs:1:1:${nl}")" \
+  "CAUGHT|thread 'c_bootstrap' panicked at x.rs:1:1:"
+# Must keep an output whose last line has no line end apart from the error output's first line, and must return the command's status.
+expect logged_unterminated "$(
+  . "$lib_test_lib"
+  run_into_log "$L/unterminated.log" sh "$L/streams.sh" "" "$finished" "thread 'x' (1) panicked at a.rs:1:1:$nl"
+  paste -sd '|' - <"$L/unterminated.log"
+)" "$finished|thread 'x' (1) panicked at a.rs:1:1:"
+expect logged_status "$(
+  . "$lib_test_lib"
+  zero=0
+  run_into_log "$L/status.log" true || zero=$?
+  three=0
+  run_into_log "$L/status.log" sh -c 'exit 3' || three=$?
+  echo "$zero $three"
+)" "0 3"
 
 # The verdict arm_ran sets for a log of the lines given that did not reach the plant e, judged by the pattern $1.
 reach_of() {

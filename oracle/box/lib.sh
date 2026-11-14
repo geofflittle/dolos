@@ -217,6 +217,17 @@ touched_arms() {
   done
 }
 
+# Runs the command given and writes the log $1 once it ends, its output lines and then its error output lines, returning the command's status.
+run_into_log() {
+  run_log=$1
+  shift
+  run_status=0
+  "$@" >"$run_log.stdout" 2>"$run_log.stderr" || run_status=$?
+  awk 1 "$run_log.stdout" "$run_log.stderr" >"$run_log"
+  rm -f "$run_log.stdout" "$run_log.stderr"
+  return "$run_status"
+}
+
 # Whether two test logs are the same but for the test harness's run time.
 same_log() {
   sed 's/; finished in [0-9.]*s$//' "$1" >"$1.untimed"

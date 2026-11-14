@@ -48,7 +48,7 @@ run_crate_test() {
     fi
     test_bin=$(executable "$2.build" "$(crate_test_target "$1")")
   fi
-  RUST_BACKTRACE=0 sh "$IN_IMAGE" "$SCRATCH" "$test_bin" $(crate_test_filter "$1") --nocapture >"$2" 2>&1 || true
+  run_into_log "$2" sh "$IN_IMAGE" "$SCRATCH" "$test_bin" $(crate_test_filter "$1") --nocapture || true
 }
 
 overlay=
@@ -111,10 +111,10 @@ build_overlay() {
 run_overlay() {
   bin="/w/${OUT#"$ROOT"/}/bin"
   if crate_test "$1" >/dev/null; then
-    ORACLE_PLANT=$2 RUST_BACKTRACE=0 sh "$IN_IMAGE" "$OVERLAY_DOLOS" "$bin/overlay-$1" $(crate_test_filter "$1") --nocapture >"$3" 2>&1 || true
+    run_into_log "$3" env ORACLE_PLANT="$2" sh "$IN_IMAGE" "$OVERLAY_DOLOS" "$bin/overlay-$1" $(crate_test_filter "$1") --nocapture || true
   else
-    ORACLE_PLANT=$2 ORACLE_RECORDS=$4 RUST_BACKTRACE=0 sh "$IN_IMAGE" "$OVERLAY_DOLOS" "$bin/overlay-judge" "${TEST}_records" \
-      --exact --ignored --nocapture >"$3" 2>&1 || true
+    run_into_log "$3" env ORACLE_PLANT="$2" ORACLE_RECORDS="$4" sh "$IN_IMAGE" "$OVERLAY_DOLOS" "$bin/overlay-judge" "${TEST}_records" \
+      --exact --ignored --nocapture || true
   fi
 }
 
@@ -346,8 +346,8 @@ for arm in $ARMS; do
   esac
   echo "ARM $arm test=${test##*::} records=$(echo "$records" | tr , '\n' | grep -c . || true)${deselect:+ deselect=$deselect} build_seconds=$(($(date +%s) - started))"
   started=$(date +%s)
-  ORACLE_DESELECT=$deselect ORACLE_HEAD_COUNTS=$head_counts ORACLE_RECORDS=$records RUST_BACKTRACE=0 \
-    sh "$IN_IMAGE" "$SCRATCH" "$judge" "$test" --exact --ignored --nocapture >"$OUT/$arm.log" 2>&1 || true
+  run_into_log "$OUT/$arm.log" env ORACLE_DESELECT="$deselect" ORACLE_HEAD_COUNTS="$head_counts" ORACLE_RECORDS="$records" \
+    sh "$IN_IMAGE" "$SCRATCH" "$judge" "$test" --exact --ignored --nocapture || true
   echo "ARM $arm judge_seconds=$(($(date +%s) - started))"
   if [ "$arm" = control ]; then
     crate_tests_built=yes
