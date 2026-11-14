@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, the overlay build's target dir, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the files a planted tree writes and whether git writes each diff as committed, the free space floor, the space the candidate's store needs, the sync deadline, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the reads the ship tier takes, the image read-live.sh syncs, that it builds nothing and its candidate's verdict, the box lock, the slice limits of the README's launch line, how many switched arms are judged at once, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier and which of its steps it reruns, the value control's verdict, the amaru pin, the amaru leg's verdicts, the build image's name by the harness's image scripts, the image in-image.sh runs and the endorser block endorser_fixture.py reads from each LeiosDb layout.
+# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, the overlay build's target dir, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the files a planted tree writes and whether git writes each diff as committed, the free space floor, the space the candidate's store needs, the sync deadline, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the reads the ship tier takes, the image read-live.sh syncs, that it builds nothing and its candidate's verdict, the box lock, the slice limits read-live.sh sets on musashi-aws, how many switched arms are judged at once, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier and which of its steps it reruns, the value control's verdict, the amaru pin, the amaru leg's verdicts, the build image's name by the harness's image scripts, the image in-image.sh runs and the endorser block endorser_fixture.py reads from each LeiosDb layout.
 # Usage: lib_test.sh <empty work dir>
 set -eu
 W=$(cd "$1" && pwd)
@@ -1736,19 +1736,27 @@ slice_of "$K" /user.slice/user-0.slice 9999 max
 )
 expect slice_lowered "$(run_out "$K" | sed -e "s#$HERE/##g")" \
   "systemctl set-property --runtime dolos-oracle.slice MemoryMax=1536M MemorySwapMax=1G systemd-run --scope --quiet --collect --slice=dolos-oracle.slice sh run.sh done exit=0"
-# Must fire: the read-live.sh launch line of the README sets the slice's limits outside it, with only its ORACLE_ settings given.
-lock_root slice-launch
-slice_of "$K" /user.slice/user-0.slice 9999 max
-(
-  for word in $(sed -n 's/ sh [^ ]*read-live\.sh$//p' "$HERE/../README.md"); do
-    case $word in
-      ORACLE_*=*) export "${word?}" ;;
-    esac
-  done
-  tier "$K"
-)
-expect slice_launch "$(run_out "$K" | sed -e "s#$HERE/##g")" \
-  "systemctl set-property --runtime dolos-oracle.slice MemoryMax=2400M MemorySwapMax=512M systemd-run --scope --quiet --collect --slice=dolos-oracle.slice sh run.sh done exit=0"
+# The output of read-live.sh run outside the oracle slice on the build root slice-launch-$1, given the ORACLE_ settings after $1.
+launch_of() {
+  lock_root "slice-launch-$1"
+  shift
+  slice_of "$K" /user.slice/user-0.slice 9999 max
+  (
+    IMAGE=i
+    export IMAGE
+    for word in "$@"; do
+      export "${word?}"
+    done
+    tier "$K" "" read-live.sh
+  )
+  run_out "$K" | sed -e "s#$HERE/##g"
+}
+# Must fire: read-live.sh given no ORACLE_ settings bounds the slice by musashi-aws's memory before it runs again in a scope of it.
+expect slice_launch "$(launch_of box)" \
+  "systemctl set-property --runtime dolos-oracle.slice MemoryMax=2400M MemorySwapMax=512M systemd-run --scope --quiet --collect --slice=dolos-oracle.slice sh read-live.sh done exit=0"
+# Must not fire: the ORACLE_ settings a launch gives replace the box's bound.
+expect slice_launch_given "$(launch_of given ORACLE_MEMORY=1G ORACLE_SWAP=256M)" \
+  "systemctl set-property --runtime dolos-oracle.slice MemoryMax=1G MemorySwapMax=256M systemd-run --scope --quiet --collect --slice=dolos-oracle.slice sh read-live.sh done exit=0"
 # Must refuse a run in the oracle slice when the slice has no memory limit or no swap limit.
 lock_root slice-unbounded
 slice_of "$K" /dolos.slice/dolos-oracle.slice max 1073741824
