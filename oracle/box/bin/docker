@@ -14,7 +14,7 @@ case ${1:-} in
     ;;
   build)
     shift
-    exec "$ORACLE_DOCKER" build --cgroup-parent "$ORACLE_SLICE" "$@"
+    exec "$ORACLE_DOCKER" build --cgroup-parent "$ORACLE_SLICE" --oom-score-adj 1000 "$@"
     ;;
   container | image | builder)
     case "$1 ${2:-}" in
