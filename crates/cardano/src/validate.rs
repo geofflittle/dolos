@@ -3,7 +3,7 @@ use std::sync::Mutex;
 
 use dolos_core::{
     ChainError, ChainPoint, Domain, EraCbor, Genesis, MempoolAwareUtxoStore, MempoolStore,
-    MempoolTx, StateStore, TxHash, UtxoMap,
+    MempoolTx, StateError, StateStore, TxHash, UtxoMap,
 };
 
 use pallas::ledger::{
@@ -145,7 +145,7 @@ pub fn phase_one_utxos(matches: &UtxoMap) -> Result<pallas_validate::utils::UTxO
             Cow::Owned(tx_in),
         ));
 
-        let output = MultiEraOutput::try_from(eracbor.as_ref())?;
+        let output = MultiEraOutput::try_from(eracbor.as_ref()).map_err(StateError::from)?;
 
         pallas_utxos.insert(input, output);
     }
@@ -284,8 +284,6 @@ fn evaluation_inputs<D: Domain>(
     ),
     ChainError,
 > {
-    use dolos_core::TxoRef;
-
     let eras = crate::eras::load_era_summary::<D>(utxos.state())?;
 
     // `eras` keeps slot_length/timestamp in seconds; the Plutus ScriptContext
@@ -307,19 +305,26 @@ fn evaluation_inputs<D: Domain>(
         None
     };
 
-    let utxos: pallas_validate::utils::UtxoMap = required_utxos(tx, utxos)?
+    let utxos = evaluation_utxos(required_utxos(tx, utxos)?)?;
+
+    Ok((utxos, slot_config, time))
+}
+
+/// The phase two view of resolved outputs.
+fn evaluation_utxos(matches: UtxoMap) -> Result<pallas_validate::utils::UtxoMap, ChainError> {
+    use dolos_core::TxoRef;
+
+    matches
         .into_iter()
         .map(|(TxoRef(a, b), eracbor)| {
-            let era = eracbor.era().try_into()?;
+            let era = Era::try_from(eracbor.era()).map_err(StateError::from)?;
 
             Ok::<_, ChainError>((
                 pallas_validate::utils::TxoRef::from((a, b)),
                 pallas_validate::utils::EraCbor::from((era, eracbor.cbor().into())),
             ))
         })
-        .collect::<Result<_, _>>()?;
-
-    Ok((utxos, slot_config, time))
+        .collect()
 }
 
 /// The chain error for a phase two evaluation pallas could not complete.
@@ -328,7 +333,51 @@ fn evaluation_error(error: pallas_validate::phase2::error::Error) -> ChainError 
         pallas_validate::phase2::error::Error::DijkstraUnsupported(unsupported) => {
             ChainError::Phase2EvaluationUnsupported(unsupported)
         }
+        error if from_node_inputs(&error) => ChainError::Phase2EvaluationInternal(error.to_string()),
         error => ChainError::Phase2EvaluationError(error.to_string()),
+    }
+}
+
+/// Whether an evaluation error comes from the inputs the node assembled for the evaluation.
+fn from_node_inputs(error: &pallas_validate::phase2::error::Error) -> bool {
+    use pallas_validate::phase2::error::Error as E;
+
+    match error {
+        E::RedeemerError { err, .. } => from_node_inputs(err),
+        E::DijkstraUnsupported(_)
+        | E::ResolvedInputNotFound(_)
+        | E::WrongEra()
+        | E::ScriptContextBuildError
+        | E::ApplyParamsError => true,
+        E::DijkstraTime(_)
+        | E::DijkstraInvalid(_)
+        | E::DijkstraCostModelNotFound(_)
+        | E::Address(_)
+        | E::BadWithdrawalAddress
+        | E::FlatDecode(_)
+        | E::NativeFlatDecode(_)
+        | E::FragmentDecode(_)
+        | E::Machine { .. }
+        | E::NativeScriptPhaseTwo
+        | E::NoRedeemers
+        | E::RequiredRedeemersMismatch { .. }
+        | E::ExtraneousRedeemer
+        | E::NonScriptWithdrawal
+        | E::NonScriptStakeCredential
+        | E::NoGuardrailScriptForProcedure
+        | E::CostModelNotFound(_)
+        | E::DecodeError(_)
+        | E::ByronAddressNotAllowed
+        | E::InlineDatumNotAllowed
+        | E::ScriptAndInputRefNotAllowed
+        | E::NoPaymentCredential
+        | E::MissingRequiredDatum { .. }
+        | E::MissingRequiredScript { .. }
+        | E::MissingRequiredInlineDatumOrHash
+        | E::UnsupportedCertificateType
+        | E::MissingScriptForRedeemer
+        | E::SlotTooFarInThePast { .. } => false,
+        _ => true,
     }
 }
 
@@ -1402,7 +1451,88 @@ mod parameter_tests {
 #[cfg(test)]
 mod evaluation_tests {
     use super::*;
+    use dolos_core::{ClientFault, DomainError, SubmitError, TxoRef};
+    use pallas::crypto::hash::Hash;
     use pallas_validate::phase2::error::{Error, Unsupported, UnsupportedEvaluation};
+    use std::sync::Arc;
+
+    /// The submit class of a chain error.
+    fn class(error: ChainError) -> SubmitError {
+        SubmitError::from(DomainError::from(error))
+    }
+
+    /// One stored output of the given era and bytes.
+    fn stored(era: dolos_core::Era, cbor: Vec<u8>) -> UtxoMap {
+        UtxoMap::from([(
+            TxoRef(Hash::new([0; 32]), 0),
+            Arc::new(EraCbor(era, cbor)),
+        )])
+    }
+
+    /// A Conway output paying one lovelace to an enterprise address.
+    fn output() -> Vec<u8> {
+        let mut cbor = vec![0x82, 0x58, 0x1d, 0x60];
+        cbor.extend([0; 28]);
+        cbor.push(0x01);
+        cbor
+    }
+
+    #[test]
+    fn a_stored_output_that_decodes_is_resolved() {
+        let conway = u16::from(Era::Conway);
+        assert!(phase_one_utxos(&stored(conway, output())).is_ok());
+        assert!(evaluation_utxos(stored(conway, output())).is_ok());
+    }
+
+    #[test]
+    fn a_stored_output_that_fails_to_decode_is_a_server_fault() {
+        let conway = u16::from(Era::Conway);
+        let refused = class(phase_one_utxos(&stored(conway, vec![0xff])).err().unwrap());
+        assert!(matches!(refused, SubmitError::Server(_)), "{refused:?}");
+    }
+
+    #[test]
+    fn a_stored_output_of_an_unknown_era_is_a_server_fault() {
+        let refused = class(evaluation_utxos(stored(99, output())).err().unwrap());
+        assert!(matches!(refused, SubmitError::Server(_)), "{refused:?}");
+    }
+
+    #[test]
+    fn a_failing_evaluation_of_the_client_transaction_is_a_client_fault() {
+        let refused = class(evaluation_error(Error::NoRedeemers));
+        assert!(
+            matches!(&refused, SubmitError::Client(ClientFault::InvalidTx(x)) if x == "couldn't evaluate phase-2 script: can't eval without redeemers"),
+            "{refused:?}"
+        );
+        let refused = class(evaluation_error(Error::RedeemerError {
+            tag: "spend".into(),
+            index: 0,
+            err: Box::new(Error::NoRedeemers),
+        }));
+        assert!(matches!(refused, SubmitError::Client(ClientFault::InvalidTx(_))), "{refused:?}");
+    }
+
+    #[test]
+    fn an_evaluation_the_server_cannot_build_is_a_server_fault() {
+        let input = TransactionInput {
+            transaction_id: Hash::new([0; 32]),
+            index: 0,
+        };
+        for error in [
+            Error::ResolvedInputNotFound(input),
+            Error::WrongEra(),
+            Error::ScriptContextBuildError,
+            Error::ApplyParamsError,
+            Error::RedeemerError {
+                tag: "spend".into(),
+                index: 0,
+                err: Box::new(Error::WrongEra()),
+            },
+        ] {
+            let refused = class(evaluation_error(error));
+            assert!(matches!(refused, SubmitError::Server(_)), "{refused:?}");
+        }
+    }
 
     #[test]
     fn an_evaluation_error_keeps_its_message() {

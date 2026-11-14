@@ -47,6 +47,10 @@ pub fn submit_errors() -> Vec<(&'static str, DomainError)> {
             ChainError::Phase2EvaluationError("can't eval without redeemers".into()).into(),
         ),
         (
+            "phase-two-unbuilt",
+            ChainError::Phase2EvaluationInternal("resolved Input not found".into()).into(),
+        ),
+        (
             "script-failure",
             ChainError::Phase2ValidationRejected(vec!["the trace".into()]).into(),
         ),

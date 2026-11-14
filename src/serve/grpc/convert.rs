@@ -51,6 +51,7 @@ mod tests {
                 ("invalid-tx", client),
                 ("phase-one-rejected", client),
                 ("phase-two-unevaluable", client),
+                ("phase-two-unbuilt", Code::Internal),
                 ("script-failure", client),
                 ("mempool-full", Code::ResourceExhausted),
                 ("pparams-missing", Code::Internal),
