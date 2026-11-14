@@ -67,16 +67,27 @@ impl Error {
     fn internal(error: impl std::fmt::Display) -> Self {
         Error::InternalError(error.to_string())
     }
+
+    fn transient(error: impl std::fmt::Display) -> Self {
+        Error::Tx3Error(Box::new(tx3_resolver::Error::TransientError(
+            error.to_string(),
+        )))
+    }
 }
 
 impl From<dolos_core::MempoolError> for Error {
     fn from(error: dolos_core::MempoolError) -> Self {
+        use dolos_core::MempoolError;
         match error {
-            dolos_core::MempoolError::PlutusNotSupported => {
-                Error::tx_not_accepted("Plutus not supported")
-            }
-            dolos_core::MempoolError::InvalidTx(x) => Error::tx_not_accepted(x),
-            x => Error::internal(x),
+            MempoolError::PlutusNotSupported => Error::tx_not_accepted("Plutus not supported"),
+            MempoolError::InvalidTx(x) => Error::tx_not_accepted(x),
+            x @ MempoolError::Full(_) => Error::transient(x),
+            x @ (MempoolError::Internal(_)
+            | MempoolError::TraverseError(_)
+            | MempoolError::DecodeError(_)
+            | MempoolError::StateError(_)
+            | MempoolError::PParamsNotAvailable
+            | MempoolError::DuplicateTx) => Error::internal(x),
         }
     }
 }
@@ -115,5 +126,43 @@ impl From<Error> for jsonrpsee::types::ErrorObject<'_> {
         let message = error.to_string();
 
         jsonrpsee::types::ErrorObject::owned(error.code(), message, error.data())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dolos_core::{MempoolError, PassedBound};
+    use jsonrpsee::types::ErrorObjectOwned;
+    use tx3_resolver::trp::errors::{CODE_TRANSIENT_ERROR, CODE_TX_NOT_ACCEPTED};
+
+    fn submit_error(error: MempoolError) -> ErrorObjectOwned {
+        Error::from(DomainError::MempoolError(error)).into()
+    }
+
+    #[test]
+    fn an_invalid_transaction_answers_not_accepted() {
+        let error = submit_error(MempoolError::InvalidTx("bad witness".into()));
+        assert_eq!(error.code(), CODE_TX_NOT_ACCEPTED);
+        assert_eq!(error.message(), "tx was not accepted: bad witness");
+    }
+
+    #[test]
+    fn a_missing_protocol_parameter_set_answers_internal_error() {
+        let error = submit_error(MempoolError::PParamsNotAvailable);
+        assert_eq!(error.code(), ErrorCode::InternalError.code());
+    }
+
+    #[test]
+    fn a_full_mempool_answers_transient_naming_the_bound() {
+        let error = submit_error(MempoolError::Full(PassedBound::Txs {
+            bound: 2,
+            would_hold: 3,
+        }));
+        assert_eq!(error.code(), CODE_TRANSIENT_ERROR);
+        assert_eq!(
+            error.message(),
+            "transient error: mempool full: would hold 3 transactions, past the bound of 2"
+        );
     }
 }
