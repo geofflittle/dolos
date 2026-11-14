@@ -274,6 +274,18 @@ arm_verdict() {
   rm -f "$OUT/served/$name.printed"
 }
 
+# Whether the live log $1 holds the served era start and the tip each disagreeing with the node on its time.
+shifted_times_differ() {
+  times='slot=[0-9]+ time=[0-9]+ node_slot=[0-9]+ '
+  grep -E "^LIVE-DIFF row=[^ ]* locus=era_summary era=[a-z]+ start_time $times" "$1" &&
+    grep -E "^LIVE-DIFF row=[^ ]* locus=era_summary tip $times" "$1"
+}
+
+# Sets verdict for the live-shift arm from the live judge's log $1 of the reads shifted one second late.
+live_shift_verdict() {
+  arm_verdict "$1" '^test result: ' "" "" shifted_times_differ "$1"
+}
+
 # Writes the lines on stdin to $OUT/served/$1 as what the arm $1 served, in byte order, without the number libtest gives a panicking test's thread, and with each panic's line in a file of the scratch tree given as the name of the innermost fn whose braces hold it and the count of lines from its fn line.
 record_served() {
   mkdir -p "$OUT/served"
