@@ -56,6 +56,7 @@ fixes = [
   { subject = "fix(grpc): map a watched block once", arm = "watch-block-copied" },
   { subject = "fix: prefix the lib_test harness names", exclude = "oracle" },
   { subject = "fix(core): classify submit errors once by fault", arm = "server-fault-as-client" },
+  { subject = "fix: prefix the fields_test harness names", exclude = "oracle" },
 ]
 
 [pallas]
