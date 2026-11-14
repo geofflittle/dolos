@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, the overlay build's target dir, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the files a planted tree writes and whether git writes each diff as committed, the free space floor, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the reads the ship tier takes, the image read-live.sh syncs and that it builds nothing, the box lock, how many switched arms are judged at once, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier and which of its steps it reruns, the value control's verdict, the amaru pin, the amaru leg's verdicts, the build image's name by the harness's image scripts, the image in-image.sh runs and the endorser block endorser_fixture.py reads from each LeiosDb layout.
+# Checks that build_checked refuses a unit cargo reports fresh after a file it reads changed, and passes every other unit, with a runner that prints canned cargo messages, the overlay build's target dir, which arms an overlay switches, when two test logs differ, an encoding arm's verdict, an arm's verdict from its run, what an arm served against its row of served.txt, the switches an overlay plant leaves out, the files a planted tree writes and whether git writes each diff as committed, the free space floor, the space the candidate's store needs, the sync deadline, the candidate's fsync state, the IO guard's breach rule, the records a passing tier writes, the reads the ship tier takes, the image read-live.sh syncs, that it builds nothing and its candidate's verdict, the box lock, the slice limits of the README's launch line, how many switched arms are judged at once, the pallas pin, the scratch pallas checkout, when the value leg is due, a value arm's verdict, what the value leg hands the harness tier and which of its steps it reruns, the value control's verdict, the amaru pin, the amaru leg's verdicts, the build image's name by the harness's image scripts, the image in-image.sh runs and the endorser block endorser_fixture.py reads from each LeiosDb layout.
 # Usage: lib_test.sh <empty work dir>
 set -eu
 W=$(cd "$1" && pwd)
@@ -600,6 +600,43 @@ expect free_whole "$(free_of 10737418240 10)" "free=10 exit=0 "
 # Must fire: one byte short of 10 gibibytes is 9, which a 10 gibibyte floor refuses.
 expect free_short "$(free_of 10737418239 10)" "free=9 exit=2 REFUSED free=9G below 10G at $W/free"
 
+# The exit and output of store_need_g for a store whose du answers $1 bytes, or fails when $1 is empty.
+need_of() {
+  (
+    HERE=$H
+    . "$LIB"
+    du() {
+      [ -n "$DU_BYTES" ] || return 1
+      printf '%s\t%s\n' "$DU_BYTES" "$2"
+    }
+    DU_BYTES=$1
+    status=0
+    out=$(store_need_g "$W/store") || status=$?
+    echo "exit=$status $out"
+  )
+}
+# Must not fire: a store of whole gibibytes needs that many.
+expect need_whole "$(need_of 19327352832)" "exit=0 18"
+# Must fire: one byte over rounds up, as does the serving store measured on musashi-aws.
+expect need_over "$(need_of 19327352833)" "exit=0 19"
+expect need_serving "$(need_of 19251746715)" "exit=0 18"
+# Must fail: a store du cannot read.
+expect need_unread "$(need_of '')" "exit=1 "
+
+# The minutes sync_minutes allows a sync to the node slot $1 at $2 slots a second.
+deadline_of() {
+  (
+    HERE=$H
+    . "$LIB"
+    sync_minutes "$1" "$2"
+  )
+}
+# Must not fire: half again a projection of whole minutes is whole.
+expect deadline_whole "$(deadline_of 2328000 291)" 200
+# Must fire: one slot more rounds up, and the tip measured on musashi-aws at the rate measured there needs more than 150 minutes.
+expect deadline_over "$(deadline_of 2328001 291)" 201
+expect deadline_tip "$(deadline_of 2345162 291)" 202
+
 # Maps of a process with libeatmydata preloaded, of one without it, of one whose loader has mapped only itself, of one that has exited, and none at all.
 M=$W/maps
 rm -rf "$M"
@@ -988,6 +1025,10 @@ ship_reads_of() {
 # Must not fire: reads whose candidate failed reach the free space floor, since the live verdict fails on them later.
 reads_of failed c "FAIL exit=1"
 expect ship_reads_failed "$(ship_reads_of failed "$W/reads-failed")" "REFUSED free run-exit=2 exit=2"
+# Must refuse: reads whose candidate refused to sync, which hold no candidate reads to judge.
+reads_of refused c REFUSED
+expect ship_reads_refused "$(ship_reads_of refused "$W/reads-refused")" \
+  "REFUSED LIVE_READS=$W/reads-refused candidate=REFUSED run-exit=2 exit=2"
 # Must refuse: no reads, a dir that holds no record of them, and reads of an image built from another commit than REV.
 expect ship_reads_unset "$(ship_reads_of unset "")" "REFUSED LIVE_READS= holds no reads.txt run-exit=2 exit=2"
 mkdir -p "$W/reads-none"
@@ -997,7 +1038,7 @@ reads_of other d PASS
 expect ship_reads_other "$(ship_reads_of other "$W/reads-other")" \
   "REFUSED LIVE_READS=$W/reads-other commit=d is not REV=c run-exit=2 exit=2"
 
-# A build root $W/$1 whose dolos.git holds one commit of these box scripts, without read-live.sh when $2 is old, with a candidate.sh that records what it was handed in the root's candidate.seen and exits $3, and a docker that logs each call to the root's docker.log and answers image inspect with that commit's id, or with $4 when it is given.
+# A build root $W/$1 whose dolos.git holds one commit of these box scripts, without read-live.sh when $2 is old, with a candidate.sh that records what it was handed in the root's candidate.seen, prints the root's candidate.says when it exists and exits $3, and a docker that logs each call to the root's docker.log and answers image inspect with that commit's id, or with $4 when it is given.
 image_root() {
   lock_root "$1"
   mkdir -p "$K/src/oracle/box"
@@ -1006,8 +1047,8 @@ image_root() {
   if [ "$2" = old ]; then
     rm -f "$K/src/oracle/box/read-live.sh"
   fi
-  printf '%s\n' '#!/bin/sh' "echo \"candidate=\$CANDIDATE commit=\$COMMIT dir=\$1\" >'$K/candidate.seen'" "exit $3" \
-    >"$K/src/oracle/box/candidate.sh"
+  printf '%s\n' '#!/bin/sh' "echo \"candidate=\$CANDIDATE commit=\$COMMIT dir=\$1\" >'$K/candidate.seen'" \
+    "cat '$K/candidate.says' 2>/dev/null || true" "exit $3" >"$K/src/oracle/box/candidate.sh"
   git -C "$K/src" init -q
   git -C "$K/src" add -A
   git -C "$K/src" -c user.name=t -c user.email=t@t commit -q -m box
@@ -1059,6 +1100,24 @@ image_root read-live-failed new 1
 sha=$(git -C "$K/dolos.git" rev-parse HEAD)
 expect read_live_failed "$(read_live_of "$IMAGE_REF")" \
   "READS image=$IMAGE_REF commit=$sha candidate=FAIL exit=1 dir=$K/runs/t/live run-exit=1 exit=1"
+# Must fire: a candidate that exits 2 with a refusal is recorded as refused and the run exits 2.
+refusal='LIVE-CANDIDATE REFUSED free=14G root_free=40G need=21G'
+image_root read-live-refused new 2
+sha=$(git -C "$K/dolos.git" rev-parse HEAD)
+echo "$refusal" >"$K/candidate.says"
+expect read_live_refused "$(read_live_of "$IMAGE_REF")" \
+  "$refusal READS image=$IMAGE_REF commit=$sha candidate=REFUSED dir=$K/runs/t/live run-exit=2 exit=2"
+expect read_live_refused_record "$(cat "$K/runs/t/live/reads.txt" 2>&1)" "image=$IMAGE_REF commit=$sha candidate=REFUSED"
+# Must not fire: an exit of 2 with no refusal, and a refusal with an exit of 1, are failures.
+image_root read-live-exit-2 new 2
+sha=$(git -C "$K/dolos.git" rev-parse HEAD)
+expect read_live_exit_2 "$(read_live_of "$IMAGE_REF")" \
+  "READS image=$IMAGE_REF commit=$sha candidate=FAIL exit=2 dir=$K/runs/t/live run-exit=1 exit=1"
+image_root read-live-refusal-exit-1 new 1
+sha=$(git -C "$K/dolos.git" rev-parse HEAD)
+echo "$refusal" >"$K/candidate.says"
+expect read_live_refusal_exit_1 "$(read_live_of "$IMAGE_REF")" \
+  "$refusal READS image=$IMAGE_REF commit=$sha candidate=FAIL exit=1 dir=$K/runs/t/live run-exit=1 exit=1"
 # Must refuse before any docker call: an image named by a tag, or by a tag and a digest.
 image_root read-live-tag new 0
 expect read_live_tag "$(read_live_of ghcr.io/o/dolos:sha-c)" \
@@ -1091,18 +1150,36 @@ lock_root lock-breaks
 tier "$K" judged breaks.sh
 expect lock_breaks "$(run_out "$K")" "REFUSED free exit=2"
 expect lock_breaks_held "$(paste -sd ' ' - <"$K/df.seen")" lock=held
-lock_root lock-candidate
-mkdir -p "$K/config" "$K/dir"
-for file in dolos.toml byron-genesis.json shelley-genesis.json alonzo-genesis.json conway-genesis.json dijkstra-genesis.json; do
-  : >"$K/config/$file"
-done
-(
-  CANDIDATE=c COMMIT=c NODE=n ENDPOINT=e SERVE_CONFIG=$K/config CANDIDATE_GRPC=g CANDIDATE_NEED_G=999999
-  export CANDIDATE COMMIT NODE ENDPOINT SERVE_CONFIG CANDIDATE_GRPC CANDIDATE_NEED_G
-  tier "$K" judged candidate.sh "$K/dir"
-)
+# A build root $W/$1 holding a serving config to copy, the candidate.sh run on it with that config, and a du that answers $2 bytes for the serving store, or none when $2 is empty.
+candidate_root() {
+  lock_root "$1"
+  mkdir -p "$K/config" "$K/dir" "$K/bin"
+  for file in dolos.toml byron-genesis.json shelley-genesis.json alonzo-genesis.json conway-genesis.json dijkstra-genesis.json; do
+    : >"$K/config/$file"
+  done
+  if [ -n "$2" ]; then
+    printf '%s\n' '#!/bin/sh' "printf '%s\t%s\n' $2 \"\$2\"" >"$K/bin/du"
+    chmod +x "$K/bin/du"
+  fi
+  (
+    CANDIDATE=c COMMIT=c NODE=n ENDPOINT=e SERVE_CONFIG=$K/config CANDIDATE_GRPC=g
+    export CANDIDATE COMMIT NODE ENDPOINT SERVE_CONFIG CANDIDATE_GRPC
+    tier "$K" judged candidate.sh "$K/dir"
+  )
+}
+# The refusal lines of the candidate.sh run on the build root $1, its free space shortened.
+candidate_refusal() {
+  sed -n 's/^LIVE-CANDIDATE REFUSED free=[0-9]*G root_free=[0-9]*G /LIVE-CANDIDATE REFUSED free /p
+    /^LIVE-CANDIDATE REFUSED serve_store/p' "$1/run.out"
+}
+# Must fire: a serving store of a million gibibytes needs three more than that free.
+candidate_root lock-candidate 1073741824000000
 expect lock_candidate_held "$(sed -n 1p "$K/df.seen")" lock=held
 expect lock_candidate_released "$(record_left "$K")" released
+expect candidate_need_store "$(candidate_refusal "$K")" "LIVE-CANDIDATE REFUSED free need=1000003G"
+# Must refuse: a serving store du cannot read.
+candidate_root candidate-store-unread ""
+expect candidate_store_unread "$(candidate_refusal "$K")" "LIVE-CANDIDATE REFUSED serve_store=$K/config/data unreadable"
 
 # A build root whose scratch Cargo.toml holds the lines after $1, and the pin pallas_pin reads from it.
 pin_of() {
@@ -1635,9 +1712,9 @@ for script in run.sh regen.sh breaks.sh candidate.sh endorser-fixture.sh; do
     *) arg=done ;;
   esac
   (
-    CANDIDATE=c COMMIT=c NODE=n ENDPOINT=e SERVE_CONFIG=$K/config CANDIDATE_GRPC=g CANDIDATE_NEED_G=999999
+    CANDIDATE=c COMMIT=c NODE=n ENDPOINT=e SERVE_CONFIG=$K/config CANDIDATE_GRPC=g
     TREE=t GRPCURL=g PEER=p LEIOS_DB=l ORACLE_MEMORY=24G
-    export CANDIDATE COMMIT NODE ENDPOINT SERVE_CONFIG CANDIDATE_GRPC CANDIDATE_NEED_G TREE GRPCURL PEER LEIOS_DB ORACLE_MEMORY
+    export CANDIDATE COMMIT NODE ENDPOINT SERVE_CONFIG CANDIDATE_GRPC TREE GRPCURL PEER LEIOS_DB ORACLE_MEMORY
     tier "$K" "" "$script" "$([ "$arg" = done ] && echo done || echo "$K/$arg")"
   )
   expect "slice_out_$script" "$(run_out "$K" | sed -e "s#$HERE/##g" -e "s#$K/##g")" \
@@ -1659,6 +1736,19 @@ slice_of "$K" /user.slice/user-0.slice 9999 max
 )
 expect slice_lowered "$(run_out "$K" | sed -e "s#$HERE/##g")" \
   "systemctl set-property --runtime dolos-oracle.slice MemoryMax=1536M MemorySwapMax=1G systemd-run --scope --quiet --collect --slice=dolos-oracle.slice sh run.sh done exit=0"
+# Must fire: the read-live.sh launch line of the README sets the slice's limits outside it, with only its ORACLE_ settings given.
+lock_root slice-launch
+slice_of "$K" /user.slice/user-0.slice 9999 max
+(
+  for word in $(sed -n 's/ sh [^ ]*read-live\.sh$//p' "$HERE/../README.md"); do
+    case $word in
+      ORACLE_*=*) export "$word" ;;
+    esac
+  done
+  tier "$K"
+)
+expect slice_launch "$(run_out "$K" | sed -e "s#$HERE/##g")" \
+  "systemctl set-property --runtime dolos-oracle.slice MemoryMax=2400M MemorySwapMax=512M systemd-run --scope --quiet --collect --slice=dolos-oracle.slice sh run.sh done exit=0"
 # Must refuse a run in the oracle slice when the slice has no memory limit or no swap limit.
 lock_root slice-unbounded
 slice_of "$K" /dolos.slice/dolos-oracle.slice max 1073741824
