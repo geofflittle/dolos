@@ -58,7 +58,7 @@ fn submit_error_status(error: DomainError) -> StatusCode {
             MempoolError::StateError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             MempoolError::PParamsNotAvailable => StatusCode::INTERNAL_SERVER_ERROR,
             MempoolError::DuplicateTx => StatusCode::CONFLICT,
-            MempoolError::Full(_) => StatusCode::TOO_EARLY,
+            MempoolError::Full(_) => StatusCode::SERVICE_UNAVAILABLE,
         },
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
