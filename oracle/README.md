@@ -24,27 +24,17 @@ Takes about 4 to 5 minutes (249 s and 302 s, measured on builder-1).
 
 The done tier, and the live judge over reads of the image being pinned, which the image's sync from genesis against the node took beside the serving Dolos.
 
-Run it once per dolos-serve rollout, on the image being pinned, in two steps.
-
-On musashi-aws, the box that reaches the node, with the image's digest from the image workflow:
+Run it once per dolos-serve rollout, on the commit whose image is being pinned, on builder-1, the builder box that runs a Musashi node, and never on musashi-aws:
 
 ```
-git -C /opt/build/ship/dolos.git fetch -q https://github.com/SundaeSwap-finance/dolos.git leios-musashi
-mkdir -p /opt/build/ship/work/launch
-git -C /opt/build/ship/dolos.git archive FETCH_HEAD oracle/box | tar -x -C /opt/build/ship/work/launch
-ROOT=/opt/build/ship OUT=/opt/build/ship/runs/<name> IMAGE=<repository>@sha256:<digest> sh /opt/build/ship/work/launch/oracle/box/read-live.sh
+ssh builder-1 oracle-run ship <name> <commit> https://github.com/SundaeSwap-finance/dolos.git
 ```
 
-`read-live.sh` pulls the image, takes the commit from its `org.opencontainers.image.revision` label, runs that commit's `read-live.sh`, syncs the image beside the serving Dolos and writes the candidate's reads, the serving Dolos's reads and a `reads.txt` naming the image, the commit and the candidate's verdict into `$OUT/live`. It builds nothing, and reads `NODE`, `NODE_DB`, `ENDPOINT`, `SERVE_CONFIG`, `CANDIDATE_GRPC` and `GRPCURL` from `$ROOT/live.env`. It refuses an image named by a tag, a label that is not a full commit id, a commit `$ROOT/dolos.git` lacks, and a commit whose `oracle/box` has no `read-live.sh`. It bounds the run's slice at 2400M of memory and 512M of swap unless `ORACLE_MEMORY` and `ORACLE_SWAP` say otherwise, about three quarters of the memory musashi-aws has available beside the node and the serving Dolos (3299 MB available, measured). Every container an oracle script starts is the kernel's first choice when the box runs out of memory, so a candidate that outgrows the box is killed before the node. The candidate refuses to start unless `$ROOT` has 3 GiB more free than the serving Dolos's store holds, and `reads.txt` then names its verdict `REFUSED` and the run exits 2. The sync stops at half again the time the node's tip takes at `SYNC_SLOTS_PER_S`. Nearly all of its time is the sync, which reached slot 1441438 of a tip near slot 2349000 in 67 minutes (4006 s, measured on musashi-aws), so a whole sync takes over two hours (estimated).
+`oracle-run` starts the node, runs the tier in a 20 GiB slice and stops the node when the tier ends, as the musashi-node README describes. The tier pulls the image the image workflow tagged `sha-` and the commit's first seven hex digits, takes its digest, and refuses it unless its `org.opencontainers.image.revision` label names the commit. It then waits up to `NODE_WAIT_MINUTES` (60) for the node's tip to come within `IO_NODE_LAG_S` of the wall clock, syncs the image from genesis against the node as the run's own user, and judges the candidate's reads against the serving Dolos beside the done tier's arms. It reads `NODE`, `NODE_DB`, `ENDPOINT`, `CANDIDATE_GRPC` and `CANDIDATE_NEED_G` from `$ROOT/live.env`, and `SERVE_CONFIG`, the Dolos config rendered for the node, from `oracle-run`. The candidate refuses to start unless `$ROOT` has `CANDIDATE_NEED_G` and 3 GiB more free. The sync stops at half again the time the node's tip takes at `SYNC_SLOTS_PER_S`.
 
-Then copy the reads to a builder box and run the tier there on the commit `reads.txt` names, which it refuses reads of any other commit for, as it refuses reads whose candidate refused:
+The sync from genesis reached slot 2346838 in about 85 minutes (5124 s, measured on builder-1), and the whole tier has no measured time yet.
 
-```
-ssh musashi-aws tar -C /opt/build/ship/runs/<name> -c live | ssh builder-1 'mkdir -p /opt/oracle/reads/<name> && tar -x -C /opt/oracle/reads/<name>'
-ssh builder-1 LIVE_READS=/opt/oracle/reads/<name>/live oracle-run ship <name> <commit> https://github.com/SundaeSwap-finance/dolos.git
-```
-
-The tier records the commit in `runs/last-done` and `runs/last-ship`, and the image in `runs/last-ship`. It takes about as long as the done tier (estimated).
+The tier records the commit in `runs/last-done` and `runs/last-ship`, and the image in `runs/last-ship`.
 
 ## The value and amaru legs
 
@@ -52,4 +42,4 @@ A tier runs a leg only when its inputs (the pinned pallas, its box files and its
 
 ## Manifests
 
-`oracle/box/regen.sh` writes the manifest lines the corpus judge and the live judge propose into `$ROOT/regen` and prints how each differs from the committed file. It builds the commit and syncs it from genesis against the node, so it runs on musashi-aws and takes about as long as `read-live.sh` (estimated).
+`oracle/box/regen.sh` writes the manifest lines the corpus judge and the live judge propose into `$ROOT/regen` and prints how each differs from the committed file. It builds the commit and syncs it from genesis against the node, so it runs on builder-1 with the node started and `SERVE_CONFIG` set as `oracle-run ship` sets them, and takes about as long as the ship tier's sync (estimated, not run on builder-1).
