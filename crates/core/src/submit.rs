@@ -178,6 +178,7 @@ impl From<DomainError> for SubmitError {
 
 fn from_chain(error: ChainError) -> SubmitError {
     let fault = match error {
+        ChainError::BrokenInvariant(x) => ClientFault::InvalidTx(x.to_string()),
         ChainError::DecodingError(x) => ClientFault::InvalidBytes(x.to_string()),
         ChainError::CborDecodingError(x) => ClientFault::InvalidBytes(x.to_string()),
         ChainError::AddressDecoding(x) => ClientFault::InvalidBytes(x.to_string()),
@@ -185,7 +186,6 @@ fn from_chain(error: ChainError) -> SubmitError {
         x @ ChainError::Phase2EvaluationError(_) => ClientFault::InvalidTx(x.to_string()),
         ChainError::Phase2ValidationRejected(x) => ClientFault::ScriptFailure(x),
         x @ (ChainError::CantReceiveBlock(_)
-        | ChainError::BrokenInvariant(_)
         | ChainError::InvalidNamespace(_)
         | ChainError::StateError(_)
         | ChainError::ArchiveError(_)
