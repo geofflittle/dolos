@@ -202,6 +202,7 @@ fn from_chain(error: ChainError) -> SubmitError {
         | ChainError::InvalidProposalParams
         | ChainError::UnrecordableProposalPart(_)
         | ChainError::Phase2EvaluationUnsupported(_)
+        | ChainError::Phase2EvaluationInternal(_)
         | ChainError::Consensus(_)) => return SubmitError::Server(x.into()),
     };
     fault.into()

@@ -142,6 +142,7 @@ mod tests {
                 ("invalid-tx", refused),
                 ("phase-one-rejected", refused),
                 ("phase-two-unevaluable", refused),
+                ("phase-two-unbuilt", internal),
                 ("script-failure", CODE_TX_SCRIPT_FAILURE),
                 ("mempool-full", CODE_TRANSIENT_ERROR),
                 ("pparams-missing", internal),

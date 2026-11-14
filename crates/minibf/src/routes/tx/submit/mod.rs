@@ -89,6 +89,7 @@ mod tests {
                 ("invalid-tx", client.clone()),
                 ("phase-one-rejected", client.clone()),
                 ("phase-two-unevaluable", client.clone()),
+                ("phase-two-unbuilt", server.clone()),
                 ("script-failure", client),
                 (
                     "mempool-full",

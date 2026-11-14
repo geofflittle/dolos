@@ -333,7 +333,54 @@ fn evaluation_error(error: pallas_validate::phase2::error::Error) -> ChainError 
         pallas_validate::phase2::error::Error::DijkstraUnsupported(unsupported) => {
             ChainError::Phase2EvaluationUnsupported(unsupported)
         }
+        error if from_node_inputs(&error) => {
+            ChainError::Phase2EvaluationInternal(error.to_string())
+        }
         error => ChainError::Phase2EvaluationError(error.to_string()),
+    }
+}
+
+/// Whether an evaluation error comes from the inputs the node assembled for the
+/// evaluation.
+fn from_node_inputs(error: &pallas_validate::phase2::error::Error) -> bool {
+    use pallas_validate::phase2::error::Error as E;
+
+    match error {
+        E::RedeemerError { err, .. } => from_node_inputs(err),
+        E::DijkstraUnsupported(_)
+        | E::ResolvedInputNotFound(_)
+        | E::WrongEra()
+        | E::ScriptContextBuildError
+        | E::ApplyParamsError => true,
+        E::DijkstraTime(_)
+        | E::DijkstraInvalid(_)
+        | E::DijkstraCostModelNotFound(_)
+        | E::Address(_)
+        | E::BadWithdrawalAddress
+        | E::FlatDecode(_)
+        | E::NativeFlatDecode(_)
+        | E::FragmentDecode(_)
+        | E::Machine { .. }
+        | E::NativeScriptPhaseTwo
+        | E::NoRedeemers
+        | E::RequiredRedeemersMismatch { .. }
+        | E::ExtraneousRedeemer
+        | E::NonScriptWithdrawal
+        | E::NonScriptStakeCredential
+        | E::NoGuardrailScriptForProcedure
+        | E::CostModelNotFound(_)
+        | E::DecodeError(_)
+        | E::ByronAddressNotAllowed
+        | E::InlineDatumNotAllowed
+        | E::ScriptAndInputRefNotAllowed
+        | E::NoPaymentCredential
+        | E::MissingRequiredDatum { .. }
+        | E::MissingRequiredScript { .. }
+        | E::MissingRequiredInlineDatumOrHash
+        | E::UnsupportedCertificateType
+        | E::MissingScriptForRedeemer
+        | E::SlotTooFarInThePast { .. } => false,
+        _ => true,
     }
 }
 
@@ -1407,7 +1454,7 @@ mod parameter_tests {
 #[cfg(test)]
 mod evaluation_tests {
     use super::*;
-    use dolos_core::{DomainError, SubmitError, TxoRef};
+    use dolos_core::{ClientFault, DomainError, SubmitError, TxoRef};
     use pallas::crypto::hash::Hash;
     use pallas_validate::phase2::error::{Error, Unsupported, UnsupportedEvaluation};
     use std::sync::Arc;
@@ -1448,6 +1495,46 @@ mod evaluation_tests {
     fn a_stored_output_of_an_unknown_era_is_a_server_fault() {
         let refused = class(evaluation_utxos(stored(99, output())).err().unwrap());
         assert!(matches!(refused, SubmitError::Server(_)), "{refused:?}");
+    }
+
+    #[test]
+    fn a_failing_evaluation_of_the_client_transaction_is_a_client_fault() {
+        let refused = class(evaluation_error(Error::NoRedeemers));
+        assert!(
+            matches!(&refused, SubmitError::Client(ClientFault::InvalidTx(x)) if x == "couldn't evaluate phase-2 script: can't eval without redeemers"),
+            "{refused:?}"
+        );
+        let refused = class(evaluation_error(Error::RedeemerError {
+            tag: "spend".into(),
+            index: 0,
+            err: Box::new(Error::NoRedeemers),
+        }));
+        assert!(
+            matches!(refused, SubmitError::Client(ClientFault::InvalidTx(_))),
+            "{refused:?}"
+        );
+    }
+
+    #[test]
+    fn an_evaluation_the_server_cannot_build_is_a_server_fault() {
+        let input = TransactionInput {
+            transaction_id: Hash::new([0; 32]),
+            index: 0,
+        };
+        for error in [
+            Error::ResolvedInputNotFound(input),
+            Error::WrongEra(),
+            Error::ScriptContextBuildError,
+            Error::ApplyParamsError,
+            Error::RedeemerError {
+                tag: "spend".into(),
+                index: 0,
+                err: Box::new(Error::WrongEra()),
+            },
+        ] {
+            let refused = class(evaluation_error(error));
+            assert!(matches!(refused, SubmitError::Server(_)), "{refused:?}");
+        }
     }
 
     #[test]

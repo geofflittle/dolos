@@ -350,6 +350,7 @@ pub(super) fn verdict(result: &Result<TxHash, DomainError>) -> DolosVerdict {
         ChainError::Phase1ValidationRejected(v) => validation_verdict(v),
         ChainError::Phase2ValidationRejected(_) => DolosVerdict::Phase2Rejected,
         ChainError::Phase2EvaluationError(_) => refused("Phase2EvaluationError"),
+        ChainError::Phase2EvaluationInternal(_) => refused("Phase2EvaluationInternal"),
         ChainError::Phase2EvaluationUnsupported(unsupported) => {
             DolosVerdict::Phase2Unsupported(unsupported.0.to_string())
         }
