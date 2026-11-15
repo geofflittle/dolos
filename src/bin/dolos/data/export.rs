@@ -150,7 +150,7 @@ pub fn run(
 ) -> miette::Result<()> {
     let pb = feedback.indeterminate_progress_bar();
 
-    let mut stores = crate::common::open_data_stores(config)?;
+    let mut stores = crate::common::open_existing_data_stores(config)?;
     let root = crate::common::ensure_storage_path(config)?;
 
     let export_file = create_export_file(&args.output, &stores.state, args.include_state)?;

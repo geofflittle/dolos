@@ -68,7 +68,7 @@ impl Formatter {
 pub fn run(config: &RootConfig, args: &Args) -> miette::Result<()> {
     crate::common::setup_tracing(&config.logging, &config.telemetry)?;
 
-    let archive = crate::common::open_archive_store(config)?;
+    let archive = crate::common::open_existing_archive_store(config)?;
 
     let mut formatter = Formatter::new_table();
 

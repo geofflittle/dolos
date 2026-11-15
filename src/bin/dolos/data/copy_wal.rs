@@ -23,7 +23,7 @@ pub struct Args {
 pub fn run(config: &RootConfig, args: &Args) -> miette::Result<()> {
     crate::common::setup_tracing(&config.logging, &config.telemetry)?;
 
-    let source = crate::common::open_wal_store(config)?;
+    let source = crate::common::open_existing_wal_store(config)?;
 
     let target = dolos_redb3::wal::RedbWalStore::open(&args.output, &RedbWalConfig::default())
         .into_diagnostic()

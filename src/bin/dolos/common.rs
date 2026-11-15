@@ -41,6 +41,26 @@ pub fn open_data_stores(config: &RootConfig) -> Result<Stores, Error> {
     storage::open_data_stores(config)
 }
 
+pub fn open_existing_wal_store(
+    config: &RootConfig,
+) -> Result<storage::WalStoreBackend<dolos_cardano::CardanoDelta>, Error> {
+    storage::open_existing_wal_store(config)
+}
+
+pub fn open_existing_archive_store(
+    config: &RootConfig,
+) -> Result<storage::ArchiveStoreBackend, Error> {
+    storage::open_existing_archive_store(config)
+}
+
+pub fn open_existing_state_store(config: &RootConfig) -> Result<storage::StateStoreBackend, Error> {
+    storage::open_existing_state_store(config)
+}
+
+pub fn open_existing_data_stores(config: &RootConfig) -> Result<Stores, Error> {
+    storage::open_existing_data_stores(config)
+}
+
 pub fn load_config(
     explicit_file: &Option<std::path::PathBuf>,
 ) -> Result<RootConfig, ::config::ConfigError> {
@@ -82,6 +102,16 @@ pub fn setup_domain_with_stop_epoch(
     DomainBuilder::new(config, genesis)
         .stop_epoch(stop_epoch)
         .build()
+        .map_err(render_domain_build_error)
+}
+
+/// A node domain over the stores already in storage, refused when one is not
+/// there.
+pub fn setup_existing_domain(config: &RootConfig) -> miette::Result<DomainAdapter> {
+    let genesis = Arc::new(open_genesis_files(&config.genesis)?);
+
+    DomainBuilder::new(config, genesis)
+        .build_existing()
         .map_err(render_domain_build_error)
 }
 

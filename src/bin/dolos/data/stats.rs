@@ -24,7 +24,7 @@ fn footprint_to_json(footprint: &TableFootprint) -> serde_json::Value {
 }
 
 pub fn run(config: &RootConfig, _args: &Args) -> miette::Result<()> {
-    let stores = crate::common::open_data_stores(config)?;
+    let stores = crate::common::open_existing_data_stores(config)?;
 
     let mut json = serde_json::Map::new();
 

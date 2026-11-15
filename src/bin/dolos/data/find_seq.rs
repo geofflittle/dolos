@@ -19,7 +19,7 @@ pub struct Args {
 pub fn run(config: &RootConfig, args: &Args) -> miette::Result<()> {
     crate::common::setup_tracing(&config.logging, &config.telemetry)?;
 
-    let wal = crate::common::open_wal_store(config)?;
+    let wal = crate::common::open_existing_wal_store(config)?;
 
     let hash = Hash::from_str(&args.hash)
         .into_diagnostic()

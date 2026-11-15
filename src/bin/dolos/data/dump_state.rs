@@ -499,7 +499,7 @@ use dolos_core::config::RootConfig;
 pub fn run(config: &RootConfig, args: &Args) -> miette::Result<()> {
     setup_tracing_for_format(config, args.format)?;
 
-    let state = crate::common::open_state_store(config)?;
+    let state = crate::common::open_existing_state_store(config)?;
     let genesis = crate::common::open_genesis_files(&config.genesis)?;
     let network = network_from_genesis(&genesis);
 

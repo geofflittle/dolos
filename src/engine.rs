@@ -73,6 +73,14 @@ impl<'a> DomainBuilder<'a> {
         self.build_with_stores(&stores)
     }
 
+    /// Construct a node domain over the stores already in storage, refused
+    /// when one is not there.
+    pub fn build_existing(&self) -> Result<DomainAdapter, DomainBuildError> {
+        let stores =
+            storage::open_existing_data_stores(self.config).map_err(DomainBuildError::Storage)?;
+        self.build_with_stores(&stores)
+    }
+
     fn build_with_stores(&self, stores: &Stores) -> Result<DomainAdapter, DomainBuildError> {
         let ChainConfig::Cardano(mut chain_config) = self.config.chain.clone();
 

@@ -170,7 +170,7 @@ pub fn run(
     args: &Args,
     feedback: &crate::feedback::Feedback,
 ) -> miette::Result<()> {
-    let stores = crate::common::open_data_stores(config)?;
+    let stores = crate::common::open_existing_data_stores(config)?;
     let genesis = crate::common::open_genesis_files(&config.genesis)?;
 
     let mut issues: Vec<Issue> = Vec::new();

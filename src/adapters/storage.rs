@@ -98,7 +98,7 @@ pub struct ExistingDataPolicy {
 
 /// Whether storage already holds a node: a state cursor is the whole test.
 pub fn has_existing_data(config: &RootConfig) -> Result<bool, Error> {
-    let state = open_state_store_at_any_revision(config)?;
+    let state = open_state_store_at_any_revision(config, Missing::Create)?;
 
     Ok(state.read_cursor()?.is_some())
 }
@@ -163,30 +163,81 @@ fn check_storage_version(version: &StorageVersion) -> Result<(), Error> {
     Ok(())
 }
 
-/// Ensure directory exists for a store path.
-fn ensure_store_path(path: &Path) -> Result<(), Error> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+/// What an opener does when nothing is on disk at a store's path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Missing {
+    /// Create the store.
+    Create,
+    /// Refuse to open it.
+    Refuse,
+}
+
+/// The path to open the store `name` at, empty for a store kept in memory.
+fn store_path(name: &str, path: Option<PathBuf>, missing: Missing) -> Result<PathBuf, Error> {
+    let Some(path) = path else {
+        return Ok(PathBuf::new());
+    };
+
+    match missing {
+        Missing::Create => {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        Missing::Refuse if !path.exists() => {
+            return Err(Error::message(format!(
+                "no {name} store at {}",
+                path.display()
+            )));
+        }
+        Missing::Refuse => {}
     }
-    Ok(())
+
+    Ok(path)
 }
 
 pub fn open_wal_store<D>(config: &RootConfig) -> Result<WalStoreBackend<D>, Error>
 where
     D: EntityDelta + Serialize + DeserializeOwned + Send + Sync + 'static,
 {
+    open_wal_store_when(config, Missing::Create)
+}
+
+pub fn open_existing_wal_store<D>(config: &RootConfig) -> Result<WalStoreBackend<D>, Error>
+where
+    D: EntityDelta + Serialize + DeserializeOwned + Send + Sync + 'static,
+{
+    open_wal_store_when(config, Missing::Refuse)
+}
+
+fn open_wal_store_when<D>(
+    config: &RootConfig,
+    missing: Missing,
+) -> Result<WalStoreBackend<D>, Error>
+where
+    D: EntityDelta + Serialize + DeserializeOwned + Send + Sync + 'static,
+{
     check_storage_version(&config.storage.version)?;
 
-    let path = config.storage.wal_path().unwrap_or_default();
-    ensure_store_path(&path)?;
+    let path = store_path("wal", config.storage.wal_path(), missing)?;
     Ok(WalStoreBackend::open(&path, &config.storage.wal)?)
 }
 
 pub fn open_archive_store(config: &RootConfig) -> Result<ArchiveStoreBackend, Error> {
+    open_archive_store_when(config, Missing::Create)
+}
+
+pub fn open_existing_archive_store(config: &RootConfig) -> Result<ArchiveStoreBackend, Error> {
+    open_archive_store_when(config, Missing::Refuse)
+}
+
+fn open_archive_store_when(
+    config: &RootConfig,
+    missing: Missing,
+) -> Result<ArchiveStoreBackend, Error> {
     check_storage_version(&config.storage.version)?;
 
-    let path = config.storage.archive_path().unwrap_or_default();
-    ensure_store_path(&path)?;
+    let path = store_path("archive", config.storage.archive_path(), missing)?;
     Ok(ArchiveStoreBackend::open(
         &path,
         dolos_cardano::model::build_schema(),
@@ -195,18 +246,31 @@ pub fn open_archive_store(config: &RootConfig) -> Result<ArchiveStoreBackend, Er
 }
 
 pub fn open_state_store(config: &RootConfig) -> Result<StateStoreBackend, Error> {
-    let store = open_state_store_at_any_revision(config)?;
+    open_state_store_when(config, Missing::Create)
+}
+
+pub fn open_existing_state_store(config: &RootConfig) -> Result<StateStoreBackend, Error> {
+    open_state_store_when(config, Missing::Refuse)
+}
+
+fn open_state_store_when(
+    config: &RootConfig,
+    missing: Missing,
+) -> Result<StateStoreBackend, Error> {
+    let store = open_state_store_at_any_revision(config, missing)?;
 
     check_state_revision(&store)?;
 
     Ok(store)
 }
 
-fn open_state_store_at_any_revision(config: &RootConfig) -> Result<StateStoreBackend, Error> {
+fn open_state_store_at_any_revision(
+    config: &RootConfig,
+    missing: Missing,
+) -> Result<StateStoreBackend, Error> {
     check_storage_version(&config.storage.version)?;
 
-    let path = config.storage.state_path().unwrap_or_default();
-    ensure_store_path(&path)?;
+    let path = store_path("state", config.storage.state_path(), missing)?;
     Ok(StateStoreBackend::open(
         &path,
         dolos_cardano::model::build_schema(),
@@ -279,12 +343,22 @@ pub fn open_mempool_store(config: &RootConfig) -> Result<MempoolBackend, Error> 
             dolos_core::builtin::EphemeralMempool::bounded(bound),
         )),
         MempoolStoreConfig::Redb(cfg) => {
-            let path = config.storage.mempool_path().unwrap_or_default();
-            ensure_store_path(&path)?;
+            let path = store_path("mempool", config.storage.mempool_path(), Missing::Create)?;
             Ok(MempoolBackend::Redb(
                 dolos_redb3::mempool::RedbMempool::open(path, cfg, bound)?,
             ))
         }
+    }
+}
+
+/// The mempool already in storage, or an empty one held in memory when none
+/// is there.
+fn open_existing_mempool_store(config: &RootConfig) -> Result<MempoolBackend, Error> {
+    match config.storage.mempool_path() {
+        Some(path) if !path.exists() => Ok(MempoolBackend::Ephemeral(
+            dolos_core::builtin::EphemeralMempool::bounded(config.submit.mempool_bound),
+        )),
+        _ => open_mempool_store(config),
     }
 }
 
@@ -299,6 +373,20 @@ where
         state: open_state_store(config)?,
         archive: open_archive_store(config)?,
         mempool: open_mempool_store(config)?,
+    })
+}
+
+pub fn open_existing_data_stores<D>(config: &RootConfig) -> Result<Stores<D>, Error>
+where
+    D: EntityDelta + Serialize + DeserializeOwned + Send + Sync + 'static,
+{
+    check_storage_version(&config.storage.version)?;
+
+    Ok(Stores {
+        wal: open_existing_wal_store(config)?,
+        state: open_existing_state_store(config)?,
+        archive: open_existing_archive_store(config)?,
+        mempool: open_existing_mempool_store(config)?,
     })
 }
 

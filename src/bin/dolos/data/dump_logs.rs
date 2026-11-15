@@ -625,7 +625,7 @@ fn dump_logs<T: TableRow>(
 pub fn run(config: &RootConfig, args: &Args) -> miette::Result<()> {
     setup_tracing_for_format(config, args.format)?;
 
-    let archive = crate::common::open_archive_store(config)?;
+    let archive = crate::common::open_existing_archive_store(config)?;
     let genesis = crate::common::open_genesis_files(&config.genesis)?;
     let network = dolos_cardano::network_from_genesis(&genesis);
 
@@ -637,7 +637,7 @@ pub fn run(config: &RootConfig, args: &Args) -> miette::Result<()> {
         || matches!(args.format, OutputFormat::Dbsync)
         || args.namespace == "account-epochs/rewards";
     let summary = if need_summary {
-        let state = crate::common::open_state_store(config)?;
+        let state = crate::common::open_existing_state_store(config)?;
         Some(load_chain_summary_from_state(&state).map_err(|err| miette::miette!("{err:?}"))?)
     } else {
         None

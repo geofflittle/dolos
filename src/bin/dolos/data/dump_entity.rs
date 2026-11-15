@@ -47,7 +47,7 @@ use dolos_core::config::RootConfig;
 pub fn run(config: &RootConfig, args: &Args) -> miette::Result<()> {
     crate::common::setup_tracing(&config.logging, &config.telemetry)?;
 
-    let state = crate::common::open_state_store(config)?;
+    let state = crate::common::open_existing_state_store(config)?;
 
     match args.namespace.as_str() {
         "epochs" => run_typed::<EpochState, _>(&state, args)?,
