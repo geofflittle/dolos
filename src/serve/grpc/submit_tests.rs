@@ -590,9 +590,20 @@ async fn watched(
     request: WatchMempoolRequest,
     txs: &[MempoolTx],
 ) -> (Vec<Result<TxInMempool, Status>>, (usize, bool)) {
+    watched_in(ToyDomain::new(None, None), request, txs).await
+}
+
+/// The answers WatchMempool gives over `toy` while the mempool receives `txs`,
+/// with the reads each made on the runtime thread and whether any ran
+/// elsewhere.
+async fn watched_in(
+    toy: ToyDomain,
+    request: WatchMempoolRequest,
+    txs: &[MempoolTx],
+) -> (Vec<Result<TxInMempool, Status>>, (usize, bool)) {
     use crate::serve::grpc::read_counting::ReadCountingDomain;
 
-    let domain = ReadCountingDomain::new(ToyDomain::new(None, None));
+    let domain = ReadCountingDomain::new(toy);
     let updates = futures_util::stream::iter(
         txs.iter()
             .cloned()
@@ -631,6 +642,79 @@ async fn watch_mempool_answers_only_the_transactions_its_predicate_admits() {
     ] {
         let (answers, _) = watched(watch_request(predicate.clone(), &[]), &txs).await;
         assert_eq!(refs(&answers), expected, "{predicate:?}");
+    }
+}
+
+/// A mempool transaction that mints `beta` and spends the first output of
+/// `parent`.
+fn spending_first_output_of(parent: &MempoolTx) -> MempoolTx {
+    let minted = minting_txs().remove(1);
+    let decoded = MultiEraTx::decode_for_era(Era::Conway, minted.payload().cbor()).unwrap();
+    let mut tx = decoded.as_conway().unwrap().clone();
+    let mut body = (*tx.transaction_body).clone();
+    body.inputs = vec![pallas::ledger::primitives::conway::TransactionInput {
+        transaction_id: parent.hash(),
+        index: 0,
+    }]
+    .into();
+    tx.transaction_body = body.into();
+    let bytes = minicbor::to_vec(&tx).unwrap();
+    let hash = MultiEraTx::decode_for_era(Era::Conway, &bytes)
+        .unwrap()
+        .hash();
+    MempoolTx::new(hash, EraCbor(Era::Conway.into(), bytes), vec![])
+}
+
+/// The address of the first output of `tx`.
+fn first_output_address(tx: &MempoolTx) -> Vec<u8> {
+    let decoded = MultiEraTx::decode_for_era(Era::Conway, tx.payload().cbor()).unwrap();
+    decoded.outputs()[0].address().unwrap().to_vec()
+}
+
+/// A predicate that admits a transaction spending an output at `address`.
+// The address pattern fields are optional at v1 and v1beta and plain at v1alpha.
+#[allow(clippy::useless_conversion)]
+fn consumes_from(address: Vec<u8>) -> TxPredicate {
+    TxPredicate {
+        r#match: Some(AnyChainTxPattern {
+            chain: Some(any_chain_tx_pattern::Chain::Cardano(
+                u5c::cardano::TxPattern {
+                    consumes: Some(u5c::cardano::TxOutputPattern {
+                        address: Some(u5c::cardano::AddressPattern {
+                            exact_address: bytes::Bytes::from(address).into(),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+        }),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn watch_mempool_matches_an_input_that_spends_a_pending_output() {
+    let parent = minting_txs().remove(0);
+    let child = spending_first_output_of(&parent);
+    let spent = first_output_address(&parent);
+    let elsewhere = vec![0x61; 29];
+    assert_ne!(spent, elsewhere);
+    let holding_parent = || {
+        let toy = ToyDomain::new(None, None);
+        toy.mempool().receive(parent.clone()).unwrap();
+        toy
+    };
+
+    for (toy, address, expected) in [
+        (holding_parent(), elsewhere, vec![]),
+        (ToyDomain::new(None, None), spent.clone(), vec![]),
+        (holding_parent(), spent, vec![child.hash().to_vec()]),
+    ] {
+        let request = watch_request(Some(consumes_from(address.clone())), &["tx.ref"]);
+        let (answers, _) = watched_in(toy, request, std::slice::from_ref(&child)).await;
+        assert_eq!(refs(&answers), expected, "{}", hex::encode(&address));
     }
 }
 

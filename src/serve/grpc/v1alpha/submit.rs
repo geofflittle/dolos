@@ -12,7 +12,7 @@ use tonic::{Request, Response, Status};
 use tracing::{debug, info};
 
 use crate::prelude::*;
-use crate::serve::grpc::block_context::{BlockContext, NoInputs};
+use crate::serve::grpc::block_context::{BlockContext, NoInputs, WithUnconfirmed};
 use crate::serve::grpc::eval::{evaluate_tx, TxEvaluation};
 use crate::serve::grpc::masking::MempoolTxMask;
 use crate::serve::grpc::run_blocking;
@@ -146,7 +146,7 @@ fn watch_mempool_answers<D: Domain + ChainReads>(
                 run_blocking(&domain, move |domain| {
                     event_to_watch_mempool_response(
                         event,
-                        &domain,
+                        &WithUnconfirmed(domain),
                         predicate.as_ref().as_ref(),
                         mask,
                     )

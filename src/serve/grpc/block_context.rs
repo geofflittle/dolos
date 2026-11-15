@@ -7,7 +7,7 @@ use pallas::{
 };
 use std::{borrow::Cow, collections::HashSet, sync::Arc};
 
-use dolos_core::TxOrder;
+use dolos_core::{Domain, MempoolStore, TxOrder};
 
 use crate::serve::ChainReads;
 
@@ -22,6 +22,34 @@ impl LedgerContext for NoInputs {
     }
     fn get_slot_timestamp(&self, _: u64) -> Option<u64> {
         None
+    }
+}
+
+/// The chain reads of a domain that also hold the outputs its unconfirmed
+/// transactions make.
+#[derive(Clone)]
+pub(super) struct WithUnconfirmed<D>(pub(super) D);
+
+impl<D: Domain + ChainReads> LedgerContext for WithUnconfirmed<D> {
+    fn get_utxos(&self, refs: &[TxoRef]) -> Option<UtxoMap> {
+        let mut rest: HashSet<dolos_core::TxoRef> = refs.iter().map(|r| (*r).into()).collect();
+        let made = self
+            .0
+            .mempool()
+            .read_unconfirmed(|index| index.take_produced(&mut rest));
+        let rest: Vec<TxoRef> = rest.into_iter().map(Into::into).collect();
+        let mut found = if rest.is_empty() {
+            UtxoMap::new()
+        } else {
+            self.0.utxos(&rest)?
+        };
+        for (r, output) in made {
+            found.insert(r.into(), (Era::try_from(output.0).ok()?, output.1.clone()));
+        }
+        Some(found)
+    }
+    fn get_slot_timestamp(&self, slot: u64) -> Option<u64> {
+        self.0.slot_timestamp(slot)
     }
 }
 
