@@ -28,9 +28,9 @@ use super::super::spec::{
 };
 use super::{
     endorser::{judge_served, node_txs, Judged, NodeEndorser},
-    output::{self, ServedOutput},
+    output::{self, Datums, ServedOutput},
     params,
-    serve::{v1::add_block, v1::add_tx, Served},
+    serve::{v1::add_block, v1::add_tx, Served, ServedInput},
     show_input,
 };
 
@@ -166,8 +166,8 @@ fn compare_children(dir: &Path, tally: &mut Tally) {
                 tally.add(false, || format!("{name} tx={tx} readtx=absent"));
                 continue;
             };
-            let read: BTreeMap<_, _> = read.iter().map(|(i, o)| (i, o)).collect();
-            for (input, output) in fetched {
+            let read: BTreeMap<_, _> = read.iter().map(|s| (&s.input, &s.output)).collect();
+            for ServedInput { input, output, .. } in fetched {
                 let other = read.get(input).copied();
                 let agrees = output.is_some() && other == Some(output);
                 tally.add(agrees, || {
@@ -280,9 +280,9 @@ fn endorsed(
 }
 
 /// The fields of a served output that state other values than the output
-/// bytes hold.
-fn fields(ledger: &[u8], served: &ServedOutput) -> Vec<String> {
-    match output::differing(ledger, served) {
+/// bytes hold, with its datum hash resolved against `datums`.
+fn fields(ledger: &[u8], served: &ServedOutput, datums: Datums<'_>) -> Vec<String> {
+    match output::differing(ledger, served, datums) {
         Ok(fields) => fields.iter().map(ToString::to_string).collect(),
         Err(e) => vec![format!("undecodable({e})")],
     }
@@ -342,19 +342,21 @@ fn producer_outputs(dir: &Path) -> BTreeMap<String, Vec<u8>> {
     outputs
 }
 
-/// Counts one served `asOutput` against the output bytes its input names.
+/// Counts one served `asOutput` against the output bytes its input names and
+/// the witness datums of the transaction that names it.
 fn judge_as_output(
     producers: &BTreeMap<String, Vec<u8>>,
     name: &str,
     input: &TxIn,
     served: &ServedOutput,
+    datums: Datums<'_>,
     tally: &mut Tally,
 ) {
     let key = show_input(input);
     match producers.get(&key) {
         None => tally.add(false, || format!("{name} input={key} producer=absent")),
         Some(ledger) => {
-            let differing = fields(ledger, served);
+            let differing = fields(ledger, served, datums);
             tally.add(differing.is_empty(), || {
                 format!("{name} input={key} differing={}", differing.join(","))
             });
@@ -367,11 +369,21 @@ fn judge_as_output(
 fn compare_as_outputs(dir: &Path, tally: &mut Tally) {
     let producers = producer_outputs(dir);
     let mut reads = Vec::new();
+    let mut witnessed = BTreeMap::new();
     for name in files(dir, "tx-") {
         let response: q::ReadTxResponse = read(dir, &name);
         let mut served = Served::new();
-        if let Some(any_chain_tx::Chain::Cardano(tx)) = response.tx.and_then(|t| t.chain) {
-            add_tx(&mut served, &tx);
+        if let Some(any_tx) = response.tx {
+            let native = &any_tx.native_bytes;
+            let tx = MultiEraTx::decode_for_era(Era::Dijkstra, native)
+                .or_else(|_| MultiEraTx::decode(native));
+            match tx {
+                Ok(tx) => witnessed.extend(super::witness_datums(tx)),
+                Err(e) => println!("LIVE {name} undecodable {e}"),
+            }
+            if let Some(any_chain_tx::Chain::Cardano(tx)) = any_tx.chain {
+                add_tx(&mut served, &tx);
+            }
         }
         reads.push((name, served));
     }
@@ -386,9 +398,24 @@ fn compare_as_outputs(dir: &Path, tally: &mut Tally) {
         reads.push((name, served));
     }
     for (name, served) in &reads {
-        for (input, output) in served.values().flatten() {
-            if let Some(output) = output {
-                judge_as_output(&producers, name, input, output, tally);
+        for ServedInput {
+            input,
+            named_by,
+            output,
+        } in served.values().flatten()
+        {
+            let Some(output) = output else {
+                continue;
+            };
+            match witnessed.get(named_by) {
+                Some(datums) => {
+                    let datums = Datums::Witnessed(datums);
+                    judge_as_output(&producers, name, input, output, datums, tally);
+                }
+                None => tally.add(false, || {
+                    let tx = hex::encode(named_by);
+                    format!("{name} input={} named_by={tx} unread", show_input(input))
+                }),
             }
         }
     }
@@ -460,7 +487,7 @@ fn compare_served_utxos(dir: &Path, tally: &mut Tally) -> Option<usize> {
     };
     match AtPoint::new(&bracket, reads) {
         Some(reads) => Some(compare_utxos(&reads, tally, |node, served| {
-            fields(node, &output::v1::output(served))
+            fields(node, &output::v1::output(served), Datums::Stored)
         })),
         None => {
             tally.add(false, || format!("utxo reads at two points {bracket}"));
@@ -591,7 +618,7 @@ mod tests {
     fn a_served_output_agrees_only_with_the_fields_the_node_bytes_hold() {
         let node = hex::decode(OUTPUT).unwrap();
         let served = output::mapped(&node);
-        let served_fields = |o| fields(&node, &output::v1::output(o));
+        let served_fields = |o| fields(&node, &output::v1::output(o), Datums::Stored);
         assert_eq!(served_fields(&served), Vec::<String>::new());
         let mut moved = served.clone();
         moved.address = vec![0x60; 29].into();
@@ -611,15 +638,16 @@ mod tests {
         let mapped = output::mapped(&producers[&show_input(&input)]);
         let served = output::v1::output(&mapped);
         let mut t = Tally::default();
-        judge_as_output(&producers, "block", &input, &served, &mut t);
+        let none = Datums::Witnessed(&[]);
+        judge_as_output(&producers, "block", &input, &served, none, &mut t);
         assert_eq!((t.compared, t.disagree.len()), (1, 0));
 
         let mut moved = mapped.clone();
         moved.address = vec![0x60; 29].into();
         let moved = output::v1::output(&moved);
-        judge_as_output(&producers, "block", &input, &moved, &mut t);
+        judge_as_output(&producers, "block", &input, &moved, none, &mut t);
         let unclaimed = TxIn { tx: [0; 32], ix: 0 };
-        judge_as_output(&producers, "block", &unclaimed, &served, &mut t);
+        judge_as_output(&producers, "block", &unclaimed, &served, none, &mut t);
         let key = show_input(&input);
         let zero = show_input(&unclaimed);
         assert_eq!(

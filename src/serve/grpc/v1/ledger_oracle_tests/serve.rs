@@ -21,7 +21,16 @@ pub(super) const NEXT: Duration = Duration::from_secs(10);
 
 /// The output one route serves for each input a transaction names, by
 /// transaction hash.
-pub(super) type Served = BTreeMap<[u8; 32], Vec<(TxIn, Option<ServedOutput>)>>;
+pub(super) type Served = BTreeMap<[u8; 32], Vec<ServedInput>>;
+
+/// An input a served transaction names, with the output served for it.
+#[derive(Debug, PartialEq)]
+pub(super) struct ServedInput {
+    pub(super) input: TxIn,
+    /// The hash of the transaction or sub transaction that names the input.
+    pub(super) named_by: [u8; 32],
+    pub(super) output: Option<ServedOutput>,
+}
 
 /// What one route at one version serves for the inputs of the transactions it
 /// serves.
@@ -223,7 +232,7 @@ macro_rules! served_routes {
             use tokio_util::sync::CancellationToken;
             use tonic::Request;
 
-            use super::{hash32, Event, LatestParams, RouteServed, Served, Utxo, Utxos, NEXT};
+            use super::{hash32, Event, LatestParams, RouteServed, Served, ServedInput, Utxo, Utxos, NEXT};
             use super::{Answers, Messages, OutputRoute, ReadTxAnswer, UtxoRoute, Version};
             use crate::serve::grpc::$version::{
                 query::QueryServiceImpl,
@@ -264,20 +273,21 @@ macro_rules! served_routes {
                 $keep_block
             }
 
-            fn served_input(
-                input: &cardano::TxInput,
-            ) -> (TxIn, Option<super::super::output::ServedOutput>) {
-                let txin = TxIn {
-                    tx: hash32(&input.tx_hash),
-                    ix: input.output_index.into(),
-                };
+            fn served_input((named_by, input): (&[u8], &cardano::TxInput)) -> ServedInput {
                 let output = input.as_output.as_ref();
-                (txin, output.map(super::super::output::$version::output))
+                ServedInput {
+                    input: TxIn {
+                        tx: hash32(&input.tx_hash),
+                        ix: input.output_index.into(),
+                    },
+                    named_by: hash32(named_by),
+                    output: output.map(super::super::output::$version::output),
+                }
             }
 
             /// Adds the inputs a served transaction names, with the output served for each.
             pub(in super::super) fn add_tx(served: &mut Served, $tx: &cardano::Tx) {
-                let (hash, inputs): (&[u8], Vec<&cardano::TxInput>) = $inputs;
+                let (hash, inputs): (&[u8], Vec<(&[u8], &cardano::TxInput)>) = $inputs;
                 served.insert(hash32(hash), inputs.into_iter().map(served_input).collect());
             }
 
@@ -634,15 +644,16 @@ served_routes!(
             .as_ref()
             .expect("a served transaction has common fields");
         let collateral = tx.collateral.iter().flat_map(|c| &c.collateral);
-        let subs = tx
-            .sub_transactions
-            .iter()
-            .flat_map(|s| s.inputs.iter().chain(&s.reference_inputs));
+        let subs = tx.sub_transactions.iter().flat_map(|s| {
+            let inputs = s.inputs.iter().chain(&s.reference_inputs);
+            inputs.map(|i| (&s.hash[..], i))
+        });
         let inputs = common
             .inputs
             .iter()
             .chain(collateral)
             .chain(&common.reference_inputs)
+            .map(|i| (&common.hash[..], i))
             .chain(subs);
         (&common.hash, inputs.collect())
     },
@@ -660,7 +671,7 @@ served_routes!(
     inputs: |tx| {
         let collateral = tx.collateral.iter().flat_map(|c| &c.collateral);
         let inputs = tx.inputs.iter().chain(collateral).chain(&tx.reference_inputs);
-        (&tx.hash, inputs.collect())
+        (&tx.hash, inputs.map(|i| (&tx.hash[..], i)).collect())
     },
     fetch_ref: |r| vec![r],
     fetched: |f| f.block,
@@ -676,7 +687,7 @@ served_routes!(
     inputs: |tx| {
         let collateral = tx.collateral.iter().flat_map(|c| &c.collateral);
         let inputs = tx.inputs.iter().chain(collateral).chain(&tx.reference_inputs);
-        (&tx.hash, inputs.collect())
+        (&tx.hash, inputs.map(|i| (&tx.hash[..], i)).collect())
     },
     fetch_ref: |r| vec![r],
     fetched: |f| f.block,

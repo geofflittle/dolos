@@ -64,7 +64,7 @@ use ledger_oracle_judge::{
         FailingMaker, Maker, Outcome, Pass, ValidationTally,
     },
 };
-use output::OutputField;
+use output::{DatumBytes, Datums, OutputField};
 use pallas::{
     codec::{
         minicbor,
@@ -95,11 +95,11 @@ fn parsed_differing(
     id: RecordId,
     ledger: &[u8],
     parsed: Option<&output::ServedOutput>,
+    datums: Datums<'_>,
 ) -> Vec<OutputField> {
     match parsed {
-        Some(parsed) => {
-            output::differing(ledger, parsed).unwrap_or_else(|e| panic!("OUTPUT {id} {e}"))
-        }
+        Some(parsed) => output::differing(ledger, parsed, datums)
+            .unwrap_or_else(|e| panic!("OUTPUT {id} {e}")),
         None => vec![OutputField::ParsedState],
     }
 }
@@ -194,7 +194,9 @@ fn compare_served_utxos(
             continue;
         };
         let fields = match (ledger, item) {
-            (Some(ledger), Some(item)) => parsed_differing(id, ledger, item.parsed.as_ref()),
+            (Some(ledger), Some(item)) => {
+                parsed_differing(id, ledger, item.parsed.as_ref(), Datums::Stored)
+            }
             (None, _) | (_, None) => Vec::new(),
         };
         tally.add(verdict.agrees() && fields.is_empty(), || {
@@ -1260,6 +1262,14 @@ fn named_txs(tx: MultiEraTx<'_>) -> Vec<(TxName, MultiEraTx<'_>)> {
     named
 }
 
+/// The witness datums of a transaction and of each of its sub transactions, by
+/// hash.
+fn witness_datums(tx: MultiEraTx<'_>) -> BTreeMap<[u8; 32], Vec<DatumBytes>> {
+    let datums = |tx: &MultiEraTx<'_>| tx.plutus_data().iter().map(DatumBytes::of).collect();
+    let named = named_txs(tx).into_iter();
+    named.map(|(name, tx)| (name.hash(), datums(&tx))).collect()
+}
+
 /// Whether the ledger holds the item a lookup serves, as its cell shows it.
 fn held<T>(ledger: &Option<T>) -> &'static str {
     match ledger {
@@ -1652,11 +1662,12 @@ fn served_verdict(
     id: RecordId,
     ledger: &[u8],
     served: Option<&output::ServedOutput>,
+    datums: Datums<'_>,
 ) -> Option<String> {
     let Some(served) = served else {
         return Some(ByteVerdict::against(ledger, None).to_string());
     };
-    let fields = parsed_differing(id, ledger, Some(served));
+    let fields = parsed_differing(id, ledger, Some(served), datums);
     let verdict = match &served.bytes {
         output::ServedBytes::NoField => None,
         output::ServedBytes::Stated(bytes) => Some(ByteVerdict::against(ledger, bytes.as_deref())),
@@ -1684,22 +1695,25 @@ fn a_served_output_stating_no_bytes_disagrees_and_one_stating_the_ledger_bytes_a
         n: 1,
     };
     let mut served = output::v1::output(&output::mapped(&ledger));
-    let stated = served_verdict(id, &ledger, Some(&served));
+    let unwitnessed = Datums::Witnessed(&[]);
+    let stated = served_verdict(id, &ledger, Some(&served), unwitnessed);
     served.bytes = output::ServedBytes::Stated(None);
-    let unstated = served_verdict(id, &ledger, Some(&served));
+    let unstated = served_verdict(id, &ledger, Some(&served), unwitnessed);
     let absent = ByteVerdict::against(&ledger, None).to_string();
     assert_eq!((stated, unstated), (None, Some(absent)));
 }
 
 /// The disagreeing verdicts on what each route serves for one input against the
-/// ledger's output bytes, by the route's entry point, with the routes left
-/// uncompared because their version states no sub transaction.
+/// ledger's output bytes and the witness datums of the transaction that names
+/// it, by the route's entry point, with the routes left uncompared because
+/// their version states no sub transaction.
 fn served_verdicts(
     id: RecordId,
     tx: &[u8; 32],
     input: &TxIn,
     sub_only: bool,
     ledger: &[u8],
+    witnessed: &BTreeMap<[u8; 32], Vec<DatumBytes>>,
     routes: &[RouteServed],
 ) -> (BTreeMap<(OutputRoute, Version), Vec<String>>, usize) {
     let mut verdicts = BTreeMap::new();
@@ -1712,14 +1726,17 @@ fn served_verdicts(
         let failing: Vec<String> = match route.served.get(tx) {
             None => vec!["not_served".to_string()],
             Some(named) => {
-                let occurrences: Vec<_> = named.iter().filter(|(i, _)| i == input).collect();
+                let occurrences: Vec<_> = named.iter().filter(|s| s.input == *input).collect();
                 if occurrences.is_empty() {
                     vec!["not_named".to_string()]
                 } else {
-                    occurrences
-                        .into_iter()
-                        .filter_map(|(_, output)| served_verdict(id, ledger, output.as_ref()))
-                        .collect()
+                    let verdict = |s: &serve::ServedInput| match witnessed.get(&s.named_by) {
+                        None => Some("named_by_unrecorded".to_string()),
+                        Some(datums) => {
+                            served_verdict(id, ledger, s.output.as_ref(), Datums::Witnessed(datums))
+                        }
+                    };
+                    occurrences.into_iter().filter_map(verdict).collect()
                 }
             }
         };
@@ -1760,6 +1777,7 @@ fn compare_served(
         let tx = MultiEraTx::decode_for_era(Era::Dijkstra, &record.tx.0)
             .unwrap_or_else(|e| panic!("TX {id} {e}"));
         let hash: [u8; 32] = *tx.hash();
+        let witnessed = witness_datums(tx);
         let by_entry = checks.records.entry(id).or_default();
         for input in named_inputs(id, record) {
             let shown = show_input(&input);
@@ -1788,7 +1806,8 @@ fn compare_served(
                 .pre_entry(record, &input)
                 .expect("an input made in the run is in the pre state")
                 .output;
-            let (verdicts, unheld) = served_verdicts(id, &hash, &input, sub, &ledger.0, routes);
+            let (verdicts, unheld) =
+                served_verdicts(id, &hash, &input, sub, &ledger.0, &witnessed, routes);
             checks.sub_unheld += unheld;
             for ((route, version), failing) in verdicts {
                 by_entry.at(route, version).add(failing.is_empty(), || {

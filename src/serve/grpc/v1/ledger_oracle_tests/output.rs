@@ -2,7 +2,7 @@
 //! output bytes.
 
 use pallas::{
-    codec::minicbor,
+    codec::{minicbor, utils::KeepRaw},
     crypto::hash::Hasher,
     ledger::primitives::{
         alonzo, babbage::GenTransactionOutput, conway, dijkstra, BigInt, PlutusData,
@@ -203,22 +203,65 @@ pub(super) struct ServedOutput {
     script: Option<Option<Script>>,
 }
 
+/// The bytes of a datum and the value they hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct DatumBytes {
+    cbor: Vec<u8>,
+    data: Data,
+}
+
+impl DatumBytes {
+    /// The bytes and value of a datum the ledger decoded.
+    pub(super) fn of(datum: &KeepRaw<'_, PlutusData>) -> Self {
+        DatumBytes {
+            cbor: datum.raw_cbor().to_vec(),
+            data: Data::ledger(datum),
+        }
+    }
+
+    /// The datum the bytes hold, none when they hold no datum.
+    fn decode(cbor: &[u8]) -> Option<Self> {
+        let datum: KeepRaw<'_, PlutusData> = minicbor::decode(cbor).ok()?;
+        Some(DatumBytes::of(&datum))
+    }
+
+    /// Whether the bytes hash to `hash`.
+    fn hashes_to(&self, hash: &[u8]) -> bool {
+        Hasher::<256>::hash(&self.cbor).as_slice() == hash
+    }
+
+    /// Whether a served datum states these bytes, their value and `hash`.
+    fn served_as(&self, hash: &[u8], served: &ServedDatum) -> bool {
+        served.hash == hash
+            && served.original_cbor.as_deref() == Some(self.cbor.as_slice())
+            && served.payload.as_ref().and_then(Option::as_ref) == Some(&self.data)
+    }
+}
+
+/// The datums a served answer resolves an output's datum hash against.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum Datums<'a> {
+    /// The witness datums of the transaction the answer maps the output in,
+    /// none when it maps the output with no transaction.
+    Witnessed(&'a [DatumBytes]),
+    /// The datum Dolos stores for the hash, which a UTxO read states whole or
+    /// not at all.
+    Stored,
+}
+
 /// The datum of a ledger output.
 #[derive(Debug)]
 enum LedgerDatum {
     None,
     Hash(Vec<u8>),
-    Inline {
-        hash: Vec<u8>,
-        cbor: Vec<u8>,
-        data: Data,
-    },
+    Inline { hash: Vec<u8>, datum: DatumBytes },
 }
 
 impl LedgerDatum {
-    /// Whether a served datum states this datum, its hash for a datum hash and
-    /// its hash, bytes and value for an inline datum.
-    fn agrees(&self, served: Option<&ServedDatum>) -> bool {
+    /// Whether a served datum states this datum, its hash, bytes and value for
+    /// an inline datum, and for a datum hash its hash with the bytes and value
+    /// of the datum `datums` resolves it to, or none when they resolve none.
+    fn agrees(&self, served: Option<&ServedDatum>, datums: Datums<'_>) -> bool {
         match (self, served) {
             (LedgerDatum::None, None) => true,
             (LedgerDatum::None, Some(d)) => {
@@ -226,14 +269,20 @@ impl LedgerDatum {
             }
             (LedgerDatum::Hash(_) | LedgerDatum::Inline { .. }, None) => false,
             (LedgerDatum::Hash(hash), Some(d)) => {
-                let bytes_hash = d.original_cbor.as_ref().map(|c| Hasher::<256>::hash(c));
-                d.hash == *hash && bytes_hash.is_none_or(|h| h.as_slice() == hash.as_slice())
+                let stored;
+                let resolved = match datums {
+                    Datums::Witnessed(witnessed) => witnessed.iter().find(|w| w.hashes_to(hash)),
+                    Datums::Stored => {
+                        stored = d.original_cbor.as_deref().and_then(DatumBytes::decode);
+                        stored.as_ref().filter(|s| s.hashes_to(hash))
+                    }
+                };
+                match resolved {
+                    Some(datum) => datum.served_as(hash, d),
+                    None => d.hash == *hash && d.payload.is_none() && d.original_cbor.is_none(),
+                }
             }
-            (LedgerDatum::Inline { hash, cbor, data }, Some(d)) => {
-                d.hash == *hash
-                    && d.original_cbor.as_deref() == Some(cbor.as_slice())
-                    && d.payload.as_ref().and_then(Option::as_ref) == Some(data)
-            }
+            (LedgerDatum::Inline { hash, datum }, Some(d)) => datum.served_as(hash, d),
         }
     }
 }
@@ -298,8 +347,7 @@ impl LedgerOutput {
                     Some(conway::DatumOption::Hash(h)) => LedgerDatum::Hash(h.to_vec()),
                     Some(conway::DatumOption::Data(d)) => LedgerDatum::Inline {
                         hash: Hasher::<256>::hash(d.raw_cbor()).to_vec(),
-                        cbor: d.raw_cbor().to_vec(),
-                        data: Data::ledger(d),
+                        datum: DatumBytes::of(&d.0),
                     },
                 };
                 let script = o.script_ref.as_ref().map(|s| Script::ledger(s, guards));
@@ -326,10 +374,11 @@ impl ServedOutput {
 }
 
 /// The fields of a served output that state other values than the ledger's
-/// output bytes hold.
+/// output bytes hold, with its datum hash resolved against `datums`.
 pub(super) fn differing(
     ledger: &[u8],
     served: &ServedOutput,
+    datums: Datums<'_>,
 ) -> Result<Vec<OutputField>, minicbor::decode::Error> {
     let ledger = LedgerOutput::decode(ledger, served.guards)?;
     let script = match (&ledger.script, &served.script) {
@@ -349,7 +398,7 @@ pub(super) fn differing(
         ),
         (
             OutputField::Datum,
-            ledger.datum.agrees(served.datum.as_ref()),
+            ledger.datum.agrees(served.datum.as_ref(), datums),
         ),
         (OutputField::Script, script),
     ];
@@ -648,6 +697,86 @@ mod tests {
         [first.concat(), second.concat()]
     }
 
+    /// No witness datums, the datums of a transaction that carries none.
+    const UNWITNESSED: Datums<'static> = Datums::Witnessed(&[]);
+
+    /// A datum, a second one, and an output locked by the first one's hash.
+    fn hash_locked() -> (DatumBytes, DatumBytes, Vec<u8>) {
+        let datum = DatumBytes::decode(&[0xd8, 0x79, 0x9f, 0x05, 0xff]).unwrap();
+        let other = DatumBytes::decode(&[0x05]).unwrap();
+        let address = cbor_bytes(&[[0x61].as_slice(), &[0x11; 28]].concat());
+        let hash = Hasher::<256>::hash(&datum.cbor);
+        let output = [
+            vec![0xa3, 0x00],
+            address,
+            vec![0x01, 0x1a, 0x00, 0x0f, 0x42, 0x40, 0x02, 0x82, 0x00],
+            cbor_bytes(hash.as_slice()),
+        ];
+        (datum, other, output.concat())
+    }
+
+    /// The output v1 serves for `bytes` with its datum stating `bytes_of` and
+    /// `value_of`.
+    fn served_with(bytes: &[u8], bytes_of: &DatumBytes, value_of: &DatumBytes) -> ServedOutput {
+        let mut served = v1::output(&mapped(bytes));
+        let datum = served.datum.as_mut().unwrap();
+        datum.original_cbor = Some(bytes_of.cbor.clone());
+        datum.payload = Some(Some(value_of.data.clone()));
+        served
+    }
+
+    #[test]
+    fn a_datum_hash_agrees_with_the_datum_the_answer_resolves_it_to() {
+        let (datum, other, bytes) = hash_locked();
+        let unresolved = v1::output(&mapped(&bytes));
+        let resolved = served_with(&bytes, &datum, &datum);
+        let carried = [other.clone(), datum.clone()];
+        let only_other = [other.clone()];
+        let cases = [
+            ("unresolved, none carried", &unresolved, UNWITNESSED),
+            ("unresolved, another carried", &unresolved, Datums::Witnessed(&only_other)),
+            ("resolved, carried", &resolved, Datums::Witnessed(&carried)),
+            ("unresolved, stored", &unresolved, Datums::Stored),
+            ("resolved, stored", &resolved, Datums::Stored),
+        ];
+        let differing: Vec<_> = cases
+            .iter()
+            .filter(|(_, served, datums)| !differing(&bytes, served, *datums).unwrap().is_empty())
+            .map(|(name, _, _)| *name)
+            .collect();
+        assert_eq!(differing, Vec::<&str>::new());
+    }
+
+    #[test]
+    fn a_datum_hash_differs_from_every_other_statement_of_its_datum() {
+        let (datum, other, bytes) = hash_locked();
+        let unresolved = v1::output(&mapped(&bytes));
+        let resolved = served_with(&bytes, &datum, &datum);
+        let mut bytes_only = resolved.clone();
+        bytes_only.datum.as_mut().unwrap().payload = None;
+        let other_value = served_with(&bytes, &datum, &other);
+        let other_bytes = served_with(&bytes, &other, &other);
+        let carried = [other.clone(), datum.clone()];
+        let cases = [
+            ("unresolved, carried", &unresolved, Datums::Witnessed(&carried)),
+            ("resolved, none carried", &resolved, UNWITNESSED),
+            ("bytes only, carried", &bytes_only, Datums::Witnessed(&carried)),
+            ("bytes only, stored", &bytes_only, Datums::Stored),
+            ("another value, carried", &other_value, Datums::Witnessed(&carried)),
+            ("another value, stored", &other_value, Datums::Stored),
+            ("another datum, carried", &other_bytes, Datums::Witnessed(&carried)),
+            ("another datum, stored", &other_bytes, Datums::Stored),
+        ];
+        let agreeing: Vec<_> = cases
+            .iter()
+            .filter(|(_, served, datums)| {
+                differing(&bytes, served, *datums).unwrap() != [OutputField::Datum]
+            })
+            .map(|(name, _, _)| *name)
+            .collect();
+        assert_eq!(agreeing, Vec::<&str>::new());
+    }
+
     #[test]
     fn the_mapped_form_of_every_corpus_output_agrees_with_its_bytes_at_every_version() {
         let outputs = ledger_outputs();
@@ -659,7 +788,7 @@ mod tests {
                 v1alpha::output(&mapped!(v1alpha, bytes)),
             ];
             for served in &served {
-                let differing = differing(bytes, served).unwrap();
+                let differing = differing(bytes, served, UNWITNESSED).unwrap();
                 assert!(differing.is_empty(), "{} {differing:?}", hex::encode(bytes));
             }
         }
@@ -669,7 +798,7 @@ mod tests {
     fn a_served_output_with_one_changed_field_names_that_field() {
         let [first, second] = constructed();
         for bytes in [&first, &second] {
-            let differing = differing(bytes, &v1::output(&mapped(bytes))).unwrap();
+            let differing = differing(bytes, &v1::output(&mapped(bytes)), UNWITNESSED).unwrap();
             assert!(differing.is_empty(), "{} {differing:?}", hex::encode(bytes));
         }
         type Change = fn(&mut cardano::TxOutput);
@@ -699,7 +828,7 @@ mod tests {
             let mut served = mapped(bytes);
             change(&mut served);
             assert_eq!(
-                differing(bytes, &v1::output(&served)).unwrap(),
+                differing(bytes, &v1::output(&served), UNWITNESSED).unwrap(),
                 [field],
                 "{served:?}"
             );
@@ -711,8 +840,12 @@ mod tests {
         let [first, _] = constructed();
         let at_v1beta = v1beta::output(&mapped!(v1beta, &first));
         let at_v1alpha = v1alpha::output(&mapped!(v1alpha, &first));
-        assert!(differing(&first, &at_v1beta).unwrap().is_empty());
-        assert!(differing(&first, &at_v1alpha).unwrap().is_empty());
+        assert!(differing(&first, &at_v1beta, UNWITNESSED)
+            .unwrap()
+            .is_empty());
+        assert!(differing(&first, &at_v1alpha, UNWITNESSED)
+            .unwrap()
+            .is_empty());
         let mut unset = mapped(&first);
         let Some(cardano::script::Script::Native(native)) =
             unset.script.as_mut().and_then(|s| s.script.as_mut())
@@ -731,7 +864,7 @@ mod tests {
         };
         n_of_k.scripts[0].native_script = None;
         assert_eq!(
-            differing(&first, &v1::output(&unset)).unwrap(),
+            differing(&first, &v1::output(&unset), UNWITNESSED).unwrap(),
             [OutputField::Script]
         );
     }
@@ -741,7 +874,7 @@ mod tests {
         use pallas::interop::utxorpc::v1alpha::spec::cardano as alpha;
         let [first, _] = constructed();
         let mut served = mapped!(v1alpha, &first);
-        assert!(differing(&first, &v1alpha::output(&served))
+        assert!(differing(&first, &v1alpha::output(&served), UNWITNESSED)
             .unwrap()
             .is_empty());
         let quantity = served.assets[0].assets[0].quantity.take();
@@ -750,7 +883,7 @@ mod tests {
         };
         served.assets[0].assets[0].quantity = Some(alpha::asset::Quantity::MintCoin(q));
         assert_eq!(
-            differing(&first, &v1alpha::output(&served)).unwrap(),
+            differing(&first, &v1alpha::output(&served), UNWITNESSED).unwrap(),
             [OutputField::Assets]
         );
     }
