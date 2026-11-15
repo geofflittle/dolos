@@ -12,9 +12,11 @@ use tonic::{Request, Response, Status};
 use tracing::{debug, info};
 
 use crate::prelude::*;
-use crate::serve::grpc::block_context::NoInputs;
+use crate::serve::grpc::block_context::{BlockContext, NoInputs};
 use crate::serve::grpc::eval::{evaluate_tx, TxEvaluation};
+use crate::serve::grpc::masking::MempoolTxMask;
 use crate::serve::grpc::run_blocking;
+use crate::serve::ChainReads;
 
 pub struct SubmitServiceImpl<D>
 where
@@ -42,16 +44,113 @@ fn tx_stage_to_u5c(stage: MempoolTxStage) -> i32 {
     }
 }
 
-fn event_to_watch_mempool_response(event: MempoolEvent) -> WatchMempoolResponse {
-    WatchMempoolResponse {
-        tx: TxInMempool {
-            r#ref: event.tx.hash().to_vec().into(),
-            native_bytes: event.tx.payload().cbor().to_vec().into(),
-            stage: tx_stage_to_u5c(event.tx.stage.clone()),
-            parsed_state: None, // TODO
-        }
-        .into(),
+/// The watch predicate that states the same rule as a mempool predicate.
+fn watch_predicate(predicate: TxPredicate) -> u5c::watch::TxPredicate {
+    let TxPredicate {
+        r#match,
+        not,
+        all_of,
+        any_of,
+    } = predicate;
+    let each = |list: Vec<TxPredicate>| -> Vec<u5c::watch::TxPredicate> {
+        list.into_iter().map(watch_predicate).collect()
+    };
+
+    u5c::watch::TxPredicate {
+        r#match: r#match.map(
+            |AnyChainTxPattern { chain }| u5c::watch::AnyChainTxPattern {
+                chain: chain.map(|any_chain_tx_pattern::Chain::Cardano(pattern)| {
+                    u5c::watch::any_chain_tx_pattern::Chain::Cardano(pattern)
+                }),
+            },
+        ),
+        not: each(not),
+        all_of: each(all_of),
+        any_of: each(any_of),
     }
+}
+
+/// The answer to a mempool change the predicate admits, holding the parts the
+/// mask selects.
+fn event_to_watch_mempool_response<C: ChainReads>(
+    event: MempoolEvent,
+    context: &C,
+    predicate: Option<&u5c::watch::TxPredicate>,
+    mask: MempoolTxMask,
+) -> Result<Option<WatchMempoolResponse>, Status> {
+    let parsed = if predicate.is_some() || mask.parsed {
+        let tx = event
+            .tx
+            .with_tx(|tx| {
+                tx.map(|tx| {
+                    interop::Mapper::new(BlockContext::for_lone_tx(context.clone(), tx)).map_tx(tx)
+                })
+            })
+            .map_err(|e| Status::internal(e.to_string()))?;
+        if predicate.is_some_and(|p| !super::watch::apply_predicate(p, &tx)) {
+            return Ok(None);
+        }
+        mask.parsed.then_some(tx)
+    } else {
+        None
+    };
+
+    Ok(Some(WatchMempoolResponse {
+        tx: Some(TxInMempool {
+            r#ref: if mask.r#ref {
+                event.tx.hash().to_vec().into()
+            } else {
+                Default::default()
+            },
+            native_bytes: if mask.native_bytes {
+                event.tx.payload().cbor().to_vec().into()
+            } else {
+                Default::default()
+            },
+            stage: if mask.stage {
+                tx_stage_to_u5c(event.tx.stage.clone())
+            } else {
+                Default::default()
+            },
+            parsed_state: parsed.map(tx_in_mempool::ParsedState::Cardano),
+        }),
+    }))
+}
+
+/// The answers to a WatchMempool request over the mempool changes `updates`
+/// yields.
+fn watch_mempool_answers<D: Domain + ChainReads>(
+    domain: D,
+    updates: impl Stream<Item = Result<MempoolEvent, MempoolError>> + Send + 'static,
+    request: WatchMempoolRequest,
+) -> impl Stream<Item = Result<WatchMempoolResponse, Status>> + Send + 'static {
+    let mask = MempoolTxMask::from_paths(
+        request
+            .field_mask
+            .as_ref()
+            .map(|m| m.paths.as_slice())
+            .unwrap_or_default(),
+    );
+    let predicate = std::sync::Arc::new(request.predicate.map(watch_predicate));
+
+    updates
+        .map_err(|e| Status::internal(e.to_string()))
+        .and_then(move |event| {
+            let domain = domain.clone();
+            let predicate = predicate.clone();
+            async move {
+                run_blocking(&domain, move |domain| {
+                    event_to_watch_mempool_response(
+                        event,
+                        &domain,
+                        predicate.as_ref().as_ref(),
+                        mask,
+                    )
+                })
+                .await
+            }
+        })
+        .try_filter_map(|answer| async move { Ok(answer) })
 }
 
 fn event_to_wait_for_tx_response(event: MempoolEvent) -> WaitForTxResponse {
@@ -158,7 +257,7 @@ fn tx_eval_to_u5c<R>(
 #[async_trait::async_trait]
 impl<D> submit_service_server::SubmitService for SubmitServiceImpl<D>
 where
-    D: Domain,
+    D: Domain + ChainReads,
 {
     type WaitForTxStream =
         Pin<Box<dyn Stream<Item = Result<WaitForTxResponse, tonic::Status>> + Send + 'static>>;
@@ -243,16 +342,13 @@ where
 
     async fn watch_mempool(
         &self,
-        _request: tonic::Request<WatchMempoolRequest>,
+        request: tonic::Request<WatchMempoolRequest>,
     ) -> Result<tonic::Response<Self::WatchMempoolStream>, tonic::Status> {
         let updates = self.domain.mempool().subscribe();
 
-        let stream = updates
-            .map_ok(event_to_watch_mempool_response)
-            .map_err(|e| Status::internal(e.to_string()))
-            .boxed();
-
-        Ok(Response::new(stream))
+        Ok(Response::new(
+            watch_mempool_answers(self.domain.clone(), updates, request.into_inner()).boxed(),
+        ))
     }
 
     async fn eval_tx(
@@ -292,6 +388,10 @@ where
 #[cfg(test)]
 mod tests {
     include!("../submit_tests.rs");
+
+    fn tx_hash(tx: &u5c::cardano::Tx) -> Vec<u8> {
+        tx.common.as_ref().unwrap().hash.to_vec()
+    }
 }
 
 #[cfg(test)]

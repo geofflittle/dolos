@@ -175,6 +175,56 @@ impl TxMask {
     }
 }
 
+/// The parts of a `TxInMempool` a `FieldMask` selects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MempoolTxMask {
+    pub r#ref: bool,
+    pub native_bytes: bool,
+    pub stage: bool,
+    pub parsed: bool,
+}
+
+impl MempoolTxMask {
+    /// A mask that selects every part.
+    pub const fn all() -> Self {
+        Self {
+            r#ref: true,
+            native_bytes: true,
+            stage: true,
+            parsed: true,
+        }
+    }
+
+    /// Interprets a `FieldMask`'s paths against `TxInMempool`, read under the
+    /// `tx` field of the response or from the transaction itself.
+    pub fn from_paths(paths: &[String]) -> Self {
+        if paths.is_empty() {
+            return Self::all();
+        }
+
+        let mut mask = Self {
+            r#ref: false,
+            native_bytes: false,
+            stage: false,
+            parsed: false,
+        };
+
+        for path in paths {
+            let field = path.strip_prefix("tx.").unwrap_or(path);
+            match field.split('.').next().unwrap_or("") {
+                "ref" => mask.r#ref = true,
+                "native_bytes" => mask.native_bytes = true,
+                "stage" => mask.stage = true,
+                "cardano" => mask.parsed = true,
+                "" | "tx" => return Self::all(),
+                _ => {}
+            }
+        }
+
+        mask
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde::Deserialize;
@@ -283,6 +333,45 @@ mod tests {
                 block: BlockMask::none()
             }
         );
+    }
+
+    #[test]
+    fn mempool_tx_mask_from_paths_semantics() {
+        let mask = |ps: &[&str]| {
+            MempoolTxMask::from_paths(&ps.iter().map(|p| p.to_string()).collect::<Vec<_>>())
+        };
+        let nothing = MempoolTxMask {
+            r#ref: false,
+            native_bytes: false,
+            stage: false,
+            parsed: false,
+        };
+
+        assert_eq!(mask(&[]), MempoolTxMask::all());
+        assert_eq!(mask(&["tx"]), MempoolTxMask::all());
+        assert_eq!(
+            mask(&["tx.native_bytes"]),
+            MempoolTxMask {
+                native_bytes: true,
+                ..nothing
+            }
+        );
+        assert_eq!(
+            mask(&["tx.cardano.hash", "stage"]),
+            MempoolTxMask {
+                stage: true,
+                parsed: true,
+                ..nothing
+            }
+        );
+        assert_eq!(
+            mask(&["tx.ref"]),
+            MempoolTxMask {
+                r#ref: true,
+                ..nothing
+            }
+        );
+        assert_eq!(mask(&["tip"]), nothing);
     }
 
     #[derive(Deserialize, Serialize, Default, Debug, PartialEq, Clone)]

@@ -30,7 +30,7 @@ fn request(bytes: &[u8]) -> Request<EvalTxRequest> {
     })
 }
 
-async fn evaluate<D: Domain>(domain: &D, bytes: &[u8]) -> u5c::cardano::TxEval {
+async fn evaluate<D: Domain + ChainReads>(domain: &D, bytes: &[u8]) -> u5c::cardano::TxEval {
     let response = SubmitServiceImpl::new(domain.clone())
         .eval_tx(request(bytes))
         .await
@@ -368,6 +368,17 @@ impl Domain for RpcDomain {
         self.inner.notify_tip(tip);
     }
 }
+impl pallas::interop::utxorpc::LedgerContext for RpcDomain {
+    fn get_utxos(
+        &self,
+        refs: &[pallas::interop::utxorpc::TxoRef],
+    ) -> Option<pallas::interop::utxorpc::UtxoMap> {
+        self.inner.get_utxos(refs)
+    }
+    fn get_slot_timestamp(&self, slot: u64) -> Option<u64> {
+        self.inner.get_slot_timestamp(slot)
+    }
+}
 
 #[tokio::test]
 async fn estimation_rpc_submission_still_enforces_phase_two() {
@@ -519,4 +530,194 @@ async fn every_handler_reads_the_stores_on_the_blocking_pool() {
             ("wait_for_tx", (0, true)),
         ]
     );
+}
+
+/// Two mempool transactions, the first minting `alpha` and the second `beta`.
+fn minting_txs() -> Vec<MempoolTx> {
+    let (blocks, _, _) = dolos_testing::synthetic::build_synthetic_blocks(
+        dolos_testing::synthetic::SyntheticBlockConfig {
+            block_count: 2,
+            txs_per_block: 1,
+            asset_names_by_block: vec!["alpha".into(), "beta".into()],
+            ..Default::default()
+        },
+    );
+    blocks
+        .iter()
+        .map(|raw| {
+            let block = pallas::ledger::traverse::MultiEraBlock::decode(raw).unwrap();
+            let tx = block.txs().remove(0);
+            MempoolTx::new(tx.hash(), EraCbor(tx.era().into(), tx.encode()), vec![])
+        })
+        .collect()
+}
+
+/// A predicate that admits a transaction minting the synthetic asset `name`.
+// The asset pattern fields are optional at v1 and v1beta and plain at v1alpha.
+#[allow(clippy::useless_conversion)]
+fn mints(name: &str) -> TxPredicate {
+    TxPredicate {
+        r#match: Some(AnyChainTxPattern {
+            chain: Some(any_chain_tx_pattern::Chain::Cardano(
+                u5c::cardano::TxPattern {
+                    mints_asset: Some(u5c::cardano::AssetPattern {
+                        policy_id: bytes::Bytes::from(vec![1u8; 28]).into(),
+                        asset_name: bytes::Bytes::from(name.as_bytes().to_vec()).into(),
+                    }),
+                    ..Default::default()
+                },
+            )),
+        }),
+        ..Default::default()
+    }
+}
+
+fn watch_request(predicate: Option<TxPredicate>, paths: &[&str]) -> WatchMempoolRequest {
+    let mut request = WatchMempoolRequest {
+        predicate,
+        field_mask: Some(Default::default()),
+    };
+    request.field_mask.as_mut().unwrap().paths = paths.iter().map(|p| p.to_string()).collect();
+    if paths.is_empty() {
+        request.field_mask = None;
+    }
+    request
+}
+
+/// The answers WatchMempool gives while the mempool receives `txs`, with the
+/// reads each made on the runtime thread and whether any ran elsewhere.
+async fn watched(
+    request: WatchMempoolRequest,
+    txs: &[MempoolTx],
+) -> (Vec<Result<TxInMempool, Status>>, (usize, bool)) {
+    use crate::serve::grpc::read_counting::ReadCountingDomain;
+
+    let domain = ReadCountingDomain::new(ToyDomain::new(None, None));
+    let updates = futures_util::stream::iter(
+        txs.iter()
+            .cloned()
+            .map(|tx| Ok(MempoolEvent { tx }))
+            .collect::<Vec<_>>(),
+    );
+    let answers = watch_mempool_answers(domain.clone(), updates, request)
+        .map(|answer| answer.map(|x| x.tx.expect("every answer holds its transaction")))
+        .collect::<Vec<_>>()
+        .await;
+    (answers, domain.take())
+}
+
+fn refs(answers: &[Result<TxInMempool, Status>]) -> Vec<Vec<u8>> {
+    answers
+        .iter()
+        .map(|x| x.as_ref().unwrap().r#ref.to_vec())
+        .collect()
+}
+
+#[tokio::test]
+async fn watch_mempool_answers_only_the_transactions_its_predicate_admits() {
+    let txs = minting_txs();
+    let [alpha, beta] = [0, 1].map(|i| txs[i].hash().to_vec());
+    let not_alpha = TxPredicate {
+        not: vec![mints("alpha")],
+        ..Default::default()
+    };
+
+    for (predicate, expected) in [
+        (None, vec![alpha.clone(), beta.clone()]),
+        (Some(mints("beta")), vec![beta.clone()]),
+        (Some(mints("alpha")), vec![alpha.clone()]),
+        (Some(not_alpha), vec![beta.clone()]),
+        (Some(mints("gamma")), vec![]),
+    ] {
+        let (answers, _) = watched(watch_request(predicate.clone(), &[]), &txs).await;
+        assert_eq!(refs(&answers), expected, "{predicate:?}");
+    }
+}
+
+#[tokio::test]
+async fn watch_mempool_answers_hold_what_the_mask_names() {
+    let txs = minting_txs();
+    let payload = |i: usize| txs[i].payload().cbor().to_vec();
+    let parsed_hash = |x: &TxInMempool| {
+        x.parsed_state
+            .as_ref()
+            .map(|tx_in_mempool::ParsedState::Cardano(tx)| tx_hash(tx))
+    };
+
+    let (unmasked, _) = watched(watch_request(None, &[]), &txs).await;
+    assert_eq!(unmasked.len(), 2);
+    for (i, answer) in unmasked.iter().enumerate() {
+        let answer = answer.as_ref().unwrap();
+        assert_eq!(answer.r#ref.to_vec(), txs[i].hash().to_vec());
+        assert_eq!(answer.native_bytes.to_vec(), payload(i));
+        assert_eq!(answer.stage, Stage::Mempool as i32);
+        assert_eq!(parsed_hash(answer), Some(txs[i].hash().to_vec()));
+    }
+
+    let only = |answer: &TxInMempool| {
+        (
+            !answer.r#ref.is_empty(),
+            !answer.native_bytes.is_empty(),
+            answer.stage != 0,
+            answer.parsed_state.is_some(),
+        )
+    };
+    for (paths, parts) in [
+        (&["tx.native_bytes"][..], (false, true, false, false)),
+        (&["tx.cardano.hash"][..], (false, false, false, true)),
+        (&["stage"][..], (false, false, true, false)),
+        (&["tx.ref", "tx.stage"][..], (true, false, true, false)),
+        (&["tx"][..], (true, true, true, true)),
+    ] {
+        let (answers, _) = watched(watch_request(None, paths), &txs).await;
+        assert_eq!(answers.len(), 2, "{paths:?}");
+        for answer in &answers {
+            assert_eq!(only(answer.as_ref().unwrap()), parts, "{paths:?}");
+        }
+    }
+
+    let (filtered, _) = watched(watch_request(Some(mints("beta")), &["tx.ref"]), &txs).await;
+    assert_eq!(refs(&filtered), vec![txs[1].hash().to_vec()]);
+    assert_eq!(
+        only(filtered[0].as_ref().unwrap()),
+        (true, false, false, false)
+    );
+}
+
+#[tokio::test]
+async fn watch_mempool_reads_the_stores_on_the_blocking_pool() {
+    let txs = minting_txs();
+
+    let (_, reads) = watched(watch_request(Some(mints("beta")), &["tx.ref"]), &txs).await;
+    assert_eq!(reads, (0, true));
+
+    let (_, reads) = watched(watch_request(None, &["tx.native_bytes"]), &txs).await;
+    assert_eq!(reads, (0, false));
+}
+
+#[tokio::test]
+async fn watch_mempool_reports_a_payload_that_does_not_decode() {
+    let undecodable = MempoolTx::new(Hash::new([7u8; 32]), EraCbor(7, vec![0xff]), vec![]);
+
+    let (bytes_only, _) = watched(
+        watch_request(None, &["tx.native_bytes"]),
+        std::slice::from_ref(&undecodable),
+    )
+    .await;
+    assert_eq!(
+        bytes_only[0].as_ref().unwrap().native_bytes.to_vec(),
+        vec![0xff]
+    );
+
+    for request in [
+        watch_request(None, &[]),
+        watch_request(Some(mints("beta")), &["tx.ref"]),
+    ] {
+        let (answers, _) = watched(request, std::slice::from_ref(&undecodable)).await;
+        assert_eq!(answers.len(), 1);
+        assert_eq!(
+            answers[0].as_ref().unwrap_err().code(),
+            tonic::Code::Internal
+        );
+    }
 }

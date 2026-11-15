@@ -351,7 +351,7 @@ fn matches_chain(chain: &Chain, tx: &u5c::cardano::Tx) -> bool {
     }
 }
 
-fn apply_predicate(predicate: &u5c::watch::TxPredicate, tx: &u5c::cardano::Tx) -> bool {
+pub(super) fn apply_predicate(predicate: &u5c::watch::TxPredicate, tx: &u5c::cardano::Tx) -> bool {
     let tx_matches = predicate
         .r#match
         .as_ref()
