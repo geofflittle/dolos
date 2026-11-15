@@ -13,46 +13,85 @@
 //!   block into its `AnyChainBlock` representation is the dominant cost.
 
 use serde::{de::DeserializeOwned, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
-fn get_nested_value(value: &Value, keys: &[&str]) -> Option<Value> {
-    let mut current = value;
-    for key in keys {
-        match current {
-            Value::Object(map) => current = map.get(*key)?,
-            _ => return None,
+/// The JSON key of the message field a mask path segment names.
+fn json_key(segment: &str) -> String {
+    let mut parts = segment.split('_');
+    let mut key = parts.next().unwrap_or_default().to_string();
+    for part in parts {
+        let mut chars = part.chars();
+        key.extend(chars.next().map(|c| c.to_ascii_uppercase()));
+        key.push_str(chars.as_str());
+    }
+    key
+}
+
+/// The part of `value` the path `keys` names, applied to each item of a list.
+fn select(value: &Value, keys: &[&str]) -> Option<Value> {
+    let Some((key, rest)) = keys.split_first() else {
+        return Some(value.clone());
+    };
+    match value {
+        Value::Object(map) => {
+            let key = json_key(key);
+            let inner = select(map.get(&key)?, rest)?;
+            Some(Value::Object(Map::from_iter([(key, inner)])))
         }
+        Value::Array(items) => {
+            let items: Vec<_> = items.iter().map(|x| select(x, keys)).collect();
+            items.iter().any(Option::is_some).then(|| {
+                Value::Array(
+                    items
+                        .into_iter()
+                        .map(|x| x.unwrap_or_else(|| json!({})))
+                        .collect(),
+                )
+            })
+        }
+        _ => None,
     }
-    Some(current.clone())
 }
 
-fn set_nested_value(value: &mut Value, keys: &[&str], new_value: Value) {
-    let mut current = value;
-    for key in keys.iter().take(keys.len() - 1) {
-        current = current
-            .as_object_mut()
-            .unwrap() // Safe to unwrap when used in conjunction with get_nested_value
-            .entry(key.to_string())
-            .or_insert_with(|| json!({}));
+/// Adds the selection `part` to `whole`.
+fn merge(whole: &mut Value, part: Value) {
+    match (whole, part) {
+        (Value::Object(whole), Value::Object(part)) => {
+            for (key, value) in part {
+                match whole.get_mut(&key) {
+                    Some(existing) => merge(existing, value),
+                    None => {
+                        whole.insert(key, value);
+                    }
+                }
+            }
+        }
+        (Value::Array(whole), Value::Array(part)) => {
+            for (existing, value) in whole.iter_mut().zip(part) {
+                merge(existing, value);
+            }
+        }
+        (whole, part) => *whole = part,
     }
-    current
-        .as_object_mut()
-        .unwrap()
-        .insert(keys.last().unwrap().to_string(), new_value);
 }
 
+/// The message `obj` holding only the fields `paths` name, or all of it when
+/// `paths` is empty.
 pub fn apply_mask<T>(obj: T, paths: Vec<String>) -> Result<T, serde_json::Error>
 where
     T: DeserializeOwned + Serialize,
 {
+    if paths.is_empty() {
+        return Ok(obj);
+    }
+
     let json_value = serde_json::to_value(obj)?;
-    // Create a new JSON object with only the specified paths
     let mut new_json = json!({});
 
     for path in paths {
         let keys: Vec<&str> = path.split('.').collect();
-        if let Some(value) = get_nested_value(&json_value, &keys) {
-            set_nested_value(&mut new_json, &keys, value);
+        if let Some(part) = select(&json_value, &keys) {
+            merge(&mut new_json, part);
         }
     }
     serde_json::from_value::<T>(new_json)
@@ -402,5 +441,72 @@ mod tests {
         let masked_foobar = apply_mask(foobar, paths).expect("Failed to serde");
         assert_eq!(masked_foobar.foo, String::default());
         assert_eq!(masked_foobar.bar.abc, 10);
+    }
+
+    #[test]
+    fn apply_mask_reads_paths_in_field_names() {
+        use pallas::interop::utxorpc::v1::spec::query::{AnyChainTx, ChainPoint, ReadTxResponse};
+
+        let point = |slot| {
+            Some(ChainPoint {
+                slot,
+                ..Default::default()
+            })
+        };
+        let response = ReadTxResponse {
+            tx: Some(AnyChainTx {
+                native_bytes: vec![1, 2, 3].into(),
+                block_ref: point(9),
+                ..Default::default()
+            }),
+            ledger_tip: point(7),
+        };
+
+        assert_eq!(apply_mask(response.clone(), vec![]).unwrap(), response);
+
+        let masked = apply_mask(response.clone(), vec!["tx.native_bytes".into()]).unwrap();
+        let tx = masked
+            .tx
+            .expect("the path names a field of the transaction");
+        assert_eq!(tx.native_bytes.to_vec(), vec![1, 2, 3]);
+        assert_eq!(tx.block_ref, None);
+        assert_eq!(masked.ledger_tip, None);
+
+        for path in ["ledger_tip", "ledgerTip"] {
+            let masked = apply_mask(response.clone(), vec![path.into()]).unwrap();
+            assert_eq!(masked.ledger_tip, point(7), "{path}");
+            assert_eq!(masked.tx, None, "{path}");
+        }
+    }
+
+    #[test]
+    fn apply_mask_applies_a_path_through_a_list_to_each_item() {
+        use pallas::interop::utxorpc::v1::spec::query::{AnyUtxoData, ReadUtxosResponse, TxoRef};
+
+        let item = |index: u32| AnyUtxoData {
+            native_bytes: vec![index as u8].into(),
+            txo_ref: Some(TxoRef {
+                index,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let bytes_only = |index: u32| AnyUtxoData {
+            native_bytes: vec![index as u8].into(),
+            ..Default::default()
+        };
+        let response = ReadUtxosResponse {
+            items: vec![item(1), item(2)],
+            ledger_tip: None,
+        };
+
+        let masked = apply_mask(response.clone(), vec!["items.native_bytes".into()]).unwrap();
+        assert_eq!(masked.items, vec![bytes_only(1), bytes_only(2)]);
+
+        let masked = apply_mask(response.clone(), vec!["items".into()]).unwrap();
+        assert_eq!(masked.items, response.items);
+
+        let masked = apply_mask(response, vec!["ledger_tip".into()]).unwrap();
+        assert_eq!(masked.items, vec![]);
     }
 }

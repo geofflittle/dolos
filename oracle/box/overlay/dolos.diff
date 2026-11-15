@@ -526,7 +526,7 @@ index 6a010719..b24b47e5 100644
          let resolved = if refs.is_empty() {
              Some(UtxoMap::new())
 diff --git a/src/serve/grpc/v1/query.rs b/src/serve/grpc/v1/query.rs
-index b02dea73..4a8dce78 100644
+index 927eb5af..571f1cb6 100644
 --- a/src/serve/grpc/v1/query.rs
 +++ b/src/serve/grpc/v1/query.rs
 @@ -830,6 +830,9 @@ fn into_u5c_utxo<S: Domain>(

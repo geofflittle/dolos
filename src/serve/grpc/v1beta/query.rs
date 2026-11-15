@@ -984,10 +984,17 @@ where
 
         let (items, cursor) = self.map_utxos(utxos).await?;
 
-        Ok(Response::new(u5c::query::ReadUtxosResponse {
+        let mut response = u5c::query::ReadUtxosResponse {
             items,
             ledger_tip: cursor,
-        }))
+        };
+
+        if let Some(mask) = message.field_mask {
+            response = apply_mask(response, mask.paths)
+                .map_err(|_| Status::internal("Failed to apply field mask"))?
+        }
+
+        Ok(Response::new(response))
     }
 
     async fn search_utxos(
@@ -999,15 +1006,18 @@ where
         info!("received new grpc query - search_utxos");
 
         let pattern = match message.predicate {
-            Some(x) => match x.r#match {
-                Some(x) => x,
-                _ => {
-                    return Err(Status::invalid_argument(
-                        "only 'match' predicate is supported by Dolos",
-                    ));
-                }
-            },
-            _ => {
+            Some(u5c::query::UtxoPredicate {
+                r#match: Some(x),
+                not,
+                all_of,
+                any_of,
+            }) if not.is_empty() && all_of.is_empty() && any_of.is_empty() => x,
+            Some(_) => {
+                return Err(Status::invalid_argument(
+                    "only 'match' predicate is supported by Dolos",
+                ));
+            }
+            None => {
                 return Err(Status::invalid_argument(
                     "criteria too broad, narrow it down",
                 ));
@@ -1024,11 +1034,18 @@ where
 
         let (items, cursor) = self.map_utxos(utxos).await?;
 
-        Ok(Response::new(u5c::query::SearchUtxosResponse {
+        let mut response = u5c::query::SearchUtxosResponse {
             items,
             ledger_tip: cursor,
             next_token: None,
-        }))
+        };
+
+        if let Some(mask) = message.field_mask {
+            response = apply_mask(response, mask.paths)
+                .map_err(|_| Status::internal("Failed to apply field mask"))?
+        }
+
+        Ok(Response::new(response))
     }
 
     async fn read_tx(
@@ -1732,6 +1749,141 @@ mod tests {
                 assert!(!cardano.summaries.is_empty());
             }
             _ => panic!("missing cardano era summaries"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_and_search_utxos_apply_field_mask() {
+        let fixture = crate::tests::musashi::sub_transaction_block();
+        let service = QueryServiceImpl::new(fixture.domain.clone());
+        let key = u5c::query::TxoRef {
+            hash: fixture.parent.to_vec().into(),
+            index: 0,
+        };
+        let read = |paths: &[&str]| {
+            let mut request = u5c::query::ReadUtxosRequest {
+                keys: vec![key.clone()],
+                field_mask: Some(Default::default()),
+            };
+            request.field_mask.as_mut().unwrap().paths =
+                paths.iter().map(|p| p.to_string()).collect();
+            let service = &service;
+            async move {
+                service
+                    .read_utxos(Request::new(request))
+                    .await
+                    .unwrap()
+                    .into_inner()
+            }
+        };
+
+        let whole = read(&[]).await;
+        assert_eq!(whole.items.len(), 1);
+        let item = whole.items[0].clone();
+        assert!(!item.native_bytes.is_empty());
+        assert!(item.txo_ref.is_some());
+        let Some(u5c::query::any_utxo_data::ParsedState::Cardano(output)) = &item.parsed_state
+        else {
+            panic!("an unmasked answer holds the parsed output");
+        };
+
+        let bytes_only = u5c::query::AnyUtxoData {
+            native_bytes: item.native_bytes.clone(),
+            ..Default::default()
+        };
+        assert_eq!(
+            read(&["items.native_bytes"]).await.items,
+            vec![bytes_only.clone()]
+        );
+        assert_eq!(read(&["ledger_tip"]).await.items, vec![]);
+
+        let search = |paths: &[&str]| {
+            let pattern = u5c::cardano::TxOutputPattern {
+                address: Some(u5c::cardano::AddressPattern {
+                    exact_address: Some(output.address.clone()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let mut request = u5c::query::SearchUtxosRequest {
+                predicate: Some(u5c::query::UtxoPredicate {
+                    r#match: Some(u5c::query::AnyUtxoPattern {
+                        utxo_pattern: Some(UtxoPattern::Cardano(pattern)),
+                    }),
+                    ..Default::default()
+                }),
+                field_mask: Some(Default::default()),
+                ..Default::default()
+            };
+            request.field_mask.as_mut().unwrap().paths =
+                paths.iter().map(|p| p.to_string()).collect();
+            let service = &service;
+            async move {
+                service
+                    .search_utxos(Request::new(request))
+                    .await
+                    .unwrap()
+                    .into_inner()
+                    .items
+            }
+        };
+
+        assert!(search(&[]).await.contains(&item));
+        let masked = search(&["items.native_bytes"]).await;
+        assert!(masked.contains(&bytes_only));
+        assert!(masked.iter().all(|x| x.txo_ref.is_none()));
+    }
+
+    #[tokio::test]
+    async fn search_utxos_refuses_a_predicate_beyond_its_match() {
+        let fixture = crate::tests::musashi::sub_transaction_block();
+        let service = QueryServiceImpl::new(fixture.domain.clone());
+        let pattern = || u5c::query::AnyUtxoPattern {
+            utxo_pattern: Some(UtxoPattern::Cardano(u5c::cardano::TxOutputPattern {
+                address: Some(u5c::cardano::AddressPattern {
+                    exact_address: Some(vec![0x61; 29].into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+        };
+        let only = |pattern| u5c::query::UtxoPredicate {
+            r#match: Some(pattern),
+            ..Default::default()
+        };
+        let search = |predicate| {
+            let service = &service;
+            async move {
+                service
+                    .search_utxos(Request::new(u5c::query::SearchUtxosRequest {
+                        predicate: Some(predicate),
+                        ..Default::default()
+                    }))
+                    .await
+            }
+        };
+
+        assert!(search(only(pattern())).await.is_ok());
+        for predicate in [
+            u5c::query::UtxoPredicate {
+                not: vec![only(pattern())],
+                ..only(pattern())
+            },
+            u5c::query::UtxoPredicate {
+                all_of: vec![only(pattern())],
+                ..only(pattern())
+            },
+            u5c::query::UtxoPredicate {
+                any_of: vec![only(pattern())],
+                ..only(pattern())
+            },
+        ] {
+            let refusal = search(predicate.clone()).await.unwrap_err();
+            assert_eq!(
+                refusal.code(),
+                tonic::Code::InvalidArgument,
+                "{predicate:?}"
+            );
         }
     }
 }
