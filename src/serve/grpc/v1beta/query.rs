@@ -4,7 +4,6 @@ use pallas::interop::utxorpc::v1beta::spec::query::any_utxo_pattern::UtxoPattern
 use pallas::interop::utxorpc::v1beta::{self as interop, spec as u5c};
 use pallas::interop::utxorpc::LedgerContext;
 use pallas::ledger::traverse::{MultiEraBlock, MultiEraOutput};
-use std::collections::HashSet;
 use tonic::{Request, Response, Status};
 use tracing::{info, warn};
 
@@ -14,6 +13,7 @@ use crate::serve::grpc::block_context::{BlockContext, BlockTxs, NoInputs};
 use crate::serve::grpc::block_refs::BlockRefData;
 use crate::serve::grpc::masking::apply_mask;
 use crate::serve::grpc::run_blocking;
+use crate::serve::grpc::selection::{self, Selection};
 use crate::serve::ChainReads;
 
 fn to_chain_point(data: &BlockRefData) -> u5c::query::ChainPoint {
@@ -104,18 +104,29 @@ fn map_live_params<C: LedgerContext>(
 }
 
 trait IntoSet {
-    fn into_set<S: CardanoStateIndexExt>(self, state: &S) -> Result<HashSet<TxoRef>, Status>;
+    fn into_set<S: CardanoStateIndexExt>(self, state: &S) -> Result<Selection, Status>;
 }
 
-fn intersect<S: CardanoStateIndexExt>(
-    state: &S,
-    a: impl IntoSet,
-    b: impl IntoSet,
-) -> Result<HashSet<TxoRef>, Status> {
-    let a = a.into_set(state)?;
-    let b = b.into_set(state)?;
+impl<T: IntoSet> IntoSet for Option<T> {
+    fn into_set<S: CardanoStateIndexExt>(self, state: &S) -> Result<Selection, Status> {
+        match self {
+            Some(x) => x.into_set(state),
+            None => Ok(Selection::all()),
+        }
+    }
+}
 
-    Ok(a.intersection(&b).cloned().collect())
+impl selection::UtxoPredicate for u5c::query::UtxoPredicate {
+    type Pattern = u5c::query::AnyUtxoPattern;
+
+    fn into_clauses(self) -> selection::Clauses<Self> {
+        selection::Clauses {
+            matching: self.r#match,
+            not: self.not,
+            all_of: self.all_of,
+            any_of: self.any_of,
+        }
+    }
 }
 
 struct ByAddressQuery(bytes::Bytes);
@@ -127,8 +138,11 @@ impl ByAddressQuery {
 }
 
 impl IntoSet for ByAddressQuery {
-    fn into_set<S: CardanoStateIndexExt>(self, state: &S) -> Result<HashSet<TxoRef>, Status> {
-        state.utxos_by_address(&self.0).map_err(into_status)
+    fn into_set<S: CardanoStateIndexExt>(self, state: &S) -> Result<Selection, Status> {
+        state
+            .utxos_by_address(&self.0)
+            .map(Selection::Only)
+            .map_err(into_status)
     }
 }
 
@@ -141,8 +155,11 @@ impl ByPaymentQuery {
 }
 
 impl IntoSet for ByPaymentQuery {
-    fn into_set<S: CardanoStateIndexExt>(self, state: &S) -> Result<HashSet<TxoRef>, Status> {
-        state.utxos_by_payment(&self.0).map_err(into_status)
+    fn into_set<S: CardanoStateIndexExt>(self, state: &S) -> Result<Selection, Status> {
+        state
+            .utxos_by_payment(&self.0)
+            .map(Selection::Only)
+            .map_err(into_status)
     }
 }
 
@@ -155,25 +172,24 @@ impl ByDelegationQuery {
 }
 
 impl IntoSet for ByDelegationQuery {
-    fn into_set<S: CardanoStateIndexExt>(self, state: &S) -> Result<HashSet<TxoRef>, Status> {
-        state.utxos_by_stake(&self.0).map_err(into_status)
+    fn into_set<S: CardanoStateIndexExt>(self, state: &S) -> Result<Selection, Status> {
+        state
+            .utxos_by_stake(&self.0)
+            .map(Selection::Only)
+            .map_err(into_status)
     }
 }
 
 impl IntoSet for u5c::cardano::AddressPattern {
-    fn into_set<S: CardanoStateIndexExt>(self, state: &S) -> Result<HashSet<TxoRef>, Status> {
+    fn into_set<S: CardanoStateIndexExt>(self, state: &S) -> Result<Selection, Status> {
         let exact = ByAddressQuery::maybe_from(self.exact_address);
         let payment = ByPaymentQuery::maybe_from(self.payment_part);
         let delegation = ByDelegationQuery::maybe_from(self.delegation_part);
 
-        match (exact, payment, delegation) {
-            (Some(x), None, None) => x.into_set(state),
-            (None, Some(x), None) => x.into_set(state),
-            (None, None, Some(x)) => x.into_set(state),
-            (None, Some(a), Some(b)) => intersect(state, a, b),
-            (None, None, None) => Ok(HashSet::default()),
-            _ => Err(Status::invalid_argument("conflicting address criteria")),
-        }
+        Ok(exact
+            .into_set(state)?
+            .intersection(payment.into_set(state)?)
+            .intersection(delegation.into_set(state)?))
     }
 }
 
@@ -186,8 +202,11 @@ impl ByPolicyQuery {
 }
 
 impl IntoSet for ByPolicyQuery {
-    fn into_set<S: CardanoStateIndexExt>(self, state: &S) -> Result<HashSet<TxoRef>, Status> {
-        state.utxos_by_policy(&self.0).map_err(into_status)
+    fn into_set<S: CardanoStateIndexExt>(self, state: &S) -> Result<Selection, Status> {
+        state
+            .utxos_by_policy(&self.0)
+            .map(Selection::Only)
+            .map_err(into_status)
     }
 }
 
@@ -200,13 +219,16 @@ impl ByAssetQuery {
 }
 
 impl IntoSet for ByAssetQuery {
-    fn into_set<S: CardanoStateIndexExt>(self, state: &S) -> Result<HashSet<TxoRef>, Status> {
-        state.utxos_by_asset(&self.0).map_err(into_status)
+    fn into_set<S: CardanoStateIndexExt>(self, state: &S) -> Result<Selection, Status> {
+        state
+            .utxos_by_asset(&self.0)
+            .map(Selection::Only)
+            .map_err(into_status)
     }
 }
 
 impl IntoSet for u5c::cardano::AssetPattern {
-    fn into_set<S: CardanoStateIndexExt>(self, state: &S) -> Result<HashSet<TxoRef>, Status> {
+    fn into_set<S: CardanoStateIndexExt>(self, state: &S) -> Result<Selection, Status> {
         let by_policy = ByPolicyQuery::maybe_from(self.policy_id);
         let by_asset = ByAssetQuery::maybe_from(self.asset_name);
 
@@ -220,28 +242,25 @@ impl IntoSet for u5c::cardano::AssetPattern {
             (None, Some(_)) => Err(Status::invalid_argument(
                 "asset name query requires a policy_id",
             )),
-            (None, None) => Ok(HashSet::default()),
+            (None, None) => Ok(Selection::all()),
         }
     }
 }
 
 impl IntoSet for u5c::cardano::TxOutputPattern {
-    fn into_set<S: CardanoStateIndexExt>(self, state: &S) -> Result<HashSet<TxoRef>, Status> {
-        match (self.address, self.asset) {
-            (None, Some(x)) => x.into_set(state),
-            (Some(x), None) => x.into_set(state),
-            (Some(a), Some(b)) => intersect(state, a, b),
-            (None, None) => Ok(HashSet::default()),
-        }
+    fn into_set<S: CardanoStateIndexExt>(self, state: &S) -> Result<Selection, Status> {
+        Ok(self
+            .address
+            .into_set(state)?
+            .intersection(self.asset.into_set(state)?))
     }
 }
 
 impl IntoSet for u5c::query::AnyUtxoPattern {
-    fn into_set<S: CardanoStateIndexExt>(self, state: &S) -> Result<HashSet<TxoRef>, Status> {
-        match self.utxo_pattern {
-            Some(UtxoPattern::Cardano(x)) => x.into_set(state),
-            _ => Ok(HashSet::new()),
-        }
+    fn into_set<S: CardanoStateIndexExt>(self, state: &S) -> Result<Selection, Status> {
+        self.utxo_pattern
+            .map(|UtxoPattern::Cardano(x)| x)
+            .into_set(state)
     }
 }
 
@@ -1005,27 +1024,12 @@ where
 
         info!("received new grpc query - search_utxos");
 
-        let pattern = match message.predicate {
-            Some(u5c::query::UtxoPredicate {
-                r#match: Some(x),
-                not,
-                all_of,
-                any_of,
-            }) if not.is_empty() && all_of.is_empty() && any_of.is_empty() => x,
-            Some(_) => {
-                return Err(Status::invalid_argument(
-                    "only 'match' predicate is supported by Dolos",
-                ));
-            }
-            None => {
-                return Err(Status::invalid_argument(
-                    "criteria too broad, narrow it down",
-                ));
-            }
-        };
+        let predicate = message.predicate.unwrap_or_default();
 
         let utxos = run_blocking(&self.domain, move |domain| {
-            let set = pattern.into_set(domain.state())?;
+            let set =
+                selection::select(predicate, &mut |pattern| pattern.into_set(domain.state()))?
+                    .into_bounded()?;
 
             StateStore::get_utxos(domain.state(), set.into_iter().collect_vec())
                 .map_err(|e| Status::internal(e.to_string()))
@@ -1834,57 +1838,8 @@ mod tests {
         assert!(masked.iter().all(|x| x.txo_ref.is_none()));
     }
 
-    #[tokio::test]
-    async fn search_utxos_refuses_a_predicate_beyond_its_match() {
-        let fixture = crate::tests::musashi::sub_transaction_block();
-        let service = QueryServiceImpl::new(fixture.domain.clone());
-        let pattern = || u5c::query::AnyUtxoPattern {
-            utxo_pattern: Some(UtxoPattern::Cardano(u5c::cardano::TxOutputPattern {
-                address: Some(u5c::cardano::AddressPattern {
-                    exact_address: Some(vec![0x61; 29].into()),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            })),
-        };
-        let only = |pattern| u5c::query::UtxoPredicate {
-            r#match: Some(pattern),
-            ..Default::default()
-        };
-        let search = |predicate| {
-            let service = &service;
-            async move {
-                service
-                    .search_utxos(Request::new(u5c::query::SearchUtxosRequest {
-                        predicate: Some(predicate),
-                        ..Default::default()
-                    }))
-                    .await
-            }
-        };
-
-        assert!(search(only(pattern())).await.is_ok());
-        for predicate in [
-            u5c::query::UtxoPredicate {
-                not: vec![only(pattern())],
-                ..only(pattern())
-            },
-            u5c::query::UtxoPredicate {
-                all_of: vec![only(pattern())],
-                ..only(pattern())
-            },
-            u5c::query::UtxoPredicate {
-                any_of: vec![only(pattern())],
-                ..only(pattern())
-            },
-        ] {
-            let refusal = search(predicate.clone()).await.unwrap_err();
-            assert_eq!(
-                refusal.code(),
-                tonic::Code::InvalidArgument,
-                "{predicate:?}"
-            );
-        }
+    mod search {
+        include!("../search_tests.rs");
     }
 }
 

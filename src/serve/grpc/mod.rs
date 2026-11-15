@@ -13,6 +13,7 @@ mod eval;
 mod masking;
 #[cfg(test)]
 mod read_counting;
+mod selection;
 mod stream;
 mod v1;
 mod v1alpha;
