@@ -12,8 +12,37 @@ jobs:
     with:
       os: ubuntu-latest
 
+  judge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-09-04
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: judge
+
+      # libtest exits zero when its filter matches no test, so each step
+      # also requires its count line to show a passed test.
+      - name: Judge Dolos against the ledger corpora
+        shell: bash
+        run: |
+          cargo test --release -p dolos --lib -- serve::grpc::v1::ledger_oracle_tests::ledger_oracle --exact --ignored --test-threads=1 | tee judge.log
+          grep -q '^test result: ok. 1 passed' judge.log
+
+      - name: Run the judge self tests
+        shell: bash
+        run: |
+          cargo test --release -p dolos --lib -- serve::grpc::v1::ledger_oracle_tests:: --ignored --test-threads=1 --skip serve::grpc::v1::ledger_oracle_tests::ledger_oracle --skip serve::grpc::v1::ledger_oracle_tests::n2n:: --skip serve::grpc::v1::ledger_oracle_tests::endorser:: | tee self.log
+          grep -Eq '^test result: ok. [1-9][0-9]* passed' self.log
+
   build:
-    needs: [test]
+    needs: [test, judge]
     continue-on-error: true
 
     strategy:
