@@ -392,6 +392,66 @@ mod input_resolution_tests {
         assert_eq!(archive.counters.snapshot().block_reads, 1);
     }
 
+    /// A phase two invalid transaction makes its collateral return, at the
+    /// index after its regular outputs, and none of its regular outputs.
+    #[test]
+    fn an_invalid_transaction_resolves_its_collateral_return_alone() {
+        use pallas::ledger::primitives::{
+            conway::{PostAlonzoTransactionOutput, TransactionBody, TransactionOutput, Value},
+            NonEmptySet, Set, TransactionInput,
+        };
+        let input = |id: u8| TransactionInput {
+            transaction_id: [id; 32].into(),
+            index: 0,
+        };
+        let output = |coin| PostAlonzoTransactionOutput {
+            address: vec![0x61; 29].into(),
+            value: Value::Coin(coin),
+            datum_option: None,
+            script_ref: None,
+        };
+        let collateral_return = output(1_500_000);
+        let body = TransactionBody {
+            inputs: Set::from(vec![input(1)]),
+            outputs: vec![TransactionOutput::PostAlonzo(output(2_000_000).into())],
+            fee: 200_000,
+            ttl: None,
+            certificates: None,
+            withdrawals: None,
+            auxiliary_data_hash: None,
+            validity_interval_start: None,
+            mint: None,
+            script_data_hash: None,
+            collateral: NonEmptySet::from_vec(vec![input(2)]),
+            required_signers: None,
+            network_id: None,
+            collateral_return: Some(TransactionOutput::PostAlonzo(
+                collateral_return.clone().into(),
+            )),
+            total_collateral: Some(500_000),
+            reference_inputs: None,
+            voting_procedures: None,
+            proposal_procedures: None,
+            treasury_value: None,
+            donation: None,
+        };
+        let (_, bytes) = dolos_testing::blocks::make_conway_block_with_tx(10, body, None, false);
+        let block = MultiEraBlock::decode(&bytes).unwrap();
+        let hash = block.txs()[0].hash();
+        let stores = MeasuredStores::new(MemoryStores::open());
+        let archive = stores.archive();
+        store_block(archive, &bytes);
+        let made = TransactionOutput::PostAlonzo(collateral_return.into());
+        let expected = pallas::interop::utxorpc::UtxoMap::from([(
+            (hash, 1),
+            (block.era(), pallas::codec::minicbor::to_vec(made).unwrap()),
+        )]);
+        assert_eq!(
+            resolve_archive_inputs(archive, &[(hash, 0), (hash, 1)]),
+            expected
+        );
+    }
+
     /// Outputs of a transaction the index locates resolve while every other
     /// transaction of its block is bytes that do not decode.
     #[test]

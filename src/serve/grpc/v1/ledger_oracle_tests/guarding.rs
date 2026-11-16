@@ -2,7 +2,7 @@
 //! Corpus bytes are unchanged; mutations and evidence limits:
 //! test_data/musashi-guard-callers/.
 use super::*;
-use dolos_core::{ChainError, MempoolAwareUtxoStore};
+use dolos_core::{ChainError, DomainError, MempoolAwareUtxoStore};
 use pallas::interop::utxorpc::v1::spec as rpc;
 use pallas::ledger::primitives::dijkstra as n;
 use rpc::submit::submit_service_server::SubmitService as _;
@@ -16,7 +16,9 @@ pub(super) struct Fixture {
 }
 pub(super) fn fixture(number: u32) -> Fixture {
     static CORPUS: std::sync::OnceLock<Corpus> = std::sync::OnceLock::new();
-    let corpus = CORPUS.get_or_init(|| load(CorpusKind::Ic));
+    record_fixture(CORPUS.get_or_init(|| load(CorpusKind::Ic)), number)
+}
+fn record_fixture(corpus: &Corpus, number: u32) -> Fixture {
     let run = corpus
         .kept()
         .find(|run| run.records().iter().any(|r| r.n == number))
@@ -221,6 +223,30 @@ async fn original_bad_guard_datum_is_rejected() {
     // Context evaluation and phase-one datum-shape checks have different
     // responsibilities.
     assert_guard(&reports(&f, &f.tx).0.unwrap(), f.expected.unwrap());
+}
+
+#[tokio::test]
+async fn top_level_guards_without_a_plutus_script_are_admitted() {
+    let f = fixture(863);
+    f.group.check(&f.tx).unwrap();
+}
+
+#[tokio::test]
+async fn top_level_guards_under_a_plutus_v3_script_are_refused() {
+    use pallas::ledger::validate::utils::{ContextFailure, ValidationError};
+    let f = record_fixture(&load(CorpusKind::Supp), 189);
+    let result = f.group.check(&f.tx);
+    assert!(
+        matches!(
+            result,
+            Err(DomainError::ChainError(
+                ChainError::Phase1ValidationRejected(ValidationError::DijkstraScriptContext(
+                    ContextFailure::RequiredTopLevelGuards
+                ))
+            ))
+        ),
+        "{result:?}"
+    );
 }
 
 #[tokio::test]

@@ -6,7 +6,7 @@ use dolos_cardano::{
     model::{AccountState, EpochState, EpochValue, FixedNamespace, Stake},
     SingletonEntity,
 };
-use dolos_core::*;
+use dolos_core::{sync::SyncExt as _, *};
 use dolos_testing::toy_domain::ToyDomain;
 use pallas::{
     codec::{minicbor, utils::MaybeIndefArray},
@@ -557,6 +557,65 @@ fn a_pending_withdrawal_is_dropped_once_its_registration_is_dropped() {
         stages,
         vec![(a, MempoolTxStage::Dropped), (t, MempoolTxStage::Dropped)]
     );
+}
+
+fn roll_back_to_the_cursor(domain: &WithdrawalDomain) {
+    let cursor = domain.state().read_cursor().unwrap().unwrap();
+    domain
+        .wal()
+        .append_entries(&[(cursor.clone(), LogValue::origin())])
+        .unwrap();
+    domain.rollback(&cursor).unwrap();
+}
+
+#[test]
+fn a_rollback_keeps_pending_transactions_the_ledger_still_accepts() {
+    let (domain, txs, credential) = synthetic(&[0], 0);
+    let register = registration(&domain, &txs, &credential);
+    let a = domain
+        .receive_tx("register", &domain.read_chain(), &register)
+        .unwrap();
+    let t = domain
+        .receive_tx("withdraw", &domain.read_chain(), &txs[0])
+        .unwrap();
+    roll_back_to_the_cursor(&domain);
+    let pending: Vec<_> = domain
+        .mempool()
+        .peek_pending()
+        .iter()
+        .map(|x| x.hash())
+        .collect();
+    assert_eq!(pending, vec![a, t]);
+}
+
+#[test]
+fn a_rollback_drops_a_pending_withdrawal_whose_registration_is_dropped() {
+    let (domain, txs, credential) = synthetic(&[0], 0);
+    let register = registration(&domain, &txs, &credential);
+    let a = domain
+        .receive_tx("register", &domain.read_chain(), &register)
+        .unwrap();
+    domain.mempool().mark_inflight(&[a]).unwrap();
+    let t = domain
+        .receive_tx("withdraw", &domain.read_chain(), &txs[0])
+        .unwrap();
+    domain
+        .mempool()
+        .confirm(&ChainPoint::Slot(1400011), &[], &[], 10, 1)
+        .unwrap();
+    roll_back_to_the_cursor(&domain);
+    let stages: Vec<_> = domain
+        .mempool()
+        .dump_finalized(0, 10)
+        .items
+        .iter()
+        .map(|x| (x.hash(), x.stage.clone()))
+        .collect();
+    assert_eq!(
+        stages,
+        vec![(a, MempoolTxStage::Dropped), (t, MempoolTxStage::Dropped)]
+    );
+    assert!(domain.mempool().peek_pending().is_empty());
 }
 
 #[test]
