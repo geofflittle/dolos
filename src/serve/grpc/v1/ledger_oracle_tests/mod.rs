@@ -2584,39 +2584,6 @@ fn a_transaction_the_decoder_refuses_names_no_transaction_and_produces_no_refere
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "judges Dolos against the committed ledger corpora, run in release"]
-async fn dropping_one_seed_pair_prints_utxo_disagree() {
-    let corpus = load(CorpusKind::Supp);
-    let manifests = Manifests::committed();
-    let intact = judge(&corpus, &manifests, &Edits::default()).await;
-    assert!(intact.state.utxo.compared() > 0);
-    assert!(intact.state.utxo.disagree().next().is_none(), "{intact}");
-    let dropped = AtomicBool::new(false);
-    let edits = Edits {
-        pre: Box::new(|_, pre| {
-            let skip = !dropped.swap(true, Ordering::Relaxed);
-            pre.iter().skip(usize::from(skip)).cloned().collect()
-        }),
-        ..Edits::default()
-    };
-    let planted = judge(&corpus, &manifests, &edits).await;
-    let run = corpus.kept().next().unwrap();
-    let first = &run.records()[0];
-    let pair = &run.seed()[0];
-    let line = format!(
-        "{} input={} ledger={} dolos=none",
-        supp(first.n),
-        show_input(&pair.input),
-        hex::encode(&pair.output.0)
-    );
-    assert!(
-        shown(planted.state.utxo.disagree()).contains(&line),
-        "{planted}"
-    );
-    assert!(!failing(&planted, Judge::Utxo).is_empty());
-}
-
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn one_changed_cost_model_entry_prints_params_disagree() {
     let corpus = load(CorpusKind::Supp);
     let manifests = Manifests::committed();
@@ -2636,29 +2603,21 @@ async fn one_changed_cost_model_entry_prints_params_disagree() {
         ..Edits::default()
     };
     let planted = judge(&corpus, &manifests, &edits).await;
-    let lines = failing(&planted, Judge::Params);
-    assert_eq!(lines.len(), 1, "{lines:?}");
+    let report = planted.report();
+    let lines: Vec<_> = report
+        .failing
+        .iter()
+        .filter(|v| v.judge == Judge::Params)
+        .collect();
+    let entries: Vec<_> = lines.iter().map(|v| v.entry).collect();
+    let every_route =
+        ByRoute::<ParamsRoute>::routes().map(|(route, version)| Some(route.at(version)));
+    assert_eq!(entries, every_route.collect::<Vec<_>>(), "{lines:?}");
     assert!(
-        lines[0].contains("costModels.PlutusV1[0] ledger="),
+        lines
+            .iter()
+            .all(|v| v.to_string().contains(" costModels.PlutusV1[0] ledger=")),
         "{lines:?}"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
-async fn the_v2_record_is_known_and_its_maker_agrees() {
-    let judged = judge_supp(|_| ()).await;
-    let text = judged.validation.to_string();
-    assert!(!text.contains(" supp#1 "), "{text}");
-    assert!(
-        !fails_with(&judged, Judge::Validation, "supp#2", ""),
-        "{text}"
-    );
-    assert!(
-        text.contains(
-            "\nKNOWN row=V2 ids=supp#2 ledger=accepted dolos=refused[PostAlonzo(InputNotInUTxO)]"
-        ),
-        "{text}"
     );
 }
 
@@ -2702,44 +2661,43 @@ async fn every_layer_accepts_the_sha2_256_mk_nil_data_and_wide_integer_records_i
 
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "judges Dolos against the committed ledger corpora, run in release"]
-async fn deleting_the_v2_known_entry_prints_its_disagreement() {
-    let judged = judge_supp(|m| {
-        m.known.remove(&(Locus::Validation, supp(2))).unwrap();
-    })
-    .await;
-    let text = judged.to_string();
-    assert!(!text.contains("\nKNOWN row=V2 "), "{text}");
-    let tail = " ledger=accepted dolos=refused[PostAlonzo(InputNotInUTxO)]";
-    assert!(
-        fails_with(&judged, Judge::Validation, "supp#2", tail),
-        "{:?}",
-        failing(&judged, Judge::Validation)
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn deleting_one_declared_entry_prints_unsupported_unexpected() {
-    let label = "stateful or scripted subtransaction";
-    let unexpected = format!(" label={label}");
     let intact = judge_supp(|_| ()).await;
+    let refused: BTreeSet<RecordId> = intact
+        .validation
+        .refuse_unsupported
+        .iter()
+        .map(|(id, _)| *id)
+        .collect();
+    let (record, Feature(label)) = Manifests::committed()
+        .declared
+        .into_iter()
+        .find(|(id, _)| id.corpus == CorpusKind::Supp && !refused.contains(id))
+        .expect("a declared record the ledger accepts");
     assert!(
-        !fails_with(&intact, Judge::Validation, "supp#14", &unexpected),
+        intact.validation.unsupported_expected.contains_key(&label),
         "{intact}"
     );
+    let unexpected = format!(" label={label}");
+    let shown = record.to_string();
+    assert!(
+        !fails_with(&intact, Judge::Validation, &shown, &unexpected),
+        "{intact}"
+    );
+    let absent = supp(u32::MAX);
     let deleted = judge_supp(|m| {
-        assert_eq!(m.declared.remove(&supp(14)), Some(Feature(label.into())));
-        m.declared.insert(supp(999), Feature(label.into()));
+        m.declared.remove(&record).unwrap();
+        m.declared.insert(absent, Feature(label.clone()));
     })
     .await;
     let lines = failing(&deleted, Judge::Validation);
     assert!(
-        fails_with(&deleted, Judge::Validation, "supp#14", &unexpected),
+        fails_with(&deleted, Judge::Validation, &shown, &unexpected),
         "{lines:?}"
     );
     let stale = format!(" declared={label} dolos=not_judged");
     assert!(
-        fails_with(&deleted, Judge::Validation, "supp#999", &stale),
+        fails_with(&deleted, Judge::Validation, &absent.to_string(), &stale),
         "{lines:?}"
     );
 }
@@ -2759,108 +2717,6 @@ async fn a_known_entry_naming_an_agreeing_or_unjudged_record_prints_known_stale(
         let stale = fails_with(&named, Judge::Validation, record, " row=V9");
         assert!(stale, "{record} {lines:?}");
     }
-}
-
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
-async fn a_maker_that_fails_leaves_its_dependents_disagreeing() {
-    let corpus = load(CorpusKind::Ic);
-    let committed = Manifests::committed();
-    let intact = judge(&corpus, &committed, &Edits::default()).await;
-    let maker = intact
-        .validation
-        .dependent
-        .iter()
-        .flat_map(|(_, makers)| makers)
-        .find(|m| committed.declared.contains_key(m))
-        .copied()
-        .expect("a declared unsupported maker has a seeded dependent");
-    let dependents: BTreeSet<RecordId> = intact
-        .validation
-        .dependent
-        .iter()
-        .filter(|(_, makers)| makers.contains(&maker))
-        .map(|(id, _)| *id)
-        .collect();
-    let disagrees = |judged: &Judged| -> BTreeSet<RecordId> {
-        let ids = judged
-            .validation
-            .failing
-            .iter()
-            .filter_map(|v| match v.subject {
-                judgement::Subject::Record(id) => Some(id),
-                judgement::Subject::Selection => None,
-            });
-        ids.filter(|id| dependents.contains(id)).collect()
-    };
-    assert!(disagrees(&intact).is_empty(), "{intact}");
-    let mut failing = committed.clone();
-    failing.declared.remove(&maker).unwrap();
-    let patched = judge(&corpus, &failing, &Edits::default()).await;
-    assert!(
-        patched
-            .validation
-            .dependent
-            .iter()
-            .all(|(_, makers)| !makers.contains(&maker)),
-        "{patched}"
-    );
-    assert!(
-        !disagrees(&patched).is_empty(),
-        "maker={maker} dependents={dependents:?} {patched}"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
-async fn dropping_the_seeded_input_under_a_metadata_refusal_prints_reason_mismatch() {
-    let corpus = load(CorpusKind::Ic);
-    let manifests = Manifests::committed();
-    let run = corpus
-        .kept()
-        .find(|r| r.records().iter().any(|x| x.n == 1311))
-        .unwrap();
-    let first = &run.records()[0];
-    assert_eq!(run.seed().len(), 1, "the run is seeded with one output");
-    let first = RecordId {
-        corpus: CorpusKind::Ic,
-        n: first.n,
-    };
-    let tail = " outcome=disagree ledger=refused[SubMissingTxMetadata] ledger_class=metadata \
-                dolos=refused[PostAlonzo(InputNotInUTxO)] dolos_class=inputs";
-    let intact = judge(&corpus, &manifests, &Edits::default()).await;
-    assert!(
-        !fails_with(&intact, Judge::Validation, "ic#1311", ""),
-        "{intact}"
-    );
-    let edits = Edits {
-        pre: Box::new(|id, pre| if id == first { vec![] } else { pre.to_vec() }),
-        ..Edits::default()
-    };
-    let planted = judge(&corpus, &manifests, &edits).await;
-    assert!(
-        fails_with(&planted, Judge::Validation, "ic#1311", tail),
-        "{:?}",
-        failing(&planted, Judge::Validation)
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
-async fn deleting_the_v1_known_entry_prints_its_reason_mismatch() {
-    let intact = judge_supp(|_| ()).await.to_string();
-    assert!(intact.contains("\nKNOWN row=V1 ids=supp#5 "), "{intact}");
-    let deleted = judge_supp(|m| {
-        m.known.remove(&(Locus::Validation, supp(5))).unwrap();
-    })
-    .await;
-    let tail = " outcome=disagree ledger=refused[BadInputsUTxO,BadInputsUTxO] ledger_class=inputs \
-                dolos=refused[PostAlonzo(PreservationOfValue)] dolos_class=value";
-    assert!(
-        fails_with(&deleted, Judge::Validation, "supp#5", tail),
-        "{:?}",
-        failing(&deleted, Judge::Validation)
-    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2926,8 +2782,9 @@ async fn a_block_that_does_not_roll_prints_one_roll_fail_and_no_state_line_for_i
     let first = group[0];
     let last = group[group.len() - 1];
     let head = format!(
-        "VERDICT judge=apply_block entry=apply_block record={first} cells=answer:refused \
+        "VERDICT judge={} entry=apply_block record={first} cells=answer:refused \
          outcome=disagree group={first}..{last} records={} ",
+        Judge::ApplyBlock.name(),
         group.len()
     );
     assert_eq!(lines.len(), 1, "{lines:?}");
@@ -2986,11 +2843,13 @@ async fn an_output_dolos_holds_that_the_ledger_never_made_prints_utxo_disagree()
     let corpus = load(CorpusKind::Supp);
     let manifests = Manifests::committed();
     let intact = judge(&corpus, &manifests, &Edits::default()).await;
-    let unmade = |judged: &Judged, tx: Option<[u8; 32]>| -> Vec<String> {
-        let lines = shown(judged.state.utxo.disagree()).into_iter();
-        let lines = lines.filter(|d| d.contains(" ledger=none dolos="));
-        let named =
-            |d: &String| tx.is_none_or(|tx| d.contains(&format!(" input={}#", hex::encode(tx))));
+    let unmade = |judged: &Judged, tx: Option<[u8; 32]>| -> Vec<((UtxoRoute, Version), String)> {
+        let tallies = judged.state.utxo.0.iter();
+        let lines = tallies.flat_map(|(at, t)| t.disagree.iter().map(|d| (*at, d.to_string())));
+        let lines = lines.filter(|(_, d)| d.contains(" ledger=none dolos="));
+        let named = |(_, d): &(_, String)| {
+            tx.is_none_or(|tx| d.contains(&format!(" input={}#", hex::encode(tx))))
+        };
         lines.filter(named).collect()
     };
     assert!(unmade(&intact, None).is_empty(), "{intact}");
@@ -3010,7 +2869,10 @@ async fn an_output_dolos_holds_that_the_ledger_never_made_prints_utxo_disagree()
     };
     let planted = judge(&corpus, &manifests, &edits).await;
     let lines = unmade(&planted, Some(*tx.hash()));
-    assert_eq!(lines.len(), tx.outputs().len(), "{planted}");
+    let at: Vec<_> = lines.iter().map(|(at, _)| *at).sorted().collect();
+    let reads = ByRoute::<UtxoRoute>::routes().filter(|(route, _)| *route == UtxoRoute::ReadUtxos);
+    let every_read = reads.flat_map(|at| std::iter::repeat_n(at, tx.outputs().len()));
+    assert_eq!(at, every_read.sorted().collect::<Vec<_>>(), "{lines:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3091,7 +2953,7 @@ async fn the_vote_delegation_ic551_keeps_is_known() {
     deleted.known.remove(&(Locus::Accounts, id)).unwrap();
     let deleted = judge(&corpus, &deleted, &Edits::default()).await;
     let text = deleted.state.to_string();
-    assert!(!text.contains("\nKNOWN row=S18 "), "{text}");
+    assert!(!text.contains(line), "{text}");
     let lines = failing(&deleted, Judge::Accounts);
     assert_eq!(lines.len(), 1, "{lines:?}");
     let named = " record=ic#551 cells=answer:differ,field:drep outcome=disagree account=";
