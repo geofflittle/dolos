@@ -700,7 +700,7 @@ pub(crate) mod tests {
     /// and it refuses to have two requests outstanding, because the behavior
     /// under the real transport serves one per peer and a second would wait
     /// behind the first with nothing saying so.
-    pub(crate) struct FakeRelay {
+    struct FakeRelay {
         point: EbId,
         body: Vec<u8>,
         eb_txs: Vec<Vec<u8>>,
@@ -732,7 +732,7 @@ pub(crate) mod tests {
     }
 
     impl FakeRelay {
-        pub(crate) fn new(point: EbId, body: Vec<u8>, eb_txs: Vec<Vec<u8>>, cap: usize) -> Self {
+        fn new(point: EbId, body: Vec<u8>, eb_txs: Vec<Vec<u8>>, cap: usize) -> Self {
             Self {
                 point,
                 body,

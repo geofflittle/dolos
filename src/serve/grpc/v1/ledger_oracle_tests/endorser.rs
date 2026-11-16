@@ -3,8 +3,13 @@
 
 use std::{io::Read as _, path::PathBuf, sync::Arc};
 
-use dolos_core::SyncExt as _;
+use dolos_core::{
+    config::{PeerConfig, SyncConfig},
+    ChainPoint, LogValue, PullEvent, SyncExt as _, WalStore as _,
+};
 use futures_util::StreamExt as _;
+use gasket::framework::{WorkSchedule, Worker as _, WorkerError};
+use gasket::messaging::{tokio::connect_ports, InputPort};
 use ledger_oracle_judge::{
     compare::Tally,
     judgement::{self, Axis, CellKey, EntryPoint, Judge, Route, RunVerdict, Verdict, Version},
@@ -16,7 +21,13 @@ use pallas::{
     },
     crypto::hash::{Hash, Hasher},
     ledger::traverse::MultiEraBlock,
-    network2::protocol::Point,
+    network::{
+        facades::PeerServer,
+        miniprotocols::{
+            chainsync::{ClientRequest, Tip},
+            Point,
+        },
+    },
 };
 use serde::Deserialize;
 use tonic::Request;
@@ -27,15 +38,17 @@ use super::super::{
 };
 use super::serve::NEXT;
 use crate::{
+    adapters::WalAdapter,
     prelude::CancelTokenImpl,
+    relay::convert::header_cbor_to_chainsync,
     sync::{
-        leios::{
-            tests::FakeRelay, CertifiedPayload, LeiosClient, PendingPayloads, FETCH_TIMEOUT,
-            TXS_PER_REQUEST,
-        },
-        pull::announced_by,
+        leios::tests::endorser_block_responder,
+        pull::{Stage, WorkUnit, Worker},
     },
 };
+
+/// The network magic of the Musashi chain the cases were recorded from.
+const MAGIC: u64 = 164;
 
 /// The v1 FetchBlock route.
 pub(super) const FETCH_BLOCK: EntryPoint = EntryPoint::Route(Route::FetchBlock, Version::V1);
@@ -43,11 +56,10 @@ pub(super) const FETCH_BLOCK: EntryPoint = EntryPoint::Route(Route::FetchBlock, 
 /// The v1 FollowTip route.
 pub(super) const FOLLOW_TIP: EntryPoint = EntryPoint::Route(Route::FollowTip, Version::V1);
 
-/// The endorser block the node stores, as the slot of the block that announced
-/// it, its body and its transactions in body order.
+/// The endorser block the node stores, as its body and its transactions in body
+/// order.
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct NodeEndorser {
-    pub slot: u64,
     #[serde(deserialize_with = "hex_bytes")]
     pub body: Vec<u8>,
     #[serde(deserialize_with = "hex_list")]
@@ -376,44 +388,117 @@ pub(super) fn judge_served(served: &s::AnyChainBlock, node: &NodeTxs) -> Result<
     })
 }
 
-/// The block Dolos's pull stage passes on for the case, its endorser block
-/// fetched through the leios-fetch client from a relay serving the node's
-/// endorser block.
-async fn resolved(case: &Case) -> Result<Vec<u8>, String> {
-    let parent = MultiEraBlock::decode(&case.parent).map_err(|e| e.to_string())?;
-    let block = MultiEraBlock::decode(&case.block).map_err(|e| e.to_string())?;
-    let announced =
-        announced_by(Some(&parent.header()), &block.header()).map_err(|e| e.to_string())?;
-    let mut payloads = PendingPayloads::default();
-    match (announced, &case.endorser) {
-        (None, None) => {}
-        (Some(eb), Some(node)) => {
-            payloads.expect(block.slot());
-            let point = Point::Specific(node.slot, Hasher::<256>::hash(&node.body).to_vec());
-            let relay = FakeRelay::new(point, node.body.clone(), node.txs.clone(), usize::MAX);
-            let mut client =
-                LeiosClient::with_transport(relay, "node".into(), TXS_PER_REQUEST, FETCH_TIMEOUT);
-            let txs = client.fetch(&eb).await.map_err(|e| e.to_string())?;
-            let payload = CertifiedPayload {
-                endorser_block: eb,
-                txs,
-            };
-            payloads.deliver(block.slot(), payload);
-        }
-        (announced, node) => {
-            return Err(format!(
-                "dolos certifies={} node stores an endorser block={}",
-                announced.is_some(),
-                node.is_some()
-            ))
+/// A node to node peer on a local port for one session, that finds the
+/// intersection at `parent`, rolls forward to the header of `block`, and
+/// answers the one block fetch with `fetched`.
+async fn ranking_peer(parent: &[u8], block: &[u8], fetched: Vec<u8>) -> String {
+    let point = |cbor: &[u8]| {
+        let decoded = MultiEraBlock::decode(cbor).unwrap();
+        Point::Specific(decoded.slot(), decoded.hash().to_vec())
+    };
+    let (at, next) = (point(parent), point(block));
+    let tip = Tip(next, MultiEraBlock::decode(block).unwrap().number());
+    let header = header_cbor_to_chainsync(Arc::new(block.to_vec())).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+
+    tokio::spawn(async move {
+        let mut server = PeerServer::accept(&listener, MAGIC).await.unwrap();
+        let chainsync = server.chainsync();
+        let asked = chainsync.recv_while_idle().await.unwrap();
+        assert!(matches!(asked, Some(ClientRequest::Intersect(_))));
+        chainsync
+            .send_intersect_found(at.clone(), tip.clone())
+            .await
+            .unwrap();
+        chainsync.recv_while_idle().await.unwrap();
+        chainsync.send_roll_backward(at, tip.clone()).await.unwrap();
+        chainsync.recv_while_idle().await.unwrap();
+        chainsync.send_roll_forward(header, tip).await.unwrap();
+        chainsync.recv_while_idle().await.unwrap();
+        chainsync.send_await_reply().await.unwrap();
+        server.blockfetch().recv_while_idle().await.unwrap();
+        server
+            .blockfetch()
+            .send_block_range(vec![fetched])
+            .await
+            .unwrap();
+        std::future::pending::<()>().await;
+    });
+
+    address
+}
+
+/// The blocks Dolos's pull stage sends downstream from `parent`, held in its
+/// log, against `peer` and a Leios peer serving `endorser`, with whether it
+/// reached the peer's tip or the error it stopped on first.
+async fn pulled(
+    parent: &[u8],
+    peer: String,
+    endorser: Option<&NodeEndorser>,
+) -> (Vec<Vec<u8>>, Result<(), WorkerError>) {
+    let (body, txs) = endorser.map_or_else(Default::default, |e| (e.body.clone(), e.txs.clone()));
+    let (leios, _) = endorser_block_responder(body, txs).await;
+    let decoded = MultiEraBlock::decode(parent).unwrap();
+    let at = ChainPoint::Specific(decoded.slot(), decoded.hash());
+    let wal = WalAdapter::in_memory().unwrap();
+    wal.append_entries(vec![(
+        at.clone(),
+        LogValue {
+            block: parent.to_vec(),
+            delta: Vec::new(),
+            inputs: Default::default(),
+        },
+    )])
+    .unwrap();
+    let upstream = PeerConfig {
+        peer_address: peer,
+        leios_peer_address: Some(leios.to_string()),
+    };
+    let mut stage = Stage::new(&SyncConfig::default(), &upstream, MAGIC, wal);
+    let mut downstream = InputPort::<PullEvent>::default();
+    connect_ports(&mut stage.downstream, &mut downstream, 16);
+    // The stage schedules an await once the peer has said it holds nothing
+    // more, which is the end of the stretch.
+    let ended = match <Worker as gasket::framework::Worker<Stage>>::bootstrap(&stage).await {
+        Ok(mut worker) => loop {
+            match worker.schedule(&mut stage).await {
+                Ok(WorkSchedule::Unit(WorkUnit::Pull)) => {
+                    if let Err(e) = worker.execute(&WorkUnit::Pull, &mut stage).await {
+                        break Err(e);
+                    }
+                }
+                Ok(WorkSchedule::Unit(WorkUnit::Await)) => break Ok(()),
+                Ok(_) => panic!("the pull stage stops scheduling work while its peer is up"),
+                Err(e) => break Err(e),
+            }
+        },
+        Err(e) => Err(e),
+    };
+    drop(stage);
+    let mut sent = Vec::new();
+    while let Ok(message) = downstream.recv().await {
+        match message.payload {
+            PullEvent::RollForward(raw) => sent.push(raw.to_vec()),
+            PullEvent::Rollback(point) if point == at => {}
+            PullEvent::Rollback(point) => panic!("a rollback past the parent to {point:?}"),
         }
     }
-    let mut out = payloads
-        .apply(vec![case.block.clone()])
-        .map_err(|e| e.to_string())?;
-    payloads.refuse_undelivered().map_err(|e| e.to_string())?;
-    out.pop()
-        .ok_or("the pending payloads passed on no block".into())
+    (sent, ended)
+}
+
+/// The block Dolos's pull stage passes on for the case, pulled from a peer
+/// serving the parent and the block and a Leios peer serving the node's
+/// endorser block.
+async fn resolved(case: &Case) -> Result<Vec<u8>, String> {
+    let peer = ranking_peer(&case.parent, &case.block, case.block.clone()).await;
+    match pulled(&case.parent, peer, case.endorser.as_ref()).await {
+        (sent, Ok(())) => match <[Vec<u8>; 1]>::try_from(sent) {
+            Ok([block]) => Ok(block),
+            Err(sent) => Err(format!("the pull stage passed on {} blocks", sent.len())),
+        },
+        (_, Err(e)) => Err(format!("the pull stage stopped on {e}")),
+    }
 }
 
 /// The block FetchBlock and FollowTip serve after Dolos applies the parent and
@@ -587,6 +672,21 @@ async fn served_endorser_transactions_are_the_nodes() {
     tally.report(cases.len(), &mut out);
     println!("{out}");
     assert!(matches!(out.verdict(), RunVerdict::Pass { .. }));
+}
+
+/// A certifying block whose block fetch answers another block leaves its
+/// endorser block unclaimed, and the pull stops with nothing sent downstream.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_endorser_block_no_fetched_block_claims_stops_the_pull() {
+    let cases = load(&fixture_path());
+    let case = cases
+        .iter()
+        .find(|case| case.endorser.is_some())
+        .expect("a certifying case");
+    let peer = ranking_peer(&case.parent, &case.block, case.parent.clone()).await;
+    let (sent, ended) = pulled(&case.parent, peer, case.endorser.as_ref()).await;
+    assert!(matches!(ended, Err(WorkerError::Panic)), "{ended:?}");
+    assert_eq!(sent.len(), 0, "blocks sent downstream");
 }
 
 #[tokio::test]

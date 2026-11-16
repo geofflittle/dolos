@@ -1319,6 +1319,65 @@ mod tests {
         );
     }
 
+    /// A transaction a block carries twice consumes its inputs the first time,
+    /// leaves them the second time, and the block still applies.
+    #[test]
+    fn a_transaction_carried_twice_in_one_block_spends_its_inputs_once() {
+        let cbor = trimmed_block("dijkstra-repeat-ranking-first.block");
+        let block = MultiEraBlock::decode(&cbor).unwrap();
+        let (loaded, store_has) = outside_world(&block);
+
+        let tx = block
+            .txs()
+            .into_iter()
+            .find(|tx| {
+                tx.consumes()
+                    .iter()
+                    .all(|i| store_has.contains(&TxoRef(*i.hash(), i.index() as u32)))
+            })
+            .expect("fixture precondition: a transaction spends only from outside the block");
+
+        let inputs: Vec<TxoRef> = tx
+            .consumes()
+            .iter()
+            .map(|i| TxoRef(*i.hash(), i.index() as u32))
+            .collect();
+        let outputs = tx.produces().len();
+
+        let (once, once_stats) =
+            super::apply_txs_lenient(std::slice::from_ref(&tx), &loaded, &store_has).unwrap();
+        assert_eq!(
+            once_stats,
+            LenientApply::default(),
+            "one copy skips and re-creates nothing"
+        );
+
+        let (twice, twice_stats) =
+            super::apply_txs_lenient(&[tx.clone(), tx.clone()], &loaded, &store_has)
+                .expect("a block carrying a transaction twice still applies");
+
+        assert_eq!(
+            sorted(&twice.consumed_utxo),
+            sorted(&once.consumed_utxo),
+            "the inputs are consumed once"
+        );
+        assert_eq!(
+            twice_stats.skipped,
+            inputs
+                .into_iter()
+                .map(|input| SkippedInput {
+                    tx: tx.hash(),
+                    input
+                })
+                .collect::<Vec<_>>(),
+            "the second copy leaves every input it names"
+        );
+        assert_eq!(
+            twice_stats.recreated_outputs, outputs,
+            "the second copy re-creates every output of the first"
+        );
+    }
+
     fn musashi_block(name: &str) -> Vec<u8> {
         let path = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
             .join("../../test_data/musashi-w36")

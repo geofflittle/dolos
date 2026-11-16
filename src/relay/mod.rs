@@ -9,7 +9,7 @@ use crate::{adapters::DomainAdapter, prelude::*};
 
 mod blockfetch;
 mod chainsync;
-mod convert;
+pub(crate) mod convert;
 mod hanshake;
 
 // TODO: add tests
