@@ -658,7 +658,7 @@ checksum = "90dbd31c98227229239363921e60fcf5e558e43ec69094d46fc4996f08d1d5bc"
 dependencies = [
  "bitcoin_hashes",
  "rand 0.8.6",
- "rand_core 0.5.1",
+ "rand_core 0.6.4",
  "serde",
  "unicode-normalization",
 ]
@@ -4304,7 +4304,7 @@ dependencies = [
 [[package]]
 name = "pallas"
 version = "1.5.0"
-source = "git+https://github.com/SundaeSwap-finance/pallas?rev=c70f3aade32b74f3030fe38236b0d99906f2dda2#c70f3aade32b74f3030fe38236b0d99906f2dda2"
+source = "git+https://github.com/geofflittle/pallas?rev=aa19cf7208fb042407f423f51ce6d20c5736d4c8#aa19cf7208fb042407f423f51ce6d20c5736d4c8"
 dependencies = [
  "pallas-addresses",
  "pallas-codec",
@@ -4323,7 +4323,7 @@ dependencies = [
 [[package]]
 name = "pallas-addresses"
 version = "1.5.0"
-source = "git+https://github.com/SundaeSwap-finance/pallas?rev=c70f3aade32b74f3030fe38236b0d99906f2dda2#c70f3aade32b74f3030fe38236b0d99906f2dda2"
+source = "git+https://github.com/geofflittle/pallas?rev=aa19cf7208fb042407f423f51ce6d20c5736d4c8#aa19cf7208fb042407f423f51ce6d20c5736d4c8"
 dependencies = [
  "base58",
  "bech32 0.11.1",
@@ -4338,7 +4338,7 @@ dependencies = [
 [[package]]
 name = "pallas-codec"
 version = "1.5.0"
-source = "git+https://github.com/SundaeSwap-finance/pallas?rev=c70f3aade32b74f3030fe38236b0d99906f2dda2#c70f3aade32b74f3030fe38236b0d99906f2dda2"
+source = "git+https://github.com/geofflittle/pallas?rev=aa19cf7208fb042407f423f51ce6d20c5736d4c8#aa19cf7208fb042407f423f51ce6d20c5736d4c8"
 dependencies = [
  "hex",
  "minicbor 0.26.4",
@@ -4349,7 +4349,7 @@ dependencies = [
 [[package]]
 name = "pallas-configs"
 version = "1.5.0"
-source = "git+https://github.com/SundaeSwap-finance/pallas?rev=c70f3aade32b74f3030fe38236b0d99906f2dda2#c70f3aade32b74f3030fe38236b0d99906f2dda2"
+source = "git+https://github.com/geofflittle/pallas?rev=aa19cf7208fb042407f423f51ce6d20c5736d4c8#aa19cf7208fb042407f423f51ce6d20c5736d4c8"
 dependencies = [
  "base64 0.22.1",
  "num-rational",
@@ -4364,7 +4364,7 @@ dependencies = [
 [[package]]
 name = "pallas-crypto"
 version = "1.5.0"
-source = "git+https://github.com/SundaeSwap-finance/pallas?rev=c70f3aade32b74f3030fe38236b0d99906f2dda2#c70f3aade32b74f3030fe38236b0d99906f2dda2"
+source = "git+https://github.com/geofflittle/pallas?rev=aa19cf7208fb042407f423f51ce6d20c5736d4c8#aa19cf7208fb042407f423f51ce6d20c5736d4c8"
 dependencies = [
  "cryptoxide 0.4.4",
  "hex",
@@ -4377,7 +4377,7 @@ dependencies = [
 [[package]]
 name = "pallas-hardano"
 version = "1.5.0"
-source = "git+https://github.com/SundaeSwap-finance/pallas?rev=c70f3aade32b74f3030fe38236b0d99906f2dda2#c70f3aade32b74f3030fe38236b0d99906f2dda2"
+source = "git+https://github.com/geofflittle/pallas?rev=aa19cf7208fb042407f423f51ce6d20c5736d4c8#aa19cf7208fb042407f423f51ce6d20c5736d4c8"
 dependencies = [
  "binary-layout",
  "hex",
@@ -4397,7 +4397,7 @@ dependencies = [
 [[package]]
 name = "pallas-network"
 version = "1.5.0"
-source = "git+https://github.com/SundaeSwap-finance/pallas?rev=c70f3aade32b74f3030fe38236b0d99906f2dda2#c70f3aade32b74f3030fe38236b0d99906f2dda2"
+source = "git+https://github.com/geofflittle/pallas?rev=aa19cf7208fb042407f423f51ce6d20c5736d4c8#aa19cf7208fb042407f423f51ce6d20c5736d4c8"
 dependencies = [
  "byteorder",
  "hex",
@@ -4414,7 +4414,7 @@ dependencies = [
 [[package]]
 name = "pallas-network2"
 version = "1.5.0"
-source = "git+https://github.com/SundaeSwap-finance/pallas?rev=c70f3aade32b74f3030fe38236b0d99906f2dda2#c70f3aade32b74f3030fe38236b0d99906f2dda2"
+source = "git+https://github.com/geofflittle/pallas?rev=aa19cf7208fb042407f423f51ce6d20c5736d4c8#aa19cf7208fb042407f423f51ce6d20c5736d4c8"
 dependencies = [
  "byteorder",
  "chrono",
@@ -4433,7 +4433,7 @@ dependencies = [
 [[package]]
 name = "pallas-primitives"
 version = "1.5.0"
-source = "git+https://github.com/SundaeSwap-finance/pallas?rev=c70f3aade32b74f3030fe38236b0d99906f2dda2#c70f3aade32b74f3030fe38236b0d99906f2dda2"
+source = "git+https://github.com/geofflittle/pallas?rev=aa19cf7208fb042407f423f51ce6d20c5736d4c8#aa19cf7208fb042407f423f51ce6d20c5736d4c8"
 dependencies = [
  "hex",
  "pallas-codec",
@@ -4445,7 +4445,7 @@ dependencies = [
 [[package]]
 name = "pallas-traverse"
 version = "1.5.0"
-source = "git+https://github.com/SundaeSwap-finance/pallas?rev=c70f3aade32b74f3030fe38236b0d99906f2dda2#c70f3aade32b74f3030fe38236b0d99906f2dda2"
+source = "git+https://github.com/geofflittle/pallas?rev=aa19cf7208fb042407f423f51ce6d20c5736d4c8#aa19cf7208fb042407f423f51ce6d20c5736d4c8"
 dependencies = [
  "hex",
  "itertools 0.14.0",
@@ -4461,7 +4461,7 @@ dependencies = [
 [[package]]
 name = "pallas-txbuilder"
 version = "1.5.0"
-source = "git+https://github.com/SundaeSwap-finance/pallas?rev=c70f3aade32b74f3030fe38236b0d99906f2dda2#c70f3aade32b74f3030fe38236b0d99906f2dda2"
+source = "git+https://github.com/geofflittle/pallas?rev=aa19cf7208fb042407f423f51ce6d20c5736d4c8#aa19cf7208fb042407f423f51ce6d20c5736d4c8"
 dependencies = [
  "hex",
  "pallas-addresses",
@@ -4477,7 +4477,7 @@ dependencies = [
 [[package]]
 name = "pallas-utxorpc"
 version = "1.5.0"
-source = "git+https://github.com/SundaeSwap-finance/pallas?rev=c70f3aade32b74f3030fe38236b0d99906f2dda2#c70f3aade32b74f3030fe38236b0d99906f2dda2"
+source = "git+https://github.com/geofflittle/pallas?rev=aa19cf7208fb042407f423f51ce6d20c5736d4c8#aa19cf7208fb042407f423f51ce6d20c5736d4c8"
 dependencies = [
  "pallas-codec",
  "pallas-crypto",
@@ -4485,13 +4485,13 @@ dependencies = [
  "pallas-traverse",
  "pallas-validate",
  "prost-types 0.13.5",
- "utxorpc-spec 0.19.2",
+ "utxorpc-spec 0.20.0-dev.1",
 ]
 
 [[package]]
 name = "pallas-validate"
 version = "1.5.0"
-source = "git+https://github.com/SundaeSwap-finance/pallas?rev=c70f3aade32b74f3030fe38236b0d99906f2dda2#c70f3aade32b74f3030fe38236b0d99906f2dda2"
+source = "git+https://github.com/geofflittle/pallas?rev=aa19cf7208fb042407f423f51ce6d20c5736d4c8#aa19cf7208fb042407f423f51ce6d20c5736d4c8"
 dependencies = [
  "amaru-kernel",
  "amaru-uplc 0.1.0",
@@ -7270,8 +7270,9 @@ dependencies = [
 
 [[package]]
 name = "utxorpc-spec"
-version = "0.19.2"
-source = "git+https://github.com/SundaeSwap-finance/utxorpc-spec?rev=4bef71401bae7e9fc80b9d24379be0f9078b0ff5#4bef71401bae7e9fc80b9d24379be0f9078b0ff5"
+version = "0.20.0-dev.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a952a9b5dae5fe98889a406fb9bfac2a4fdafc48ac52c5fc0e78628a368e4470"
 dependencies = [
  "bytes",
  "futures-core",
