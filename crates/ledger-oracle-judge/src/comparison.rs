@@ -3,7 +3,7 @@
 //! the per class tally a run passes or fails by.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fmt,
     panic::AssertUnwindSafe,
     path::Path,
@@ -130,6 +130,11 @@ pub enum Owner {
     Check { layer: Layer, test: &'static str },
     /// A commit on upstream main that accepts the difference on purpose.
     Upstream { commit: Commit },
+    /// A clause of the implementation's written rules that accepts the
+    /// difference.
+    Rule { clause: &'static str },
+    /// A known defect of the implementation that the difference shows.
+    Defect { defect: &'static str },
 }
 
 impl fmt::Display for Owner {
@@ -137,6 +142,8 @@ impl fmt::Display for Owner {
         match self {
             Owner::Check { layer, test } => write!(f, "{layer}: {test}"),
             Owner::Upstream { commit } => write!(f, "accepted on upstream main by {commit}"),
+            Owner::Rule { clause } => write!(f, "rule: {clause}"),
+            Owner::Defect { defect } => write!(f, "defect: {defect}"),
         }
     }
 }
@@ -424,6 +431,37 @@ impl<A: Ord + Clone + fmt::Display> Tally<A> {
             out.push(format!(
                 "{layer}: class {class:?} is not declared, {n} inputs"
             ));
+        }
+        out
+    }
+
+    /// Each listed allowance that fails the run: a class listed twice, a class
+    /// `declared` does not name, or an entry no observation of its selected
+    /// class was allowed by.
+    pub fn unused(&self, listed: &[(&str, Allowed)], declared: &[String]) -> Vec<String> {
+        let layer = self.layer;
+        let mut out = Vec::new();
+        let mut seen = BTreeSet::new();
+        for (class, allowed) in listed {
+            if !seen.insert(*class) {
+                out.push(format!("{layer}: class {class:?} is listed twice"));
+            }
+            if !declared.iter().any(|d| d == class) {
+                out.push(format!("{layer}: listed class {class:?} is not declared"));
+                continue;
+            }
+            let Some(counts) = self.classes.get(*class) else {
+                continue;
+            };
+            let used = counts
+                .axes
+                .values()
+                .any(|c| c.allowed.get(allowed).is_some_and(|n| *n > 0));
+            if !used {
+                out.push(format!(
+                    "{layer}: listed {allowed} in class {class:?} matched no observation"
+                ));
+            }
         }
         out
     }
