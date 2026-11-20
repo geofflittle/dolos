@@ -450,6 +450,116 @@ fn records_of_another_layer_fail() {
     );
 }
 
+#[test]
+fn owner_rule_prints_its_clause() {
+    let owner = Owner::Rule { clause: "step 4" };
+    assert_eq!(owner.to_string(), "rule: step 4");
+    let allowed = Allowed::new("block array-short", Disagreement::Accepts, owner);
+    assert_eq!(allowed.to_string(), "block array-short (rule: step 4)");
+}
+
+#[test]
+fn owner_defect_prints_its_defect() {
+    let owner = Owner::Defect {
+        defect: "a rational reads any tag",
+    };
+    assert_eq!(owner.to_string(), "defect: a rational reads any tag");
+    let allowed = Allowed::new("body rational-tag", Disagreement::Accepts, owner);
+    assert_eq!(
+        allowed.to_string(),
+        "body rational-tag (defect: a rational reads any tag)"
+    );
+}
+
+/// The stand in's difference listed under a defect owner, which the stand in
+/// never allows.
+const DEFECT: Allowed = Allowed::new(
+    "an owned refusal",
+    Disagreement::Refuses,
+    Owner::Defect {
+        defect: "refuses as owned",
+    },
+);
+
+/// Records of a class with one allowed observation, a class with two, a class
+/// whose observation agrees and a class with no judged observation.
+fn listed_records() -> Records {
+    records(
+        &["allowed once", "allowed twice", "agreeing", "not-judged"],
+        &[
+            ("allowed once", "07", "5"),
+            ("allowed twice", "07", "5"),
+            ("allowed twice", "07", "6"),
+            ("agreeing", "0001", "1"),
+            ("not-judged", "0001", "null"),
+        ],
+    )
+}
+
+#[test]
+fn unused_entry_seen_nowhere_fails() {
+    let r = listed_records();
+    let run = one(&r);
+    let listed = [
+        ("agreeing", OWNED),
+        ("not-judged", OWNED),
+        ("allowed once", DEFECT),
+    ];
+    assert_eq!(
+        run.tally.unused(&listed, r.classes()),
+        [
+            "decode: listed an owned refusal (decode: interface stand in) in class \"agreeing\" matched no observation",
+            "decode: listed an owned refusal (decode: interface stand in) in class \"not-judged\" matched no observation",
+            "decode: listed an owned refusal (defect: refuses as owned) in class \"allowed once\" matched no observation",
+        ]
+    );
+}
+
+#[test]
+fn unused_entry_seen_once_passes() {
+    let r = listed_records();
+    let run = one(&r);
+    assert_eq!(counts(&run, "allowed once", 0).allowed[&OWNED], 1);
+    assert_eq!(counts(&run, "allowed twice", 0).allowed[&OWNED], 2);
+    let listed = [("allowed once", OWNED), ("allowed twice", OWNED)];
+    assert_eq!(run.tally.unused(&listed, r.classes()), Vec::<String>::new());
+}
+
+#[test]
+fn unused_undeclared_class_fails() {
+    let r = listed_records();
+    let run = one(&r);
+    let listed = [("allowed once", OWNED), ("allowed thrice", OWNED)];
+    assert_eq!(
+        run.tally.unused(&listed, r.classes()),
+        ["decode: listed class \"allowed thrice\" is not declared"]
+    );
+}
+
+#[test]
+fn unused_class_listed_twice_fails() {
+    let r = listed_records();
+    let run = one(&r);
+    let listed = [("allowed once", OWNED), ("allowed once", OWNED)];
+    assert_eq!(
+        run.tally.unused(&listed, r.classes()),
+        ["decode: class \"allowed once\" is listed twice"]
+    );
+}
+
+#[test]
+fn unused_unselected_class_is_skipped() {
+    let r = listed_records();
+    let run = compare(&Arc::new(StandIn), &r, &kinds(&["allowed twice"]));
+    assert_eq!(run.judgements.len(), 2);
+    let listed = [
+        ("allowed twice", OWNED),
+        ("allowed once", DEFECT),
+        ("agreeing", OWNED),
+    ];
+    assert_eq!(run.tally.unused(&listed, r.classes()), Vec::<String>::new());
+}
+
 /// A layer whose implementation answers as the reference does, for the
 /// records fixtures.
 struct Echo;
