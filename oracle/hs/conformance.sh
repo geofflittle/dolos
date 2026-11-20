@@ -1,13 +1,13 @@
 #!/bin/sh
 # Writes the protocol 12 V3 and V4 conformance directories of an amaru tree from its protocol 11 V3 programs, with the result and budget the ledger gives each text and flat program.
-# Usage: GEN=<pallas conformance-value-oracle/gen dir> conformance.sh <amaru tree> <store dir> <work dir> [check]
+# Usage: conformance.sh <amaru tree> <store dir> <work dir> [check]
 # With check it writes the protocol 11 V3 results instead, compares them with the tree's own, and prints one CONFORMANCE line.
 # A scenario the amaru test build lists as out of budget is counted apart, since the test replaces its expected files.
 set -eu
 TREE=$1/crates/amaru-uplc/tests/conformance
 STORE=$2
 WORK=$3
-IMAGE=${IMAGE:-$(sh "${GEN:?}/build-image.sh" conformance-gen-hs)}
+IMAGE=${IMAGE:-$(sh "$(dirname "$0")/../image.sh")}
 export IMAGE
 sh "$(dirname "$0")/build.sh" Conformance "$STORE" "$WORK"
 
