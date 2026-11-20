@@ -1,0 +1,13 @@
+--- a/reference-comparison/tests/decode/differences.rs
++++ b/reference-comparison/tests/decode/differences.rs
+@@ -139,10 +139,6 @@
+         ),
+     ),
+     (
+-        "tx zap",
+-        accepts("a size is kept as read", KEPT_AS_READ, any),
+-    ),
+-    (
+         "wits zap",
+         accepts("a size is kept as read", KEPT_AS_READ, any),
+     ),

@@ -1,0 +1,91 @@
+name: Reference comparison
+
+on:
+  push:
+    branches: [feat/decode-reference-comparison]
+
+permissions:
+  contents: read
+
+jobs:
+  decode:
+    name: decode (planted ${{ matrix.planted }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        planted: [none, rational-tag-refused, tx-zap-entry-removed]
+        include:
+          - planted: rational-tag-refused
+            patched: pallas-head
+            expected: |
+              decode: listed a rational under another tag (defect: a rational reads any tag) in class "body rational-tag" matched no observation
+              decode: listed a rational under another tag (defect: a rational reads any tag) in class "ppu rational-tag" matched no observation
+              decode: listed a rational under another tag (defect: a rational reads any tag) in class "ppu zap" matched no observation
+          - planted: tx-zap-entry-removed
+            patched: dolos
+            expected: |
+              decode: class "tx zap" disagrees (accepts) 4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: dolos
+          persist-credentials: false
+      - name: Check out the pallas head under comparison
+        uses: actions/checkout@v4
+        with:
+          repository: geofflittle/pallas
+          ref: adb44159a4ca20e8f70d8cada66c93d505aa8ca9
+          path: pallas-head
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-09-04
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.151
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: dolos/reference-comparison -> target
+          save-if: ${{ matrix.planted == 'none' }}
+
+      - name: Run the decode comparison
+        if: matrix.planted == 'none'
+        working-directory: dolos/reference-comparison
+        run: cargo nextest run --locked --test decode --no-capture
+
+      - name: Apply the planted defect
+        if: matrix.planted != 'none'
+        working-directory: ${{ matrix.patched }}
+        env:
+          PATCH: ${{ github.workspace }}/dolos/reference-comparison/planted-defects/${{ matrix.planted }}.patch
+        run: |
+          git apply --check "$PATCH"
+          git apply "$PATCH"
+          if git diff --quiet; then
+            echo "::error::$PATCH changed nothing in ${{ matrix.patched }}"
+            exit 1
+          fi
+          git diff --stat
+
+      - name: Run the decode comparison over the planted defect
+        if: matrix.planted != 'none'
+        working-directory: dolos/reference-comparison
+        env:
+          EXPECTED: ${{ matrix.expected }}
+        run: |
+          rc=0
+          cargo nextest run --locked --no-fail-fast --test decode --no-capture > "$RUNNER_TEMP/run.out" 2>&1 || rc=$?
+          cat "$RUNNER_TEMP/run.out"
+          if [ "$rc" -ne 100 ]; then
+            echo "::error::the run exited $rc, and a failing test exits 100"
+            exit 1
+          fi
+          awk '/panicked at tests\/decode\/main.rs/{f=1;next} f&&(/^note:/||/^$/||/^test /){f=0} f' "$RUNNER_TEMP/run.out" | sort > "$RUNNER_TEMP/failures"
+          printf '%s' "$EXPECTED" | sort > "$RUNNER_TEMP/expected"
+          if ! diff "$RUNNER_TEMP/expected" "$RUNNER_TEMP/failures"; then
+            echo "::error::the failure lines differ from the planted defect's expected lines"
+            exit 1
+          fi
+          echo "failure lines: $(wc -l < "$RUNNER_TEMP/failures"), as expected"
