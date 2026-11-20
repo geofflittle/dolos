@@ -2,12 +2,12 @@
 # Writes the mutant corpus. Each record writer runs with the mutants of its
 # accepted records, its records must equal its committed corpus, and the
 # mutants of lowest rank per corpus and operator are kept in generation order.
-# Usage: GEN=<pallas conformance-value-oracle/gen dir> mutants.sh <store dir> <work dir> [seed], then the corpus is
+# Usage: mutants.sh <store dir> <work dir> [seed], then the corpus is
 # test_data/ledger-oracle/mut.jsonl.gz and the last line gives its sha256.
 set -eu
 STORE=$1
 WORK=$2
-IMAGE=${IMAGE:-$(sh "${GEN:?}/build-image.sh" conformance-gen-hs)}
+IMAGE=${IMAGE:-$(sh "$(dirname "$0")/../image.sh")}
 export IMAGE
 SEED=${3:-42}
 PER=100

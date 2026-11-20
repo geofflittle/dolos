@@ -1,10 +1,10 @@
 #!/bin/sh
 # Builds and runs one corpus writer, then prints its line count and sha256.
-# Usage: GEN=<pallas conformance-value-oracle/gen dir> gen.sh <Extract|Pwc|Supplement|Phase1|Uplc|Leaves> <store dir> <work dir>
+# Usage: gen.sh <Extract|Pwc|Supplement|Phase1|Uplc|Leaves> <store dir> <work dir>
 set -eu
 STORE=$2
 WORK=$3
-IMAGE=${IMAGE:-$(sh "${GEN:?}/build-image.sh" conformance-gen-hs)}
+IMAGE=${IMAGE:-$(sh "$(dirname "$0")/../image.sh")}
 export IMAGE
 MODE=
 case $1 in

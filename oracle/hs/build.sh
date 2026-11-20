@@ -1,13 +1,12 @@
 #!/bin/sh
 # Compiles one module of this directory against a prebuilt cardano-ledger
 # package store, mounted read only.
-# Usage: GEN=<pallas conformance-value-oracle/gen dir> build.sh <module> <store dir> <work dir>
-# GEN holds the build-image.sh that names the image, used unless IMAGE names it already.
+# Usage: build.sh <module> <store dir> <work dir>
 set -eu
 M=$1
 STORE=$2
 WORK=$3
-IMAGE=${IMAGE:-$(sh "${GEN:?}/build-image.sh" conformance-gen-hs)}
+IMAGE=${IMAGE:-$(sh "$(dirname "$0")/../image.sh")}
 mkdir -p "$WORK/bin" "$WORK/obj" "$WORK/out"
 cp "$(dirname "$0")"/*.hs "$WORK/"
 docker run --rm -v "$STORE":/work:ro -v "$WORK":/probe -w /probe "$IMAGE" \
