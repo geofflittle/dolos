@@ -1,0 +1,36 @@
+cabal-version: 3.0
+name: reference-writer
+version: 0.1.0.0
+build-type: Simple
+
+executable reference-writer
+  main-is: Main.hs
+  other-modules: Build
+  hs-source-dirs: .
+  default-language: Haskell2010
+  ghc-options: -O1 -Wall
+  build-depends:
+    base,
+    aeson,
+    base16-bytestring,
+    bytestring,
+    cborg,
+    containers,
+    microlens,
+    text,
+    QuickCheck,
+    antigen,
+    cuddle,
+    cardano-crypto-class,
+    cardano-data,
+    cardano-strict-containers,
+    cardano-ledger-binary:{cardano-ledger-binary, testlib},
+    cardano-ledger-core,
+    cardano-ledger-allegra,
+    cardano-ledger-alonzo,
+    cardano-ledger-babbage,
+    cardano-ledger-mary,
+    plutus-ledger-api,
+    cardano-ledger-conway,
+    cardano-ledger-dijkstra:{cardano-ledger-dijkstra, testlib, cddl},
+    cardano-protocol:{cardano-protocol, testlib},
