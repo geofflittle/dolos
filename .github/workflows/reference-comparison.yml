@@ -18,7 +18,7 @@ jobs:
         planted: [none, rational-tag-refused, tx-zap-entry-removed]
         include:
           - planted: rational-tag-refused
-            patched: pallas-head
+            patched: dolos
             expected: |
               decode: listed a rational under another tag (defect: a rational reads any tag) in class "body rational-tag" matched no observation
               decode: listed a rational under another tag (defect: a rational reads any tag) in class "ppu rational-tag" matched no observation
