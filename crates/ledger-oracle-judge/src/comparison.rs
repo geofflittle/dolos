@@ -367,6 +367,89 @@ pub struct Row {
     pub input: Vec<u8>,
     pub reference: Reference<Value>,
     pub rules: Vec<String>,
+    pub site: Option<String>,
+    pub mutated: Option<String>,
+    pub base: Option<Vec<u8>>,
+}
+
+impl Row {
+    /// The rule a changed row's input changes and the kind of change, the
+    /// second word of its class.
+    pub fn change(&self) -> Option<(&str, &str)> {
+        let (_, kind) = self.class.split_once(' ')?;
+        Some((self.mutated.as_deref()?, kind))
+    }
+}
+
+/// A rule of the reference's spec and the kinds of change the records make to
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Target {
+    pub rule: String,
+    pub kinds: Vec<String>,
+}
+
+/// The number of inputs of each target change, over one layer's records.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Coverage {
+    layer: Layer,
+    counts: BTreeMap<(String, String), usize>,
+}
+
+impl Coverage {
+    /// Counts the rows that make each change `targets` names.
+    pub fn new(layer: Layer, targets: &[Target], rows: &[Row]) -> Self {
+        let mut counts: BTreeMap<(String, String), usize> = targets
+            .iter()
+            .flat_map(|t| t.kinds.iter().map(|k| ((t.rule.clone(), k.clone()), 0)))
+            .collect();
+        for (rule, kind) in rows.iter().filter_map(Row::change) {
+            if let Some(n) = counts.get_mut(&(rule.to_owned(), kind.to_owned())) {
+                *n += 1;
+            }
+        }
+        Coverage { layer, counts }
+    }
+
+    /// The number of inputs that change `rule` by `kind`, if it is a target.
+    pub fn count(&self, rule: &str, kind: &str) -> Option<usize> {
+        self.counts
+            .get(&(rule.to_owned(), kind.to_owned()))
+            .copied()
+    }
+
+    /// Each reason the coverage fails: a target change no input makes, or a
+    /// change in `required` the targets lack.
+    pub fn failures(&self, required: &[(&str, &str)]) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .counts
+            .iter()
+            .filter(|(_, n)| **n == 0)
+            .map(|((rule, kind), _)| format!("{}: no input changes {rule} by {kind}", self.layer))
+            .collect();
+        for (rule, kind) in required {
+            if self.count(rule, kind).is_none() {
+                out.push(format!(
+                    "{}: the targets lack the required change {rule} by {kind}",
+                    self.layer
+                ));
+            }
+        }
+        out
+    }
+}
+
+impl fmt::Display for Coverage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let made = self.counts.values().filter(|n| **n > 0).count();
+        writeln!(
+            f,
+            "{}: {} target changes, {made} made, {} not made",
+            self.layer,
+            self.counts.len(),
+            self.counts.len() - made
+        )
+    }
 }
 
 /// A record file whose reference pin equals the pin of the head under test.
@@ -376,6 +459,7 @@ pub struct Records {
     generator: String,
     layer: Layer,
     classes: Vec<String>,
+    targets: Vec<Target>,
     rows: Vec<Row>,
 }
 
@@ -421,6 +505,28 @@ impl Records {
             .and_then(Value::as_array)
             .and_then(|a| a.iter().map(|c| c.as_str().map(str::to_owned)).collect())
             .ok_or_else(|| malformed(n, "header has no class list"))?;
+        let names = |v: Option<&Value>| -> Option<Vec<String>> {
+            v?.as_array()?
+                .iter()
+                .map(|x| x.as_str().map(str::to_owned))
+                .collect()
+        };
+        let targets = match header.get("targets") {
+            None => Vec::new(),
+            Some(t) => t
+                .as_array()
+                .and_then(|a| {
+                    a.iter()
+                        .map(|t| {
+                            Some(Target {
+                                rule: t.get("rule")?.as_str()?.to_owned(),
+                                kinds: names(t.get("kinds"))?,
+                            })
+                        })
+                        .collect()
+                })
+                .ok_or_else(|| malformed(n, "targets is not a list of rules with kinds"))?,
+        };
         let mut rows = Vec::new();
         for (n, line) in lines {
             let v: Value = serde_json::from_str(line).map_err(|e| malformed(n, &e.to_string()))?;
@@ -439,10 +545,17 @@ impl Records {
             };
             let rules = match v.get("rules") {
                 None => Vec::new(),
-                Some(r) => r
-                    .as_array()
-                    .and_then(|a| a.iter().map(|x| x.as_str().map(str::to_owned)).collect())
-                    .ok_or_else(|| malformed(n, "rules is not a list of names"))?,
+                Some(r) => {
+                    names(Some(r)).ok_or_else(|| malformed(n, "rules is not a list of names"))?
+                }
+            };
+            let base = match v.get("base") {
+                None => None,
+                Some(b) => Some(
+                    b.as_str()
+                        .and_then(|h| hex::decode(h).ok())
+                        .ok_or_else(|| malformed(n, "base is not hex"))?,
+                ),
             };
             rows.push(Row {
                 class: class.to_owned(),
@@ -450,6 +563,9 @@ impl Records {
                 input,
                 reference,
                 rules,
+                site: text("site").map(str::to_owned),
+                mutated: text("mutated").map(str::to_owned),
+                base,
             });
         }
         Ok(Records {
@@ -458,8 +574,15 @@ impl Records {
             layer: Layer::from_name(&field("layer")?)
                 .ok_or_else(|| malformed(n, "header names no known layer"))?,
             classes,
+            targets,
             rows,
         })
+    }
+
+    /// The changes the records name as targets, empty when the header names
+    /// none.
+    pub fn targets(&self) -> &[Target] {
+        &self.targets
     }
 
     /// The reference pin the records were written at.
@@ -725,6 +848,102 @@ mod tests {
             Records::read(&text, "9df9f98c"),
             Err(RecordsError::Malformed { line: 1, .. })
         ));
+    }
+
+    const CHANGED: &str = r#"{"reference":"9df9f98c","generator":"g1","targets":[{"rule":"voter","kinds":["unknown-arm","array-short"]},{"rule":"transaction_body","kinds":["wide-heads"]}],"layer":"decode","classes":["body","body unknown-arm"]}
+{"class":"body","input":"a0","reference":{"accepts":{"fee":1}}}
+{"class":"body unknown-arm","variant":"80 5","input":"a1","reference":{"refuses":"unknown tag"},"site":"voting_procedures key","mutated":"voter","base":"a0"}
+"#;
+
+    #[test]
+    fn the_change_of_a_row_is_read() {
+        let records = Records::read(CHANGED, "9df9f98c").unwrap();
+        let row = &records.rows()[1];
+        assert_eq!(row.site.as_deref(), Some("voting_procedures key"));
+        assert_eq!(row.mutated.as_deref(), Some("voter"));
+        assert_eq!(row.base.as_deref(), Some(&[0xa0][..]));
+        assert_eq!(row.change(), Some(("voter", "unknown-arm")));
+        let plain = &records.rows()[0];
+        assert_eq!((plain.base.as_deref(), plain.change()), (None, None));
+    }
+
+    #[test]
+    fn a_base_that_is_not_hex_is_refused() {
+        let text = CHANGED.replace(r#""base":"a0""#, r#""base":"ag""#);
+        assert!(matches!(
+            Records::read(&text, "9df9f98c"),
+            Err(RecordsError::Malformed { line: 3, .. })
+        ));
+    }
+
+    #[test]
+    fn the_targets_of_records_are_read() {
+        let records = Records::read(CHANGED, "9df9f98c").unwrap();
+        assert_eq!(
+            records.targets(),
+            [
+                Target {
+                    rule: "voter".into(),
+                    kinds: vec!["unknown-arm".into(), "array-short".into()]
+                },
+                Target {
+                    rule: "transaction_body".into(),
+                    kinds: vec!["wide-heads".into()]
+                },
+            ]
+        );
+        assert!(Records::read(RECORDS, "9df9f98c")
+            .unwrap()
+            .targets()
+            .is_empty());
+    }
+
+    #[test]
+    fn a_target_change_no_row_makes_fails() {
+        let records = Records::read(CHANGED, "9df9f98c").unwrap();
+        let coverage = Coverage::new(records.layer(), records.targets(), records.rows());
+        assert_eq!(coverage.count("voter", "unknown-arm"), Some(1));
+        assert_eq!(
+            coverage.failures(&[("voter", "unknown-arm")]),
+            [
+                "decode: no input changes transaction_body by wide-heads",
+                "decode: no input changes voter by array-short",
+            ]
+        );
+    }
+
+    #[test]
+    fn targets_each_changed_pass() {
+        let rows = [
+            "\n{\"class\":\"body array-short\",\"input\":\"a1\",\"reference\":{\"refuses\":\"r\"},\"mutated\":\"voter\"}",
+            "\n{\"class\":\"body wide-heads\",\"input\":\"a1\",\"reference\":{\"accepts\":{}},\"mutated\":\"transaction_body\"}",
+        ];
+        let records = Records::read(
+            &(CHANGED.trim_end().to_owned() + rows[0] + rows[1]),
+            "9df9f98c",
+        )
+        .unwrap();
+        let coverage = Coverage::new(records.layer(), records.targets(), records.rows());
+        assert_eq!(
+            coverage.failures(&[("voter", "unknown-arm")]),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            coverage.to_string(),
+            "decode: 3 target changes, 3 made, 0 not made\n"
+        );
+    }
+
+    #[test]
+    fn a_required_change_the_targets_lack_fails() {
+        let records = Records::read(CHANGED, "9df9f98c").unwrap();
+        let coverage = Coverage::new(records.layer(), records.targets(), records.rows());
+        assert!(coverage
+            .failures(&[("gov_action", "unknown-arm")])
+            .contains(
+                &"decode: the targets lack the required change gov_action by unknown-arm"
+                    .to_owned()
+            ));
     }
 
     #[test]

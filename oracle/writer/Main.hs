@@ -12,6 +12,8 @@
 module Main (main) where
 
 import qualified Build
+import qualified Mutation
+import qualified SignedChange
 import Cardano.Ledger.Address (DirectDeposits (..))
 import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
 import Cardano.Ledger.Alonzo.Scripts (AlonzoScript (..), plutusScriptBinary, plutusScriptLanguage)
@@ -67,6 +69,7 @@ import Codec.CBOR.Cuddle.CDDL.CtlOp (CtlOp (Cbor))
 import Codec.CBOR.Cuddle.CDDL.Custom.Generator (runCBORGen)
 import Codec.CBOR.Cuddle.CDDL.Custom.Validator (ValidatorPhase, XXCTree (..))
 import Codec.CBOR.Cuddle.CDDL.Resolve (MonoReferenced, XXCTree (..))
+import Codec.CBOR.Cuddle.IndexMappable (mapIndex)
 import qualified Codec.CBOR.Read as CBOR
 import qualified Codec.CBOR.Term as CBOR
 import qualified Codec.CBOR.Write as CBOR
@@ -81,7 +84,9 @@ import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.ByteString.Lazy.Char8 as BSL8
 import qualified Data.ByteString.Short as SBS
+import Control.Monad (unless)
 import Data.Containers.ListUtils (nubOrd)
+import Data.Either (isRight)
 import Data.Foldable (toList)
 import Data.List (sortOn)
 import qualified Data.List.NonEmpty as NE
@@ -97,7 +102,7 @@ import qualified Data.Text.Encoding as T
 import Lens.Micro ((^.))
 import qualified PlutusLedgerApi.V1 as PV1
 import System.Environment (getArgs)
-import Test.AntiGen (runAntiGen)
+import Test.AntiGen (ZapResult (..), runAntiGen, zapAntiGenResult)
 import Test.Cardano.Ledger.Binary.Cuddle (HuddleEnv (..), resolveHuddle, toGenConfig)
 import Test.Cardano.Ledger.Dijkstra.Arbitrary (
   genSmallDijkstraCertBlockBody,
@@ -569,15 +574,14 @@ answer = \case
   Right d -> Aeson.object ["accepts" .= toJ d]
   Left reason -> Aeson.object ["refuses" .= reason]
 
--- | Prints one record of an input with the ledger's answer for it.
-record :: T.Text -> T.Text -> BS.ByteString -> Either T.Text D -> Aeson.Series -> IO ()
+-- | One record of an input with the ledger's answer for it.
+record :: T.Text -> T.Text -> BS.ByteString -> Either T.Text D -> Aeson.Series -> Aeson.Series
 record class_ variant input reading_ extra =
-  line $
-    "class" .= class_
-      <> "variant" .= variant
-      <> "input" .= hexT input
-      <> "reference" .= answer reading_
-      <> extra
+  "class" .= class_
+    <> "variant" .= variant
+    <> "input" .= hexT input
+    <> "reference" .= answer reading_
+    <> extra
 
 -- | The kinds of the decode records, each with its class name.
 decodeKinds :: [(T.Text, Kind)]
@@ -596,7 +600,103 @@ decodeKinds =
 sources :: [(String, Int)]
 sources = [("arb", 10), ("cddl", 30), ("cddl-plain", 30)]
 
--- | Prints the decode records: of the values each source draws for each kind, from seed 1 at sizes 1 to 10, every one the ledger decodes.
+-- | The kinds the changed values of the decode records are drawn as.
+changedKinds :: [(T.Text, Kind)]
+changedKinds = [("body", KBody), ("wits", KWits), ("ppu", KPpu), ("block", KBlock), ("tx", KTx)]
+
+-- | The number of values drawn of each changed kind, and of each zapped kind.
+changedDraws, zappedDraws :: Int
+changedDraws = 300
+zappedDraws = 30
+
+-- | The most records of one change at one site of one rule, over every kind.
+perSite :: Int
+perSite = 1
+
+-- | The record of a value of a class with the ledger's answer for it.
+data Out = Out {outClass :: T.Text, outRecord :: Aeson.Series}
+
+-- | The values a fault injected by the generator makes the full spec refuse
+-- in a value the ledger reads, each with the rules the generator was in where
+-- it injected the fault and the value before the fault.
+zapped :: CTreeRoot MonoReferenced -> [Out]
+zapped root =
+  [ Out class_ (record class_ (T.pack ("zap " <> show i)) bs (reading k bs) ("mutated" .= faults zr <> "base" .= hexT base))
+  | (name, k) <- changedKinds
+  , i <- [0 .. zappedDraws - 1]
+  , let draw n = unGen (zapAntiGenResult n (runCBORGen cfg (generateFromName (Name (ruleOf k))))) (mkQCGen (1 + i)) (1 + i `mod` 10)
+        zr = draw 1
+        bs = encoded (zrValue zr)
+        base = encoded (zrValue (draw 0))
+        class_ = name <> " zap"
+  , zrZapped zr > 0
+  , refusedBySpec (Name (ruleOf k)) bs
+  , isRight (reading k base)
+  ]
+  where
+    encoded = CBOR.toStrictByteString . CBOR.encodeTerm
+    cfg = toGenConfig HuddleEnv {heTwiddle = False, heRoot = root}
+    full = mapIndex root :: CTreeRoot ValidatorPhase
+    refusedBySpec n bs = case validateCBOR bs n full of
+      Right (Evidenced SInvalid _) -> True
+      _ -> False
+    faults = T.intercalate " " . map (T.intercalate "/" . NE.toList) . zrAnnotation
+
+-- | The rules no change targets, each with the reason.
+untargeted :: [(Name, T.Text)]
+untargeted =
+  [ (Name "sub_transaction", "the generator of sub_transactions reads the first item of each element to keep bodies distinct, and a mark hides it")
+  , (Name "%nonempty_oset<sub_transaction>", "the generator of sub_transactions draws its elements itself, so no value of this rule is drawn by name")
+  ]
+
+-- | The value drawn of a kind at a seed from a spec.
+drawn :: CTreeRoot MonoReferenced -> Kind -> Int -> CBOR.Term
+drawn root k i = unGen (runAntiGen (runCBORGen cfg (generateFromName (Name (ruleOf k))))) (mkQCGen (1 + i)) (1 + i `div` 5)
+  where
+    cfg = toGenConfig HuddleEnv {heTwiddle = False, heRoot = root}
+
+-- | The marked value of a kind at a seed written without its marks, its
+-- occurrences, the marked term and the rules marked.
+markedDraw :: CTreeRoot MonoReferenced -> Set.Set Name -> Kind -> Int -> (BS.ByteString, [Mutation.Occurrence], CBOR.Term, [(Name, Mutation.Shape)])
+markedDraw root excluded k i =
+  let (root', table) = Mutation.marked excluded root
+      term = drawn root' k i
+      (bs, occs) = Mutation.write table Nothing False term
+   in (bs, occs, term, table)
+
+-- | The values one change makes to one marked value of a generated value the
+-- ledger decodes, at most `perSite` of each change at each site of each rule,
+-- and the generated values with every head in eight bytes, each with the
+-- generated value.
+changed :: CTreeRoot MonoReferenced -> Set.Set Name -> [Out]
+changed root excluded = go Map.empty draws
+  where
+    draws = [(name, k, i) | (name, k) <- changedKinds, i <- [0 .. changedDraws - 1]]
+    go _ [] = []
+    go seen ((name, k, i) : rest) = case markedDraw root excluded k i of
+      (base, _, _, _) | Left _ <- reading k base -> go seen rest
+      (base, occs, term, table) ->
+        let candidates =
+              ("wide-heads", "", ruleOf k, "", fst (Mutation.write table Nothing True term))
+                : [ (Mutation.changeKind ch, Mutation.occSite o, unName (Mutation.occRule o), Mutation.changeDetail ch, bs)
+                  | o <- occs
+                  , ch <- Mutation.changes (Mutation.occShape o) (Mutation.occTerm o)
+                  , let bs = fst (Mutation.write table (Just (Mutation.occNumber o, Mutation.changeApply ch)) False term)
+                  ]
+            step (s, outs) (kind, site, rule, detail, bs) =
+              let key = (kind, site, rule)
+                  class_ = name <> " " <> kind
+                  extra = "site" .= site <> "mutated" .= rule <> "base" .= hexT base
+                  out = Out class_ (record class_ (T.unwords (T.pack (show i) : [detail | detail /= ""])) bs (reading k bs) extra)
+               in if Map.findWithDefault 0 key s >= perSite || bs == base
+                    then (s, outs)
+                    else (Map.insertWith (+) key (1 :: Int) s, out : outs)
+            (seen', outs') = foldl step (seen, []) candidates
+         in reverse outs' <> go seen' rest
+
+-- | Prints the decode records: of the values each source draws for each kind,
+-- from seed 1 at sizes 1 to 10, every one the ledger decodes, then the zapped
+-- and the changed values with the ledger's answer for each.
 decodeRecords :: IO ()
 decodeRecords = do
   root <- either error pure (resolveHuddle dijkstraCDDL)
@@ -605,15 +705,29 @@ decodeRecords = do
         "arb" -> arbBytes k i
         "cddl" -> cddlBytes HuddleEnv {heTwiddle = True, heRoot = root} k
         _ -> cddlBytes HuddleEnv {heTwiddle = False, heRoot = root} k
-  header "decode" (map fst decodeKinds) mempty
-  sequence_
-    [ either (const (pure ())) (\d -> record name variant bs (Right d) ("rules" .= rulesOf spec k bs)) (reading k bs)
-    | (name, k) <- decodeKinds
-    , (source, n) <- sources
-    , i <- [0 .. n - 1]
-    , let bs = unGen (gen source k i) (mkQCGen (1 + i)) (1 + i `mod` 10)
-          variant = T.pack (source <> " " <> show i)
-    ]
+      generated =
+        [ Out name (record name variant bs (Right d) ("rules" .= rulesOf spec k bs))
+        | (name, k) <- decodeKinds
+        , (source, n) <- sources
+        , i <- [0 .. n - 1]
+        , let bs = unGen (gen source k i) (mkQCGen (1 + i)) (1 + i `mod` 10)
+              variant = T.pack (source <> " " <> show i)
+        , Right d <- [reading k bs]
+        ]
+      excluded = Set.fromList (map fst untargeted)
+      outs = generated <> zapped root <> changed root excluded
+      tops = map (ruleOf . snd) changedKinds
+      within = Mutation.reachable root (map Name tops)
+      targets =
+        [Aeson.object ["rule" .= r, "kinds" .= ["wide-heads" :: T.Text]] | r <- tops]
+          <> [ Aeson.object ["rule" .= unName n, "kinds" .= Mutation.kinds s]
+             | (n, s) <- snd (Mutation.marked excluded root)
+             , Set.member n within
+             , not (null (Mutation.kinds s))
+             ]
+      extra = "targets" .= targets <> "untargeted" .= [Aeson.object ["rule" .= unName n, "reason" .= reason] | (n, reason) <- untargeted]
+  header "decode" (map fst decodeKinds <> sortOn T.toLower (nubOrd (drop (length generated) (map outClass outs)))) extra
+  mapM_ (line . outRecord) outs
 
 -- | One transaction input of the validation records, with its class and variant.
 data Case = Case {caseClass :: T.Text, caseVariant :: T.Text, caseInput :: BS.ByteString}
@@ -629,15 +743,38 @@ readCases path = concatMap parse . filter (not . BS8.null) . BS8.lines <$> BS.re
         Left _ -> pure []
         Right hex -> (\k n i -> [Case k n i]) <$> field "class" <*> field "variant" <*> B16.decode (T.encodeUtf8 hex)
 
--- | Prints the validation records of the cases, the input classes in the order of their names.
-validationRecords :: Aeson.Series -> [Case] -> IO ()
-validationRecords extra cases = do
-  header "validation" (sortOn T.toLower (nubOrd (map caseClass cases))) extra
-  mapM_ (\x -> record (caseClass x) (caseVariant x) (caseInput x) (reading KTx (caseInput x)) mempty) cases
+-- | The number of changes of the base transaction the validation records hold.
+baseChangeDraws :: Int
+baseChangeDraws = 1000
+
+-- | The changes of the base transaction, each signed again, from seed 1.
+baseChanges :: BS.ByteString -> [Case]
+baseChanges base = case CBOR.deserialiseFromBytes CBOR.decodeTerm (BSL.fromStrict base) of
+  Right (_, t) ->
+    [ Case ("generated " <> SignedChange.kindName k) (T.pack (show i)) (SignedChange.resign base bs)
+    | i <- [0 .. baseChangeDraws - 1]
+    , let (k, bs) = unGen (SignedChange.change t) (mkQCGen (1 + i)) 30
+    ]
+  Left e -> error ("the base transaction is not CBOR: " <> show e)
+
+-- | Prints the validation records of the base and planted inputs of a record
+-- file and of the changes of its base, the input classes in the order of
+-- their names.
+validationRecords :: FilePath -> IO ()
+validationRecords path = do
+  planted <- filter (not . T.isPrefixOf "generated " . caseClass) <$> readCases path
+  base <- case [caseInput x | x <- planted, caseClass x == "base"] of
+    [b] -> pure b
+    _ -> error (path <> " holds no single base transaction")
+  unless (SignedChange.signs base) $ error "the signer of the changes does not sign the base transaction"
+  let cases = planted <> baseChanges base
+      inputs = "the base and planted inputs of the committed validation records, and " <> T.pack (show baseChangeDraws) <> " changes of the base"
+  header "validation" (sortOn T.toLower (nubOrd (map caseClass cases))) ("inputs" .= (inputs :: T.Text))
+  mapM_ (\x -> line (record (caseClass x) (caseVariant x) (caseInput x) (reading KTx (caseInput x)) mempty)) cases
 
 main :: IO ()
 main =
   getArgs >>= \case
     ["decode"] -> decodeRecords
-    ["validation", records, inputs] -> readCases records >>= validationRecords ("inputs" .= T.pack inputs)
-    _ -> error "usage: reference-writer decode | validation RECORDS INPUTS"
+    ["validation", records] -> validationRecords records
+    _ -> error "usage: reference-writer decode | validation RECORDS"
