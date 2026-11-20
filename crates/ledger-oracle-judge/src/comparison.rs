@@ -26,6 +26,18 @@ impl Layer {
             Layer::Networking => "networking",
         }
     }
+
+    /// The layer a records header names.
+    pub fn from_name(name: &str) -> Option<Layer> {
+        [
+            Layer::Decode,
+            Layer::Validation,
+            Layer::Mapping,
+            Layer::Networking,
+        ]
+        .into_iter()
+        .find(|l| l.name() == name)
+    }
 }
 
 impl fmt::Display for Layer {
@@ -178,6 +190,7 @@ pub struct Counts {
     pub disagree: BTreeMap<Disagreement, usize>,
     pub panic: usize,
     pub allowed: BTreeMap<Allowed, usize>,
+    pub not_judged: usize,
 }
 
 /// The per class counts of one layer's run, over the classes its records
@@ -214,6 +227,15 @@ impl Tally {
             Outcome::Disagree(d) => *counts.disagree.entry(*d).or_default() += 1,
             Outcome::Panic(_) => counts.panic += 1,
             Outcome::Allowed(class) => *counts.allowed.entry(*class).or_default() += 1,
+        }
+    }
+
+    /// Counts one input of `class` whose reference answer this layer does not
+    /// judge.
+    pub fn not_judged(&mut self, class: &str) {
+        match self.classes.get_mut(class) {
+            Some(counts) => counts.not_judged += 1,
+            None => *self.undeclared.entry(class.to_owned()).or_default() += 1,
         }
     }
 
@@ -259,7 +281,7 @@ impl fmt::Display for Tally {
         let columns: Vec<&str> = Disagreement::ALL.iter().map(|d| d.name()).collect();
         writeln!(
             f,
-            "{:<8} {:<32} {:>6} {:>6} {:>9} {:>9} {:>12} {:>7} {:>6}  allowed with owner",
+            "{:<8} {:<32} {:>6} {:>6} {:>9} {:>9} {:>12} {:>7} {:>6} {:>10}  allowed with owner",
             "layer",
             "class",
             "inputs",
@@ -268,7 +290,8 @@ impl fmt::Display for Tally {
             columns[0],
             columns[1],
             columns[2],
-            "panic"
+            "panic",
+            "not judged"
         )?;
         for (class, c) in &self.classes {
             let d = |k: Disagreement| c.disagree.get(&k).copied().unwrap_or(0);
@@ -276,7 +299,7 @@ impl fmt::Display for Tally {
             let allowed: Vec<String> = c.allowed.iter().map(|(a, n)| format!("{n} {a}")).collect();
             writeln!(
                 f,
-                "{:<8} {:<32} {:>6} {:>6} {:>9} {:>9} {:>12} {:>7} {:>6}  {}",
+                "{:<8} {:<32} {:>6} {:>6} {:>9} {:>9} {:>12} {:>7} {:>6} {:>10}  {}",
                 self.layer.name(),
                 class,
                 c.inputs,
@@ -286,6 +309,7 @@ impl fmt::Display for Tally {
                 d(Disagreement::Refuses),
                 d(Disagreement::OtherReason),
                 c.panic,
+                c.not_judged,
                 allowed.join(", ")
             )?;
             if d(Disagreement::Values) > 0 {
@@ -325,7 +349,7 @@ pub struct Row {
 pub struct Records {
     pin: String,
     generator: String,
-    layer: String,
+    layer: Layer,
     classes: Vec<String>,
     rows: Vec<Row>,
 }
@@ -398,7 +422,8 @@ impl Records {
         Ok(Records {
             pin: records_pin,
             generator: field("generator")?,
-            layer: field("layer")?,
+            layer: Layer::from_name(&field("layer")?)
+                .ok_or_else(|| malformed(n, "header names no known layer"))?,
             classes,
             rows,
         })
@@ -415,8 +440,8 @@ impl Records {
     }
 
     /// The layer the records are for.
-    pub fn layer(&self) -> &str {
-        &self.layer
+    pub fn layer(&self) -> Layer {
+        self.layer
     }
 
     /// The input classes the records declare.
@@ -540,6 +565,18 @@ mod tests {
     }
 
     #[test]
+    fn a_class_with_only_inputs_not_judged_fails() {
+        let mut tally = Tally::new(Layer::Validation, &["base", "drop"]);
+        tally.add("base", &Outcome::Agree);
+        tally.not_judged("drop");
+        assert_eq!(tally.counts("drop").unwrap().not_judged, 1);
+        assert_eq!(
+            tally.failures(),
+            ["validation: class \"drop\" has no input"]
+        );
+    }
+
+    #[test]
     fn an_undeclared_class_fails() {
         let mut tally = Tally::new(Layer::Validation, &["base"]);
         tally.add("base", &Outcome::Agree);
@@ -558,6 +595,7 @@ mod tests {
     #[test]
     fn records_at_the_head_pin_are_read() {
         let records = Records::read(RECORDS, "9df9f98c").unwrap();
+        assert_eq!(records.layer(), Layer::Validation);
         assert_eq!(records.classes(), ["base", "zero denominator"]);
         assert_eq!(records.rows().len(), 2);
         assert_eq!(records.rows()[1].variant.as_deref(), Some("pool margin"));
@@ -587,6 +625,15 @@ mod tests {
         assert!(matches!(
             Records::read(&text, "9df9f98c"),
             Err(RecordsError::Malformed { line: 2, .. })
+        ));
+    }
+
+    #[test]
+    fn records_of_an_unknown_layer_are_refused() {
+        let text = RECORDS.replace("\"validation\"", "\"valuation\"");
+        assert!(matches!(
+            Records::read(&text, "9df9f98c"),
+            Err(RecordsError::Malformed { line: 1, .. })
         ));
     }
 
