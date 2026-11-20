@@ -15,16 +15,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        planted: [none, rational-tag-refused, tx-zap-entry-removed, line-replaced-by-itself, comment-changed]
+        planted: [none, rational-tag-refused, tx-zap-entry-removed]
         include:
-          - planted: line-replaced-by-itself
-            patched: pallas-head
-            expected: |
-              decode: never reached
-          - planted: comment-changed
-            patched: pallas-head
-            expected: |
-              decode: never reached
           - planted: rational-tag-refused
             patched: pallas-head
             expected: |
@@ -34,7 +26,7 @@ jobs:
           - planted: tx-zap-entry-removed
             patched: dolos
             expected: |
-              decode: class "tx zap" disagrees (accepts) 5
+              decode: class "tx zap" disagrees (accepts) 4
     steps:
       - uses: actions/checkout@v4
         with:

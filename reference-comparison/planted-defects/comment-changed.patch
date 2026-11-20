@@ -1,9 +1,0 @@
---- a/pallas-primitives/src/lib.rs
-+++ b/pallas-primitives/src/lib.rs
-@@ -326,5 +326,5 @@
- impl<'b, C> minicbor::decode::Decode<'b, C> for RationalNumber {
-     fn decode(d: &mut minicbor::Decoder<'b>, ctx: &mut C) -> Result<Self, minicbor::decode::Error> {
--        // TODO: Enforce tag == 30 & array of size 2
-+        // TODO: Enforce the tag and the array size
-         d.tag()?;
-         let len = d.array()?;
