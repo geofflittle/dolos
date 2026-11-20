@@ -278,54 +278,44 @@ impl Tally {
 
 impl fmt::Display for Tally {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let columns: Vec<&str> = Disagreement::ALL.iter().map(|d| d.name()).collect();
+        write!(
+            f,
+            "{:<10} {:<32} {:>6} {:>6}",
+            "layer", "class", "inputs", "agree"
+        )?;
+        for d in Disagreement::ALL {
+            write!(f, " {:>12}", d.name())?;
+        }
         writeln!(
             f,
-            "{:<8} {:<32} {:>6} {:>6} {:>9} {:>9} {:>12} {:>7} {:>6} {:>10}  allowed with owner",
-            "layer",
-            "class",
-            "inputs",
-            "agree",
-            "disagree",
-            columns[0],
-            columns[1],
-            columns[2],
-            "panic",
-            "not judged"
+            " {:>6} {:>10}  allowed with owner",
+            "panic", "not judged"
         )?;
         for (class, c) in &self.classes {
-            let d = |k: Disagreement| c.disagree.get(&k).copied().unwrap_or(0);
-            let total: usize = c.disagree.values().sum();
-            let allowed: Vec<String> = c.allowed.iter().map(|(a, n)| format!("{n} {a}")).collect();
-            writeln!(
+            write!(
                 f,
-                "{:<8} {:<32} {:>6} {:>6} {:>9} {:>9} {:>12} {:>7} {:>6} {:>10}  {}",
+                "{:<10} {:<32} {:>6} {:>6}",
                 self.layer.name(),
                 class,
                 c.inputs,
-                c.agree,
-                total,
-                d(Disagreement::Accepts),
-                d(Disagreement::Refuses),
-                d(Disagreement::OtherReason),
+                c.agree
+            )?;
+            for d in Disagreement::ALL {
+                write!(f, " {:>12}", c.disagree.get(&d).copied().unwrap_or(0))?;
+            }
+            let allowed: Vec<String> = c.allowed.iter().map(|(a, n)| format!("{n} {a}")).collect();
+            writeln!(
+                f,
+                " {:>6} {:>10}  {}",
                 c.panic,
                 c.not_judged,
                 allowed.join(", ")
             )?;
-            if d(Disagreement::Values) > 0 {
-                writeln!(
-                    f,
-                    "{:<8} {:<32} values differ {}",
-                    "",
-                    "",
-                    d(Disagreement::Values)
-                )?;
-            }
         }
         for (class, n) in &self.undeclared {
             writeln!(
                 f,
-                "{:<8} {:<32} {:>6} undeclared",
+                "{:<10} {:<32} {:>6} undeclared",
                 self.layer.name(),
                 class,
                 n
