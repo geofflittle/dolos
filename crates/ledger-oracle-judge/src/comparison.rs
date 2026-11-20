@@ -2,7 +2,7 @@
 //! records, the outcome of each input, the owner of each allowed difference and
 //! the per class tally a run passes or fails by.
 
-use std::{collections::BTreeMap, fmt};
+use std::{collections::BTreeMap, fmt, path::Path};
 
 use serde_json::Value;
 use thiserror::Error;
@@ -37,6 +37,15 @@ impl Layer {
         ]
         .into_iter()
         .find(|l| l.name() == name)
+    }
+
+    /// Whether every accepted row of this layer carries the reference's
+    /// encoding of the value it read.
+    pub fn encodes(self) -> bool {
+        match self {
+            Layer::Decode => true,
+            Layer::Validation | Layer::Mapping | Layer::Networking => false,
+        }
     }
 }
 
@@ -359,13 +368,21 @@ impl fmt::Display for Tally {
     }
 }
 
+/// The reference's reading of an input it accepts and its own encoding of the
+/// value, when the records carry one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Accepted {
+    pub dump: Value,
+    pub encoding: Option<Vec<u8>>,
+}
+
 /// One recorded input and the reference's answer for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
     pub class: String,
     pub variant: Option<String>,
     pub input: Vec<u8>,
-    pub reference: Reference<Value>,
+    pub reference: Reference<Accepted>,
     pub rules: Vec<String>,
     pub site: Option<String>,
     pub mutated: Option<String>,
@@ -416,6 +433,18 @@ impl Coverage {
         self.counts
             .get(&(rule.to_owned(), kind.to_owned()))
             .copied()
+    }
+
+    /// The number of target changes of each kind and how many of them an
+    /// input makes.
+    pub fn kinds(&self) -> BTreeMap<&str, (usize, usize)> {
+        let mut out: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+        for ((_, kind), n) in &self.counts {
+            let (targets, made) = out.entry(kind.as_str()).or_default();
+            *targets += 1;
+            *made += usize::from(*n > 0);
+        }
+        out
     }
 
     /// Each reason the coverage fails: a target change no input makes, or a
@@ -470,6 +499,8 @@ pub enum RecordsError {
     PinDiffers { records: String, head: String },
     #[error("line {line}: {reason}")]
     Malformed { line: usize, reason: String },
+    #[error("{path}: {reason}")]
+    Unreadable { path: String, reason: String },
 }
 
 impl Records {
@@ -536,9 +567,22 @@ impl Records {
                 .and_then(|h| hex::decode(h).ok())
                 .ok_or_else(|| malformed(n, "row has no hex input"))?;
             let reference = match v.get("reference") {
-                Some(r) => match (r.get("accepts"), r.get("refuses")) {
-                    (Some(dump), None) => Reference::Accepts(dump.clone()),
-                    (None, Some(Value::String(reason))) => Reference::Refuses(reason.clone()),
+                Some(r) => match (r.get("accepts"), r.get("refuses"), r.get("encoding")) {
+                    (Some(dump), None, encoding) => Reference::Accepts(Accepted {
+                        dump: dump.clone(),
+                        encoding: match encoding {
+                            None => None,
+                            Some(e) => Some(
+                                e.as_str()
+                                    .and_then(|h| hex::decode(h).ok())
+                                    .ok_or_else(|| malformed(n, "encoding is not hex"))?,
+                            ),
+                        },
+                    }),
+                    (None, Some(Value::String(reason)), None) => Reference::Refuses(reason.clone()),
+                    (None, Some(_), Some(_)) => {
+                        return Err(malformed(n, "an encoding beside a refusal"))
+                    }
                     _ => return Err(malformed(n, "reference is neither accepts nor refuses")),
                 },
                 None => return Err(malformed(n, "row has no reference")),
@@ -608,6 +652,92 @@ impl Records {
     /// The recorded inputs.
     pub fn rows(&self) -> &[Row] {
         &self.rows
+    }
+
+    /// Reads the records of `layer` in `dir`, a directory named by the
+    /// reference pin they must be written at.
+    pub fn read_dir(dir: &Path, layer: Layer) -> Result<Records, RecordsError> {
+        let path = dir.join(format!("{}.jsonl", layer.name()));
+        let unreadable = |reason: String| RecordsError::Unreadable {
+            path: path.display().to_string(),
+            reason,
+        };
+        let pin = dir
+            .file_name()
+            .and_then(|p| p.to_str())
+            .ok_or_else(|| unreadable("the directory names no pin".to_owned()))?;
+        let text = std::fs::read_to_string(&path).map_err(|e| unreadable(e.to_string()))?;
+        Records::read(&text, pin)
+    }
+
+    /// The number of rows of each declared class and of each class a row
+    /// names that the header does not declare.
+    pub fn rows_per_class(&self) -> BTreeMap<&str, usize> {
+        let mut out: BTreeMap<&str, usize> = self.classes.iter().map(|c| (c.as_str(), 0)).collect();
+        for row in &self.rows {
+            *out.entry(row.class.as_str()).or_default() += 1;
+        }
+        out
+    }
+
+    /// Each reason the records cannot be judged as `layer` with the kinds and
+    /// classes `required` names: another layer, no rows, a declared class with
+    /// no row, a row of a class not declared, a kind with a target no row
+    /// makes, a required name the records lack, or an accepted row with no
+    /// encoding in a layer whose rows carry one.
+    pub fn check<S: AsRef<str>>(&self, layer: Layer, required: &[S]) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.layer != layer {
+            out.push(format!("the records are for {}, not {layer}", self.layer));
+        }
+        let layer = self.layer;
+        if self.rows.is_empty() {
+            out.push(format!("{layer}: no rows"));
+        }
+        for (class, n) in self.rows_per_class() {
+            if !self.classes.iter().any(|c| c == class) {
+                out.push(format!(
+                    "{layer}: class {class:?} is not declared, {n} rows"
+                ));
+            } else if n == 0 {
+                out.push(format!("{layer}: class {class:?} has no row"));
+            }
+        }
+        let coverage = Coverage::new(layer, &self.targets, &self.rows);
+        let kinds = coverage.kinds();
+        for (kind, (targets, made)) in &kinds {
+            if made < targets {
+                out.push(format!(
+                    "{layer}: kind {kind} made {made} of {targets} targets"
+                ));
+            }
+        }
+        for name in required.iter().map(AsRef::as_ref) {
+            let named = kinds.contains_key(name)
+                || self
+                    .classes
+                    .iter()
+                    .any(|c| c == name || c.split_once(' ').is_some_and(|(_, kind)| kind == name));
+            if !named {
+                out.push(format!(
+                    "{layer}: the records name no kind or class {name:?}"
+                ));
+            }
+        }
+        if layer.encodes() {
+            let mut bare: BTreeMap<&str, usize> = BTreeMap::new();
+            for row in &self.rows {
+                if let Reference::Accepts(Accepted { encoding: None, .. }) = &row.reference {
+                    *bare.entry(row.class.as_str()).or_default() += 1;
+                }
+            }
+            for (class, n) in bare {
+                out.push(format!(
+                    "{layer}: class {class:?} has {n} accepted rows with no encoding"
+                ));
+            }
+        }
+        out
     }
 }
 
@@ -839,6 +969,42 @@ mod tests {
             Records::read(&text, "9df9f98c"),
             Err(RecordsError::Malformed { line: 2, .. })
         ));
+    }
+
+    #[test]
+    fn the_encoding_of_an_accepted_row_is_read() {
+        let text = RECORDS.replace(
+            r#"{"accepts":{"fee":1}}"#,
+            r#"{"accepts":{"fee":1},"encoding":"a10101"}"#,
+        );
+        let records = Records::read(&text, "9df9f98c").unwrap();
+        assert_eq!(
+            records.rows()[0].reference,
+            Reference::Accepts(Accepted {
+                dump: serde_json::json!({"fee": 1}),
+                encoding: Some(vec![0xa1, 0x01, 0x01]),
+            })
+        );
+        let plain = Records::read(RECORDS, "9df9f98c").unwrap();
+        assert!(matches!(
+            &plain.rows()[0].reference,
+            Reference::Accepts(Accepted { encoding: None, .. })
+        ));
+    }
+
+    #[test]
+    fn an_encoding_beside_a_refusal_is_refused() {
+        let text = RECORDS.replace(
+            r#"{"refuses":"Denominator cannot be zero"}"#,
+            r#"{"refuses":"Denominator cannot be zero","encoding":"a1"}"#,
+        );
+        assert_eq!(
+            Records::read(&text, "9df9f98c"),
+            Err(RecordsError::Malformed {
+                line: 3,
+                reason: "an encoding beside a refusal".into()
+            })
+        );
     }
 
     #[test]

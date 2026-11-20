@@ -1,0 +1,2 @@
+{"reference":"9df9f98cce86c5f2195142b2c02dd9b39dd9dc7c","generator":"fixture","layer":"validation","classes":["base"]}
+{"class":"base","input":"a0","reference":{"accepts":{"fee":1}}}
