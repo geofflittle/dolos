@@ -1,0 +1,4 @@
+{"reference":"9df9f98cce86c5f2195142b2c02dd9b39dd9dc7c","generator":"fixture","layer":"decode","classes":["body","body array-extra","body set-duplicate"],"targets":[{"rule":"voter","kinds":["array-extra"]},{"rule":"%nonempty_set<addr_keyhash>","kinds":["set-duplicate"]}]}
+{"class":"body","input":"a0","reference":{"accepts":{"fee":1},"encoding":"ag"}}
+{"class":"body array-extra","input":"a1","reference":{"refuses":"r"},"site":"voting_procedures key","mutated":"voter","base":"a0"}
+{"class":"body set-duplicate","input":"a2","reference":{"refuses":"r"},"site":"required_signers","mutated":"%nonempty_set<addr_keyhash>","base":"a0"}
