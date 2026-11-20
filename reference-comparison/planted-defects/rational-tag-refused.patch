@@ -1,0 +1,14 @@
+--- a/pallas-primitives/src/lib.rs
++++ b/pallas-primitives/src/lib.rs
+@@ -325,8 +325,9 @@
+ 
+ impl<'b, C> minicbor::decode::Decode<'b, C> for RationalNumber {
+     fn decode(d: &mut minicbor::Decoder<'b>, ctx: &mut C) -> Result<Self, minicbor::decode::Error> {
+-        // TODO: Enforce tag == 30 & array of size 2
+-        d.tag()?;
++        if d.tag()?.as_u64() != 30 {
++            return Err(minicbor::decode::Error::message("plant: rational tag"));
++        }
+         let len = d.array()?;
+         let rational = RationalNumber {
+             numerator: d.decode_with(ctx)?,
