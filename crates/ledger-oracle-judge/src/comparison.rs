@@ -366,6 +366,7 @@ pub struct Row {
     pub variant: Option<String>,
     pub input: Vec<u8>,
     pub reference: Reference<Value>,
+    pub rules: Vec<String>,
 }
 
 /// A record file whose reference pin equals the pin of the head under test.
@@ -436,11 +437,19 @@ impl Records {
                 },
                 None => return Err(malformed(n, "row has no reference")),
             };
+            let rules = match v.get("rules") {
+                None => Vec::new(),
+                Some(r) => r
+                    .as_array()
+                    .and_then(|a| a.iter().map(|x| x.as_str().map(str::to_owned)).collect())
+                    .ok_or_else(|| malformed(n, "rules is not a list of names"))?,
+            };
             rows.push(Row {
                 class: class.to_owned(),
                 variant: text("variant").map(str::to_owned),
                 input,
                 reference,
+                rules,
             });
         }
         Ok(Records {
@@ -672,6 +681,29 @@ mod tests {
                 head: "1587f21a".into()
             })
         );
+    }
+
+    #[test]
+    fn the_rules_of_a_row_are_read() {
+        let text = RECORDS.replace(
+            r#""input":"a0","reference":{"accepts":{"fee":1}}"#,
+            r#""input":"a0","reference":{"accepts":{"fee":1}},"rules":["coin","transaction_body"]"#,
+        );
+        let records = Records::read(&text, "9df9f98c").unwrap();
+        assert_eq!(records.rows()[0].rules, ["coin", "transaction_body"]);
+        assert!(records.rows()[1].rules.is_empty());
+    }
+
+    #[test]
+    fn rules_that_are_not_names_are_refused() {
+        let text = RECORDS.replace(
+            r#""input":"a0","reference":{"accepts":{"fee":1}}"#,
+            r#""input":"a0","reference":{"accepts":{"fee":1}},"rules":[1]"#,
+        );
+        assert!(matches!(
+            Records::read(&text, "9df9f98c"),
+            Err(RecordsError::Malformed { line: 2, .. })
+        ));
     }
 
     #[test]
