@@ -349,6 +349,9 @@ mod tests {
     use crate::judgement::RunVerdict;
     use crate::state::Anchor;
 
+    /// A change to one held field and the cells the replay must fail for it.
+    type FieldChange = (&'static str, fn(&mut Held));
+
     const FIXTURE: &str = r#"[
       {"epoch": 1, "slot": 21602, "hash": "e1cf320b00000000000000000000000000000000000000000000000000000000",
        "state": {
@@ -482,7 +485,7 @@ mod tests {
     #[test]
     fn each_compared_field_fails_alone_naming_its_cells() {
         let checkpoints: Vec<Checkpoint> = serde_json::from_str(FIXTURE).unwrap();
-        let changes: [(&str, fn(&mut Held)); 12] = [
+        let changes: [FieldChange; 12] = [
             ("table:blocks,answer:differ,field:epoch", |h| h.epoch = 9),
             ("table:blocks,answer:differ,field:hash", |h| {
                 h.hash.0[31] = 1
