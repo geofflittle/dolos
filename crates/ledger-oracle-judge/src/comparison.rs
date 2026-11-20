@@ -79,45 +79,79 @@ impl Disagreement {
     }
 }
 
-/// A disagreement a layer lets pass because another layer's check owns it.
+/// A commit named by its 40 lowercase hex digits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Commit(&'static str);
+
+impl Commit {
+    /// The commit `hash`, a compile error in a constant unless it is 40
+    /// lowercase hex digits.
+    pub const fn new(hash: &'static str) -> Commit {
+        let digits = hash.as_bytes();
+        let mut i = 0;
+        while i < digits.len() {
+            assert!(
+                matches!(digits[i], b'0'..=b'9' | b'a'..=b'f'),
+                "a commit is 40 lowercase hex digits"
+            );
+            i += 1;
+        }
+        assert!(digits.len() == 40, "a commit is 40 lowercase hex digits");
+        Commit(hash)
+    }
+}
+
+impl fmt::Display for Commit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+/// What holds a difference a layer lets pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Owner {
+    /// A test of another layer.
+    Check { layer: Layer, test: &'static str },
+    /// A commit on upstream main that accepts the difference on purpose.
+    Upstream { commit: Commit },
+}
+
+impl fmt::Display for Owner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Owner::Check { layer, test } => write!(f, "{layer}: {test}"),
+            Owner::Upstream { commit } => write!(f, "accepted on upstream main by {commit}"),
+        }
+    }
+}
+
+/// A disagreement a layer lets pass because its owner holds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Allowed {
     name: &'static str,
     allows: Disagreement,
-    owner: Layer,
-    check: &'static str,
+    owner: Owner,
 }
 
 impl Allowed {
-    /// The class `name` letting `allows` pass, owned by `check` in `owner`.
-    pub const fn new(
-        name: &'static str,
-        allows: Disagreement,
-        owner: Layer,
-        check: &'static str,
-    ) -> Self {
+    /// The class `name` letting `allows` pass, held by `owner`.
+    pub const fn new(name: &'static str, allows: Disagreement, owner: Owner) -> Self {
         Allowed {
             name,
             allows,
             owner,
-            check,
         }
     }
 
-    /// The layer whose check must hold this difference.
-    pub fn owner(&self) -> Layer {
+    /// What holds this difference.
+    pub fn owner(&self) -> Owner {
         self.owner
-    }
-
-    /// The test in the owning layer that holds this difference.
-    pub fn check(&self) -> &'static str {
-        self.check
     }
 }
 
 impl fmt::Display for Allowed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} ({}: {})", self.name, self.owner, self.check)
+        write!(f, "{} ({})", self.name, self.owner)
     }
 }
 
@@ -460,8 +494,18 @@ mod tests {
     const TRAILING: Allowed = Allowed::new(
         "trailing bytes",
         Disagreement::Accepts,
-        Layer::Validation,
-        "phase_one_refuses_leftover",
+        Owner::Check {
+            layer: Layer::Validation,
+            test: "phase_one_refuses_leftover",
+        },
+    );
+
+    const EXTRA: Allowed = Allowed::new(
+        "extra array elements",
+        Disagreement::Accepts,
+        Owner::Upstream {
+            commit: Commit::new("a8516e16bb38621eeb86b83bef0e146e6123b648"),
+        },
     );
 
     fn refuses() -> Reference<()> {
@@ -533,7 +577,31 @@ mod tests {
         tally.add("trailing", &accepts);
         assert!(tally.failures().is_empty());
         assert_eq!(tally.counts("trailing").unwrap().allowed[&TRAILING], 1);
-        assert_eq!(TRAILING.owner(), Layer::Validation);
+        assert!(tally
+            .to_string()
+            .contains("1 trailing bytes (validation: phase_one_refuses_leftover)"));
+    }
+
+    #[test]
+    fn a_difference_upstream_accepts_names_its_commit() {
+        let outcome = judge(
+            &refuses(),
+            &Answer::<(), &str>::Accepts(()),
+            any_reason,
+            Some(EXTRA),
+        );
+        let mut tally = Tally::new(Layer::Validation, &["generated extra"]);
+        tally.add("generated extra", &outcome);
+        assert!(tally.failures().is_empty());
+        assert!(tally.to_string().contains(
+            "1 extra array elements (accepted on upstream main by a8516e16bb38621eeb86b83bef0e146e6123b648)"
+        ));
+    }
+
+    #[test]
+    #[should_panic(expected = "a commit is 40 lowercase hex digits")]
+    fn a_short_commit_is_refused() {
+        Commit::new("a8516e16");
     }
 
     #[test]
