@@ -1,0 +1,8 @@
+-- This commit takes cardano-crypto-leios from a cardano-base commit whose cardano-crypto-class is newer than the bounds of cardano-ledger-core, so the class comes from the same commit.
+source-repository-package
+  type: git
+  location: https://github.com/intersectmbo/cardano-base.git
+  tag: fbfb3f05d8092492f000264edca2d7a1a105741a
+  subdir: cardano-crypto-class
+
+allow-newer: cardano-crypto-class
