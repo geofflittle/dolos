@@ -1,13 +1,14 @@
 --- a/reference-comparison/tests/decode/differences.rs
 +++ b/reference-comparison/tests/decode/differences.rs
-@@ -139,10 +139,6 @@
-         ),
+@@ -184,11 +184,6 @@
+         accepts("a duplicate is kept as read", KEPT_AS_READ, keeps_duplicate),
      ),
      (
 -        "tx zap",
+-        Rules::Every,
 -        accepts("a size is kept as read", KEPT_AS_READ, any),
 -    ),
 -    (
-         "wits zap",
-         accepts("a size is kept as read", KEPT_AS_READ, any),
-     ),
+         "wits array-extra",
+         Rules::Every,
+         accepts("an extra array item is dropped", EXTRA_ITEM_DROPPED, any),

@@ -25,7 +25,7 @@ permissions:
 
 env:
   PALLAS_REF: ${{ inputs.pallas_ref || 'adb44159a4ca20e8f70d8cada66c93d505aa8ca9' }}
-  COMPARISONS: ${{ inputs.comparisons || 'decode mapping' }}
+  COMPARISONS: ${{ inputs.comparisons || 'mapping' }}
   TOOLCHAIN: nightly-2026-09-04
 
 jobs:
@@ -62,6 +62,10 @@ jobs:
             fi
           done
           planted=$(jq -c --argjson s "$selected" '[.[] | select(.test as $t | $s | index($t))]' planted-defects/planted.json)
+          if ! jq -e 'all(.pallas | type == "string" and test("^[0-9a-f]{40}$"))' <<< "$planted" > /dev/null; then
+            echo "::error::a planted defect names no pallas commit to plant into"
+            exit 1
+          fi
           echo "comparisons=$selected" >> "$GITHUB_OUTPUT"
           echo "planted=$planted" >> "$GITHUB_OUTPUT"
           echo "Comparisons at $PALLAS_REF: $selected" >> "$GITHUB_STEP_SUMMARY"
@@ -106,6 +110,8 @@ jobs:
             *) echo "::error::the ${{ matrix.comparison }} comparison exited $rc before judging, a build failure or a crash"; exit 1 ;;
           esac
 
+  # A planted defect and its expected lines hold for one pallas commit, so
+  # each one runs at the commit it names, whatever ref is compared.
   planted:
     name: planted ${{ matrix.planted }}
     needs: select
@@ -123,7 +129,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: geofflittle/pallas
-          ref: ${{ env.PALLAS_REF }}
+          ref: ${{ matrix.pallas }}
           path: pallas-head
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@master
