@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use ledger_oracle_judge::cbor::{self, Data, Int, TxIn};
 use ledger_oracle_judge::comparison::{
-    self, Allowance, Answer, ComparedLayer, Expected, Key, Layer, Outcome, Records, Reference, Row,
-    WholeInput, catch, cddl_pin, kinds_from_env,
+    self, Allowance, Allowed, Answer, ComparedLayer, Disagreement, Expected, Key, Layer, Outcome,
+    Owner, Records, Reference, Row, WholeInput, catch, cddl_pin, kinds_from_env,
 };
 use pallas::network::miniprotocols::localstate::queries_v16 as q;
 use pallas_codec::minicbor;
@@ -517,6 +517,38 @@ fn reading(input: &Encoded) -> Result<Reply, Refusal> {
     Err(Refusal { error, base })
 }
 
+/// The classes where pallas's reading of a UTxO reply differs from the
+/// ledger's, each with what holds the difference.
+const DIFFERENCES: &[(&str, Allowance<Reply, Refusal>)] = &[
+    (
+        "conway-utxo map-indefinite",
+        Allowance {
+            allowed: Allowed::new(
+                "a Conway output in an indefinite length map is refused",
+                Disagreement::Refuses,
+                Owner::Defect {
+                    defect: "the Conway UTxO reply decoder reads an output only from a definite length map or array",
+                },
+            ),
+            shown: |answer| matches!(answer, Answer::Refuses(r) if r.error.contains("unknown cbor data type for TransactionOutput enum")),
+        },
+    ),
+    (
+        "conway-utxo unknown-key",
+        Allowance {
+            allowed: Allowed::new(
+                "a Conway output with an unknown key is read without it",
+                Disagreement::Accepts,
+                Owner::Decision {
+                    date: "2026-11-21",
+                    words: "yes keep it",
+                },
+            ),
+            shown: |answer| matches!(answer, Answer::Accepts(Reply::Read(_))),
+        },
+    ),
+];
+
 /// Pallas's decoding of local state query UTxO replies.
 struct Networking;
 
@@ -554,8 +586,14 @@ impl ComparedLayer for Networking {
         refusal.base == Base::Reads
     }
 
-    fn allowance(&self, _: &Key<WholeInput>) -> Option<Allowance<Reply, Refusal>> {
-        None
+    fn allowance(&self, _: &Row, key: &Key<WholeInput>) -> Option<Allowance<Reply, Refusal>> {
+        DIFFERENCES
+            .iter()
+            .find(|(class, _)| *class == key.class)
+            .map(|(_, a)| Allowance {
+                allowed: a.allowed,
+                shown: a.shown,
+            })
     }
 
     fn detail(
@@ -626,6 +664,11 @@ fn failures(dir: &Path, kinds: &[String]) -> Vec<String> {
     println!("{judged}");
     examples.values().for_each(|e| println!("{e}"));
     out.extend(judged.failures());
+    let listed: Vec<(&str, Allowed)> = DIFFERENCES
+        .iter()
+        .map(|(class, a)| (*class, a.allowed))
+        .collect();
+    out.extend(judged.tally.unused(&listed, records.classes()));
     out
 }
 

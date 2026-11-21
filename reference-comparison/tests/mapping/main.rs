@@ -490,7 +490,7 @@ impl ComparedLayer for Mapping {
         false
     }
 
-    fn allowance(&self, key: &Key<Axis>) -> Option<Allowance<Seen, String>> {
+    fn allowance(&self, _: &Row, key: &Key<Axis>) -> Option<Allowance<Seen, String>> {
         let unset = matches!(
             key.axis,
             Axis::Datum {
