@@ -63,6 +63,9 @@ const FORMS: &[&str] = &[
     "native-invalid-hereafter",
     "native-require-guard",
     "native-unknown-arm",
+    "map-indefinite",
+    "no-address",
+    "no-value",
 ];
 
 /// The classes the records must declare, an era's reply crossed with a form

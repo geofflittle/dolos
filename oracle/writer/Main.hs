@@ -92,7 +92,7 @@ import Control.Monad (unless)
 import Data.Containers.ListUtils (nubOrd)
 import Data.Either (isRight)
 import Data.Foldable (toList)
-import Data.List (sortOn)
+import Data.List (foldl', sortOn)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
 import qualified Data.OMap.Strict as OMap
@@ -622,9 +622,9 @@ changedDraws, zappedDraws :: Int
 changedDraws = 300
 zappedDraws = 30
 
--- | The most records of one change at one site of one rule, over every kind.
-perSite :: Int
-perSite = 1
+-- | The forms other than the shortest that a whole changed value is written in, each with its kind of change.
+wholeForms :: [(T.Text, Mutation.Form)]
+wholeForms = [("wide-heads", Mutation.WideHeads), ("indefinite-lengths", Mutation.IndefiniteLengths)]
 
 -- | The record of a value of a class with the ledger's answer for it.
 data Out = Out {outClass :: T.Text, outRecord :: Aeson.Series}
@@ -655,11 +655,16 @@ zapped root =
       _ -> False
     faults = T.intercalate " " . map (T.intercalate "/" . NE.toList) . zrAnnotation
 
--- | The rules the writer leaves unmarked, since the generator of sub
+-- | The rules the generator draws without marks, since the generator of sub
 -- transactions reads the first item of each element and draws the elements
 -- itself.
 unmarked :: Set.Set Name
-unmarked = Set.fromList [Name "sub_transaction", Name "%nonempty_oset<sub_transaction>"]
+unmarked = Set.fromList [subTransaction, subTransactions]
+
+-- | The rule of one sub transaction and the rule of the set of them.
+subTransaction, subTransactions :: Name
+subTransaction = Name "sub_transaction"
+subTransactions = Name "%nonempty_oset<sub_transaction>"
 
 -- | The value drawn of a kind at a seed from a spec.
 drawn :: CTreeRoot MonoReferenced -> Kind -> Int -> CBOR.Term
@@ -672,39 +677,62 @@ drawn root k i = unGen (runAntiGen (runCBORGen cfg (generateFromName (Name (rule
 markedDraw :: CTreeRoot MonoReferenced -> Set.Set Name -> Kind -> Int -> (BS.ByteString, [Mutation.Occurrence], CBOR.Term, [(Name, Mutation.Shape)])
 markedDraw root excluded k i =
   let (root', table) = Mutation.marked excluded root
-      term = drawn root' k i
-      (bs, occs) = Mutation.write table Nothing False term
+      term = markSubs table (drawn root' k i)
+      (bs, occs) = Mutation.write table Nothing Mutation.Shortest term
    in (bs, occs, term, table)
 
--- | The values one change makes to one marked value of a generated value the
--- ledger decodes, at most `perSite` of each change at each site of each rule,
--- and the generated values with every head in eight bytes, each with the
--- generated value.
+-- | A drawn value with the sub transactions of each transaction body under the marks of their rules.
+markSubs :: [(Name, Mutation.Shape)] -> CBOR.Term -> CBOR.Term
+markSubs table = go
+  where
+    body = Mutation.markOf table (Name "transaction_body")
+    go = \case
+      CBOR.TTagged tag (CBOR.TMap kvs) | Just tag == body -> CBOR.TTagged tag (CBOR.TMap (map field kvs))
+      CBOR.TTagged tag (CBOR.TMapI kvs) | Just tag == body -> CBOR.TTagged tag (CBOR.TMapI (map field kvs))
+      CBOR.TTagged tag x -> CBOR.TTagged tag (go x)
+      CBOR.TList xs -> CBOR.TList (map go xs)
+      CBOR.TListI xs -> CBOR.TListI (map go xs)
+      CBOR.TMap kvs -> CBOR.TMap [(go key, go v) | (key, v) <- kvs]
+      CBOR.TMapI kvs -> CBOR.TMapI [(go key, go v) | (key, v) <- kvs]
+      x -> x
+    field (key, v)
+      | key `elem` [CBOR.TInt 23, CBOR.TInteger 23] = (key, Mutation.mark table subTransactions (elements (go v)))
+      | otherwise = (key, go v)
+    elements = \case
+      CBOR.TTagged 258 x -> CBOR.TTagged 258 (elements x)
+      CBOR.TList xs -> CBOR.TList (map (Mutation.mark table subTransaction) xs)
+      CBOR.TListI xs -> CBOR.TListI (map (Mutation.mark table subTransaction) xs)
+      x -> x
+
+-- | The smallest value one change makes to one marked value of a generated
+-- value the ledger decodes, for each change at each site of each rule, and
+-- the generated values written in each of `wholeForms`, each with the
+-- generated value, in the order of their draws.
 changed :: CTreeRoot MonoReferenced -> Set.Set Name -> [Out]
-changed root excluded = go Map.empty draws
+changed root excluded = [out | (_, _, out) <- sortOn (\(_, order, _) -> order) (Map.elems (foldl' visit Map.empty (zip [0 :: Int ..] draws)))]
   where
     draws = [(name, k, i) | (name, k) <- changedKinds, i <- [0 .. changedDraws - 1]]
-    go _ [] = []
-    go seen ((name, k, i) : rest) = case markedDraw root excluded k i of
-      (base, _, _, _) | Left _ <- reading k base -> go seen rest
+    visit best (n, (name, k, i)) = case markedDraw root excluded k i of
+      (base, _, _, _) | Left _ <- reading k base -> best
       (base, occs, term, table) ->
         let candidates =
-              ("wide-heads", "", ruleOf k, "", fst (Mutation.write table Nothing True term))
-                : [ (Mutation.changeKind ch, Mutation.occSite o, unName (Mutation.occRule o), Mutation.changeDetail ch, bs)
-                  | o <- occs
-                  , ch <- Mutation.changes (Mutation.occShape o) (Mutation.occTerm o)
-                  , let bs = fst (Mutation.write table (Just (Mutation.occNumber o, Mutation.changeApply ch)) False term)
-                  ]
-            step (s, outs) (kind, site, rule, detail, bs) =
-              let key = (kind, site, rule)
-                  class_ = name <> " " <> kind
-                  extra = "site" .= site <> "mutated" .= rule <> "base" .= hexT base
-                  out = Out class_ (record class_ (T.unwords (T.pack (show i) : [detail | detail /= ""])) bs (reading k bs) extra)
-               in if Map.findWithDefault 0 key s >= perSite || bs == base
-                    then (s, outs)
-                    else (Map.insertWith (+) key (1 :: Int) s, out : outs)
-            (seen', outs') = foldl step (seen, []) candidates
-         in reverse outs' <> go seen' rest
+              [ (form, "", ruleOf k, "", fst (Mutation.write table Nothing f term))
+              | (form, f) <- wholeForms
+              ]
+                <> [ (Mutation.changeKind ch, Mutation.occSite o, unName (Mutation.occRule o), Mutation.changeDetail ch, bs)
+                   | o <- occs
+                   , ch <- Mutation.changes (Mutation.occShape o) (Mutation.occTerm o)
+                   , let bs = fst (Mutation.write table (Just (Mutation.occNumber o, Mutation.changeApply ch)) Mutation.Shortest term)
+                   ]
+            step acc (j, (kind, site, rule, detail, bs))
+              | bs == base = acc
+              | otherwise =
+                  let class_ = name <> " " <> kind
+                      extra = "site" .= site <> "mutated" .= rule <> "base" .= hexT base
+                      out = Out class_ (record class_ (T.unwords (T.pack (show i) : [detail | detail /= ""])) bs (reading k bs) extra)
+                   in Map.insertWith smaller (kind, site, rule) (BS.length bs + BS.length base, (n, j), out) acc
+         in foldl' step best (zip [0 :: Int ..] candidates)
+    smaller new@(size, _, _) old@(size', _, _) = if size < size' then new else old
 
 -- | Prints the decode records: of the values each source draws for each kind,
 -- from seed 1 at sizes 1 to 10, every one the ledger decodes, then the zapped
@@ -730,7 +758,7 @@ decodeRecords = do
       tops = map (ruleOf . snd) changedKinds
       within = Mutation.reachable root (map Name tops)
       targets =
-        [Aeson.object ["rule" .= r, "kinds" .= ["wide-heads" :: T.Text]] | r <- tops]
+        [Aeson.object ["rule" .= r, "kinds" .= map fst wholeForms] | r <- tops]
           <> [ Aeson.object ["rule" .= unName n, "kinds" .= Mutation.kinds s]
              | (n, s) <- snd (Mutation.marked Set.empty root)
              , Set.member n within
@@ -803,10 +831,24 @@ scriptOf = \case
   _ -> Nothing
 
 -- | The forms of output a UTxO reply's outputs take in the networking classes,
--- each with the extra entries of a map output of that form, given the
--- scripts and datums the drawn outputs hold and the index of the variant.
-outputForms :: ([CBOR.Term] -> Int -> Maybe CBOR.Term) -> [CBOR.Term] -> [CBOR.Term] -> [CBOR.Term] -> [(T.Text, Int -> Maybe [(CBOR.Term, CBOR.Term)])]
+-- each making a map output of that form from the address and value entries,
+-- given the scripts and datums the drawn outputs hold and the index of the
+-- variant.
+outputForms :: ([CBOR.Term] -> Int -> Maybe CBOR.Term) -> [CBOR.Term] -> [CBOR.Term] -> [CBOR.Term] -> [(T.Text, Int -> Maybe ([(CBOR.Term, CBOR.Term)] -> CBOR.Term))]
 outputForms pick scripts hashes inlines =
+  [(name, fmap adding . make) | (name, make) <- extraForms pick scripts hashes inlines]
+    <> [ ("map-indefinite", \_ -> Just CBOR.TMapI)
+       , ("no-address", \_ -> Just (CBOR.TMap . filter ((/= CBOR.TInt 0) . fst)))
+       , ("no-value", \_ -> Just (CBOR.TMap . filter ((/= CBOR.TInt 1) . fst)))
+       ]
+  where
+    adding extra entries = CBOR.TMap (entries <> extra)
+
+-- | The forms of output that add entries to a map output, each with the
+-- entries it adds, given the scripts and datums the drawn outputs hold and
+-- the index of the variant.
+extraForms :: ([CBOR.Term] -> Int -> Maybe CBOR.Term) -> [CBOR.Term] -> [CBOR.Term] -> [CBOR.Term] -> [(T.Text, Int -> Maybe [(CBOR.Term, CBOR.Term)])]
+extraForms pick scripts hashes inlines =
   [ ("map-output", \_ -> Just [])
   , ("script-native", withScript . pick (armed 0))
   , ("script-plutus-v1", withScript . pick (armed 1))
@@ -875,10 +917,10 @@ networkingRecords = do
          in [ (klass "legacy-output", T.pack (show i), reply i o, Nothing)
             | (i, o) <- zip [0 ..] (take replyVariants legacy)
             ]
-              <> [ (klass form, T.pack (show i), reply i (CBOR.TMap (plainMap p <> extra)), Just (reply i (CBOR.TMap (plainMap p))))
+              <> [ (klass form, T.pack (show i), reply i (output (plainMap p)), Just (reply i (CBOR.TMap (plainMap p))))
                  | (form, make) <- outputForms pick scripts hashes inlines
                  , (i, p) <- zip [0 .. replyVariants - 1] (cycle pairs)
-                 , Just extra <- [make i]
+                 , Just output <- [make i]
                  ]
       isList = \case
         CBOR.TList _ -> True
