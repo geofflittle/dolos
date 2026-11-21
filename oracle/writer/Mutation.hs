@@ -1,108 +1,139 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Values generated with each rule of a mutable shape marked, and the CBOR
--- writer that drops the marks, changing one marked value on request.
+-- | The shapes of the spec's trees that a change applies to, the changes of each, and the CBOR writer that makes one change at a position.
 module Mutation (
   Shape (..),
-  Occurrence (..),
+  Fraction (..),
   Change (..),
-  marked,
-  write,
-  changes,
+  shapeOf,
   kinds,
+  changes,
+  write,
   reachable,
 ) where
 
-import Codec.CBOR.Cuddle.CBOR.Gen (generateFromName)
-import Codec.CBOR.Cuddle.CDDL (Name (..), Value (..), ValueVariant (..))
-import Codec.CBOR.Cuddle.CDDL.CTree (CTree (..), CTreeRoot (..))
-import Codec.CBOR.Cuddle.CDDL.Custom.Core (RuleTerm (..))
-import Codec.CBOR.Cuddle.CDDL.Resolve (MonoReferenced, XXCTree (..))
+import Codec.CBOR.Cuddle.CDDL (Name (..), RangeBound (..), Value (..), ValueVariant (..))
+import Codec.CBOR.Cuddle.CDDL.CTree (CTree (..), CTreeRoot (..), PTerm (..))
+import Codec.CBOR.Cuddle.CDDL.CtlOp (CtlOp (Size))
+import Codec.CBOR.Cuddle.CDDL.Resolve (MonoSimplePhase, XXCTree (..))
 import qualified Codec.CBOR.Read as CBOR
 import qualified Codec.CBOR.Term as CBOR
 import qualified Codec.CBOR.Write as CBOR
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Builder as B
 import qualified Data.ByteString.Lazy as BSL
+import Data.List (isPrefixOf)
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import Data.Word (Word64, Word8)
+import Path (Tree)
 
--- | The shape of a rule whose values a change applies to.
+-- | The shape of a tree whose values a change applies to.
 data Shape
   = -- | A choice whose arms each start with a distinct unsigned literal, and whether every arm is an array.
     Sum [Word64] Bool
   | -- | A set or ordered set of elements.
     SetOf
   | -- | A rational number under tag 30.
-    Rational
+    Rational Fraction
   | -- | An array of fields.
     ArrayRecord
-  | -- | A map of fields.
-    MapRecord
+  | -- | A map of fields under the unsigned keys it declares.
+    MapRecord [Word64]
+  | -- | An integer between two bounds, the upper one absent when unbounded.
+    Between Integer (Maybe Integer)
+  | -- | Bytes or text whose length is between two bounds, the upper one absent when unbounded.
+    Length Integer (Maybe Integer)
   deriving (Eq, Show)
 
--- | The kinds of change every rule of the shape receives.
+-- | Which rational numbers a fraction holds.
+data Fraction
+  = -- | Any numerator over any denominator its rule allows.
+    Unbounded
+  | -- | A number from zero to one, the bound `unit_interval` states only in a comment of the CDDL.
+    Unit
+  deriving (Eq, Show)
+
+-- | The kinds of change every value of the shape receives.
 kinds :: Shape -> [T.Text]
 kinds = \case
   Sum _ arrays -> "unknown-arm" : ["array-extra" | arrays] <> ["array-short" | arrays]
   SetOf -> ["set-duplicate", "set-two-ways", "set-reorder"]
-  Rational -> ["rational-tag", "rational-third", "rational-unreduced"]
+  Rational f ->
+    ["rational-tag", "rational-third", "rational-unreduced", "rational-one", "rational-empty", "rational-indefinite"]
+      <> ["unit-above" | f == Unit]
+      <> ["unit-zero-denominator" | f == Unit]
   ArrayRecord -> ["array-extra", "array-short"]
-  MapRecord -> []
+  MapRecord _ -> ["map-unknown-key"]
+  Between _ hi -> "range-below" : ["range-above" | Just _ <- [hi]]
+  Length lo hi -> ["range-below" | lo > 0] <> ["range-above" | Just _ <- [hi]]
 
--- | One marked value of a written term.
-data Occurrence = Occurrence
-  { occNumber :: Int
-  , occRule :: Name
-  , occShape :: Shape
-  , occSite :: T.Text
-  , occTerm :: CBOR.Term
+-- | A change to one value: its kind, which case of the kind it is, a detail for the record's variant, and the change itself.
+data Change = Change
+  { changeKind :: T.Text
+  , changeCase :: T.Text
+  , changeDetail :: T.Text
+  , changeApply :: CBOR.Term -> CBOR.Term
   }
-
--- | A change to one marked value, named by its kind and a detail.
-data Change = Change {changeKind :: T.Text, changeDetail :: T.Text, changeApply :: CBOR.Term -> CBOR.Term}
-
--- | The tag of the first mark, above every tag the spec defines.
-markBase :: Word64
-markBase = 0xFFFFFFFF00000000
 
 -- | The tag under which the writer writes every integer and length in eight bytes.
 wideTag :: Word64
-wideTag = markBase - 1
+wideTag = 0xFFFFFFFEFFFFFFFF
 
--- | The shape of a rule, if a change applies to its values.
-shapeOf :: Map.Map Name (CTree MonoReferenced) -> Name -> CTree MonoReferenced -> Maybe Shape
-shapeOf m n t
-  | set n = Just SetOf
-  | CTreeE (MGenerator _ x) <- t, CTreeE (MRuleRef r) <- unwrap x, set r = Just SetOf
-  | otherwise = case unwrap t of
-      Tag 30 _ -> Just Rational
+-- | The shape of a tree, given the rule it defines if any, when a change applies to its values.
+shapeOf :: CTreeRoot MonoSimplePhase -> Maybe Name -> Tree -> Maybe Shape
+shapeOf (CTreeRoot m) name tree
+  | Just n <- name, set n = Just SetOf
+  | otherwise = case tree of
+      Tag 30 _ -> Just (Rational (if fmap unName name == Just "unit_interval" then Unit else Unbounded))
       Choice arms -> (\ks -> Sum ks (all array (NE.toList arms))) <$> traverse (leading m) (NE.toList arms)
-      Map _ -> Just MapRecord
-      Array xs | not (any repeated xs) -> Just ArrayRecord
+      Map xs@(_ : _) -> MapRecord <$> traverse literalKey xs
+      Array xs | not (any repeats xs) -> Just ArrayRecord
+      Range a b closing -> do
+        lo <- bound m a
+        hi <- bound m b
+        Just (Between lo (Just (if closing == Closed then hi else hi - 1)))
+      Control Size sized size -> do
+        (lo, hi) <- case size of
+          Range a b closing -> (,) <$> bound m a <*> ((\h -> if closing == Closed then h else h - 1) <$> bound m b)
+          x -> (\n -> (n, n)) <$> bound m x
+        case sized of
+          Postlude PTBytes -> Just (Length lo (Just hi))
+          Postlude PTText -> Just (Length lo (Just hi))
+          Postlude PTUInt -> Just (Between 0 (Just (256 ^ hi - 1)))
+          _ -> Nothing
       _ -> Nothing
   where
     set r = any (`T.isPrefixOf` unName r) ["%set<", "%nonempty_set<", "%oset<", "%nonempty_oset<"]
-    repeated = \case
+    repeats = \case
       Occur {} -> True
       _ -> False
     array = \case
       Array _ -> True
       _ -> False
+    literalKey = \case
+      Occur x _ -> literalKey x
+      KV (Literal (Value (VUInt k) _)) _ _ -> Just k
+      _ -> Nothing
 
-unwrap :: CTree MonoReferenced -> CTree MonoReferenced
-unwrap = \case
-  CTreeE (MGenerator _ x) -> unwrap x
-  CTreeE (MValidator _ x) -> unwrap x
-  x -> x
+-- | The integer a bound of a range or size names.
+bound :: Map.Map Name Tree -> Tree -> Maybe Integer
+bound m = go (8 :: Int)
+  where
+    go 0 = const Nothing
+    go d = \case
+      Literal (Value (VUInt k) _) -> Just (toInteger k)
+      Literal (Value (VNInt k) _) -> Just (negate (toInteger k))
+      Literal (Value (VBignum k) _) -> Just k
+      CTreeE (MSimpleRef r) -> Map.lookup r m >>= go (d - 1)
+      _ -> Nothing
 
 -- | The unsigned literal an arm of a choice starts with, when the arm is one value.
-leading :: Map.Map Name (CTree MonoReferenced) -> CTree MonoReferenced -> Maybe Word64
+leading :: Map.Map Name Tree -> Tree -> Maybe Word64
 leading m = \case
   Literal (Value (VUInt k) _) -> Just k
   Array (x : _) -> first (8 :: Int) x
@@ -112,117 +143,58 @@ leading m = \case
     first d = \case
       Literal (Value (VUInt k) _) -> Just k
       Group (x : _) -> first (d - 1) x
-      CTreeE (MRuleRef r) -> Map.lookup r m >>= first (d - 1)
+      CTreeE (MSimpleRef r) -> Map.lookup r m >>= first (d - 1)
       _ -> Nothing
 
--- | The spec with each rule of a shape, other than the excluded ones,
--- generating its values under a mark naming it, and the rules marked, each
--- with its shape.
-marked :: Set.Set Name -> CTreeRoot MonoReferenced -> (CTreeRoot MonoReferenced, [(Name, Shape)])
-marked excluded (CTreeRoot m) = (CTreeRoot (Map.unions [wrapped, own, m]), table)
+-- | Writes a term, applying the change to the value at the position given, every head in eight bytes when wide, and reading again the bytes at the embedded positions that hold the change or are written wide.
+write :: Set.Set [Int] -> Maybe ([Int], CBOR.Term -> CBOR.Term) -> Bool -> CBOR.Term -> BS.ByteString
+write embedded wanted wide0 t0 = BSL.toStrict (B.toLazyByteString (go [] wide0 t0))
   where
-    table = [(n, s) | (n, t) <- Map.toList m, Set.notMember n excluded, Just s <- [shapeOf m n t]]
-    own = Map.fromList [(ownName n, m Map.! n) | (n, _) <- table]
-    wrapped =
-      Map.fromList
-        [ (n, CTreeE (MGenerator (SingleTerm . CBOR.TTagged (markBase + i) <$> generateFromName (ownName n)) (m Map.! n)))
-        | (i, (n, _)) <- zip [0 ..] table
-        ]
-    ownName n = Name (unName n <> "!")
-
--- | Where the writer is: the enclosing record and the field in it, and how it writes integers.
-data Place = Place {placeRecord :: Maybe (Name, Maybe T.Text), placeWide :: Bool}
-
--- | Writes a marked term without its marks, applying the change to the
--- occurrence numbered `target`, and returns the occurrences it passed.
-write :: [(Name, Shape)] -> Maybe (Int, CBOR.Term -> CBOR.Term) -> Bool -> CBOR.Term -> (BS.ByteString, [Occurrence])
-write table wanted wide t =
-  let (b, _, occs) = go (Place Nothing wide) 0 t
-   in (BSL.toStrict (B.toLazyByteString b), occs)
-  where
-    go :: Place -> Int -> CBOR.Term -> (B.Builder, Int, [Occurrence])
-    go p n = \case
+    go pos wide t = emit pos wide (case wanted of Just (p, f) | p == pos -> f t; _ -> t)
+    emit pos wide = \case
       CBOR.TTagged tag x
-        | tag == wideTag -> go p {placeWide = True} n x
-        | tag >= markBase, Just (rule, shape) <- lookupMark tag ->
-            let occ = Occurrence n rule shape (site p) x
-                x' = case wanted of
-                  Just (k, f) | k == n -> f x
-                  _ -> x
-                p' = if opensPlace shape then p {placeRecord = Just (rule, Nothing)} else p
-                (b, n', occs) = go p' (n + 1) x'
-             in (b, n', occ : occs)
-        | otherwise -> cat (header p 6 tag) (go p n x)
-      CBOR.TList xs -> items p n (header p 4 (fromIntegral (length xs))) (zip (map (T.pack . show) [0 :: Int ..]) xs) mempty
-      CBOR.TListI xs -> items p n (B.word8 0x9f) (zip (map (T.pack . show) [0 :: Int ..]) xs) (B.word8 0xff)
-      CBOR.TMap kvs -> pairs p n (header p 5 (fromIntegral (length kvs))) kvs mempty
-      CBOR.TMapI kvs -> pairs p n (B.word8 0xbf) kvs (B.word8 0xff)
-      CBOR.TBytes bs | Just nested <- embedded bs ->
-        let (b, n', occs) = go p n nested
-            bytes = BSL.toStrict (B.toLazyByteString b)
-         in (header p 2 (fromIntegral (BS.length bytes)) <> B.byteString bytes, n', occs)
-      CBOR.TBytes bs | placeWide p -> (header p 2 (fromIntegral (BS.length bs)) <> B.byteString bs, n, [])
-      CBOR.TString s | placeWide p -> let bs = T.encodeUtf8 s in (header p 3 (fromIntegral (BS.length bs)) <> B.byteString bs, n, [])
-      CBOR.TInt i | placeWide p -> (integer p (toInteger i), n, [])
-      CBOR.TInteger i | placeWide p, i >= negate (2 ^ (64 :: Int)), i < 2 ^ (64 :: Int) -> (integer p i, n, [])
-      leaf -> (CBOR.toBuilder (CBOR.encodeTerm leaf), n, [])
-    cat b (b', n, occs) = (b <> b', n, occs)
-    items p n open xs close =
-      let step (acc, k, os) (pos, x) = let (b', k', os') = go (field p pos) k x in (acc <> b', k', os <> os')
-          (b, n', occs) = foldl step (open, n, []) xs
-       in (b <> close, n', occs)
-    pairs p n open kvs close =
-      let step (acc, k, os) (kt, v) =
-            let (bk, k1, ok) = go (field p "key") k kt
-                (bv, k2, ov) = go (field p (keyName kt)) k1 v
-             in (acc <> bk <> bv, k2, os <> ok <> ov)
-          (b, n', occs) = foldl step (open, n, []) kvs
-       in (b <> close, n', occs)
-    field p pos = case placeRecord p of
-      Just (r, Nothing) -> p {placeRecord = Just (r, Just pos)}
-      _ -> p
-    keyName = \case
-      CBOR.TInt i -> T.pack (show i)
-      CBOR.TString s -> s
-      _ -> "*"
-    site p = case placeRecord p of
-      Just (r, Just pos) -> unName r <> " " <> pos
-      Just (r, Nothing) -> unName r
-      Nothing -> ""
-    lookupMark tag = let i = fromIntegral (tag - markBase) in if i < length table then Just (table !! i) else Nothing
-    opensPlace = \case
-      SetOf -> False
-      Rational -> False
-      _ -> True
-    embedded bs = case CBOR.deserialiseFromBytes CBOR.decodeTerm (BSL.fromStrict bs) of
-      Right (rest, nested) | BSL.null rest, hasMark nested -> Just nested
-      _ -> Nothing
-    hasMark = \case
-      CBOR.TTagged tag x -> tag >= wideTag || hasMark x
-      CBOR.TList xs -> any hasMark xs
-      CBOR.TListI xs -> any hasMark xs
-      CBOR.TMap kvs -> any (\(k, v) -> hasMark k || hasMark v) kvs
-      CBOR.TMapI kvs -> any (\(k, v) -> hasMark k || hasMark v) kvs
-      _ -> False
+        | tag == wideTag -> emit pos True x
+        | otherwise -> header wide 6 tag <> go (pos <> [0]) wide x
+      CBOR.TList xs -> header wide 4 (fromIntegral (length xs)) <> list pos wide xs
+      CBOR.TListI xs -> B.word8 0x9f <> list pos wide xs <> B.word8 0xff
+      CBOR.TMap kvs -> header wide 5 (fromIntegral (length kvs)) <> pairs pos wide kvs
+      CBOR.TMapI kvs -> B.word8 0xbf <> pairs pos wide kvs <> B.word8 0xff
+      CBOR.TBytes bs
+        | Set.member pos embedded
+        , wide || holds pos
+        , Right (rest, nested) <- CBOR.deserialiseFromBytes CBOR.decodeTerm (BSL.fromStrict bs)
+        , BSL.null rest ->
+            let b = BSL.toStrict (B.toLazyByteString (go (pos <> [0]) wide nested))
+             in header wide 2 (fromIntegral (BS.length b)) <> B.byteString b
+      CBOR.TBytes bs | wide -> header wide 2 (fromIntegral (BS.length bs)) <> B.byteString bs
+      CBOR.TString s | wide -> let bs = T.encodeUtf8 s in header wide 3 (fromIntegral (BS.length bs)) <> B.byteString bs
+      CBOR.TInt i | wide -> integer wide (toInteger i)
+      CBOR.TInteger i | wide, i >= negate (2 ^ (64 :: Int)), i < 2 ^ (64 :: Int) -> integer wide i
+      leaf -> CBOR.toBuilder (CBOR.encodeTerm leaf)
+    list pos wide xs = mconcat [go (pos <> [k]) wide x | (k, x) <- zip [0 ..] xs]
+    pairs pos wide kvs = mconcat [go (pos <> [2 * k]) wide kt <> go (pos <> [2 * k + 1]) wide v | (k, (kt, v)) <- zip [0 ..] kvs]
+    holds pos = case wanted of
+      Just (p, _) -> (pos <> [0]) `isPrefixOf` p
+      Nothing -> False
 
--- | The head of a data item, in eight bytes when the place writes wide.
-header :: Place -> Word8 -> Word64 -> B.Builder
-header p major v
-  | placeWide p = B.word8 (major * 32 + 27) <> B.word64BE v
+-- | The head of a data item, in eight bytes when wide.
+header :: Bool -> Word8 -> Word64 -> B.Builder
+header wide major v
+  | wide = B.word8 (major * 32 + 27) <> B.word64BE v
   | v < 24 = B.word8 (major * 32 + fromIntegral v)
   | v < 0x100 = B.word8 (major * 32 + 24) <> B.word8 (fromIntegral v)
   | v < 0x10000 = B.word8 (major * 32 + 25) <> B.word16BE (fromIntegral v)
   | v < 0x100000000 = B.word8 (major * 32 + 26) <> B.word32BE (fromIntegral v)
   | otherwise = B.word8 (major * 32 + 27) <> B.word64BE v
 
--- | An integer of the range of a head, in eight bytes.
-integer :: Place -> Integer -> B.Builder
-integer p i
-  | i >= 0 = header p 0 (fromInteger i)
-  | otherwise = header p 1 (fromInteger (negate 1 - i))
+-- | An integer of the range of a head.
+integer :: Bool -> Integer -> B.Builder
+integer wide i
+  | i >= 0 = header wide 0 (fromInteger i)
+  | otherwise = header wide 1 (fromInteger (negate 1 - i))
 
 -- | The rules a value of any of the named rules can contain, those included.
-reachable :: CTreeRoot MonoReferenced -> [Name] -> Set.Set Name
+reachable :: CTreeRoot MonoSimplePhase -> [Name] -> Set.Set Name
 reachable (CTreeRoot m) = go Set.empty
   where
     go seen [] = seen
@@ -243,42 +215,68 @@ reachable (CTreeRoot m) = go Set.empty
       Enum x -> refs x
       Unwrap x -> refs x
       Tag _ x -> refs x
-      CTreeE (MRuleRef r) -> [r]
-      CTreeE (MGenerator _ x) -> refs x
-      CTreeE (MValidator _ x) -> refs x
+      CTreeE (MSimpleRef r) -> [r]
 
 -- | The changes that apply to a value of a shape.
 changes :: Shape -> CBOR.Term -> [Change]
 changes shape t = case shape of
-  Sum ks _ -> unknownArms ks <> arrays
+  Sum ks allArrays -> unknownArms ks <> (if allArrays then arrays else [])
   ArrayRecord -> arrays
-  MapRecord -> []
+  MapRecord ks -> case t of
+    CBOR.TMap kvs ->
+      [ Change "map-unknown-key" case_ (T.pack (show k)) (const (CBOR.TMap (kvs <> [(CBOR.TInteger (toInteger k), CBOR.TInt 0)])))
+      | (case_, k) <- [("above", maximum ks + 1)] <> take 1 [("gap", k) | k <- [0 .. maximum ks], k `notElem` ks]
+      ]
+    _ -> []
   SetOf -> case elementsOf t of
     Just (wrap, xs@(x : _)) ->
-      [Change "set-duplicate" "" (const (wrap (xs <> [x])))]
-        <> [Change "set-two-ways" "" (const (wrap (xs <> [CBOR.TTagged wideTag x])))]
-        <> [Change "set-reorder" "" (const (wrap (reverse xs))) | reverse xs /= xs]
+      [Change "set-duplicate" "" "" (const (wrap (xs <> [x])))]
+        <> [Change "set-two-ways" "" "" (const (wrap (xs <> [CBOR.TTagged wideTag x])))]
+        <> [Change "set-reorder" "" "" (const (wrap (reverse xs))) | reverse xs /= xs]
     _ -> []
-  Rational -> case t of
+  Rational f -> case t of
     CBOR.TTagged 30 (CBOR.TList [n, d]) ->
-      [ Change "rational-tag" "31" (const (CBOR.TTagged 31 (CBOR.TList [n, d])))
-      , Change "rational-third" "" (const (CBOR.TTagged 30 (CBOR.TList [n, d, CBOR.TInt 1])))
+      [ Change "rational-tag" "" "31" (const (CBOR.TTagged 31 (CBOR.TList [n, d])))
+      , Change "rational-third" "" "" (const (CBOR.TTagged 30 (CBOR.TList [n, d, CBOR.TInt 1])))
+      , Change "rational-one" "" "" (const (CBOR.TTagged 30 (CBOR.TList [n])))
+      , Change "rational-empty" "" "" (const (CBOR.TTagged 30 (CBOR.TList [])))
+      , Change "rational-indefinite" "" "" (const (CBOR.TTagged 30 (CBOR.TListI [n, d])))
       ]
-        <> [ Change "rational-unreduced" "" (const (CBOR.TTagged 30 (CBOR.TList [CBOR.TInteger (2 * a), CBOR.TInteger (2 * b)])))
+        <> [ Change "rational-unreduced" "" "" (const (CBOR.TTagged 30 (CBOR.TList [CBOR.TInteger (2 * a), CBOR.TInteger (2 * b)])))
            | Just a <- [intOf n]
            , Just b <- [intOf d]
            , 2 * max a b < 2 ^ (64 :: Int)
            ]
+        <> [ c
+           | f == Unit
+           , c <-
+              [ Change "unit-above" "" "2/1" (const (CBOR.TTagged 30 (CBOR.TList [CBOR.TInt 2, CBOR.TInt 1])))
+              , Change "unit-zero-denominator" "" "1/0" (const (CBOR.TTagged 30 (CBOR.TList [CBOR.TInt 1, CBOR.TInt 0])))
+              ]
+           ]
+    _ -> []
+  Between lo hi -> case intOf t of
+    Just _ ->
+      [Change "range-below" "" (T.pack (show (lo - 1))) (const (CBOR.TInteger (lo - 1)))]
+        <> [Change "range-above" "" (T.pack (show (h + 1))) (const (CBOR.TInteger (h + 1))) | Just h <- [hi]]
+    Nothing -> []
+  Length lo hi -> case t of
+    CBOR.TBytes bs ->
+      [Change "range-below" "" (T.pack (show (lo - 1))) (const (CBOR.TBytes (sized (lo - 1) bs))) | lo > 0]
+        <> [Change "range-above" "" (T.pack (show (h + 1))) (const (CBOR.TBytes (sized (h + 1) bs))) | Just h <- [hi]]
+    CBOR.TString _ ->
+      [Change "range-below" "" (T.pack (show (lo - 1))) (const (CBOR.TString (T.replicate (fromInteger (lo - 1)) "a"))) | lo > 0]
+        <> [Change "range-above" "" (T.pack (show (h + 1))) (const (CBOR.TString (T.replicate (fromInteger (h + 1)) "a"))) | Just h <- [hi]]
     _ -> []
   where
     unknownArms ks =
-      [ Change "unknown-arm" (T.pack (show u)) (setLeading u)
+      [ Change "unknown-arm" "" (T.pack (show u)) (setLeading u)
       | Just _ <- [leadingOf t]
       , u <- [k | k <- [0 .. maximum ks + 1], k `notElem` ks]
       ]
     arrays = case t of
       CBOR.TList xs@(_ : _) ->
-        [Change "array-extra" "" (const (CBOR.TList (xs <> [CBOR.TInt 0]))), Change "array-short" "" (const (CBOR.TList (init xs)))]
+        [Change "array-extra" "" "" (const (CBOR.TList (xs <> [CBOR.TInt 0]))), Change "array-short" "" "" (const (CBOR.TList (init xs)))]
       _ -> []
     setLeading u = \case
       CBOR.TList (_ : xs) -> CBOR.TList (CBOR.TInteger (toInteger u) : xs)
@@ -298,3 +296,4 @@ changes shape t = case shape of
       CBOR.TList xs -> Just (CBOR.TList, xs)
       CBOR.TListI xs -> Just (CBOR.TListI, xs)
       _ -> Nothing
+    sized n bs = BS.take (fromInteger n) (bs <> BS.replicate (fromInteger n) 0)
