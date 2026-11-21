@@ -64,7 +64,6 @@ jobs:
 
   planted:
     name: planted ${{ matrix.planted }}
-    if: ${{ !inputs.pallas_ref }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -172,6 +171,8 @@ jobs:
     name: coverage
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      COVERED: pallas-primitives,pallas-codec,pallas-network
     steps:
       - uses: actions/checkout@v4
         with:
@@ -194,16 +195,37 @@ jobs:
         with:
           workspaces: dolos/reference-comparison -> target
           key: coverage
-      - name: Run the comparison tests with coverage
+      - name: Remove the profiles of earlier runs
         working-directory: dolos/reference-comparison
-        run: cargo llvm-cov nextest --no-report --branch --ignore-run-fail
+        run: cargo llvm-cov clean --workspace
+      # Each comparison runs alone, so one that fails to build leaves the
+      # coverage of the others in the report.
+      - name: decode with coverage
+        if: ${{ !cancelled() }}
+        working-directory: dolos/reference-comparison
+        run: cargo llvm-cov nextest --no-report --branch --ignore-run-fail --dep-coverage "$COVERED" --test decode
+      - name: networking with coverage
+        if: ${{ !cancelled() }}
+        working-directory: dolos/reference-comparison
+        run: cargo llvm-cov nextest --no-report --branch --ignore-run-fail --dep-coverage "$COVERED" --test networking
+      - name: mapping with coverage
+        if: ${{ !cancelled() }}
+        working-directory: dolos/reference-comparison
+        run: cargo llvm-cov nextest --no-report --branch --ignore-run-fail --dep-coverage "$COVERED" --test mapping
+      # The report keeps every instrumented source except test files, and the runs
+      # instrument the pallas crates they name beside the comparison's tests.
       - name: Report the coverage of the compared pallas crates
+        if: ${{ !cancelled() }}
         working-directory: dolos/reference-comparison
         run: |
-          deps=pallas-primitives,pallas-codec,pallas-network
-          cargo llvm-cov report --branch --dep-coverage "$deps" --lcov --output-path "$RUNNER_TEMP/lcov.info"
-          cargo llvm-cov report --branch --dep-coverage "$deps" --html --output-dir "$RUNNER_TEMP/coverage"
-          cargo llvm-cov report --branch --dep-coverage "$deps" > "$RUNNER_TEMP/summary.txt"
+          cargo llvm-cov report --branch --lcov --output-path "$RUNNER_TEMP/lcov.info"
+          cargo llvm-cov report --branch --html --output-dir "$RUNNER_TEMP/coverage"
+          cargo llvm-cov report --branch > "$RUNNER_TEMP/summary.txt"
+          if ! grep -q 'dijkstra' "$RUNNER_TEMP/summary.txt" || ! [ -s "$RUNNER_TEMP/lcov.info" ]; then
+            echo "::error::the report holds no Dijkstra source, so the pallas crates were not measured"
+            cat "$RUNNER_TEMP/summary.txt"
+            exit 1
+          fi
           {
             echo "### Coverage of pallas-primitives, pallas-codec and pallas-network at $PALLAS_REF"
             echo '```'
@@ -214,6 +236,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           cp "$RUNNER_TEMP/lcov.info" "$RUNNER_TEMP/summary.txt" "$RUNNER_TEMP/coverage/"
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
         with:
           name: coverage
           path: ${{ runner.temp }}/coverage
