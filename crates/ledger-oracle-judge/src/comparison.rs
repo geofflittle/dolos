@@ -932,24 +932,13 @@ impl Coverage {
         out
     }
 
-    /// Each reason the coverage fails: a target change no input makes, or a
-    /// change in `required` the targets lack.
-    pub fn failures(&self, required: &[(&str, &str)]) -> Vec<String> {
-        let mut out: Vec<String> = self
-            .counts
+    /// Each target change no input makes.
+    pub fn failures(&self) -> Vec<String> {
+        self.counts
             .iter()
             .filter(|(_, n)| **n == 0)
             .map(|((rule, kind), _)| format!("{}: no input changes {rule} by {kind}", self.layer))
-            .collect();
-        for (rule, kind) in required {
-            if self.count(rule, kind).is_none() {
-                out.push(format!(
-                    "{}: the targets lack the required change {rule} by {kind}",
-                    self.layer
-                ));
-            }
-        }
-        out
+            .collect()
     }
 }
 
@@ -1567,7 +1556,7 @@ mod tests {
         let coverage = Coverage::new(records.layer(), records.targets(), records.rows());
         assert_eq!(coverage.count("voter", "unknown-arm"), Some(1));
         assert_eq!(
-            coverage.failures(&[("voter", "unknown-arm")]),
+            coverage.failures(),
             [
                 "decode: no input changes transaction_body by wide-heads",
                 "decode: no input changes voter by array-short",
@@ -1587,26 +1576,11 @@ mod tests {
         )
         .unwrap();
         let coverage = Coverage::new(records.layer(), records.targets(), records.rows());
-        assert_eq!(
-            coverage.failures(&[("voter", "unknown-arm")]),
-            Vec::<String>::new()
-        );
+        assert_eq!(coverage.failures(), Vec::<String>::new());
         assert_eq!(
             coverage.to_string(),
             "decode: 3 target changes, 3 made, 0 not made\n"
         );
-    }
-
-    #[test]
-    fn a_required_change_the_targets_lack_fails() {
-        let records = Records::read(CHANGED, "9df9f98c").unwrap();
-        let coverage = Coverage::new(records.layer(), records.targets(), records.rows());
-        assert!(coverage
-            .failures(&[("gov_action", "unknown-arm")])
-            .contains(
-                &"decode: the targets lack the required change gov_action by unknown-arm"
-                    .to_owned()
-            ));
     }
 
     #[test]
