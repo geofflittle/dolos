@@ -1076,7 +1076,7 @@ networkingRecords = do
 -- Mapping records ----------------------------------------------------------------
 
 -- | Where the datum of an output of a sub transaction is.
-data DatumSource = SubWitness | TopWitness | BothWitness | SiblingWitness | NoWitness | Inline | NoDatumSource
+data DatumSource = SubWitness | TopWitness | BothWitness | NoWitness | Inline | NoDatumSource
   deriving (Eq, Enum, Bounded)
 
 -- | The name of a datum source in a mapping class.
@@ -1085,7 +1085,6 @@ sourceName = \case
   SubWitness -> "sub-witness"
   TopWitness -> "top-witness"
   BothWitness -> "both-witness"
-  SiblingWitness -> "sibling-witness"
   NoWitness -> "no-witness"
   Inline -> "inline"
   NoDatumSource -> "none"
@@ -1106,9 +1105,7 @@ mappingTx source at = do
       witnessing :: Bool -> Tx l DijkstraEra -> Tx l DijkstraEra
       witnessing False tx = tx
       witnessing True tx = tx & witsTxL . datsTxWitsL .~ TxDats (Map.insert h d (unTxDats (tx ^. witsTxL . datsTxWitsL)))
-      held k
-        | k == at = source `elem` [SubWitness, BothWitness]
-        | otherwise = source == SiblingWitness
+      held k = k == at && source `elem` [SubWitness, BothWitness]
       placed k tx
         | k == at = tx & bodyTxL . outputsTxBodyL .~ ((out & datumTxOutL .~ datum) StrictSeq.<| (tx ^. bodyTxL . outputsTxBodyL))
         | otherwise = tx
@@ -1116,28 +1113,25 @@ mappingTx source at = do
   pure (witnessing (source `elem` [TopWitness, BothWitness]) top & bodyTxL . subTransactionsTxBodyL .~ OMap.fromFoldable subs')
 
 -- | For each sub transaction of a transaction, each output with the source,
--- hash and bytes of the datum the ledger finds for it in the datums of the
--- whole batch.
+-- hash and bytes of the datum the ledger allows for it, from the witnesses
+-- of that sub transaction or of the top transaction.
 datumsD :: Tx TopTx DijkstraEra -> D
-datumsD tx = DO [("subs", DL [DL [outputD k o | o <- toList (s ^. bodyTxL . outputsTxBodyL)] | (k, s) <- zip [0 :: Int ..] subs])]
+datumsD tx = DO [("subs", DL [DL [outputD s o | o <- toList (s ^. bodyTxL . outputsTxBodyL)] | s <- subs])]
   where
     subs = toList (tx ^. bodyTxL . subTransactionsTxBodyL)
     dats :: Tx l DijkstraEra -> Map.Map DataHash (Data DijkstraEra)
     dats t = unTxDats (t ^. witsTxL . datsTxWitsL)
-    batch = foldMap dats subs <> dats tx
     raw = DS . hexT . hashToBytes . extractHash
     found name h bytes = DO [("source", DS name), ("hash", raw h), ("datum", maybe DNull (DS . hexT) bytes)]
-    outputD k o = case o ^. datumTxOutL of
+    outputD s o = case o ^. datumTxOutL of
       NoDatum -> DO [("source", DS (sourceName NoDatumSource)), ("hash", DNull), ("datum", DNull)]
       Datum bd -> found (sourceName Inline) (hashBinaryData bd) (Just (originalBytes bd))
-      DatumHash h -> found (sourceName (witnessed k h)) h (originalBytes <$> Map.lookup h batch)
-    witnessed k h = case (Map.member h (dats (subs !! k)), Map.member h (dats tx)) of
+      DatumHash h -> found (sourceName (witnessed s h)) h (originalBytes <$> Map.lookup h (dats s <> dats tx))
+    witnessed s h = case (Map.member h (dats s), Map.member h (dats tx)) of
       (True, True) -> BothWitness
       (True, False) -> SubWitness
       (False, True) -> TopWitness
-      (False, False)
-        | any (Map.member h . dats) [s | (j, s) <- zip [0 ..] subs, j /= k] -> SiblingWitness
-        | otherwise -> NoWitness
+      (False, False) -> NoWitness
 
 -- | The number of variants of each mapping class.
 mappingVariants :: Int
