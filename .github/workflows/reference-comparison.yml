@@ -27,6 +27,8 @@ jobs:
             patched: dolos
             expected: |
               decode: class "tx zap" disagrees (accepts) 4
+    env:
+      PALLAS_REF: adb44159a4ca20e8f70d8cada66c93d505aa8ca9
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,9 +38,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: geofflittle/pallas
-          ref: adb44159a4ca20e8f70d8cada66c93d505aa8ca9
+          ref: ${{ env.PALLAS_REF }}
           path: pallas-head
           persist-credentials: false
+      - name: Use the lock resolved for the pallas head
+        working-directory: dolos/reference-comparison
+        run: cp "locks/$PALLAS_REF.lock" Cargo.lock
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-09-04

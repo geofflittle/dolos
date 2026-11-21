@@ -11,6 +11,7 @@ use std::{
     time::Duration,
 };
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -573,8 +574,10 @@ impl<A, D> Expected<A, D> {
 /// A layer of the implementation compared with its reference, one record at
 /// a time.
 pub trait ComparedLayer: Send + Sync + 'static {
-    /// The layer the records are written for.
+    /// The layer the run is judged and tallied as.
     const LAYER: Layer;
+    /// The layer of the records the implementation reads.
+    const RECORDS: Layer = Self::LAYER;
     /// The longest the implementation may take over one input.
     const TIME_LIMIT: Duration;
     /// What the implementation reads from one record.
@@ -741,11 +744,11 @@ pub fn compare<'r, L: ComparedLayer>(
         judgements: Vec::new(),
         failures: Vec::new(),
     };
-    if records.layer() != L::LAYER {
+    if records.layer() != L::RECORDS {
         run.failures.push(format!(
             "the records are for {}, not {}",
             records.layer(),
-            L::LAYER
+            L::RECORDS
         ));
         return run;
     }
@@ -872,6 +875,71 @@ pub struct Row {
     pub site: Option<String>,
     pub mutated: Option<String>,
     pub base: Option<Vec<u8>>,
+    pub place: Option<Place>,
+}
+
+/// Where in the reference's spec a changed input makes its change, and the
+/// kind of change.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Place {
+    pub root: String,
+    pub path: Vec<Step>,
+    pub kind: ChangeKind,
+}
+
+/// One step from a rule of the reference's spec to a node beneath it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum Step {
+    /// The value under one key of a map rule.
+    Key { rule: String, key: u64 },
+    /// One declared member of an array rule.
+    Member { rule: String, member: Part },
+    /// One arm of a choice rule.
+    Arm { rule: String, arm: Part },
+    /// An item of a set or a list.
+    Element,
+    /// The key of an entry of a table.
+    EntryKey,
+    /// The value of an entry of a table.
+    EntryValue,
+}
+
+/// A member or an arm, by the name the rule gives it, or by its declared
+/// position when the rule gives none.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Part {
+    Named(String),
+    Position(usize),
+}
+
+/// A kind of change the records make to an input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChangeKind {
+    ArrayExtra,
+    ArrayShort,
+    BlockForm,
+    MapUnknownKey,
+    RangeAbove,
+    RangeBelow,
+    RationalEmpty,
+    RationalIndefinite,
+    RationalOne,
+    RationalTag,
+    RationalThird,
+    RationalUnreduced,
+    SetDuplicate,
+    SetReorder,
+    SetTwoWays,
+    TrailingBytes,
+    UnitAbove,
+    UnitZeroDenominator,
+    UnknownArm,
+    WideHeads,
+    Zap,
 }
 
 impl Row {
@@ -1086,6 +1154,18 @@ impl Records {
                         .ok_or_else(|| malformed(n, "base is not hex"))?,
                 ),
             };
+            let place = match v.get("place") {
+                None => None,
+                Some(p) => {
+                    let place: Place = serde_json::from_value(p.clone())
+                        .map_err(|e| malformed(n, &format!("place: {e}")))?;
+                    let kind = class.split_once(' ').map(|(_, k)| Value::from(k));
+                    if kind.and_then(|k| serde_json::from_value(k).ok()) != Some(place.kind) {
+                        return Err(malformed(n, "the place's kind is not the class's kind"));
+                    }
+                    Some(place)
+                }
+            };
             rows.push(Row {
                 class: class.to_owned(),
                 variant: text("variant").map(str::to_owned),
@@ -1095,6 +1175,7 @@ impl Records {
                 site: text("site").map(str::to_owned),
                 mutated: text("mutated").map(str::to_owned),
                 base,
+                place,
             });
         }
         Ok(Records {
@@ -1625,5 +1706,172 @@ mod tests {
         let caught = catch(|| -> u8 { panic!("boom") });
         assert_eq!(caught, Err("boom".to_owned()));
         assert_eq!(catch(|| 3), Ok(3));
+    }
+
+    const PLACE: &str = r#"{"root":"transaction_body","path":[{"key":{"rule":"transaction_body","key":19}},"entry_key",{"arm":{"rule":"voter","arm":5}},{"member":{"rule":"pool_params","member":"margin"}},{"arm":{"rule":"set","arm":0}},"element","entry_value"],"kind":"unknown-arm"}"#;
+
+    fn placed(place: &str) -> String {
+        CHANGED.replace(
+            r#""base":"a0"}"#,
+            &format!(r#""base":"a0","place":{place}}}"#),
+        )
+    }
+
+    #[test]
+    fn the_place_of_a_row_is_read_in_its_written_form() {
+        let records = Records::read(&placed(PLACE), "9df9f98c").unwrap();
+        let place = Place {
+            root: "transaction_body".into(),
+            path: vec![
+                Step::Key {
+                    rule: "transaction_body".into(),
+                    key: 19,
+                },
+                Step::EntryKey,
+                Step::Arm {
+                    rule: "voter".into(),
+                    arm: Part::Position(5),
+                },
+                Step::Member {
+                    rule: "pool_params".into(),
+                    member: Part::Named("margin".into()),
+                },
+                Step::Arm {
+                    rule: "set".into(),
+                    arm: Part::Position(0),
+                },
+                Step::Element,
+                Step::EntryValue,
+            ],
+            kind: ChangeKind::UnknownArm,
+        };
+        assert_eq!(records.rows()[1].place.as_ref(), Some(&place));
+        assert_eq!(records.rows()[0].place, None);
+        assert_eq!(serde_json::to_string(&place).unwrap(), PLACE);
+    }
+
+    #[test]
+    fn a_place_whose_kind_is_not_the_class_kind_is_refused() {
+        let text = placed(&PLACE.replace("unknown-arm", "array-short"));
+        assert_eq!(
+            Records::read(&text, "9df9f98c"),
+            Err(RecordsError::Malformed {
+                line: 3,
+                reason: "the place's kind is not the class's kind".into()
+            })
+        );
+    }
+
+    #[test]
+    fn a_place_on_a_row_with_no_change_is_refused() {
+        let text = CHANGED.replace(
+            r#""reference":{"accepts":{"fee":1}}}"#,
+            &format!(r#""reference":{{"accepts":{{"fee":1}}}},"place":{PLACE}}}"#),
+        );
+        assert_eq!(
+            Records::read(&text, "9df9f98c"),
+            Err(RecordsError::Malformed {
+                line: 2,
+                reason: "the place's kind is not the class's kind".into()
+            })
+        );
+    }
+
+    #[test]
+    fn a_place_that_is_not_a_place_is_refused() {
+        let wrong = [
+            PLACE.replace("unknown-arm", "unknown-army"),
+            PLACE.replace(r#""key":19"#, r#""key":"19""#),
+            PLACE.replace(r#""element""#, r#""elements""#),
+            PLACE.replace(r#""arm":5}"#, r#""arm":5,"at":1}"#),
+            PLACE.replace(r#""root":"transaction_body","#, ""),
+        ];
+        for place in wrong {
+            let read = Records::read(&placed(&place), "9df9f98c");
+            assert!(
+                matches!(&read, Err(RecordsError::Malformed { line: 3, reason }) if reason.starts_with("place: ")),
+                "{place} read as {read:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_kinds_the_records_name_are_change_kinds() {
+        let kinds = [
+            "array-extra",
+            "array-short",
+            "rational-tag",
+            "rational-third",
+            "rational-unreduced",
+            "set-duplicate",
+            "set-reorder",
+            "set-two-ways",
+            "unknown-arm",
+            "wide-heads",
+            "zap",
+        ];
+        for kind in kinds {
+            let read: Result<ChangeKind, _> = serde_json::from_value(Value::from(kind));
+            assert_eq!(
+                read.map(|k| serde_json::to_value(k).unwrap()).ok(),
+                Some(Value::from(kind)),
+                "{kind}"
+            );
+        }
+    }
+
+    struct OverDecodeRecords;
+
+    impl ComparedLayer for OverDecodeRecords {
+        const LAYER: Layer = Layer::Validation;
+        const RECORDS: Layer = Layer::Decode;
+        const TIME_LIMIT: Duration = Duration::from_secs(10);
+        type Input = ();
+        type Axis = WholeInput;
+        type Value = ();
+        type Refusal = ();
+
+        fn input(&self, _: &Row) {}
+
+        fn reference(&self, _: &Row) -> Expected<WholeInput, ()> {
+            Expected::one(WholeInput, Reference::Accepts(()))
+        }
+
+        fn run(&self, _: &()) -> Vec<(WholeInput, Result<(), ()>)> {
+            vec![(WholeInput, Ok(()))]
+        }
+
+        fn same_reason(&self, _: &str, _: &()) -> bool {
+            false
+        }
+
+        fn allowance(&self, _: &Key<WholeInput>) -> Option<Allowance<(), ()>> {
+            None
+        }
+    }
+
+    #[test]
+    fn a_layer_judges_the_records_of_its_records_layer_as_its_own() {
+        let records = Records::read(CHANGED, "9df9f98c").unwrap();
+        let run = compare(&Arc::new(OverDecodeRecords), &records, &[]);
+        assert_eq!(run.failures(), Vec::<String>::new());
+        assert_eq!(run.judgements.len(), 2);
+        assert_eq!(run.tally.layer, Layer::Validation);
+    }
+
+    #[test]
+    fn a_layer_refuses_records_of_another_layer_than_its_records_layer() {
+        let records = Records::read(RECORDS, "9df9f98c").unwrap();
+        let run = compare(&Arc::new(OverDecodeRecords), &records, &[]);
+        assert_eq!(
+            run.failures(),
+            [
+                "the records are for validation, not decode",
+                "validation: no observation judged",
+                "validation: class \"base\" has no judged observation",
+                "validation: class \"zero denominator\" has no judged observation",
+            ]
+        );
+        assert!(run.judgements.is_empty());
     }
 }
