@@ -8,6 +8,7 @@ publish = false
 
 [dev-dependencies]
 ledger-oracle-judge = { path = "../crates/ledger-oracle-judge" }
+pallas = { path = "../../pallas-head/pallas", features = ["unstable"] }
 pallas-codec = { path = "../../pallas-head/pallas-codec" }
 pallas-crypto = { path = "../../pallas-head/pallas-crypto" }
 pallas-primitives = { path = "../../pallas-head/pallas-primitives", features = ["unstable"] }
@@ -17,3 +18,11 @@ hex = "0.4.3"
 [[test]]
 name = "decode"
 path = "tests/decode/main.rs"
+
+[[test]]
+name = "networking"
+path = "tests/networking/main.rs"
+
+[[test]]
+name = "mapping"
+path = "tests/mapping/main.rs"
