@@ -16,8 +16,30 @@ use pallas::network::miniprotocols::localstate::queries_v16 as q;
 use pallas_codec::minicbor;
 use serde_json::Value as Json;
 
-/// The eras whose UTxO replies the records hold.
-const ERAS: &[&str] = &["conway", "dijkstra"];
+/// An era whose UTxO replies the records hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Era {
+    Conway,
+    Dijkstra,
+}
+
+impl Era {
+    const ALL: [Era; 2] = [Era::Conway, Era::Dijkstra];
+
+    /// The era's name in a class.
+    fn name(self) -> &'static str {
+        match self {
+            Era::Conway => "conway",
+            Era::Dijkstra => "dijkstra",
+        }
+    }
+
+    /// The era a class names before its `-utxo`.
+    fn of_class(class: &str) -> Option<Era> {
+        let (name, _) = class.split_once("-utxo ")?;
+        Era::ALL.into_iter().find(|e| e.name() == name)
+    }
+}
 
 /// The forms of output the ledger's output decoder tells apart.
 const FORMS: &[&str] = &[
@@ -46,8 +68,13 @@ const FORMS: &[&str] = &[
 /// The classes the records must declare, an era's reply crossed with a form
 /// of output.
 fn classes() -> Vec<String> {
-    ERAS.iter()
-        .flat_map(|era| FORMS.iter().map(move |form| format!("{era}-utxo {form}")))
+    Era::ALL
+        .into_iter()
+        .flat_map(|era| {
+            FORMS
+                .iter()
+                .map(move |form| format!("{}-utxo {form}", era.name()))
+        })
         .collect()
 }
 
@@ -205,19 +232,52 @@ fn pallas_output(x: &q::TransactionOutput) -> Result<Output, String> {
     })
 }
 
-/// Pallas's reading of a UTxO reply.
-fn pallas_reply(raw: &[u8]) -> Result<Reply, String> {
-    let utxos: q::UTxOByAddress = minicbor::decode(raw).map_err(|e| e.to_string())?;
-    let read = utxos
-        .iter()
-        .map(|(input, output)| {
-            let input = TxIn {
-                tx: *input.transaction_id,
-                ix: u64::from(&input.index),
-            };
-            Ok((input, pallas_output(output)?))
-        })
-        .collect();
+/// Pallas's reading of one Dijkstra output.
+fn dijkstra_output(x: &q::dijkstra::TransactionOutput) -> Result<Output, String> {
+    match x {
+        q::dijkstra::TransactionOutput::Legacy(o) => {
+            pallas_output(&q::TransactionOutput::Legacy(o.clone()))
+        }
+        q::dijkstra::TransactionOutput::Current(o) => {
+            let mut output = pallas_output(&q::TransactionOutput::Current(
+                q::PostAlonsoTransactionOutput {
+                    address: o.address.clone(),
+                    amount: o.amount.clone(),
+                    inline_datum: o.inline_datum.clone(),
+                    script_ref: None,
+                },
+            ))?;
+            if let Some(s) = &o.script_ref {
+                output.script = script(encoded(&s.0)?)?;
+            }
+            Ok(output)
+        }
+    }
+}
+
+/// Pallas's reading of a UTxO reply of an era.
+fn pallas_reply(raw: &[u8], era: Era) -> Result<Reply, String> {
+    let input = |i: &q::UTxO| TxIn {
+        tx: *i.transaction_id,
+        ix: u64::from(&i.index),
+    };
+    let read = match era {
+        Era::Conway => {
+            let utxos: q::UTxOByAddress = minicbor::decode(raw).map_err(|e| e.to_string())?;
+            utxos
+                .iter()
+                .map(|(i, output)| Ok((input(i), pallas_output(output)?)))
+                .collect()
+        }
+        Era::Dijkstra => {
+            let utxos: q::dijkstra::UTxOByAddress =
+                minicbor::decode(raw).map_err(|e| e.to_string())?;
+            utxos
+                .iter()
+                .map(|(i, output)| Ok((input(i), dijkstra_output(output)?)))
+                .collect()
+        }
+    };
     Ok(Reply::of(read))
 }
 
@@ -423,22 +483,30 @@ struct Refusal {
     base: Base,
 }
 
-/// The bytes of one recorded reply and of the reply its change was made to.
+/// The bytes of one recorded reply, of the reply its change was made to, and
+/// the era its class names.
 struct Encoded {
     bytes: Vec<u8>,
     base: Option<Vec<u8>>,
+    era: Option<Era>,
 }
 
 /// Pallas's reading of one record, or a refusal with its reading of the
 /// record's base.
 fn reading(input: &Encoded) -> Result<Reply, Refusal> {
-    let error = match pallas_reply(&input.bytes) {
+    let Some(era) = input.era else {
+        return Err(Refusal {
+            error: "the class names no era".into(),
+            base: Base::Unrecorded,
+        });
+    };
+    let error = match pallas_reply(&input.bytes, era) {
         Ok(reply) => return Ok(reply),
         Err(error) => error,
     };
     let base = match &input.base {
         None => Base::Unrecorded,
-        Some(raw) => match catch(AssertUnwindSafe(|| pallas_reply(raw))) {
+        Some(raw) => match catch(AssertUnwindSafe(|| pallas_reply(raw, era))) {
             Ok(Ok(_)) => Base::Reads,
             Ok(Err(e)) | Err(e) => Base::Refuses(e),
         },
@@ -461,6 +529,7 @@ impl ComparedLayer for Networking {
         Encoded {
             bytes: row.input.clone(),
             base: row.base.clone(),
+            era: Era::of_class(&row.class),
         }
     }
 
@@ -635,8 +704,28 @@ fn a_class_the_check_does_not_know_fails() {
 #[test]
 fn the_known_classes_pass_the_class_check() {
     let classes = classes();
-    assert_eq!(classes.len(), ERAS.len() * FORMS.len());
+    assert_eq!(classes.len(), Era::ALL.len() * FORMS.len());
     assert_eq!(unknown_classes(&classes, &classes), Vec::<String>::new());
+}
+
+#[test]
+fn a_class_is_read_with_the_era_it_names() {
+    assert_eq!(Era::of_class("babbage-utxo map-output"), None);
+    assert_eq!(Era::of_class("dijkstra map-output"), None);
+    assert_eq!(Era::of_class("conway-utxo map-output"), Some(Era::Conway));
+    assert_eq!(
+        Era::of_class("dijkstra-utxo native-require-guard"),
+        Some(Era::Dijkstra)
+    );
+    let unnamed = Encoded {
+        bytes: vec![0xa0],
+        base: None,
+        era: None,
+    };
+    assert_eq!(
+        reading(&unnamed).unwrap_err().error,
+        "the class names no era"
+    );
 }
 
 #[test]
