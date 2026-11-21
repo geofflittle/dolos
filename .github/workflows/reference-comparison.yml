@@ -2,33 +2,131 @@ name: Reference comparison
 
 on:
   push:
-    branches: [feat/decode-reference-comparison]
+    branches:
+      - feat/decode-reference-comparison
+      - feat/comparison-derived-classes-and-served
 
 permissions:
   contents: read
 
 jobs:
-  decode:
-    name: decode (planted ${{ matrix.planted }})
+  leg:
+    name: pallas ${{ matrix.name }} (${{ matrix.targets }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        planted: [none, rational-tag-refused, tx-zap-entry-removed]
+        include:
+          - name: 6bfad204
+            pallas: 6bfad204347727e74e07801c4e8569caa8e3b964
+            targets: --test decode --test served
+            features: --features served
+          - name: adb44159a
+            pallas: adb44159a4ca20e8f70d8cada66c93d505aa8ca9
+            targets: --test decode --test classes
+            features: ""
+          - name: 006ae251
+            pallas: 006ae251b9362a776e9d740f7f08bce36ea65f8e
+            targets: --test mapping
+            features: ""
+          - name: 10eb1bf55
+            pallas: 10eb1bf5507a817e67afacdd4baf8d7bd29e7428
+            targets: --test networking
+            features: ""
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: dolos
+          persist-credentials: false
+      - name: Check out the pallas head under comparison
+        uses: actions/checkout@v4
+        with:
+          repository: geofflittle/pallas
+          ref: ${{ matrix.pallas }}
+          path: pallas-head
+          persist-credentials: false
+      - name: Use the lock resolved for the pallas head
+        working-directory: dolos/reference-comparison
+        run: cp "locks/${{ matrix.pallas }}.lock" Cargo.lock
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-09-04
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.151
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: dolos/reference-comparison -> target
+          key: ${{ matrix.pallas }}
+
+      - name: Compile the targets
+        working-directory: dolos/reference-comparison
+        run: cargo nextest run --locked --no-run ${{ matrix.features }} ${{ matrix.targets }}
+
+      - name: Run the targets
+        working-directory: dolos/reference-comparison
+        run: |
+          rc=0
+          cargo nextest run --locked --no-fail-fast --no-capture ${{ matrix.features }} ${{ matrix.targets }} || rc=$?
+          case "$rc" in
+            0) ;;
+            4) echo "::error::the targets hold no test"; exit 1 ;;
+            100) echo "::error::a comparison is red, its failure lines are above"; exit 1 ;;
+            *) echo "::error::the run exited $rc, which is neither a pass nor a failing test"; exit 1 ;;
+          esac
+
+  planted:
+    name: planted ${{ matrix.planted }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
         include:
           - planted: rational-tag-refused
             patched: pallas-head
+            target: decode
             expected: |
               decode: listed a rational under another tag (defect: a rational reads any tag) in class "body rational-tag" matched no observation
               decode: listed a rational under another tag (defect: a rational reads any tag) in class "ppu rational-tag" matched no observation
               decode: listed a rational under another tag (defect: a rational reads any tag) in class "ppu zap" matched no observation
           - planted: tx-zap-entry-removed
             patched: dolos
+            target: decode
             expected: |
               decode: class "tx zap" disagrees (accepts) 4
+          - planted: classes-gov-action-rows-dropped
+            patched: dolos
+            target: classes
+            expected: |
+              decode: no input changes transaction_body / transaction_body key 20 / nonempty_oset arm 0 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes transaction_body / transaction_body key 20 / nonempty_oset arm 1 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes transaction_body / transaction_body key 23 / nonempty_oset arm 0 / element / sub_transaction member 0 / sub_transaction_body key 20 / nonempty_oset arm 0 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes transaction_body / transaction_body key 23 / nonempty_oset arm 0 / element / sub_transaction member 0 / sub_transaction_body key 20 / nonempty_oset arm 1 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes transaction_body / transaction_body key 23 / nonempty_oset arm 1 / element / sub_transaction member 0 / sub_transaction_body key 20 / nonempty_oset arm 0 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes transaction_body / transaction_body key 23 / nonempty_oset arm 1 / element / sub_transaction member 0 / sub_transaction_body key 20 / nonempty_oset arm 1 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes mempool_transaction / mempool_transaction arm 0 / mempool_transaction member 0 / transaction_body key 20 / nonempty_oset arm 0 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes mempool_transaction / mempool_transaction arm 0 / mempool_transaction member 0 / transaction_body key 20 / nonempty_oset arm 1 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes mempool_transaction / mempool_transaction arm 0 / mempool_transaction member 0 / transaction_body key 23 / nonempty_oset arm 0 / element / sub_transaction member 0 / sub_transaction_body key 20 / nonempty_oset arm 0 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes mempool_transaction / mempool_transaction arm 0 / mempool_transaction member 0 / transaction_body key 23 / nonempty_oset arm 0 / element / sub_transaction member 0 / sub_transaction_body key 20 / nonempty_oset arm 1 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes mempool_transaction / mempool_transaction arm 0 / mempool_transaction member 0 / transaction_body key 23 / nonempty_oset arm 1 / element / sub_transaction member 0 / sub_transaction_body key 20 / nonempty_oset arm 0 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes mempool_transaction / mempool_transaction arm 0 / mempool_transaction member 0 / transaction_body key 23 / nonempty_oset arm 1 / element / sub_transaction member 0 / sub_transaction_body key 20 / nonempty_oset arm 1 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes mempool_transaction / mempool_transaction arm 1 / mempool_transaction member 0 / transaction_body key 20 / nonempty_oset arm 0 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes mempool_transaction / mempool_transaction arm 1 / mempool_transaction member 0 / transaction_body key 20 / nonempty_oset arm 1 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes mempool_transaction / mempool_transaction arm 1 / mempool_transaction member 0 / transaction_body key 23 / nonempty_oset arm 0 / element / sub_transaction member 0 / sub_transaction_body key 20 / nonempty_oset arm 0 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes mempool_transaction / mempool_transaction arm 1 / mempool_transaction member 0 / transaction_body key 23 / nonempty_oset arm 0 / element / sub_transaction member 0 / sub_transaction_body key 20 / nonempty_oset arm 1 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes mempool_transaction / mempool_transaction arm 1 / mempool_transaction member 0 / transaction_body key 23 / nonempty_oset arm 1 / element / sub_transaction member 0 / sub_transaction_body key 20 / nonempty_oset arm 0 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes mempool_transaction / mempool_transaction arm 1 / mempool_transaction member 0 / transaction_body key 23 / nonempty_oset arm 1 / element / sub_transaction member 0 / sub_transaction_body key 20 / nonempty_oset arm 1 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes block / block member 1 / block_body member transactions / element / block_transaction member 0 / transaction_body key 20 / nonempty_oset arm 0 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes block / block member 1 / block_body member transactions / element / block_transaction member 0 / transaction_body key 20 / nonempty_oset arm 1 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes block / block member 1 / block_body member transactions / element / block_transaction member 0 / transaction_body key 23 / nonempty_oset arm 0 / element / sub_transaction member 0 / sub_transaction_body key 20 / nonempty_oset arm 0 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes block / block member 1 / block_body member transactions / element / block_transaction member 0 / transaction_body key 23 / nonempty_oset arm 0 / element / sub_transaction member 0 / sub_transaction_body key 20 / nonempty_oset arm 1 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes block / block member 1 / block_body member transactions / element / block_transaction member 0 / transaction_body key 23 / nonempty_oset arm 1 / element / sub_transaction member 0 / sub_transaction_body key 20 / nonempty_oset arm 0 / element / proposal_procedure member 2 by unknown-arm
+              decode: no input changes block / block member 1 / block_body member transactions / element / block_transaction member 0 / transaction_body key 23 / nonempty_oset arm 1 / element / sub_transaction member 0 / sub_transaction_body key 20 / nonempty_oset arm 1 / element / proposal_procedure member 2 by unknown-arm
     env:
       PALLAS_REF: adb44159a4ca20e8f70d8cada66c93d505aa8ca9
+      TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,15 +151,25 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: dolos/reference-comparison -> target
-          save-if: ${{ matrix.planted == 'none' }}
+          key: ${{ env.PALLAS_REF }}
+          save-if: false
 
-      - name: Run the decode comparison
-        if: matrix.planted == 'none'
+      - name: Compile the target
         working-directory: dolos/reference-comparison
-        run: cargo nextest run --locked --test decode --no-capture
+        run: cargo nextest run --locked --no-run --test "$TARGET"
+
+      - name: Run the target before the planted defect
+        working-directory: dolos/reference-comparison
+        run: |
+          rc=0
+          cargo nextest run --locked --no-fail-fast --no-capture --test "$TARGET" > "$RUNNER_TEMP/base.out" 2>&1 || rc=$?
+          cat "$RUNNER_TEMP/base.out"
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 100 ]; then
+            echo "::error::the run exited $rc, which is neither a pass nor a failing test"
+            exit 1
+          fi
 
       - name: Apply the planted defect
-        if: matrix.planted != 'none'
         working-directory: ${{ matrix.patched }}
         env:
           PATCH: ${{ github.workspace }}/dolos/reference-comparison/planted-defects/${{ matrix.planted }}.patch
@@ -74,23 +182,37 @@ jobs:
           fi
           git diff --stat
 
-      - name: Run the decode comparison over the planted defect
-        if: matrix.planted != 'none'
+      - name: Compile the target over the planted defect
+        working-directory: dolos/reference-comparison
+        run: cargo nextest run --locked --no-run --test "$TARGET"
+
+      - name: Run the target over the planted defect
         working-directory: dolos/reference-comparison
         env:
           EXPECTED: ${{ matrix.expected }}
         run: |
           rc=0
-          cargo nextest run --locked --no-fail-fast --test decode --no-capture > "$RUNNER_TEMP/run.out" 2>&1 || rc=$?
-          cat "$RUNNER_TEMP/run.out"
+          cargo nextest run --locked --no-fail-fast --no-capture --test "$TARGET" > "$RUNNER_TEMP/planted.out" 2>&1 || rc=$?
+          cat "$RUNNER_TEMP/planted.out"
           if [ "$rc" -ne 100 ]; then
             echo "::error::the run exited $rc, and a failing test exits 100"
             exit 1
           fi
-          awk '/panicked at tests\/decode\/main.rs/{f=1;next} f&&(/^note:/||/^$/||/^test /){f=0} f' "$RUNNER_TEMP/run.out" | sort > "$RUNNER_TEMP/failures"
-          printf '%s' "$EXPECTED" | sort > "$RUNNER_TEMP/expected"
-          if ! diff "$RUNNER_TEMP/expected" "$RUNNER_TEMP/failures"; then
-            echo "::error::the failure lines differ from the planted defect's expected lines"
+          lines() {
+            awk '/panicked at tests\//{f=1;next} f&&(/^note:/||/^$/||/^test /){f=0} f' "$1" | sort -u
+          }
+          lines "$RUNNER_TEMP/base.out" > "$RUNNER_TEMP/base"
+          lines "$RUNNER_TEMP/planted.out" > "$RUNNER_TEMP/planted"
+          comm -13 "$RUNNER_TEMP/base" "$RUNNER_TEMP/planted" > "$RUNNER_TEMP/added"
+          comm -23 "$RUNNER_TEMP/base" "$RUNNER_TEMP/planted" > "$RUNNER_TEMP/removed"
+          printf '%s' "$EXPECTED" | sort -u > "$RUNNER_TEMP/expected"
+          if [ -s "$RUNNER_TEMP/removed" ]; then
+            echo "::error::the planted defect removed failure lines"
+            cat "$RUNNER_TEMP/removed"
             exit 1
           fi
-          echo "failure lines: $(wc -l < "$RUNNER_TEMP/failures"), as expected"
+          if ! diff "$RUNNER_TEMP/expected" "$RUNNER_TEMP/added"; then
+            echo "::error::the failure lines the planted defect added differ from its expected lines"
+            exit 1
+          fi
+          echo "failure lines added: $(wc -l < "$RUNNER_TEMP/added"), as expected"
