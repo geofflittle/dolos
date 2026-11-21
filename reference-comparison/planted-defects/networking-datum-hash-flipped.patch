@@ -1,0 +1,18 @@
+diff --git a/pallas-network/src/miniprotocols/localtxsubmission/codec.rs b/pallas-network/src/miniprotocols/localtxsubmission/codec.rs
+index 1befecf..a25d014 100644
+--- a/pallas-network/src/miniprotocols/localtxsubmission/codec.rs
++++ b/pallas-network/src/miniprotocols/localtxsubmission/codec.rs
+@@ -770,7 +770,12 @@ impl<'b, C> Decode<'b, C> for DatumOption {
+         d.array()?;
+ 
+         match d.u8()? {
+-            0 => Ok(Self::Hash(d.decode_with(ctx)?)),
++            0 => {
++                let hash: pallas_crypto::hash::Hash<32> = d.decode_with(ctx)?;
++                let mut flipped = *hash;
++                flipped[0] ^= 1;
++                Ok(Self::Hash(pallas_crypto::hash::Hash::new(flipped)))
++            }
+             1 => Ok(Self::Data(d.decode_with(ctx)?)),
+             _ => Err(decode::Error::message(
+                 "invalid variant for datum option enum",
