@@ -22,16 +22,18 @@ pub enum Layer {
     Validation,
     Mapping,
     Networking,
+    Served,
 }
 
 impl Layer {
-    /// The layer's name in a records header.
+    /// The layer's name in a records header and a report.
     pub fn name(self) -> &'static str {
         match self {
             Layer::Decode => "decode",
             Layer::Validation => "validation",
             Layer::Mapping => "mapping",
             Layer::Networking => "networking",
+            Layer::Served => "served",
         }
     }
 
@@ -52,7 +54,7 @@ impl Layer {
     pub fn encodes(self) -> bool {
         match self {
             Layer::Decode => true,
-            Layer::Validation | Layer::Mapping | Layer::Networking => false,
+            Layer::Validation | Layer::Mapping | Layer::Networking | Layer::Served => false,
         }
     }
 }
@@ -679,7 +681,7 @@ pub fn kinds_from_env() -> Vec<String> {
 
 /// Whether the record class `class` is one of `kinds`, by its whole name or
 /// its kind of change.
-fn selected(class: &str, kinds: &[String]) -> bool {
+pub fn selected(class: &str, kinds: &[String]) -> bool {
     kinds.is_empty()
         || kinds
             .iter()
@@ -942,6 +944,47 @@ pub enum ChangeKind {
     Zap,
 }
 
+impl fmt::Display for ChangeKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match serde_json::to_value(self) {
+            Ok(Value::String(name)) => f.write_str(&name),
+            _ => Err(fmt::Error),
+        }
+    }
+}
+
+impl fmt::Display for Part {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Part::Named(name) => f.write_str(name),
+            Part::Position(n) => write!(f, "{n}"),
+        }
+    }
+}
+
+impl fmt::Display for Step {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Step::Key { rule, key } => write!(f, "{rule} key {key}"),
+            Step::Member { rule, member } => write!(f, "{rule} member {member}"),
+            Step::Arm { rule, arm } => write!(f, "{rule} arm {arm}"),
+            Step::Element => f.write_str("element"),
+            Step::EntryKey => f.write_str("entry key"),
+            Step::EntryValue => f.write_str("entry value"),
+        }
+    }
+}
+
+impl fmt::Display for Place {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.root)?;
+        for step in &self.path {
+            write!(f, " / {step}")?;
+        }
+        write!(f, " by {}", self.kind)
+    }
+}
+
 impl Row {
     /// The rule a changed row's input changes and the kind of change, the
     /// second word of its class.
@@ -981,13 +1024,6 @@ impl Coverage {
         Coverage { layer, counts }
     }
 
-    /// The number of inputs that change `rule` by `kind`, if it is a target.
-    pub fn count(&self, rule: &str, kind: &str) -> Option<usize> {
-        self.counts
-            .get(&(rule.to_owned(), kind.to_owned()))
-            .copied()
-    }
-
     /// The number of target changes of each kind and how many of them an
     /// input makes.
     pub fn kinds(&self) -> BTreeMap<&str, (usize, usize)> {
@@ -999,25 +1035,76 @@ impl Coverage {
         }
         out
     }
+}
 
-    /// Each reason the coverage fails: a target change no input makes, or a
-    /// change in `required` the targets lack.
-    pub fn failures(&self, required: &[(&str, &str)]) -> Vec<String> {
+/// The number of changed inputs at each place a grammar derives, over one
+/// layer's records.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaceCoverage {
+    layer: Layer,
+    counts: BTreeMap<Place, usize>,
+    underived: BTreeMap<Place, usize>,
+    unplaced: usize,
+}
+
+impl PlaceCoverage {
+    /// Counts the changed rows at each of `derived` and at each place it lacks.
+    pub fn new<'r>(layer: Layer, derived: &[Place], rows: impl IntoIterator<Item = &'r Row>) -> Self {
+        let mut coverage = PlaceCoverage {
+            layer,
+            counts: derived.iter().map(|p| (p.clone(), 0)).collect(),
+            underived: BTreeMap::new(),
+            unplaced: 0,
+        };
+        for row in rows.into_iter().filter(|r| r.class.contains(' ')) {
+            match &row.place {
+                None => coverage.unplaced += 1,
+                Some(place) => match coverage.counts.get_mut(place) {
+                    Some(n) => *n += 1,
+                    None => *coverage.underived.entry(place.clone()).or_default() += 1,
+                },
+            }
+        }
+        coverage
+    }
+
+    /// The number of changed inputs at each derived place.
+    pub fn counts(&self) -> &BTreeMap<Place, usize> {
+        &self.counts
+    }
+
+    /// Each reason the coverage fails: a derived place no input changes, a
+    /// changed input at a place not derived, or a changed input with no place.
+    pub fn failures(&self) -> Vec<String> {
+        let layer = self.layer;
         let mut out: Vec<String> = self
             .counts
             .iter()
             .filter(|(_, n)| **n == 0)
-            .map(|((rule, kind), _)| format!("{}: no input changes {rule} by {kind}", self.layer))
+            .map(|(place, _)| format!("{layer}: no input changes {place}"))
             .collect();
-        for (rule, kind) in required {
-            if self.count(rule, kind).is_none() {
-                out.push(format!(
-                    "{}: the targets lack the required change {rule} by {kind}",
-                    self.layer
-                ));
-            }
+        out.extend(self.underived.iter().map(|(place, n)| {
+            format!("{layer}: {n} inputs change {place}, which the grammar does not derive")
+        }));
+        if self.unplaced > 0 {
+            out.push(format!("{layer}: {} changed inputs name no place", self.unplaced));
         }
         out
+    }
+}
+
+impl fmt::Display for PlaceCoverage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let made = self.counts.values().filter(|n| **n > 0).count();
+        writeln!(
+            f,
+            "{}: {} derived places, {made} changed, {} not changed, {} places not derived, {} changed inputs with no place",
+            self.layer,
+            self.counts.len(),
+            self.counts.len() - made,
+            self.underived.len(),
+            self.unplaced
+        )
     }
 }
 
@@ -1643,16 +1730,16 @@ mod tests {
     }
 
     #[test]
-    fn a_target_change_no_row_makes_fails() {
+    fn a_target_change_no_row_makes_is_counted_as_not_made() {
         let records = Records::read(CHANGED, "9df9f98c").unwrap();
         let coverage = Coverage::new(records.layer(), records.targets(), records.rows());
-        assert_eq!(coverage.count("voter", "unknown-arm"), Some(1));
         assert_eq!(
-            coverage.failures(&[("voter", "unknown-arm")]),
-            [
-                "decode: no input changes transaction_body by wide-heads",
-                "decode: no input changes voter by array-short",
-            ]
+            coverage.kinds(),
+            BTreeMap::from([
+                ("array-short", (1, 0)),
+                ("unknown-arm", (1, 1)),
+                ("wide-heads", (1, 0)),
+            ])
         );
     }
 
@@ -1668,26 +1755,11 @@ mod tests {
         )
         .unwrap();
         let coverage = Coverage::new(records.layer(), records.targets(), records.rows());
-        assert_eq!(
-            coverage.failures(&[("voter", "unknown-arm")]),
-            Vec::<String>::new()
-        );
+        assert!(coverage.kinds().values().all(|(targets, made)| targets == made));
         assert_eq!(
             coverage.to_string(),
             "decode: 3 target changes, 3 made, 0 not made\n"
         );
-    }
-
-    #[test]
-    fn a_required_change_the_targets_lack_fails() {
-        let records = Records::read(CHANGED, "9df9f98c").unwrap();
-        let coverage = Coverage::new(records.layer(), records.targets(), records.rows());
-        assert!(coverage
-            .failures(&[("gov_action", "unknown-arm")])
-            .contains(
-                &"decode: the targets lack the required change gov_action by unknown-arm"
-                    .to_owned()
-            ));
     }
 
     #[test]
@@ -1748,6 +1820,80 @@ mod tests {
         assert_eq!(records.rows()[1].place.as_ref(), Some(&place));
         assert_eq!(records.rows()[0].place, None);
         assert_eq!(serde_json::to_string(&place).unwrap(), PLACE);
+    }
+
+    #[test]
+    fn a_place_is_written_as_its_root_steps_and_kind() {
+        let place: Place = serde_json::from_str(PLACE).unwrap();
+        assert_eq!(
+            place.to_string(),
+            "transaction_body / transaction_body key 19 / entry key / voter arm 5 / pool_params member margin / set arm 0 / element / entry value by unknown-arm"
+        );
+    }
+
+    fn voter_place(kind: ChangeKind) -> Place {
+        Place {
+            root: "transaction_body".into(),
+            path: vec![Step::Arm {
+                rule: "voter".into(),
+                arm: Part::Position(5),
+            }],
+            kind,
+        }
+    }
+
+    #[test]
+    fn derived_places_each_changed_pass() {
+        let records = Records::read(&placed(PLACE), "9df9f98c").unwrap();
+        let derived = [serde_json::from_str::<Place>(PLACE).unwrap()];
+        let coverage = PlaceCoverage::new(Layer::Decode, &derived, records.rows());
+        assert_eq!(coverage.failures(), Vec::<String>::new());
+        assert_eq!(coverage.counts().values().collect::<Vec<_>>(), [&1]);
+        assert_eq!(
+            coverage.to_string(),
+            "decode: 1 derived places, 1 changed, 0 not changed, 0 places not derived, 0 changed inputs with no place\n"
+        );
+    }
+
+    #[test]
+    fn a_derived_place_no_input_changes_fails() {
+        let records = Records::read(&placed(PLACE), "9df9f98c").unwrap();
+        let derived = [
+            serde_json::from_str::<Place>(PLACE).unwrap(),
+            voter_place(ChangeKind::ArrayShort),
+        ];
+        let coverage = PlaceCoverage::new(Layer::Decode, &derived, records.rows());
+        assert_eq!(
+            coverage.failures(),
+            ["decode: no input changes transaction_body / voter arm 5 by array-short"]
+        );
+    }
+
+    #[test]
+    fn a_change_at_a_place_not_derived_fails() {
+        let records = Records::read(&placed(PLACE), "9df9f98c").unwrap();
+        let derived = [voter_place(ChangeKind::UnknownArm)];
+        let coverage = PlaceCoverage::new(Layer::Decode, &derived, records.rows());
+        assert_eq!(
+            coverage.failures(),
+            [
+                "decode: no input changes transaction_body / voter arm 5 by unknown-arm".to_owned(),
+                format!(
+                    "decode: 1 inputs change {}, which the grammar does not derive",
+                    serde_json::from_str::<Place>(PLACE).unwrap()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_change_with_no_place_fails() {
+        let records = Records::read(CHANGED, "9df9f98c").unwrap();
+        let coverage = PlaceCoverage::new(Layer::Decode, &[], records.rows());
+        assert_eq!(
+            coverage.failures(),
+            ["decode: 1 changed inputs name no place"]
+        );
     }
 
     #[test]

@@ -1,17 +1,19 @@
 //! Dijkstra values decoded by pallas compared leaf by leaf with the ledger's
 //! reading of them.
 
+#[path = "../common/mod.rs"]
+mod common;
 mod differences;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::panic::AssertUnwindSafe;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use common::classes;
+use common::refusal::{self, Refusal, same_reason};
 use ledger_oracle_judge::comparison::{
-    self, Allowance, Allowed, Answer, ComparedLayer, Coverage, Disagreement, Expected, Key, Layer,
-    Outcome, Records, Reference, Row, WholeInput, catch, cddl_pin, judge, kinds_from_env,
+    self, Allowance, Allowed, Answer, ComparedLayer, Disagreement, Expected, Key, Layer, Outcome,
+    Place, PlaceCoverage, Reference, Row, WholeInput, judge, kinds_from_env, selected,
 };
 use pallas_codec::minicbor;
 use pallas_codec::utils::{KeepRaw, Nullable};
@@ -34,14 +36,6 @@ const UNCREDITED: &[(&str, &str)] = &[
         "eb_reference",
         "pallas reads no value of it, see EB_AS_THE_NODE_SENDS",
     ),
-];
-
-/// The changes the records must make, each a rule and a kind of change.
-const REQUIRED: &[(&str, &str)] = &[
-    ("gov_action", "unknown-arm"),
-    ("voter", "unknown-arm"),
-    ("redeemer_tag", "unknown-arm"),
-    ("datum_option", "unknown-arm"),
 ];
 
 const LACKS: &str = "pallas lacks a leaf";
@@ -831,21 +825,6 @@ fn decode(kind: &str, bytes: &[u8]) -> Result<Decoded, String> {
     })
 }
 
-/// Pallas's reading of the value a recorded change was made to.
-#[derive(Debug, PartialEq)]
-enum Base {
-    Reads,
-    Refuses(String),
-    Unrecorded,
-}
-
-/// A refusal by pallas, with its reading of the value the change was made to.
-#[derive(Debug, PartialEq)]
-struct Refusal {
-    error: String,
-    base: Base,
-}
-
 /// The bytes of one record, the kind of value they are read as and the bytes
 /// of the value the record's change was made to.
 struct Encoded {
@@ -861,20 +840,10 @@ fn reading(input: &Encoded) -> Result<Decoded, Refusal> {
         Ok(decoded) => return Ok(decoded),
         Err(error) => error,
     };
-    let base = match &input.base {
-        None => Base::Unrecorded,
-        Some(bytes) => match catch(AssertUnwindSafe(|| reader(&input.kind)(bytes))) {
-            Ok(Ok(_)) => Base::Reads,
-            Ok(Err(e)) | Err(e) => Base::Refuses(e),
-        },
-    };
+    let base = refusal::base(input.base.as_deref(), |bytes| {
+        reader(&input.kind)(bytes).map(|_| ())
+    });
     Err(Refusal { error, base })
-}
-
-/// Whether pallas refuses for the reference's reason, which holds when it
-/// reads the value the change was made to.
-fn same_reason(_: &str, refusal: &Refusal) -> bool {
-    refusal.base == Base::Reads
 }
 
 /// Pallas's decoding of Dijkstra values.
@@ -1321,14 +1290,6 @@ fn compare(ledger: Option<&Normal>, pallas: Option<&Normal>, path: &str, out: &m
     }
 }
 
-fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../pallas-head")
-}
-
-fn read(path: &str) -> String {
-    std::fs::read_to_string(root().join(path)).unwrap_or_else(|e| panic!("{path}: {e}"))
-}
-
 /// One line naming where pallas's answer for a row differs from the ledger's.
 fn difference(
     row: &Row,
@@ -1360,25 +1321,6 @@ fn difference(
             format!("{at}: the ledger refuses ({r}) and pallas accepts")
         }
     }
-}
-
-/// The rule names of a CDDL text, generic rules by the name before their
-/// parameters.
-fn rule_names(cddl: &str) -> Vec<String> {
-    cddl.lines()
-        .filter_map(|line| {
-            let name: String = line
-                .chars()
-                .take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_')
-                .collect();
-            let rest = line[name.len()..].trim_start();
-            let rest = match rest.strip_prefix('<') {
-                Some(r) => r.split_once('>')?.1.trim_start(),
-                None => rest,
-            };
-            (!name.is_empty() && rest.starts_with('=')).then_some(name)
-        })
-        .collect()
 }
 
 /// The failures of a rule credit, against the rules `defs.cddl` defines and the
@@ -1419,12 +1361,8 @@ fn credit_failures(
 }
 
 fn run() {
-    let cddl = read("pallas-primitives/src/dijkstra/defs.cddl");
-    let pin = cddl_pin(&cddl).expect("defs.cddl names no ledger commit");
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("records")
-        .join(pin);
-    let records = Records::read_dir(&dir, Layer::Decode).unwrap_or_else(|e| panic!("{e}"));
+    let cddl = common::defs();
+    let records = common::records(&cddl, Layer::Decode);
     let kinds = kinds_from_env();
     let judged = comparison::compare(&Arc::new(Decoding), &records, &kinds);
     let mut examples = BTreeMap::new();
@@ -1440,15 +1378,23 @@ fn run() {
                 .or_insert(&j.detail);
         }
     }
-    let rules = rule_names(&cddl);
+    let grammar = classes::parse(&cddl);
+    let rules = classes::rule_names(&grammar);
     let counts: Vec<String> = rules
         .iter()
         .map(|r| format!("{r}={}", credit.get(r).copied().unwrap_or(0)))
         .collect();
-    let coverage = Coverage::new(Layer::Decode, records.targets(), records.rows());
+    let roots: Vec<&str> = classes::ROOTS.iter().map(|(_, root)| *root).collect();
+    let derived: Vec<Place> = classes::places(&grammar, &roots)
+        .into_iter()
+        .filter(|p| selected(&classes::class(p), &kinds))
+        .collect();
+    let changed = records.rows().iter().filter(|r| selected(&r.class, &kinds));
+    let coverage = PlaceCoverage::new(Layer::Decode, &derived, changed);
     println!("records: {}", records.generator());
     println!("{judged}");
     print!("{coverage}");
+    print!("{}", classes::report(&coverage));
     println!("rules {}: {}", rules.len(), counts.join(" "));
     println!(
         "rules credited {} of {}{}",
@@ -1462,7 +1408,7 @@ fn run() {
     );
     examples.values().for_each(|e| println!("{e}"));
     let mut failures = judged.failures();
-    failures.extend(coverage.failures(REQUIRED));
+    failures.extend(coverage.failures());
     failures.extend(credit_failures(&rules, &credit, UNCREDITED, &kinds));
     let listed: Vec<(&str, Allowed)> = differences::LIST
         .iter()
@@ -1573,12 +1519,6 @@ fn rules_credited_or_listed_against_defs_fail() {
             "UNCREDITED names signkey_kes, which defs.cddl does not define",
         ]
     );
-}
-
-#[test]
-fn rule_names_are_read_from_definitions() {
-    let cddl = "; a comment\nblock = [header]\nnonempty_set<a0> = #6.258([+ a0])\n  foo = 1\nhash32 = bytes .size 32\n";
-    assert_eq!(rule_names(cddl), ["block", "nonempty_set", "hash32"]);
 }
 
 #[test]
