@@ -7,6 +7,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeOperators #-}
 
 -- | Writes the reference records of the ledger commit it is built at: generated Dijkstra values with the ledger's reading of each.
 module Main (main) where
@@ -15,11 +16,11 @@ import qualified Build
 import qualified Mutation
 import qualified SignedChange
 import Cardano.Ledger.Address (DirectDeposits (..))
-import Cardano.Ledger.Allegra.Scripts (ValidityInterval (..))
-import Cardano.Ledger.Alonzo.Scripts (AlonzoScript (..), plutusScriptBinary, plutusScriptLanguage)
+import Cardano.Ledger.Allegra.Scripts (Timelock, TimelockRaw (..), ValidityInterval (..))
+import Cardano.Ledger.Alonzo.Scripts (AlonzoEraScript, AlonzoScript (..), plutusScriptBinary, plutusScriptLanguage)
 import Cardano.Ledger.Alonzo.Tx (AlonzoEraTx (..), IsPhase2Valid (..))
 import Cardano.Ledger.Alonzo.TxAuxData (AlonzoTxAuxDataRaw (..))
-import Cardano.Ledger.Alonzo.TxWits (AlonzoEraTxWits (..), unRedeemers, unTxDats)
+import Cardano.Ledger.Alonzo.TxWits (AlonzoEraTxWits (..), TxDats (..), unRedeemers, unTxDats)
 import Cardano.Ledger.Babbage.TxOut (BabbageEraTxOut (..))
 import Cardano.Ledger.BaseTypes (StrictMaybe (..))
 import Cardano.Ledger.Binary (
@@ -34,6 +35,7 @@ import Cardano.Ledger.Binary (
   serialize',
  )
 import Cardano.Ledger.Block (Block (..))
+import Cardano.Ledger.Conway (ConwayEra)
 import Cardano.Ledger.Conway.Governance (GovAction (..), ProposalProcedure (..), VotingProcedures (..))
 import Cardano.Ledger.Core
 import Cardano.Ledger.Dijkstra (DijkstraEra)
@@ -43,13 +45,15 @@ import Cardano.Ledger.Dijkstra.Block.Endorser (EbReferences, getEbReferences)
 import Cardano.Ledger.Dijkstra.BlockBody (DijkstraEraBlockBody (..))
 import Cardano.Ledger.Dijkstra.HuddleSpec (dijkstraCDDL)
 import Cardano.Ledger.Dijkstra.Scripts (AccountBalanceIntervals (..), DijkstraNativeScriptRaw (..))
-import Cardano.Ledger.Dijkstra.TxBody (DijkstraTxBodyRaw (..))
+import Cardano.Ledger.Dijkstra.TxBody (DijkstraEraTxBody (..), DijkstraTxBodyRaw (..))
 import Cardano.Ledger.Dijkstra.TxCert (DijkstraTxCert (..))
 import Cardano.Ledger.Mary.Value (MaryValue (..), MultiAsset (..))
 import Cardano.Ledger.MemoBytes (getMemoRawType)
-import Cardano.Ledger.Plutus.Data (Data, Datum (..), binaryDataToData, getPlutusData)
+import Cardano.Crypto.Hash (hashToBytes)
+import Cardano.Ledger.Plutus.Data (Data, Datum (..), binaryDataToData, dataToBinaryData, getPlutusData, hashBinaryData, hashData)
+import qualified Data.Sequence.Strict as StrictSeq
 import Cardano.Ledger.Plutus.Language (Language (..), PlutusBinary (..))
-import Cardano.Ledger.State (StakePoolParams (..))
+import Cardano.Ledger.State (StakePoolParams (..), UTxO (..))
 import Cardano.Ledger.TxIn (TxIn)
 import Cardano.Protocol.Crypto (StandardCrypto)
 import qualified Cardano.Protocol.Leios.BlockHeader as Leios
@@ -99,7 +103,7 @@ import qualified Data.SimpleOMap.Strict as SimpleOMap
 #endif
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
-import Lens.Micro ((^.))
+import Lens.Micro ((&), (.~), (^.))
 import qualified PlutusLedgerApi.V1 as PV1
 import System.Environment (getArgs)
 import Test.AntiGen (ZapResult (..), runAntiGen, zapAntiGenResult)
@@ -109,7 +113,7 @@ import Test.Cardano.Ledger.Dijkstra.Arbitrary (
   genSmallDijkstraTxsBlockBody,
  )
 import Test.Cardano.Protocol.Leios.BlockHeader.Arbitrary ()
-import Test.QuickCheck (Gen, arbitrary)
+import Test.QuickCheck (Gen, arbitrary, vectorOf)
 import Test.QuickCheck.Gen (unGen)
 import Test.QuickCheck.Random (mkQCGen)
 
@@ -293,7 +297,7 @@ plutusD = \case
   PV1.I n -> tagged "int" [("v", int n)]
   PV1.B b -> tagged "bytes" [("v", DS (hexT b))]
 
-dataD :: Data DijkstraEra -> D
+dataD :: Era era => Data era -> D
 dataD = plutusD . getPlutusData
 
 langName :: Language -> T.Text
@@ -316,13 +320,22 @@ nativeD ns = case getMemoRawType ns of
   DijkstraTimeExpire s -> tagged "expire" [("slot", c s)]
   DijkstraRequireGuard cr -> tagged "guard" [("cred", c cr)]
 
-scriptD :: Script DijkstraEra -> D
-scriptD = \case
-  NativeScript ns -> tagged "native" [("script", nativeD ns)]
+timelockD :: Timelock ConwayEra -> D
+timelockD ns = case getMemoRawType ns of
+  TimelockSignature h -> tagged "sig" [("hash", c h)]
+  TimelockAllOf xs -> tagged "all" [("scripts", DL (map timelockD (toList xs)))]
+  TimelockAnyOf xs -> tagged "any" [("scripts", DL (map timelockD (toList xs)))]
+  TimelockMOf m xs -> tagged "m_of" [("m", int m), ("scripts", DL (map timelockD (toList xs)))]
+  TimelockTimeStart s -> tagged "start" [("slot", c s)]
+  TimelockTimeExpire s -> tagged "expire" [("slot", c s)]
+
+scriptD :: (Script era ~ AlonzoScript era, AlonzoEraScript era) => (NativeScript era -> D) -> Script era -> D
+scriptD native = \case
+  NativeScript ns -> tagged "native" [("script", native ns)]
   PlutusScript ps -> tagged (langName (plutusScriptLanguage ps)) [("bytes", binD (plutusScriptBinary ps))]
 
-outD :: TxOut DijkstraEra -> D
-outD o =
+outD :: (BabbageEraTxOut era, Value era ~ MaryValue, Script era ~ AlonzoScript era, AlonzoEraScript era) => (NativeScript era -> D) -> TxOut era -> D
+outD native o =
   let MaryValue coin ma = o ^. valueTxOutL
    in DO
         [ ("address", c (o ^. addrTxOutL))
@@ -334,7 +347,7 @@ outD o =
               DatumHash h -> tagged "hash" [("hash", c h)]
               Datum bd -> tagged "inline" [("data", dataD (binaryDataToData bd))]
           )
-        , ("script", opt scriptD (o ^. referenceScriptTxOutL))
+        , ("script", opt (scriptD native) (o ^. referenceScriptTxOutL))
         ]
 
 certD :: TxCert DijkstraEra -> D
@@ -396,7 +409,7 @@ sharedD ::
 sharedD ins refs outs certs (Withdrawals ws) vldt =
   [ ("inputs", setD c ins)
   , ("reference_inputs", setD c refs)
-  , ("outputs", DL (map (outD . sizedValue) outs))
+  , ("outputs", DL (map (outD nativeD . sizedValue) outs))
   , ("certs", osetD certD certs)
   , ("withdrawals", mapD c c ws)
   , ("ttl", opt c (invalidHereafter vldt))
@@ -410,7 +423,7 @@ bodyD body = case getMemoRawType body of
       sharedD dtbrSpendInputs dtbrReferenceInputs (toList dtbrOutputs) dtbrCerts dtbrWithdrawals dtbrVldt
         <> [ ("fee", c dtbrFee)
            , ("collateral", setD c dtbrCollateralInputs)
-           , ("collateral_return", opt (outD . sizedValue) dtbrCollateralReturn)
+           , ("collateral_return", opt (outD nativeD . sizedValue) dtbrCollateralReturn)
            , ("total_collateral", opt c dtbrTotalCollateral)
            , ("guards", osetD c dtbrGuards)
            , ("mint", multiD dtbrMint)
@@ -455,7 +468,7 @@ witsD w =
   DO
     [ ("vkeys", setD c (w ^. addrTxWitsL))
     , ("boots", setD c (w ^. bootAddrTxWitsL))
-    , ("scripts", mapD c scriptD (w ^. scriptTxWitsL))
+    , ("scripts", mapD c (scriptD nativeD) (w ^. scriptTxWitsL))
     , ("datums", mapD c dataD (unTxDats (w ^. datsTxWitsL)))
     , ("redeemers", mapD c (\(d, u) -> DO [("data", dataD d), ("units", c u)]) (unRedeemers (w ^. rdmrsTxWitsL)))
     ]
@@ -642,12 +655,11 @@ zapped root =
       _ -> False
     faults = T.intercalate " " . map (T.intercalate "/" . NE.toList) . zrAnnotation
 
--- | The rules no change targets, each with the reason.
-untargeted :: [(Name, T.Text)]
-untargeted =
-  [ (Name "sub_transaction", "the generator of sub_transactions reads the first item of each element to keep bodies distinct, and a mark hides it")
-  , (Name "%nonempty_oset<sub_transaction>", "the generator of sub_transactions draws its elements itself, so no value of this rule is drawn by name")
-  ]
+-- | The rules the writer leaves unmarked, since the generator of sub
+-- transactions reads the first item of each element and draws the elements
+-- itself.
+unmarked :: Set.Set Name
+unmarked = Set.fromList [Name "sub_transaction", Name "%nonempty_oset<sub_transaction>"]
 
 -- | The value drawn of a kind at a seed from a spec.
 drawn :: CTreeRoot MonoReferenced -> Kind -> Int -> CBOR.Term
@@ -714,20 +726,253 @@ decodeRecords = do
               variant = T.pack (source <> " " <> show i)
         , Right d <- [reading k bs]
         ]
-      excluded = Set.fromList (map fst untargeted)
-      outs = generated <> zapped root <> changed root excluded
+      outs = generated <> zapped root <> changed root unmarked
       tops = map (ruleOf . snd) changedKinds
       within = Mutation.reachable root (map Name tops)
       targets =
         [Aeson.object ["rule" .= r, "kinds" .= ["wide-heads" :: T.Text]] | r <- tops]
           <> [ Aeson.object ["rule" .= unName n, "kinds" .= Mutation.kinds s]
-             | (n, s) <- snd (Mutation.marked excluded root)
+             | (n, s) <- snd (Mutation.marked Set.empty root)
              , Set.member n within
              , not (null (Mutation.kinds s))
              ]
-      extra = "targets" .= targets <> "untargeted" .= [Aeson.object ["rule" .= unName n, "reason" .= reason] | (n, reason) <- untargeted]
+      extra = "targets" .= targets
   header "decode" (map fst decodeKinds <> sortOn T.toLower (nubOrd (drop (length generated) (map outClass outs)))) extra
   mapM_ (line . outRecord) outs
+
+-- Networking records -------------------------------------------------------------
+
+-- | The eras whose local state query UTxO replies the networking records hold.
+data ReplyEra = ConwayReply | DijkstraReply
+
+-- | The name of an era in a networking class.
+replyEraName :: ReplyEra -> T.Text
+replyEraName = \case
+  ConwayReply -> "conway"
+  DijkstraReply -> "dijkstra"
+
+-- | The ledger's reading of a UTxO reply of an era, or its reason to refuse it.
+replyReading :: ReplyEra -> BS.ByteString -> Either T.Text D
+replyReading = \case
+  ConwayReply -> utxoReading @ConwayEra timelockD
+  DijkstraReply -> utxoReading @DijkstraEra nativeD
+
+-- | The ledger's reading of a UTxO reply with the UTxO decoder of an era at its highest version.
+utxoReading ::
+  forall era.
+  (BabbageEraTxOut era, Value era ~ MaryValue, Script era ~ AlonzoScript era, AlonzoEraScript era, DecCBOR (UTxO era)) =>
+  (NativeScript era -> D) ->
+  BS.ByteString ->
+  Either T.Text D
+utxoReading native bs = either (Left . refusal) (Right . dump) (decodeFull' @(UTxO era) (eraProtVerHigh @era) bs)
+  where
+    dump (UTxO m) = DO [("utxos", DL [DO [("input", c i), ("output", outD native o)] | (i, o) <- Map.toList m])]
+
+-- | The outputs drawn of an era from seed 1 at sizes 1 to 30, each as the ledger writes it.
+drawnOutputs :: ReplyEra -> Int -> [CBOR.Term]
+drawnOutputs e n = [t | i <- [0 .. n - 1], Just t <- [termOf (unGen gen (mkQCGen (1 + i)) (1 + i `mod` 30))]]
+  where
+    gen = case e of
+      ConwayReply -> serialize' (eraProtVerHigh @ConwayEra) <$> arbitrary @(TxOut ConwayEra)
+      DijkstraReply -> serialize' ver <$> arbitrary @(TxOut DijkstraEra)
+
+-- | The term of bytes that hold one data item and nothing after it.
+termOf :: BS.ByteString -> Maybe CBOR.Term
+termOf bs = case CBOR.deserialiseFromBytes CBOR.decodeTerm (BSL.fromStrict bs) of
+  Right (rest, t) | BSL.null rest -> Just t
+  _ -> Nothing
+
+-- | The value of an integer key of a map term.
+entryOf :: Int -> CBOR.Term -> Maybe CBOR.Term
+entryOf k = \case
+  CBOR.TMap kvs -> lookup (CBOR.TInt k) kvs
+  CBOR.TMapI kvs -> lookup (CBOR.TInt k) kvs
+  _ -> Nothing
+
+-- | The address and the value of an output term of either form.
+addressValue :: CBOR.Term -> Maybe (CBOR.Term, CBOR.Term)
+addressValue = \case
+  CBOR.TList (a : v : _) -> Just (a, v)
+  CBOR.TListI (a : v : _) -> Just (a, v)
+  t -> (,) <$> entryOf 0 t <*> entryOf 1 t
+
+-- | The script of a script reference term, its arm and its body.
+scriptOf :: CBOR.Term -> Maybe CBOR.Term
+scriptOf = \case
+  CBOR.TTagged 24 (CBOR.TBytes bs) -> termOf bs
+  _ -> Nothing
+
+-- | The forms of output a UTxO reply's outputs take in the networking classes,
+-- each with the extra entries of a map output of that form, given the
+-- scripts and datums the drawn outputs hold and the index of the variant.
+outputForms :: ([CBOR.Term] -> Int -> Maybe CBOR.Term) -> [CBOR.Term] -> [CBOR.Term] -> [CBOR.Term] -> [(T.Text, Int -> Maybe [(CBOR.Term, CBOR.Term)])]
+outputForms pick scripts hashes inlines =
+  [ ("map-output", \_ -> Just [])
+  , ("script-native", withScript . pick (armed 0))
+  , ("script-plutus-v1", withScript . pick (armed 1))
+  , ("script-plutus-v2", withScript . pick (armed 2))
+  , ("script-plutus-v3", withScript . pick (armed 3))
+  , ("script-plutus-v4", withScript . pick (armed 4))
+  , ("script-unknown-arm", \i -> withScript (Just (CBOR.TList [CBOR.TInt 5, CBOR.TBytes (bytesOf 28 i)])))
+  , ("datum-hash", withDatum . pick hashes)
+  , ("datum-inline", withDatum . pick inlines)
+  , ("datum-unknown-arm", \i -> withDatum (Just (CBOR.TList [CBOR.TInt 2, CBOR.TBytes (bytesOf 32 i)])))
+  , ("unknown-key", \i -> Just [(CBOR.TInt 4, CBOR.TInt i)])
+  ]
+    <> [ (name, \i -> withScript (Just (CBOR.TList [CBOR.TInt 0, arm i])))
+       | (name, arm) <- nativeForms
+       ]
+  where
+    armed n = [s | s@(CBOR.TList (CBOR.TInt a : _)) <- scripts, a == n]
+    withScript = fmap (\s -> [(CBOR.TInt 3, CBOR.TTagged 24 (CBOR.TBytes (CBOR.toStrictByteString (CBOR.encodeTerm s))))])
+    withDatum = fmap (\d -> [(CBOR.TInt 2, d)])
+
+-- | The arms of a native script, from the spec's `native_script` choice, and one arm it does not define, each made at the index of a variant.
+nativeForms :: [(T.Text, Int -> CBOR.Term)]
+nativeForms =
+  [ ("native-pubkey", sig)
+  , ("native-all", \i -> CBOR.TList [CBOR.TInt 1, CBOR.TList [sig i]])
+  , ("native-any", \i -> CBOR.TList [CBOR.TInt 2, CBOR.TList [sig i]])
+  , ("native-n-of-k", \i -> CBOR.TList [CBOR.TInt 3, CBOR.TInt 1, CBOR.TList [sig i]])
+  , ("native-invalid-before", \i -> CBOR.TList [CBOR.TInt 4, CBOR.TInt (1000 * i)])
+  , ("native-invalid-hereafter", \i -> CBOR.TList [CBOR.TInt 5, CBOR.TInt (1000 * i)])
+  , ("native-require-guard", \i -> CBOR.TList [CBOR.TInt 6, CBOR.TList [CBOR.TInt 0, CBOR.TBytes (bytesOf 28 i)]])
+  , ("native-unknown-arm", \i -> CBOR.TList [CBOR.TInt 7, CBOR.TBytes (bytesOf 28 i)])
+  ]
+  where
+    sig i = CBOR.TList [CBOR.TInt 0, CBOR.TBytes (bytesOf 28 i)]
+
+-- | A byte string of a length, every byte the low byte of an index.
+bytesOf :: Int -> Int -> BS.ByteString
+bytesOf n i = BS.replicate n (fromIntegral i)
+
+-- | The number of outputs drawn of each era, and the number of variants of each networking class.
+drawnOutputCount, replyVariants :: Int
+drawnOutputCount = 400
+replyVariants = 10
+
+-- | Prints the networking records: for each era, UTxO replies of one output
+-- of each form, the address and value of each from an output drawn of that
+-- era, with the ledger's answer for each.
+networkingRecords :: IO ()
+networkingRecords = do
+  let eras = [ConwayReply, DijkstraReply]
+      drawnAll = concatMap (`drawnOutputs` drawnOutputCount) eras
+      scripts = nubOrd [s | o <- drawnAll, Just r <- [entryOf 3 o], Just s <- [scriptOf r]]
+      hashes = nubOrd [d | o <- drawnAll, Just d@(CBOR.TList (CBOR.TInt 0 : _)) <- [entryOf 2 o]]
+      inlines = nubOrd [d | o <- drawnAll, Just d@(CBOR.TList (CBOR.TInt 1 : _)) <- [entryOf 2 o]]
+      pick pool i = case drop (i `mod` max 1 (length pool)) pool of
+        x : _ -> Just x
+        [] -> Nothing
+      input i = CBOR.TList [CBOR.TBytes (bytesOf 32 i), CBOR.TInt i]
+      reply i o = CBOR.toStrictByteString (CBOR.encodeTerm (CBOR.TMap [(input i, o)]))
+      rows e =
+        let drawn' = drawnOutputs e drawnOutputCount
+            legacy = [o | o <- drawn', isList o]
+            pairs = [p | o <- drawn', Just p <- [addressValue o]]
+            plainMap (a, v) = [(CBOR.TInt 0, a), (CBOR.TInt 1, v)]
+            klass form = replyEraName e <> "-utxo " <> form
+         in [ (klass "legacy-output", T.pack (show i), reply i o, Nothing)
+            | (i, o) <- zip [0 ..] (take replyVariants legacy)
+            ]
+              <> [ (klass form, T.pack (show i), reply i (CBOR.TMap (plainMap p <> extra)), Just (reply i (CBOR.TMap (plainMap p))))
+                 | (form, make) <- outputForms pick scripts hashes inlines
+                 , (i, p) <- zip [0 .. replyVariants - 1] (cycle pairs)
+                 , Just extra <- [make i]
+                 ]
+      isList = \case
+        CBOR.TList _ -> True
+        CBOR.TListI _ -> True
+        _ -> False
+      formNames = "legacy-output" : map fst (outputForms pick scripts hashes inlines)
+      classes = [replyEraName e <> "-utxo " <> f | e <- eras, f <- formNames]
+  header "networking" classes ("inputs" .= ("UTxO replies of one output, " <> T.pack (show replyVariants) <> " of each era and form" :: T.Text))
+  mapM_
+    ( \(e, (class_, variant, bs, base)) ->
+        line (record class_ variant bs (replyReading e bs) (maybe mempty (("base" .=) . hexT) base))
+    )
+    [(e, r) | e <- eras, r <- rows e]
+
+-- Mapping records ----------------------------------------------------------------
+
+-- | Where the datum of an output of a sub transaction is.
+data DatumSource = SubWitness | TopWitness | BothWitness | NoWitness | Inline | NoDatumSource
+  deriving (Eq, Enum, Bounded)
+
+-- | The name of a datum source in a mapping class.
+sourceName :: DatumSource -> T.Text
+sourceName = \case
+  SubWitness -> "sub-witness"
+  TopWitness -> "top-witness"
+  BothWitness -> "both-witness"
+  NoWitness -> "no-witness"
+  Inline -> "inline"
+  NoDatumSource -> "none"
+
+-- | A transaction of two sub transactions whose sub at a position has as its
+-- first output a drawn output with a datum of a source.
+mappingTx :: DatumSource -> Int -> Gen (Tx TopTx DijkstraEra)
+mappingTx source at = do
+  top <- arbitrary @(Tx TopTx DijkstraEra)
+  subs <- vectorOf 2 (arbitrary @(Tx SubTx DijkstraEra))
+  out <- arbitrary @(TxOut DijkstraEra)
+  d <- arbitrary @(Data DijkstraEra)
+  let h = hashData d
+      datum = case source of
+        Inline -> Datum (dataToBinaryData d)
+        NoDatumSource -> NoDatum
+        _ -> DatumHash h
+      witnessing :: Bool -> Tx l DijkstraEra -> Tx l DijkstraEra
+      witnessing False tx = tx
+      witnessing True tx = tx & witsTxL . datsTxWitsL .~ TxDats (Map.insert h d (unTxDats (tx ^. witsTxL . datsTxWitsL)))
+      held k = k == at && source `elem` [SubWitness, BothWitness]
+      placed k tx
+        | k == at = tx & bodyTxL . outputsTxBodyL .~ ((out & datumTxOutL .~ datum) StrictSeq.<| (tx ^. bodyTxL . outputsTxBodyL))
+        | otherwise = tx
+      subs' = [witnessing (held k) (placed k s) | (k, s) <- zip [0 ..] subs]
+  pure (witnessing (source `elem` [TopWitness, BothWitness]) top & bodyTxL . subTransactionsTxBodyL .~ OMap.fromFoldable subs')
+
+-- | For each sub transaction of a transaction, each output with the source,
+-- hash and bytes of the datum the ledger allows for it, from the witnesses
+-- of that sub transaction or of the top transaction.
+datumsD :: Tx TopTx DijkstraEra -> D
+datumsD tx = DO [("subs", DL [DL [outputD s o | o <- toList (s ^. bodyTxL . outputsTxBodyL)] | s <- subs])]
+  where
+    subs = toList (tx ^. bodyTxL . subTransactionsTxBodyL)
+    dats :: Tx l DijkstraEra -> Map.Map DataHash (Data DijkstraEra)
+    dats t = unTxDats (t ^. witsTxL . datsTxWitsL)
+    raw = DS . hexT . hashToBytes . extractHash
+    found name h bytes = DO [("source", DS name), ("hash", raw h), ("datum", maybe DNull (DS . hexT) bytes)]
+    outputD s o = case o ^. datumTxOutL of
+      NoDatum -> DO [("source", DS (sourceName NoDatumSource)), ("hash", DNull), ("datum", DNull)]
+      Datum bd -> found (sourceName Inline) (hashBinaryData bd) (Just (originalBytes bd))
+      DatumHash h -> found (sourceName (witnessed s h)) h (originalBytes <$> Map.lookup h (dats s <> dats tx))
+    witnessed s h = case (Map.member h (dats s), Map.member h (dats tx)) of
+      (True, True) -> BothWitness
+      (True, False) -> SubWitness
+      (False, True) -> TopWitness
+      (False, False) -> NoWitness
+
+-- | The number of variants of each mapping class.
+mappingVariants :: Int
+mappingVariants = 10
+
+-- | Prints the mapping records: for each datum source and sub position,
+-- transactions whose sub at that position holds an output with a datum of
+-- that source, with the ledger's datums for each.
+mappingRecords :: IO ()
+mappingRecords = do
+  let positions = [(0, "first"), (1, "later")] :: [(Int, T.Text)]
+      datumSources = [minBound .. maxBound]
+      classes = [sourceName s <> " " <> p | s <- datumSources, (_, p) <- positions]
+  header "mapping" classes ("inputs" .= ("transactions of two sub transactions, " <> T.pack (show mappingVariants) <> " of each source and position" :: T.Text))
+  mapM_
+    (\(class_, i, bs) -> line (record class_ (T.pack (show i)) bs (annotated @(Tx TopTx DijkstraEra) datumsD bs) mempty))
+    [ (sourceName s <> " " <> p, i, serialize' ver (unGen (mappingTx s at) (mkQCGen (1 + i)) (1 + i `mod` 5)))
+    | s <- datumSources
+    , (at, p) <- positions
+    , i <- [0 .. mappingVariants - 1]
+    ]
 
 -- | One transaction input of the validation records, with its class and variant.
 data Case = Case {caseClass :: T.Text, caseVariant :: T.Text, caseInput :: BS.ByteString}
@@ -777,4 +1022,6 @@ main =
   getArgs >>= \case
     ["decode"] -> decodeRecords
     ["validation", records] -> validationRecords records
-    _ -> error "usage: reference-writer decode | validation RECORDS"
+    ["networking"] -> networkingRecords
+    ["mapping"] -> mappingRecords
+    _ -> error "usage: reference-writer decode | validation RECORDS | networking | mapping"
