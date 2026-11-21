@@ -49,21 +49,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: dolos/reference-comparison -> target
-      - name: Build the comparison tests
-        working-directory: dolos/reference-comparison
-        run: cargo nextest run --no-run
       - name: decode
         if: ${{ !cancelled() }}
         working-directory: dolos/reference-comparison
-        run: cargo nextest run --test decode --no-capture
+        run: cargo nextest run --no-fail-fast --test decode --no-capture
       - name: networking
         if: ${{ !cancelled() }}
         working-directory: dolos/reference-comparison
-        run: cargo nextest run --test networking --no-capture
+        run: cargo nextest run --no-fail-fast --test networking --no-capture
       - name: mapping
         if: ${{ !cancelled() }}
         working-directory: dolos/reference-comparison
-        run: cargo nextest run --test mapping --no-capture
+        run: cargo nextest run --no-fail-fast --test mapping --no-capture
 
   planted:
     name: planted ${{ matrix.planted }}
@@ -199,7 +196,7 @@ jobs:
           key: coverage
       - name: Run the comparison tests with coverage
         working-directory: dolos/reference-comparison
-        run: cargo llvm-cov nextest --no-report --branch --ignore-run-fail --no-fail-fast
+        run: cargo llvm-cov nextest --no-report --branch --ignore-run-fail
       - name: Report the coverage of the compared pallas crates
         working-directory: dolos/reference-comparison
         run: |
