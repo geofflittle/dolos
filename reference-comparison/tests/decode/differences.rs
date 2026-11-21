@@ -45,15 +45,6 @@ const OPTIONAL_SCRIPTS_DERIVED: Owner = Owner::Upstream {
 const OPTIONAL_GOVERNANCE_FIELDS: Owner = Owner::Upstream {
     commit: Commit::new("91f979f5c6e926a785049ceec80f62a1e9346be4"),
 };
-const RATIONAL_ANY_TAG: Owner = Owner::Defect {
-    defect: "a rational reads any tag",
-};
-const RATIONAL_ANY_LENGTH: Owner = Owner::Defect {
-    defect: "a rational reads any length",
-};
-const UNKNOWN_ARM_ABSENT: Owner = Owner::Defect {
-    defect: "an optional field reads an unknown arm as absent",
-};
 
 fn any(answer: &Answer<Decoded, Refusal>) -> bool {
     matches!(answer, Answer::Accepts(_))
@@ -131,16 +122,6 @@ pub const LIST: &[Entry] = &[
         ),
     ),
     (
-        "body rational-tag",
-        Rules::Every,
-        accepts("a rational under another tag", RATIONAL_ANY_TAG, any),
-    ),
-    (
-        "body rational-third",
-        Rules::Every,
-        accepts("a rational with a third number", RATIONAL_ANY_LENGTH, any),
-    ),
-    (
         "body set-duplicate",
         Rules::Every,
         accepts("a duplicate is kept as read", KEPT_AS_READ, keeps_duplicate),
@@ -149,11 +130,6 @@ pub const LIST: &[Entry] = &[
         "body set-two-ways",
         Rules::Every,
         accepts("a duplicate is kept as read", KEPT_AS_READ, keeps_duplicate),
-    ),
-    (
-        "body unknown-arm",
-        Rules::Every,
-        accepts("an unknown arm empties its field", UNKNOWN_ARM_ABSENT, any),
     ),
     (
         "body zap",
@@ -182,21 +158,6 @@ pub const LIST: &[Entry] = &[
             CONTENT_IN_VALIDATE,
             any,
         ),
-    ),
-    (
-        "ppu rational-tag",
-        Rules::Every,
-        accepts("a rational under another tag", RATIONAL_ANY_TAG, any),
-    ),
-    (
-        "ppu rational-third",
-        Rules::Every,
-        accepts("a rational with a third number", RATIONAL_ANY_LENGTH, any),
-    ),
-    (
-        "ppu zap",
-        Rules::Every,
-        accepts("a rational under another tag", RATIONAL_ANY_TAG, any),
     ),
     (
         "tx array-extra",
