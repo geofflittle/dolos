@@ -17,27 +17,70 @@ use pallas::ledger::traverse::{Era, MultiEraTx};
 use serde_json::Value as Json;
 
 /// Where the ledger finds the datum of an output of a sub transaction.
-const SOURCES: &[&str] = &[
-    "sub-witness",
-    "top-witness",
-    "both-witness",
-    "no-witness",
-    "inline",
-    "none",
-];
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Source {
+    SubWitness,
+    TopWitness,
+    BothWitness,
+    NoWitness,
+    Inline,
+    NoDatum,
+}
+
+impl Source {
+    /// Every source, in the order of the classes.
+    const ALL: [Source; 6] = [
+        Source::SubWitness,
+        Source::TopWitness,
+        Source::BothWitness,
+        Source::NoWitness,
+        Source::Inline,
+        Source::NoDatum,
+    ];
+
+    /// The source's name in the records.
+    fn name(self) -> &'static str {
+        match self {
+            Source::SubWitness => "sub-witness",
+            Source::TopWitness => "top-witness",
+            Source::BothWitness => "both-witness",
+            Source::NoWitness => "no-witness",
+            Source::Inline => "inline",
+            Source::NoDatum => "none",
+        }
+    }
+
+    /// Whether the transaction witnesses the datum by hash.
+    fn witnessed(self) -> bool {
+        matches!(
+            self,
+            Source::SubWitness | Source::TopWitness | Source::BothWitness
+        )
+    }
+
+    /// The source named `name` in the records.
+    fn named(name: &str) -> Option<Source> {
+        Source::ALL.into_iter().find(|s| s.name() == name)
+    }
+}
 
 /// The positions of a sub transaction in its batch.
 const POSITIONS: &[&str] = &["first", "later"];
 
-/// The sources whose datum the transaction witnesses by hash.
-const WITNESSED: &[&str] = &["sub-witness", "top-witness", "both-witness"];
+/// The classes of `sources`, each crossed with a position.
+fn classes_of(sources: impl Iterator<Item = Source>) -> Vec<String> {
+    sources
+        .flat_map(|source| {
+            POSITIONS
+                .iter()
+                .map(move |p| format!("{} {p}", source.name()))
+        })
+        .collect()
+}
 
 /// The classes the records must declare, a source crossed with a position.
 fn classes() -> Vec<String> {
-    SOURCES
-        .iter()
-        .flat_map(|source| POSITIONS.iter().map(move |p| format!("{source} {p}")))
-        .collect()
+    classes_of(Source::ALL.into_iter())
 }
 
 /// A schema version of the mapper.
@@ -389,13 +432,9 @@ fn bytes_unset(answer: &Answer<Seen, String>) -> bool {
 
 /// Each class the allowance lets pass, with what it allows.
 fn listed() -> Vec<(String, Allowed)> {
-    WITNESSED
-        .iter()
-        .flat_map(|source| {
-            POSITIONS
-                .iter()
-                .map(move |p| (format!("{source} {p}"), WITHOUT_BYTES))
-        })
+    classes_of(Source::ALL.into_iter().filter(|s| s.witnessed()))
+        .into_iter()
+        .map(|class| (class, WITHOUT_BYTES))
         .collect()
 }
 
@@ -460,7 +499,8 @@ impl ComparedLayer for Mapping {
                 ..
             }
         );
-        (unset && WITNESSED.contains(&key.value_kind())).then_some(Allowance {
+        let witnessed = Source::named(key.value_kind()).is_some_and(Source::witnessed);
+        (unset && witnessed).then_some(Allowance {
             allowed: WITHOUT_BYTES,
             shown: bytes_unset,
         })
@@ -696,9 +736,20 @@ fn a_row_with_its_source_at_its_position_is_exercised() {
 #[test]
 fn the_known_classes_pass_the_class_check() {
     let classes = classes();
-    assert_eq!(classes.len(), SOURCES.len() * POSITIONS.len());
+    assert_eq!(classes.len(), 12);
     assert_eq!(unknown_classes(&classes, &classes), Vec::<String>::new());
-    assert_eq!(listed().len(), WITNESSED.len() * POSITIONS.len());
+    let listed: Vec<String> = listed().into_iter().map(|(class, _)| class).collect();
+    assert_eq!(
+        listed,
+        [
+            "sub-witness first",
+            "sub-witness later",
+            "top-witness first",
+            "top-witness later",
+            "both-witness first",
+            "both-witness later",
+        ]
+    );
 }
 
 #[test]

@@ -33,6 +33,14 @@ const FORMS: &[&str] = &[
     "datum-inline",
     "datum-unknown-arm",
     "unknown-key",
+    "native-pubkey",
+    "native-all",
+    "native-any",
+    "native-n-of-k",
+    "native-invalid-before",
+    "native-invalid-hereafter",
+    "native-require-guard",
+    "native-unknown-arm",
 ];
 
 /// The classes the records must declare, an era's reply crossed with a form
