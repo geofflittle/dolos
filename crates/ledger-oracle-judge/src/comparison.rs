@@ -135,6 +135,12 @@ pub enum Owner {
     Rule { clause: &'static str },
     /// A known defect of the implementation that the difference shows.
     Defect { defect: &'static str },
+    /// A decision of the project's owner, in their words on a date, that
+    /// accepts the difference.
+    Decision {
+        date: &'static str,
+        words: &'static str,
+    },
 }
 
 impl fmt::Display for Owner {
@@ -144,6 +150,7 @@ impl fmt::Display for Owner {
             Owner::Upstream { commit } => write!(f, "accepted on upstream main by {commit}"),
             Owner::Rule { clause } => write!(f, "rule: {clause}"),
             Owner::Defect { defect } => write!(f, "defect: {defect}"),
+            Owner::Decision { date, words } => write!(f, "decision of {date}: {words:?}"),
         }
     }
 }
@@ -600,8 +607,13 @@ pub trait ComparedLayer: Send + Sync + 'static {
     /// Whether `refusal` has the reference's reason `reason`.
     fn same_reason(&self, reason: &str, refusal: &Self::Refusal) -> bool;
 
-    /// The difference this layer lets pass under `key`, if any.
-    fn allowance(&self, key: &Key<Self::Axis>) -> Option<Allowance<Self::Value, Self::Refusal>>;
+    /// The difference this layer lets pass for an observation of `row` under
+    /// `key`, if any.
+    fn allowance(
+        &self,
+        row: &Row,
+        key: &Key<Self::Axis>,
+    ) -> Option<Allowance<Self::Value, Self::Refusal>>;
 
     /// A line naming how the answer for one observation of `row` compares
     /// with the reference's.
@@ -822,7 +834,7 @@ fn judge_row<'r, L: ComparedLayer>(
         };
         let key = key(axis);
         let allowed = layer
-            .allowance(&key)
+            .allowance(row, &key)
             .filter(|a| (a.shown)(&answer))
             .map(|a| a.allowed);
         let outcome = judge(

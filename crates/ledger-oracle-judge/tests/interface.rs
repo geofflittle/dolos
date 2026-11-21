@@ -87,7 +87,7 @@ impl ComparedLayer for StandIn {
         reason == refusal
     }
 
-    fn allowance(&self, key: &Key<u8>) -> Option<Allowance<u64, String>> {
+    fn allowance(&self, _: &Row, key: &Key<u8>) -> Option<Allowance<u64, String>> {
         (key.value_kind() == "allowed").then_some(Allowance {
             allowed: OWNED,
             shown: |answer| matches!(answer, Answer::Refuses(r) if r == "owned"),
@@ -591,7 +591,7 @@ impl ComparedLayer for Echo {
         true
     }
 
-    fn allowance(&self, _: &Key<WholeInput>) -> Option<Allowance<(), ()>> {
+    fn allowance(&self, _: &Row, _: &Key<WholeInput>) -> Option<Allowance<(), ()>> {
         None
     }
 }

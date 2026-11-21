@@ -908,11 +908,11 @@ impl ComparedLayer for Decoding {
         same_reason(reason, refusal)
     }
 
-    fn allowance(&self, key: &Key<WholeInput>) -> Option<Allowance<Decoded, Refusal>> {
+    fn allowance(&self, row: &Row, key: &Key<WholeInput>) -> Option<Allowance<Decoded, Refusal>> {
         differences::LIST
             .iter()
-            .find(|(class, _)| *class == key.class)
-            .map(|(_, a)| Allowance {
+            .find(|(class, rules, _)| *class == key.class && rules.cover(row))
+            .map(|(_, _, a)| Allowance {
                 allowed: a.allowed,
                 shown: a.shown,
             })
@@ -1458,7 +1458,7 @@ fn run() {
     failures.extend(credit_failures(&rules, &credit, UNCREDITED, &kinds));
     let listed: Vec<(&str, Allowed)> = differences::LIST
         .iter()
-        .map(|(class, a)| (*class, a.allowed))
+        .map(|(class, _, a)| (*class, a.allowed))
         .collect();
     failures.extend(judged.tally.unused(&listed, records.classes()));
     assert!(failures.is_empty(), "{}", failures.join("\n"));
