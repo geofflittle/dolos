@@ -1,0 +1,44 @@
+[
+  {
+    "planted": "rational-tag-refused",
+    "patched": "pallas-head",
+    "test": "decode",
+    "expected": [
+      "decode: listed a rational under another tag (defect: a rational reads any tag) in class \"body rational-tag\" matched no observation",
+      "decode: listed a rational under another tag (defect: a rational reads any tag) in class \"ppu rational-tag\" matched no observation",
+      "decode: listed a rational under another tag (defect: a rational reads any tag) in class \"ppu zap\" matched no observation"
+    ]
+  },
+  {
+    "planted": "tx-zap-entry-removed",
+    "patched": "dolos",
+    "test": "decode",
+    "expected": [
+      "decode: class \"tx zap\" disagrees (accepts) 4"
+    ]
+  },
+  {
+    "planted": "networking-datum-hash-flipped",
+    "patched": "pallas-head",
+    "test": "networking",
+    "expected": [
+      "networking: class \"conway-utxo datum-hash\" disagrees (values) 10",
+      "networking: class \"dijkstra-utxo datum-hash\" disagrees (values) 10"
+    ]
+  },
+  {
+    "planted": "mapping-sub-own-witnesses",
+    "patched": "pallas-head",
+    "test": "mapping",
+    "expected": [
+      "mapping: class \"top-witness first v1 sub 0 output 0 bytes\" disagrees (values) 10",
+      "mapping: class \"top-witness first v1 sub 0 output 0 payload\" disagrees (values) 10",
+      "mapping: class \"top-witness first v1alpha sub 0 output 0 payload\" disagrees (values) 10",
+      "mapping: class \"top-witness first v1beta sub 0 output 0 payload\" disagrees (values) 10",
+      "mapping: class \"top-witness later v1 sub 1 output 0 bytes\" disagrees (values) 10",
+      "mapping: class \"top-witness later v1 sub 1 output 0 payload\" disagrees (values) 10",
+      "mapping: class \"top-witness later v1alpha sub 1 output 0 payload\" disagrees (values) 10",
+      "mapping: class \"top-witness later v1beta sub 1 output 0 payload\" disagrees (values) 10"
+    ]
+  }
+]

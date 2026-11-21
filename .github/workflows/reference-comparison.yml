@@ -16,19 +16,65 @@ on:
       pallas_ref:
         description: The geofflittle/pallas commit to compare
         required: false
+      comparisons:
+        description: The comparisons to run, by test name, separated by spaces
+        required: false
 
 permissions:
   contents: read
 
 env:
   PALLAS_REF: ${{ inputs.pallas_ref || 'adb44159a4ca20e8f70d8cada66c93d505aa8ca9' }}
+  COMPARISONS: ${{ inputs.comparisons || 'decode mapping' }}
   TOOLCHAIN: nightly-2026-09-04
 
 jobs:
+  select:
+    name: select
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      comparisons: ${{ steps.select.outputs.comparisons }}
+      planted: ${{ steps.select.outputs.planted }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: reference-comparison
+          persist-credentials: false
+      - name: Select the comparisons and their planted defects
+        id: select
+        working-directory: reference-comparison
+        run: |
+          read -ra names <<< "$COMPARISONS"
+          selected=$(printf '%s\n' "${names[@]}" | sort -u | jq -Rnc '[inputs | select(length > 0)]')
+          if [ "$(jq length <<< "$selected")" -eq 0 ]; then
+            echo "::error::no comparison is selected"
+            exit 1
+          fi
+          for c in $(jq -r '.[]' <<< "$selected"); do
+            if ! [ -f "tests/$c/main.rs" ]; then
+              echo "::error::$c is not a comparison under tests"
+              exit 1
+            fi
+            if [ "$(jq --arg c "$c" '[.[] | select(.test == $c)] | length' planted-defects/planted.json)" -eq 0 ]; then
+              echo "::error::the $c comparison has no planted defect"
+              exit 1
+            fi
+          done
+          planted=$(jq -c --argjson s "$selected" '[.[] | select(.test as $t | $s | index($t))]' planted-defects/planted.json)
+          echo "comparisons=$selected" >> "$GITHUB_OUTPUT"
+          echo "planted=$planted" >> "$GITHUB_OUTPUT"
+          echo "Comparisons at $PALLAS_REF: $selected" >> "$GITHUB_STEP_SUMMARY"
+
   compare:
-    name: compare
+    name: compare ${{ matrix.comparison }}
+    needs: select
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        comparison: ${{ fromJSON(needs.select.outputs.comparisons) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,57 +95,26 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: dolos/reference-comparison -> target
-      - name: decode
-        if: ${{ !cancelled() }}
+      - name: ${{ matrix.comparison }}
         working-directory: dolos/reference-comparison
-        run: cargo nextest run --no-fail-fast --test decode --no-capture
-      - name: networking
-        if: ${{ !cancelled() }}
-        working-directory: dolos/reference-comparison
-        run: cargo nextest run --no-fail-fast --test networking --no-capture
-      - name: mapping
-        if: ${{ !cancelled() }}
-        working-directory: dolos/reference-comparison
-        run: cargo nextest run --no-fail-fast --test mapping --no-capture
+        run: |
+          rc=0
+          cargo nextest run --no-fail-fast --test ${{ matrix.comparison }} --no-capture || rc=$?
+          case "$rc" in
+            0) ;;
+            100) echo "::error::the ${{ matrix.comparison }} comparison judged a difference"; exit 1 ;;
+            *) echo "::error::the ${{ matrix.comparison }} comparison exited $rc before judging, a build failure or a crash"; exit 1 ;;
+          esac
 
   planted:
     name: planted ${{ matrix.planted }}
+    needs: select
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - planted: rational-tag-refused
-            patched: pallas-head
-            test: decode
-            expected: |
-              decode: listed a rational under another tag (defect: a rational reads any tag) in class "body rational-tag" matched no observation
-              decode: listed a rational under another tag (defect: a rational reads any tag) in class "ppu rational-tag" matched no observation
-              decode: listed a rational under another tag (defect: a rational reads any tag) in class "ppu zap" matched no observation
-          - planted: tx-zap-entry-removed
-            patched: dolos
-            test: decode
-            expected: |
-              decode: class "tx zap" disagrees (accepts) 4
-          - planted: networking-datum-hash-flipped
-            patched: pallas-head
-            test: networking
-            expected: |
-              networking: class "conway-utxo datum-hash" disagrees (values) 10
-              networking: class "dijkstra-utxo datum-hash" disagrees (values) 10
-          - planted: mapping-sub-own-witnesses
-            patched: pallas-head
-            test: mapping
-            expected: |
-              mapping: class "top-witness first v1 sub 0 output 0 bytes" disagrees (values) 10
-              mapping: class "top-witness first v1 sub 0 output 0 payload" disagrees (values) 10
-              mapping: class "top-witness first v1alpha sub 0 output 0 payload" disagrees (values) 10
-              mapping: class "top-witness first v1beta sub 0 output 0 payload" disagrees (values) 10
-              mapping: class "top-witness later v1 sub 1 output 0 bytes" disagrees (values) 10
-              mapping: class "top-witness later v1 sub 1 output 0 payload" disagrees (values) 10
-              mapping: class "top-witness later v1alpha sub 1 output 0 payload" disagrees (values) 10
-              mapping: class "top-witness later v1beta sub 1 output 0 payload" disagrees (values) 10
+        include: ${{ fromJSON(needs.select.outputs.planted) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -147,7 +162,7 @@ jobs:
       - name: Compare the failure lines the planted defect adds
         working-directory: dolos/reference-comparison
         env:
-          EXPECTED: ${{ matrix.expected }}
+          EXPECTED: ${{ toJSON(matrix.expected) }}
         run: |
           rc=0
           cargo nextest run --no-fail-fast --test ${{ matrix.test }} --no-capture > "$RUNNER_TEMP/planted.out" 2>&1 || rc=$?
@@ -159,7 +174,7 @@ jobs:
           awk '/panicked at tests\//{f=1;next} f&&(/^note:/||/^$/||/^test /){f=0} f' "$RUNNER_TEMP/planted.out" | sort > "$RUNNER_TEMP/planted"
           comm -13 "$RUNNER_TEMP/clean" "$RUNNER_TEMP/planted" > "$RUNNER_TEMP/added"
           comm -23 "$RUNNER_TEMP/clean" "$RUNNER_TEMP/planted" > "$RUNNER_TEMP/removed"
-          printf '%s' "$EXPECTED" | sort > "$RUNNER_TEMP/expected"
+          jq -r '.[]' <<< "$EXPECTED" | sort > "$RUNNER_TEMP/expected"
           if ! diff "$RUNNER_TEMP/expected" "$RUNNER_TEMP/added" || [ -s "$RUNNER_TEMP/removed" ]; then
             echo "::error::the failure lines the planted defect changes differ from its expected lines"
             cat "$RUNNER_TEMP/removed"
@@ -169,10 +184,12 @@ jobs:
 
   coverage:
     name: coverage
+    needs: select
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
       COVERED: pallas-primitives,pallas-codec,pallas-network
+      SELECTED: ${{ needs.select.outputs.comparisons }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -199,19 +216,20 @@ jobs:
         working-directory: dolos/reference-comparison
         run: cargo llvm-cov clean --workspace
       # Each comparison runs alone, so one that fails to build leaves the
-      # coverage of the others in the report.
-      - name: decode with coverage
-        if: ${{ !cancelled() }}
+      # coverage of the others in the report and fails the job.
+      - name: Run the selected comparisons with coverage
         working-directory: dolos/reference-comparison
-        run: cargo llvm-cov nextest --no-report --branch --ignore-run-fail --dep-coverage "$COVERED" --test decode
-      - name: networking with coverage
-        if: ${{ !cancelled() }}
-        working-directory: dolos/reference-comparison
-        run: cargo llvm-cov nextest --no-report --branch --ignore-run-fail --dep-coverage "$COVERED" --test networking
-      - name: mapping with coverage
-        if: ${{ !cancelled() }}
-        working-directory: dolos/reference-comparison
-        run: cargo llvm-cov nextest --no-report --branch --ignore-run-fail --dep-coverage "$COVERED" --test mapping
+        run: |
+          failed=0
+          for c in $(jq -r '.[]' <<< "$SELECTED"); do
+            rc=0
+            cargo llvm-cov nextest --no-report --branch --ignore-run-fail --dep-coverage "$COVERED" --test "$c" || rc=$?
+            if [ "$rc" -ne 0 ]; then
+              echo "::error::the $c comparison exited $rc under coverage, a build failure or a crash"
+              failed=1
+            fi
+          done
+          exit "$failed"
       # The report keeps every instrumented source except test files, and the runs
       # instrument the pallas crates they name beside the comparison's tests.
       - name: Report the coverage of the compared pallas crates
@@ -227,7 +245,7 @@ jobs:
             exit 1
           fi
           {
-            echo "### Coverage of pallas-primitives, pallas-codec and pallas-network at $PALLAS_REF"
+            echo "### Coverage of pallas-primitives, pallas-codec and pallas-network at $PALLAS_REF under $SELECTED"
             echo '```'
             head -n 2 "$RUNNER_TEMP/summary.txt"
             grep -E 'dijkstra|^TOTAL' "$RUNNER_TEMP/summary.txt"
