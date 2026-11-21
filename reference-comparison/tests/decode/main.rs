@@ -36,14 +36,6 @@ const UNCREDITED: &[(&str, &str)] = &[
     ),
 ];
 
-/// The changes the records must make, each a rule and a kind of change.
-const REQUIRED: &[(&str, &str)] = &[
-    ("gov_action", "unknown-arm"),
-    ("voter", "unknown-arm"),
-    ("redeemer_tag", "unknown-arm"),
-    ("datum_option", "unknown-arm"),
-];
-
 const LACKS: &str = "pallas lacks a leaf";
 const EXTRA: &str = "pallas has an extra leaf";
 const DIFFERS: &str = "a leaf differs";
@@ -1462,7 +1454,7 @@ fn run() {
     );
     examples.values().for_each(|e| println!("{e}"));
     let mut failures = judged.failures();
-    failures.extend(coverage.failures(REQUIRED));
+    failures.extend(coverage.failures());
     failures.extend(credit_failures(&rules, &credit, UNCREDITED, &kinds));
     let listed: Vec<(&str, Allowed)> = differences::LIST
         .iter()
