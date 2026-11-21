@@ -1,17 +1,19 @@
 [
   {
-    "planted": "rational-tag-refused",
+    "planted": "fraction-any-tag",
     "patched": "pallas-head",
+    "pallas": "7caf768098b976cb31fbb8da8ab8c04c2238d607",
     "test": "decode",
     "expected": [
-      "decode: listed a rational under another tag (defect: a rational reads any tag) in class \"body rational-tag\" matched no observation",
-      "decode: listed a rational under another tag (defect: a rational reads any tag) in class \"ppu rational-tag\" matched no observation",
-      "decode: listed a rational under another tag (defect: a rational reads any tag) in class \"ppu zap\" matched no observation"
+      "decode: class \"body rational-tag\" disagrees (accepts) 3",
+      "decode: class \"ppu rational-tag\" disagrees (accepts) 27",
+      "decode: class \"ppu zap\" disagrees (accepts) 1"
     ]
   },
   {
     "planted": "tx-zap-entry-removed",
     "patched": "dolos",
+    "pallas": "7caf768098b976cb31fbb8da8ab8c04c2238d607",
     "test": "decode",
     "expected": [
       "decode: class \"tx zap\" disagrees (accepts) 4"
@@ -20,6 +22,7 @@
   {
     "planted": "networking-datum-hash-flipped",
     "patched": "pallas-head",
+    "pallas": "712e9ba7f82e92bf315bec5ef9ddb8dce979163a",
     "test": "networking",
     "expected": [
       "networking: class \"conway-utxo datum-hash\" disagrees (values) 10",
@@ -29,6 +32,7 @@
   {
     "planted": "mapping-sub-own-witnesses",
     "patched": "pallas-head",
+    "pallas": "adb44159a4ca20e8f70d8cada66c93d505aa8ca9",
     "test": "mapping",
     "expected": [
       "mapping: class \"top-witness first v1 sub 0 output 0 bytes\" disagrees (values) 10",
