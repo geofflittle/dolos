@@ -1601,10 +1601,10 @@ mod tests {
 
             let collateral = TxoRef(Hash::from([7u8; 32]), 0);
             body.collateral = Some(
-                dijkstra::NonEmptySet::try_from(vec![dijkstra::TransactionInput {
-                    transaction_id: collateral.0,
-                    index: collateral.1 as u64,
-                }])
+                dijkstra::NonEmptySet::try_from(vec![dijkstra::TransactionInput::new(
+                    collateral.0,
+                    u16::try_from(collateral.1).unwrap(),
+                )])
                 .unwrap(),
             );
             body.collateral_return = Some(body.outputs.first().unwrap().clone());

@@ -18,8 +18,9 @@ use ledger_oracle_judge::{
 use pallas::codec::minicbor;
 use pallas::crypto::hash::Hash;
 use pallas::ledger::addresses::{Network, StakeAddress, StakePayload};
+use pallas::ledger::primitives::conway::Value;
 use pallas::ledger::primitives::dijkstra::{
-    Language, MempoolTransaction, PostAlonzoTransactionOutput, Value,
+    Language, MempoolTransaction, PostAlonzoTransactionOutput,
 };
 use pallas::ledger::primitives::ExUnits;
 use pallas::ledger::traverse::MultiEraRedeemerTag as RedeemerTag;
@@ -326,7 +327,7 @@ impl Draft {
         witnesses.vkeywitness = None;
         if let Some(redeemers) = witnesses.redeemer.as_mut() {
             for value in redeemers.0.values_mut() {
-                value.ex_units = ExUnits { mem: 0, steps: 0 };
+                value.ex_units = ExUnits { mem: 0, steps: 0 }.try_into().unwrap();
             }
         }
         let bytes = minicbor::to_vec(&draft).map_err(|e| e.to_string())?;
@@ -338,7 +339,7 @@ impl Draft {
         let account = StakeAddress::new(Network::Testnet, StakePayload::Stake(Hash::new([7; 28])));
         let output = PostAlonzoTransactionOutput {
             address: account.to_vec().into(),
-            value: Value::Coin(2_000_000),
+            value: Value::Coin(2_000_000).try_into().unwrap(),
             datum_option: None,
             script_ref: None,
         };

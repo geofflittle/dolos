@@ -3032,7 +3032,7 @@ mod certificate_tests {
                 margin: margin(),
                 reward_account: reward_account(),
                 pool_owners: dijkstra::Set::from(owners()),
-                relays: vec![],
+                relays: vec![].try_into().unwrap(),
                 pool_metadata: None,
             },
             dijkstra::Certificate::PoolRetirement(pool(), RETIRING_EPOCH),

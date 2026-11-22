@@ -328,10 +328,7 @@ mod made_in_block_tests {
             .unwrap();
         let mut body = (*carrier.transaction_body).clone();
         let mut inputs = body.inputs.to_vec();
-        inputs.push(TransactionInput {
-            transaction_id: made,
-            index: 0,
-        });
+        inputs.push(TransactionInput::new(made, 0));
         body.inputs = inputs.into();
         carrier.transaction_body = body.into();
         block.block_body.transactions = MaybeIndefArray::Def(txs);

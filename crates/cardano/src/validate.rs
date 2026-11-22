@@ -473,7 +473,14 @@ pub fn validation_parameters(
             plutus_v2: cost_models.plutus_v2,
             plutus_v3: cost_models.plutus_v3,
             plutus_v4,
-            unknown: unknown.into_iter().collect(),
+            unknown: unknown
+                .into_iter()
+                .map(|(key, model)| {
+                    u8::try_from(key).map(|key| (key, model)).map_err(|_| {
+                        ChainError::InvalidConfig(format!("cost model key {key} exceeds u8"))
+                    })
+                })
+                .collect::<Result<_, _>>()?,
         },
         execution_costs: pp
             .execution_costs()
@@ -1448,6 +1455,35 @@ mod parameter_tests {
         assert!(matches!(
             refused,
             ChainError::InvalidConfig(x) if x == "leios committee size exceeds u16"
+        ));
+    }
+
+    #[test]
+    fn a_cost_model_key_of_255_is_kept() {
+        let set = active().with(P::CostModelsUnknown(std::collections::BTreeMap::from([(
+            255,
+            vec![1],
+        )])));
+        let MultiEraProtocolParameters::Dijkstra(params) = validation_parameters(&set).unwrap()
+        else {
+            panic!("a Dijkstra parameter set");
+        };
+        assert_eq!(
+            params.cost_models_for_script_languages.unknown,
+            std::collections::BTreeMap::from([(255, vec![1])])
+        );
+    }
+
+    #[test]
+    fn a_cost_model_key_beyond_u8_is_refused() {
+        let set = active().with(P::CostModelsUnknown(std::collections::BTreeMap::from([(
+            256,
+            vec![1],
+        )])));
+        let refused = validation_parameters(&set).unwrap_err();
+        assert!(matches!(
+            refused,
+            ChainError::InvalidConfig(x) if x == "cost model key 256 exceeds u8"
         ));
     }
 }

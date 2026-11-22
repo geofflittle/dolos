@@ -53,6 +53,13 @@ fn exact(report: &u5c::cardano::TxEval) {
     assert_eq!(r.ex_units, report.ex_units);
 }
 
+/// A redeemer budget of the given memory and steps.
+fn budget(mem: u64, steps: u64) -> n::ExUnits {
+    pallas::ledger::primitives::ExUnits { mem, steps }
+        .try_into()
+        .unwrap()
+}
+
 // Synthetic witness mutations only; the original body is preserved exactly.
 fn derivative(bytes: &[u8], unsigned: bool, budget: Option<n::ExUnits>) -> Vec<u8> {
     let decoded = MultiEraTx::decode_for_era(Era::Dijkstra, bytes).unwrap();
@@ -108,19 +115,10 @@ async fn estimation_rpc_unsigned() {
 async fn estimation_rpc_placeholder_budgets() {
     let (domain, bytes) = capture::fixture(true);
     for budget in [
-        n::ExUnits { mem: 0, steps: 0 },
-        n::ExUnits {
-            mem: 18484,
-            steps: 4805428,
-        },
-        n::ExUnits {
-            mem: 18485,
-            steps: 4805427,
-        },
-        n::ExUnits {
-            mem: u64::MAX,
-            steps: u64::MAX,
-        },
+        budget(0, 0),
+        budget(18484, 4805428),
+        budget(18485, 4805427),
+        budget(i64::MAX as u64, i64::MAX as u64),
     ] {
         let changed = derivative(&bytes, false, Some(budget));
         exact(&evaluate(&domain, &changed).await);
@@ -131,7 +129,7 @@ async fn estimation_rpc_placeholder_budgets() {
 #[tokio::test]
 async fn estimation_rpc_unsigned_zero_budget() {
     let (domain, bytes) = capture::fixture(true);
-    let changed = derivative(&bytes, true, Some(n::ExUnits { mem: 0, steps: 0 }));
+    let changed = derivative(&bytes, true, Some(budget(0, 0)));
     let before = changed.clone();
     exact(&evaluate(&domain, &changed).await);
     assert_eq!(changed, before);
@@ -145,7 +143,9 @@ async fn estimation_rpc_exhaustion_retains_failure_and_units() {
     epoch
         .pparams
         .unwrap_live_mut()
-        .set(PParamValue::MaxTxExUnits(n::ExUnits { mem: 0, steps: 0 }));
+        .set(PParamValue::MaxTxExUnits(
+            pallas::ledger::primitives::ExUnits { mem: 0, steps: 0 },
+        ));
     let writer = domain.state().start_writer().unwrap();
     writer
         .write_entity_typed(&EpochState::singleton_key(), &epoch)
@@ -300,7 +300,7 @@ async fn estimation_rpc_resolves_pending_and_inflight_outputs_without_mutation()
             usize::from(inflight)
         );
         let cursor = domain.state().read_cursor().unwrap();
-        let unsigned = derivative(&bytes, true, Some(n::ExUnits { mem: 0, steps: 0 }));
+        let unsigned = derivative(&bytes, true, Some(budget(0, 0)));
         exact(&evaluate(&domain, &unsigned).await);
         assert_eq!(domain.state().read_cursor().unwrap(), cursor);
         let mut remaining = domain.mempool().peek_pending();
@@ -411,7 +411,15 @@ async fn estimation_rpc_submission_still_enforces_phase_two() {
         let mut output: n::TransactionOutput = minicbor::decode(raw.cbor()).unwrap();
         match &mut output {
             n::TransactionOutput::PostAlonzo(output) => output.address = address.clone().into(),
-            n::TransactionOutput::Legacy(output) => output.address = address.clone().into(),
+            n::TransactionOutput::Legacy(output) => {
+                let mut legacy = pallas::ledger::primitives::alonzo::TransactionOutput::from(
+                    (**output).clone(),
+                );
+                legacy.address = address.clone().into();
+                *output = n::LegacyTransactionOutput::try_from(legacy)
+                    .unwrap()
+                    .into();
+            }
         }
         delta.produced_utxo.insert(
             reference,
@@ -458,15 +466,9 @@ async fn estimation_rpc_submission_still_enforces_phase_two() {
         }]);
         minicbor::to_vec(tx.to_mempool_transaction()).unwrap()
     };
-    let signed = seal(
-        &mut tx,
-        n::ExUnits {
-            mem: 18485,
-            steps: 4805428,
-        },
-    );
+    let signed = seal(&mut tx, budget(18485, 4805428));
     domain.validate_tx(&domain.read_chain(), &signed).unwrap();
-    let insufficient = seal(&mut tx, n::ExUnits { mem: 0, steps: 0 });
+    let insufficient = seal(&mut tx, budget(0, 0));
     let error = domain
         .validate_tx(&domain.read_chain(), &insufficient)
         .unwrap_err();

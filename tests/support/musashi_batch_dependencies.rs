@@ -12,10 +12,7 @@ use pallas::{
 use std::sync::Arc;
 
 fn input(index: u64) -> n::TransactionInput {
-    n::TransactionInput {
-        transaction_id: [42; 32].into(),
-        index,
-    }
+    n::TransactionInput::new([42; 32].into(), u16::try_from(index).unwrap())
 }
 
 fn fixture(children: &[u64], references: &[u64], missing: Option<u64>) -> (ToyDomain, Vec<u8>) {
@@ -32,7 +29,9 @@ fn fixture(children: &[u64], references: &[u64], missing: Option<u64>) -> (ToyDo
     let output = |coin| {
         n::TransactionOutput::PostAlonzo(KeepRaw::from(n::PostAlonzoTransactionOutput {
             address: address.clone().into(),
-            value: n::Value::Coin(coin),
+            value: pallas::ledger::primitives::conway::Value::Coin(coin)
+                .try_into()
+                .unwrap(),
             datum_option: None,
             script_ref: None,
         }))
@@ -141,19 +140,25 @@ fn batch_missing_parent_child_or_reference_input_rejects() {
 
 #[test]
 fn batch_duplicate_spending_references_still_reject() {
+    // Two children spending one input have one body, so the ledger reads them as one sub transaction twice.
     for children in [[1, 1], [0, 1]] {
         let (domain, bytes) = fixture(&children, &[], None);
         let error = domain
             .receive_tx("duplicate-batch-input", &domain.read_chain(), &bytes)
             .unwrap_err();
         assert!(
-            matches!(
-                error,
-                DomainError::ChainError(ChainError::Phase1ValidationRejected(
-                    ValidationError::DijkstraInputAlreadySpent
-                ))
-            ),
-            "{error:?}"
+            match (children, &error) {
+                ([1, 1], DomainError::ChainError(ChainError::CborDecodingError(error))) =>
+                    error.to_string().contains("a repeated element"),
+                (
+                    [0, 1],
+                    DomainError::ChainError(ChainError::Phase1ValidationRejected(
+                        ValidationError::DijkstraInputAlreadySpent,
+                    )),
+                ) => true,
+                _ => false,
+            },
+            "{children:?}: {error:?}"
         );
         assert!(!domain.mempool().has_pending());
     }

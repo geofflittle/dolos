@@ -114,12 +114,10 @@ refused[DijkstraMalformed("empty required top-level guards")] | leaves DecoderEr
 refused[DijkstraMalformed("empty starting account balance intervals")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k27
 refused[DijkstraMalformed("empty voting procedures")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k19,sub.k19
 refused[DijkstraMalformed("empty withdrawals")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k5,sub.k5
-refused[DijkstraMalformed("execution units")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w5,sub.w5
 refused[DijkstraMalformed("key witness")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w0,sub.w0
 refused[DijkstraMalformed("metadata")] | leaves DecoderErrorDeserialiseFailure | reads top.aux,sub.aux
 refused[DijkstraMalformed("multi-asset value")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k1,sub.k1,top.k9,sub.k9
 refused[DijkstraMalformed("protocol parameter update")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k20,sub.k20 | excluded the site decodes the map encoding of a typed update, whose keys are integers command: git -C pallas show 2b7bd3fb:pallas-primitives/src/dijkstra/model.rs | grep -n -B1 'pub struct ProtocolParamUpdate'
-refused[DijkstraMalformed("zero donation")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k22,sub.k22
 refused[DijkstraScriptContext("account balance intervals")] | leaves CollectErrors | reads top.w5,sub.w5
 refused[DijkstraScriptContext("Byron address")] | leaves CollectErrors | reads top.w5,sub.w5
 refused[DijkstraScriptContext("certificate kind")] | leaves CollectErrors | reads top.w5,sub.w5

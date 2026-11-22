@@ -4,10 +4,7 @@
 use pallas::{
     codec::{minicbor, utils::KeepRaw},
     crypto::hash::Hasher,
-    ledger::primitives::{
-        alonzo, babbage::GenTransactionOutput, conway, dijkstra, BigInt, PlutusData,
-        StakeCredential,
-    },
+    ledger::primitives::{alonzo, conway, dijkstra, BigInt, PlutusData, StakeCredential},
 };
 
 use std::fmt;
@@ -334,14 +331,14 @@ impl LedgerOutput {
     fn decode(bytes: &[u8], guards: bool) -> Result<Self, minicbor::decode::Error> {
         let output: dijkstra::TransactionOutput = minicbor::decode(bytes)?;
         let (address, (coin, mut assets), datum, script) = match &output {
-            GenTransactionOutput::Legacy(o) => {
+            dijkstra::TransactionOutput::Legacy(o) => {
                 let datum = match &o.datum_hash {
                     Some(h) => LedgerDatum::Hash(h.to_vec()),
                     None => LedgerDatum::None,
                 };
                 (o.address.to_vec(), alonzo_assets(&o.amount), datum, None)
             }
-            GenTransactionOutput::PostAlonzo(o) => {
+            dijkstra::TransactionOutput::PostAlonzo(o) => {
                 let datum = match o.datum_option.as_deref() {
                     None => LedgerDatum::None,
                     Some(conway::DatumOption::Hash(h)) => LedgerDatum::Hash(h.to_vec()),

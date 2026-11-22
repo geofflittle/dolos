@@ -61,7 +61,7 @@ fn set_dijkstra_pparams(update: &MultiEraParamUpdate, set: &mut PParamsSet) {
         ($($getter:ident => $variant:ident),*) => {
             $(
                 if let ParamRead::Proposed(value) = update.$getter() {
-                    set.set(PParamValue::$variant(value));
+                    set.set(PParamValue::$variant(value.into()));
                 }
             )*
         };
@@ -70,7 +70,6 @@ fn set_dijkstra_pparams(update: &MultiEraParamUpdate, set: &mut PParamsSet) {
     each_proposed!(
         max_ref_script_size_per_block => MaxRefScriptSizePerBlock,
         max_ref_script_size_per_tx => MaxRefScriptSizePerTx,
-        ref_script_cost_stride => RefScriptCostStride,
         ref_script_cost_multiplier => RefScriptCostMultiplier,
         min_pool_margin => MinPoolMargin,
         leios_announcement_period_length => LeiosAnnouncementPeriodLength,
@@ -91,12 +90,18 @@ fn set_dijkstra_pparams(update: &MultiEraParamUpdate, set: &mut PParamsSet) {
         ref_inputs_cost_per_datum_byte => RefInputsCostPerDatumByte
     );
 
+    if let ParamRead::Proposed(stride) = update.ref_script_cost_stride() {
+        set.set(PParamValue::RefScriptCostStride(stride.get().into()));
+    }
+
     if let ParamRead::Proposed(cap) = update.max_pledge_leverage() {
         set.set(PParamValue::MaxPledgeLeverage(cap.into()));
     }
 
     if let ParamRead::Proposed(round) = update.peras_bootstrap_round() {
-        set.set(PParamValue::PerasBootstrapRound(round.into()));
+        set.set(PParamValue::PerasBootstrapRound(
+            Option::<u32>::from(round).map(u64::from),
+        ));
     }
 }
 
@@ -119,7 +124,13 @@ fn wildcard_cost_models(
         return Ok(dijkstra
             .cost_models_for_script_languages
             .as_ref()
-            .map(|models| models.unknown.clone())
+            .map(|models| {
+                models
+                    .unknown
+                    .iter()
+                    .map(|(key, model)| (u64::from(*key), model.clone()))
+                    .collect()
+            })
             .unwrap_or_default());
     }
 
