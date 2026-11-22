@@ -1,7 +1,10 @@
-# An ignored test is large, and every other test is medium.
+# An ignored test is large, a judge test is small unless it reads its records from disk, and every other test is medium.
+# Each size's time limit is Bazel's default timeout for it: https://bazel.build/reference/test-encyclopedia#role-test-runner
 
 [test-groups]
 shared-ports = { max-threads = 1 }
+small = { max-threads = "num-cpus" }
+medium = { max-threads = "num-cpus" }
 
 # Medium: at most 300 s.
 [profile.default]
@@ -11,6 +14,19 @@ slow-timeout = { period = "300s", terminate-after = 1 }
 [[profile.default.overrides]]
 test-group = "shared-ports"
 filter = 'binary_id(dolos::smoke) | binary_id(dolos::snapshot) | (binary_id(dolos::sync) & test(/^daemon_syncs_for_/))'
+
+[[profile.default.overrides]]
+filter = """
+    binary_id(ledger-oracle-judge::records)
+    | (binary_id(ledger-oracle-judge::interface) & test(/^(a_declared_class_with_no_observation_fails|a_run_with_no_observation_fails|an_undeclared_record_class_fails)$/))
+"""
+test-group = "medium"
+slow-timeout = { period = "300s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = "package(ledger-oracle-judge)"
+test-group = "small"
+slow-timeout = { period = "60s", terminate-after = 1 }
 
 # Large: at most 900 s, run with `--profile large --run-ignored only`.
 [profile.large]

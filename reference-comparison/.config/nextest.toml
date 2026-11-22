@@ -1,2 +1,16 @@
-[profile.default]
+# A comparison reads the ledger's records and pallas's CDDL from disk and is medium, and every other test is small.
+# Each size's time limit is Bazel's default timeout for it: https://bazel.build/reference/test-encyclopedia#role-test-runner
+
+[test-groups]
+small = { max-threads = "num-cpus" }
+medium = { max-threads = "num-cpus" }
+
+[[profile.default.overrides]]
+filter = "test(/^(pallas_decodes_what_the_ledger_writes|pallas_maps_the_datums_the_ledger_finds|pallas_reads_the_utxo_replies_the_ledger_writes)$/)"
+test-group = "medium"
 slow-timeout = { period = "300s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = "all()"
+test-group = "small"
+slow-timeout = { period = "60s", terminate-after = 1 }
