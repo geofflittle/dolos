@@ -94,6 +94,21 @@ jobs:
       # compiled, so the archive unpacks into the checkout.
       - run: mkdir -p target/tmp
 
+      # The registry tests run this image, which is loaded before they start.
+      - name: Restore the registry image
+        if: matrix.size == 'large'
+        id: registry-image
+        uses: actions/cache@v4
+        with:
+          path: registry-image.tar
+          key: registry-image-2
+      - name: Save the registry image
+        if: matrix.size == 'large' && steps.registry-image.outputs.cache-hit != 'true'
+        run: docker pull registry:2 && docker save registry:2 --output registry-image.tar
+      - name: Load the registry image
+        if: matrix.size == 'large'
+        run: docker load --input registry-image.tar
+
       # The judge is a medium test that the judge job runs in release.
       - name: Run the ${{ matrix.size }} tests
         run: cargo-nextest nextest run --archive-file nextest-archive.tar.zst --extract-to "$GITHUB_WORKSPACE" --extract-overwrite --no-fail-fast --no-tests fail --run-ignored all -E 'group(${{ matrix.size }}) - (package(dolos) & kind(lib) & test(=serve::grpc::v1::ledger_oracle_tests::ledger_oracle))'

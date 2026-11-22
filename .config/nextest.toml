@@ -13,31 +13,8 @@ threads-required = "num-test-threads"
 
 [[profile.default.overrides]]
 filter = '''
-    (binary_id(dolos-minibf) & (
-      test(=routes::governance::tests::governance_drep_metadata_returns_anchor_error)
-      | test(=routes::governance::tests::governance_proposal_metadata_by_gov_action_returns_anchor_error)
-      | test(=routes::governance::tests::governance_proposal_metadata_returns_404_when_fetch_fails)
-    ))
-  | binary_id(dolos-snapshot::restore_registry)
+    binary_id(dolos-snapshot::restore_registry)
   | binary_id(dolos-snapshot::snapshot_verify)
-  | (binary_id(dolos::bin/dolos) & (
-      test(/^bootstrap::ranged::/)
-    ))
-  | (binary_id(dolos::smoke) & (
-      test(=daemon_runs_for_mainnet_full_implicit)
-      | test(=daemon_runs_for_preprod_full_implicit)
-      | test(=daemon_runs_for_preview_full_explicit)
-      | test(=daemon_runs_for_preview_full_implicit)
-      | test(=daemon_runs_for_preview_min_implicit)
-    ))
-  | binary_id(dolos::snapshot)
-  | (binary_id(dolos::sync) & (
-      test(=daemon_syncs_for_mainnet_full_implicit)
-      | test(=daemon_syncs_for_preprod_full_implicit)
-      | test(=daemon_syncs_for_preview_full_explicit)
-      | test(=daemon_syncs_for_preview_full_implicit)
-      | test(=daemon_syncs_for_preview_min_implicit)
-    ))
 '''
 test-group = "large"
 slow-timeout = { period = "900s", terminate-after = 1 }
@@ -258,6 +235,10 @@ filter = '''
   | (binary_id(dolos-fjall) & (
       test(/^archive::tests::/)
     ))
+  | (binary_id(dolos-testing) & (
+      test(/^http::tests::/)
+      | test(/^relay::tests::/)
+    ))
   | (binary_id(dolos-minibf) & (
       test(=mapping::anchor_tests::anchor_body_accepts_size_limit)
       | test(=mapping::anchor_tests::anchor_body_rejects_oversized_content_length)
@@ -318,6 +299,7 @@ filter = '''
   | binary_id(dolos::bench/archive_backends)
   | (binary_id(dolos::bin/dolos) & (
       test(/^bootstrap::mithril::/)
+      | test(/^bootstrap::ranged::/)
       | test(=data::cleanup::tests::clears_nested_stores_and_restore_progress)
       | test(=data::cleanup::tests::refuses_a_root_symlink_before_deleting_anything)
       | test(=data::cleanup::tests::refuses_an_outside_store_before_deleting_anything)
@@ -345,16 +327,15 @@ filter = '''
   | binary_id(dolos::offline_import)
   | binary_id(dolos::read_only_data)
   | binary_id(dolos::rebuild_state)
-  | (binary_id(dolos::smoke) & (
-      test(=daemon_runs_for_custom_network)
-    ))
+  | binary_id(dolos::smoke)
+  | binary_id(dolos::snapshot)
   | (binary_id(dolos::state_conformance) & (
       test(/^fjall::/)
       | test(=backends_agree_on_the_iterated_utxo_set)
     ))
   | binary_id(dolos::stelae_restore)
   | (binary_id(dolos::sync) & (
-      test(=daemon_syncs_for_custom_network)
+      test(/^daemon_syncs_for_/)
     ))
   | binary_id(dolos::tip_subscription)
   | (binary_id(xtask::minibf_perf) & (
