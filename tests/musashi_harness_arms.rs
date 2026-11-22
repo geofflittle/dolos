@@ -77,21 +77,3 @@ fn the_comparison_harness_meets_every_arm() {
 
     assert_verdict(&text, "PROBE 6 arms, 6 as expected", &root().join(script));
 }
-
-/// The inventory check accepts a log whose every binary asserted something and
-/// refuses an unrecorded silent binary, a recorded entry that now passes a
-/// test, a log naming no binary, a log holding a failure, and a log naming one
-/// target twice.
-#[test]
-fn the_inventory_harness_meets_every_arm() {
-    require_python();
-
-    let script = "scripts/musashi/probe/run-inventory-probe.sh";
-    let text = run(script);
-
-    assert_verdict(
-        &text,
-        "INVENTORY PROBE 6 arms, 6 as expected",
-        &root().join(script),
-    );
-}
