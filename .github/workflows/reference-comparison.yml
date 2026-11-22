@@ -2,15 +2,7 @@ name: Reference comparison
 
 on:
   push:
-    paths:
-      - .github/workflows/reference-comparison.yml
-      - crates/ledger-oracle-judge/**
-      - reference-comparison/**
   pull_request:
-    paths:
-      - .github/workflows/reference-comparison.yml
-      - crates/ledger-oracle-judge/**
-      - reference-comparison/**
   workflow_dispatch:
     inputs:
       pallas_ref:
@@ -24,8 +16,8 @@ permissions:
   contents: read
 
 env:
-  PALLAS_REF: ${{ inputs.pallas_ref || 'adb44159a4ca20e8f70d8cada66c93d505aa8ca9' }}
-  COMPARISONS: ${{ inputs.comparisons || 'mapping' }}
+  PALLAS_REF: ${{ inputs.pallas_ref || '20223bc95abb6ae7536858a01ddeddaacd4b741c' }}
+  COMPARISONS: ${{ inputs.comparisons || 'decode mapping networking' }}
   TOOLCHAIN: nightly-2026-09-04
 
 jobs:
@@ -70,15 +62,12 @@ jobs:
           echo "planted=$planted" >> "$GITHUB_OUTPUT"
           echo "Comparisons at $PALLAS_REF: $selected" >> "$GITHUB_STEP_SUMMARY"
 
-  compare:
-    name: compare ${{ matrix.comparison }}
+  # The judge's small tests and every small test of the selected comparisons.
+  small:
+    name: small
     needs: select
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        comparison: ${{ fromJSON(needs.select.outputs.comparisons) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -98,16 +87,65 @@ jobs:
           tool: cargo-nextest@0.9.151
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: dolos/reference-comparison -> target
-      - name: ${{ matrix.comparison }}
+          workspaces: |
+            dolos -> target
+            dolos/reference-comparison -> target
+          key: small
+      - name: judge
+        working-directory: dolos
+        run: cargo nextest run --no-fail-fast --run-ignored all -p ledger-oracle-judge -E 'group(small)'
+      - name: comparisons
         working-directory: dolos/reference-comparison
+        env:
+          SELECTED: ${{ needs.select.outputs.comparisons }}
         run: |
+          binaries=$(jq -r 'map("binary(=" + . + ")") | join(" | ")' <<< "$SELECTED")
+          cargo nextest run --no-fail-fast --run-ignored all -E "group(small) & ($binaries)"
+
+  # The judge's medium tests and the medium tests of the selected comparisons.
+  medium:
+    name: medium
+    needs: select
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: dolos
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: geofflittle/pallas
+          ref: ${{ env.PALLAS_REF }}
+          path: pallas-head
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.TOOLCHAIN }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.151
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            dolos -> target
+            dolos/reference-comparison -> target
+          key: medium
+      - name: judge
+        working-directory: dolos
+        run: cargo nextest run --no-fail-fast --run-ignored all -p ledger-oracle-judge -E 'group(medium)'
+      - name: comparisons
+        working-directory: dolos/reference-comparison
+        env:
+          SELECTED: ${{ needs.select.outputs.comparisons }}
+        run: |
+          binaries=$(jq -r 'map("binary(=" + . + ")") | join(" | ")' <<< "$SELECTED")
           rc=0
-          cargo nextest run --no-fail-fast --test ${{ matrix.comparison }} --no-capture || rc=$?
+          cargo nextest run --no-fail-fast --run-ignored all --no-capture -E "group(medium) & ($binaries)" || rc=$?
           case "$rc" in
             0) ;;
-            100) echo "::error::the ${{ matrix.comparison }} comparison judged a difference"; exit 1 ;;
-            *) echo "::error::the ${{ matrix.comparison }} comparison exited $rc before judging, a build failure or a crash"; exit 1 ;;
+            100) echo "::error::a comparison judged a difference or ran over its time limit"; exit 1 ;;
+            *) echo "::error::the comparisons exited $rc before judging, a build failure or a crash"; exit 1 ;;
           esac
 
   # A planted defect and its expected lines hold for one pallas commit, so

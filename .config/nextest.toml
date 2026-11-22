@@ -239,6 +239,12 @@ filter = '''
       test(/^http::tests::/)
       | test(/^relay::tests::/)
     ))
+  | binary_id(ledger-oracle-judge::records)
+  | (binary_id(ledger-oracle-judge::interface) & (
+      test(=a_declared_class_with_no_observation_fails)
+      | test(=a_run_with_no_observation_fails)
+      | test(=an_undeclared_record_class_fails)
+    ))
   | (binary_id(dolos-minibf) & (
       test(=mapping::anchor_tests::anchor_body_accepts_size_limit)
       | test(=mapping::anchor_tests::anchor_body_rejects_oversized_content_length)
