@@ -99,7 +99,11 @@ jobs:
         with:
           shared-key: test-ubuntu-latest
           save-if: false
-      - run: cargo test --workspace --all-targets --all-features --exclude dolos-minibf --exclude dolos-minikupo --exclude dolos-trp
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.151
+      # The judge is a medium test that the judge job of docker.yml runs in release.
+      - run: cargo nextest run --workspace --all-targets --all-features --no-fail-fast --no-tests fail --run-ignored all --exclude dolos-minibf --exclude dolos-minikupo --exclude dolos-trp -E 'not (package(dolos) & kind(lib) & test(=serve::grpc::v1::ledger_oracle_tests::ledger_oracle))'
 
   # Keep the snapshot profile independently embeddable. The workspace build
   # can unify features through the Dolos binary, while an external consumer
@@ -119,23 +123,3 @@ jobs:
           shared-key: test-ubuntu-latest
           save-if: false
       - run: cargo check -p dolos-snapshot --all-targets
-
-  # These sleep on a real relay rather than compute, so they are slow and only
-  # as reliable as the relay. Run them on merges to main. Smoke runs in the test
-  # job and covers ports, socket and shutdown on every PR.
-  e2e:
-    name: E2E (sync, snapshot)
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-2026-09-04
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: test-ubuntu-latest
-          save-if: false
-      - run: cargo test --test sync --test snapshot -- --ignored

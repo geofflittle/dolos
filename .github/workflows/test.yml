@@ -14,9 +14,13 @@ env:
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 jobs:
-  test:
-    name: Test
+  sized:
+    name: Test (${{ matrix.size }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        size: [small, medium, large]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,12 +33,17 @@ jobs:
           tool: cargo-nextest@0.9.151
       - uses: Swatinem/rust-cache@v2
         with:
-          # `all-features` and `e2e` restore this read only, and without a shared
-          # key each would save its own multi GB entry against a full quota.
+          # Every size and `all-features` restore one multi GB entry, which the
+          # small job saves.
           shared-key: test-ubuntu-latest
+          save-if: ${{ matrix.size == 'small' }}
 
-      - name: Run the tests
-        run: cargo nextest run --workspace --all-targets
+      # The judge is a medium test that the judge job runs in release.
+      - name: Run the ${{ matrix.size }} tests
+        run: cargo nextest run --workspace --all-targets --no-fail-fast --no-tests fail --run-ignored all -E 'group(${{ matrix.size }}) - (package(dolos) & kind(lib) & test(=serve::grpc::v1::ledger_oracle_tests::ledger_oracle))'
 
-      - name: Run e2e smoke tests
-        run: cargo nextest run --profile large --run-ignored only --test smoke
+      - name: Run the doctests
+        if: matrix.size == 'small'
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: timeout 60
+        run: cargo test --workspace --doc

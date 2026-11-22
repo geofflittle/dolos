@@ -305,11 +305,11 @@ All agents working on this repository must verify their modifications by running
 
 3. **Testing**: Run tests to verify functionality
    ```bash
-   cargo test --workspace --all-targets
-   cargo test --workspace --all-features --exclude dolos-minibf --exclude dolos-minikupo --exclude dolos-trp
+   cargo nextest run --workspace --all-targets
+   cargo nextest run --workspace --all-targets --all-features --exclude dolos-minibf --exclude dolos-minikupo --exclude dolos-trp
    ```
 
-   The first command is what CI runs on every platform. The second adds the
+   The first command runs every test, which CI runs one size per job. The second adds the
    feature-gated code the default run never exercises — most importantly the
    `strict` feature, dolos-cardano's epoch-coherence assertions. The three
    service crates are excluded from the all-features run because their test
@@ -321,27 +321,16 @@ All agents working on this repository must verify their modifications by running
    runs both commands, so a verification that passes locally cannot drift from
    what the repository keeps green.
 
-4. **Registry restore round trip** (requires Docker): the `#[ignore]`d suite
-   that spawns a real OCI registry
+4. **Test sizes**: `.config/nextest.toml` gives each test a size, small,
+   medium or large, and the time limit of that size. CI runs each size in
+   its own job, for example
    ```bash
-   cargo test -p dolos-snapshot --test restore_registry -- --ignored --test-threads=1
+   cargo nextest run --workspace --all-targets -E 'group(large)'
    ```
 
-   Each test spawns its own registry container via `docker run` and tears it
-   down on the way out; the suite is `#[ignore]`d so plain `cargo test` stays
-   green without a container runtime. Run it when touching the Stelae pin or
-   `crates/snapshot`'s registry restore path;
-   `STELAE_TEST_REGISTRY_IMAGE` selects the server.
-
-   These are local verification tools, deliberately not a CI job here.
-   Registry interaction — transport and publication lifecycle — is implemented
-   by the Stelae crates, so testing that integration in CI is
-   `github.com/txpipe/stelae`'s responsibility, and its `Registry` workflow
-   runs against `registry:2`, `registry:3` and a pinned `zot`. Dolos's test
-   subject is the profile, and the profile is transport-blind by
-   construction: the directory-transport suites in the workspace gate cover
-   it, and these two suites exist to double-check the composition when the
-   seam itself is in question.
+   The large tests need Docker and the network. Each registry test spawns
+   its own registry container via `docker run` and tears it down on the way
+   out, and `STELAE_TEST_REGISTRY_IMAGE` selects the server.
 
 ### Code Quality Standards
 

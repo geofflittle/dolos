@@ -29,10 +29,7 @@ jobs:
           shared-key: judge
 
       - name: Judge Dolos against the ledger corpora
-        run: cargo nextest run --profile large --release -p dolos --lib --run-ignored only --no-capture -E 'test(=serve::grpc::v1::ledger_oracle_tests::ledger_oracle)'
-
-      - name: Run the judge self tests
-        run: cargo nextest run --profile large --release -p dolos --lib --run-ignored only -E 'test(/^serve::grpc::v1::ledger_oracle_tests::/) - test(/^serve::grpc::v1::ledger_oracle_tests::(ledger_oracle|n2n::|endorser::)/)'
+        run: cargo nextest run --release -p dolos --lib --no-tests fail --no-capture -E 'test(=serve::grpc::v1::ledger_oracle_tests::ledger_oracle)'
 
   pallas-ci:
     name: Require pallas CI at the pinned commit
@@ -70,8 +67,6 @@ jobs:
           bash .github/scripts/require-pallas-ci.sh <<< "$pins"
 
   build:
-    continue-on-error: true
-
     strategy:
       matrix:
         include:
@@ -117,6 +112,15 @@ jobs:
         with:
           name: binaries-${{ matrix.release_for }}
           path: dolos-${{ matrix.release_for }}${{ matrix.ext }}
+
+  ci-passed:
+    if: always()
+    needs: [build, test, judge, pallas-ci]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: re-actors/alls-green@v1.3.0
+        with:
+          jobs: ${{ toJSON(needs) }}
 
   docker:
     if: github.ref == 'refs/heads/leios-musashi' || startsWith(github.ref, 'refs/tags/leios-musashi-')
