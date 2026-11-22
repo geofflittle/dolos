@@ -30,7 +30,9 @@ pub mod synthetic;
 pub mod toy_domain;
 
 pub mod harness;
+pub mod http;
 pub mod mempool;
+pub mod relay;
 pub mod streams;
 pub mod submit;
 

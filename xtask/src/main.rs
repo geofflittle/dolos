@@ -7,6 +7,7 @@ use xtask::perf::measure::PeakAlloc;
 mod bootstrap;
 mod config;
 mod ground_truth;
+mod record_relay;
 mod test_instance;
 mod util;
 
@@ -46,6 +47,9 @@ enum Commands {
     /// Test instance management commands (create, delete)
     #[command(subcommand)]
     TestInstance(test_instance::TestInstanceCmd),
+
+    /// Record a relay's first blocks for the e2e tests' loopback relay
+    RecordRelay(record_relay::RecordRelayArgs),
 }
 
 fn main() -> Result<()> {
@@ -66,6 +70,7 @@ fn main() -> Result<()> {
         Commands::BootstrapMithrilLocal(args) => bootstrap::run(&sh, &args)?,
         Commands::GroundTruth(cmd) => ground_truth::run(cmd)?,
         Commands::TestInstance(cmd) => test_instance::run(&sh, cmd)?,
+        Commands::RecordRelay(args) => record_relay::run(&args)?,
     }
 
     Ok(())

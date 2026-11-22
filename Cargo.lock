@@ -2054,6 +2054,7 @@ dependencies = [
  "pallas",
  "rand 0.9.3",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "tokio-stream",

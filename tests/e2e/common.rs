@@ -6,6 +6,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant};
 
+use dolos_testing::relay::Relay;
 use tempfile::TempDir;
 
 pub struct Scenario {
@@ -88,6 +89,7 @@ pub struct ScenarioWorkspace {
     expect_ports: bool,
     port_prefix: u16,
     dir: TempDir,
+    relay: Option<Relay>,
 }
 
 impl ScenarioWorkspace {
@@ -104,6 +106,7 @@ impl ScenarioWorkspace {
             .unwrap_or_else(|err| panic!("failed to read {}: {err}", fixture.display()));
 
         let rewritten = rewrite_ports(&config, scenario.port_prefix, port_prefix);
+        let (rewritten, relay) = stand_in_relay(&rewritten);
 
         assert!(
             !scenario.expect_ports || rewritten != config,
@@ -120,6 +123,7 @@ impl ScenarioWorkspace {
             expect_ports: scenario.expect_ports,
             port_prefix,
             dir,
+            relay,
         }
     }
 
@@ -158,6 +162,31 @@ fn rewrite_ports(config: &str, from_prefix: u16, to_prefix: u16) -> String {
             &format!(":{}", to_prefix + suffix),
         )
     })
+}
+
+/// Moves a scenario's upstream peer to a loopback relay that serves the
+/// recorded first blocks of its network.
+fn stand_in_relay(config: &str) -> (String, Option<Relay>) {
+    let parsed: toml::Value = config.parse().expect("scenario config is TOML");
+
+    let Some(peer) = parsed["upstream"]
+        .get("peer_address")
+        .and_then(|x| x.as_str())
+    else {
+        return (config.to_string(), None);
+    };
+
+    let magic = parsed["chain"]["magic"]
+        .as_integer()
+        .expect("scenario names its network magic");
+
+    let recordings = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_data/relay");
+    let relay =
+        Relay::start(&Relay::recording(&recordings, magic as u64)).expect("loopback relay starts");
+
+    let config = config.replace(peer, &relay.address().to_string());
+
+    (config, Some(relay))
 }
 
 pub fn prepare_scenario_process(workspace: &ScenarioWorkspace) -> Command {

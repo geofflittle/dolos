@@ -345,12 +345,11 @@ pub fn ranged_reader_with_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dolos_testing::http::RangeServer;
 
-    const TEST_URL: &str = "https://dolos-snapshots.txpipe.cloud/v3/764824073/full/latest.tar.gz";
-
-    /// End-to-end check against the real R2 endpoint: download a small prefix
-    /// in many small chunks through the ring buffer and confirm the bytes
-    /// match a single plain ranged GET of the same prefix.
+    /// Download a small prefix from a loopback range server in many small
+    /// chunks through the ring buffer and confirm the bytes match a single
+    /// plain ranged GET of the same prefix.
     #[test]
     fn ranged_matches_direct_fetch() {
         // 5 MiB total in 1 MiB chunks => 5 chunks, exercising the 4-part window
@@ -359,15 +358,19 @@ mod tests {
         const TOTAL: u64 = 5 * 1024 * 1024;
         const CHUNK: u64 = 1024 * 1024;
 
+        let body = (0..TOTAL + CHUNK / 2).map(|i| (i % 251) as u8).collect();
+        let server = RangeServer::start(body).expect("range server");
+        let url = server.url();
+
         let client = build_client().expect("client");
 
-        let probe = probe(&client, TEST_URL).expect("probe");
+        let probe = probe(&client, &url).expect("probe");
         assert!(probe.supports_ranges, "endpoint must advertise ranges");
         assert!(probe.total_size >= TOTAL, "remote smaller than test window");
 
         // Reference: one plain ranged GET of the same prefix.
         let expected = client
-            .get(TEST_URL)
+            .get(&url)
             .header(RANGE, format!("bytes=0-{}", TOTAL - 1))
             .send()
             .and_then(|r| r.error_for_status())
@@ -382,14 +385,8 @@ mod tests {
         std::fs::create_dir_all(&staging).expect("staging");
 
         let progress = ProgressBar::hidden();
-        let mut reader = ranged_reader_with_chunk(
-            client,
-            TEST_URL.to_string(),
-            TOTAL,
-            CHUNK,
-            staging.clone(),
-            progress.clone(),
-        );
+        let mut reader =
+            ranged_reader_with_chunk(client, url, TOTAL, CHUNK, staging.clone(), progress.clone());
 
         let mut actual = Vec::new();
         let n = reader.read_to_end(&mut actual).expect("read ring buffer");

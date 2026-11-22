@@ -1362,9 +1362,9 @@ mod tests {
     }
 
     /// This function gives the synthetic DRep an anchor that Dolos can never
-    /// fetch. `example.invalid` does not resolve (RFC 6761), so the fetch
-    /// always stops with a connection error. The endpoint still returns the
-    /// anchor fields. This function uses the same entity key that the
+    /// fetch. Dolos refuses a loopback anchor before it opens a socket, so the
+    /// fetch always stops with a connection error. The endpoint still returns
+    /// the anchor fields. This function uses the same entity key that the
     /// endpoint reads. The synthetic chain imported a registration with no
     /// anchor, and this function replaces it.
     fn seed_drep_anchor(domain: &ToyDomain, drep_bytes: Vec<u8>) {
@@ -1379,7 +1379,7 @@ mod tests {
 
         let mut state = DRepState::new(DRep::Key(Hash::from(keyhash)));
         state.anchor = Some(Anchor {
-            url: "https://example.invalid/drep".to_string(),
+            url: "https://127.0.0.1/drep".to_string(),
             content_hash: Hash::from([9u8; 32]),
         });
 
@@ -1418,7 +1418,7 @@ mod tests {
         // the drep id in the vectors is the 29-byte CIP-129 form, so the hex
         // keeps the header
         assert_eq!(model.hex, hex::encode([vec![0x22], vec![7u8; 28]].concat()));
-        assert_eq!(model.url, "https://example.invalid/drep");
+        assert_eq!(model.url, "https://127.0.0.1/drep");
         assert_eq!(model.hash, hex::encode([9u8; 32]));
         assert!(model.json_metadata.is_none());
         assert!(model.bytes.is_none());
@@ -1585,7 +1585,7 @@ mod tests {
         assert_eq!(metadata.id, id);
         assert_eq!(metadata.tx_hash, tx);
         assert_eq!(metadata.cert_index, 0);
-        assert_eq!(metadata.url, "https://example.invalid/proposal");
+        assert_eq!(metadata.url, "https://127.0.0.1/proposal");
         assert_eq!(metadata.hash, hex::encode([6u8; 32]));
         assert!(metadata.json_metadata.is_none());
         assert!(metadata.bytes.is_none());
