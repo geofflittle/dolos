@@ -13,14 +13,12 @@ env:
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
+# One job compiles the tests into a nextest archive and each size runs from it,
+# https://nexte.st/docs/ci-features/archiving/
 jobs:
-  sized:
-    name: Test (${{ matrix.size }})
+  build:
+    name: Build the tests
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        size: [small, medium, large]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,17 +31,48 @@ jobs:
           tool: cargo-nextest@0.9.151
       - uses: Swatinem/rust-cache@v2
         with:
-          # Every size and `all-features` restore one multi GB entry, which the
-          # small job saves.
+          # This job and `all-features` restore one multi GB entry, which this
+          # job saves.
           shared-key: test-ubuntu-latest
-          save-if: ${{ matrix.size == 'small' }}
 
-      # The judge is a medium test that the judge job runs in release.
-      - name: Run the ${{ matrix.size }} tests
-        run: cargo nextest run --workspace --all-targets --no-fail-fast --no-tests fail --run-ignored all -E 'group(${{ matrix.size }}) - (package(dolos) & kind(lib) & test(=serve::grpc::v1::ledger_oracle_tests::ledger_oracle))'
+      - name: Archive the tests
+        run: cargo nextest archive --workspace --all-targets --archive-file nextest-archive.tar.zst
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nextest-archive
+          path: nextest-archive.tar.zst
+          retention-days: 1
+
+      # Doctests are small tests that nextest cannot archive.
       - name: Run the doctests
-        if: matrix.size == 'small'
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: timeout 60
         run: cargo test --workspace --doc
+
+  sized:
+    name: Test (${{ matrix.size }})
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        size: [small, medium, large]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.151
+      - uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive
+
+      # The tests read `CARGO_BIN_EXE_dolos` and `CARGO_TARGET_TMPDIR` as
+      # compiled, so the archive unpacks into the checkout.
+      - run: mkdir -p target/tmp
+
+      # The judge is a medium test that the judge job runs in release.
+      - name: Run the ${{ matrix.size }} tests
+        run: cargo-nextest nextest run --archive-file nextest-archive.tar.zst --extract-to "$GITHUB_WORKSPACE" --extract-overwrite --no-fail-fast --no-tests fail --run-ignored all -E 'group(${{ matrix.size }}) - (package(dolos) & kind(lib) & test(=serve::grpc::v1::ledger_oracle_tests::ledger_oracle))'
