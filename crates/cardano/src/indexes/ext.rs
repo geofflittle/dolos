@@ -20,12 +20,16 @@ use crate::model::{DatumState, DATUM_NS};
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use dolos_cardano::indexes::CardanoStateIndexExt;
+/// # use dolos_core::{Domain, StateError};
+/// # fn example<D: Domain>(domain: &D, address_bytes: Vec<u8>, payment_cred: Vec<u8>) -> Result<(), StateError> {
 ///
 /// // domain.state() returns a StateStore implementation
 /// let utxos = domain.state().utxos_by_address(&address_bytes)?;
 /// let utxos = domain.state().utxos_by_payment(&payment_cred)?;
+/// # Ok(())
+/// # }
 /// ```
 pub trait CardanoStateIndexExt: StateStore {
     /// Get UTxOs by full address.
@@ -77,11 +81,15 @@ impl<T: StateStore> CardanoStateIndexExt for T {}
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use dolos_cardano::indexes::CardanoArchiveIndexExt;
+/// # use dolos_core::{ArchiveError, BlockSlot, Domain};
+/// # fn example<D: Domain>(domain: &D, address_bytes: Vec<u8>, start: BlockSlot, end: BlockSlot) -> Result<(), ArchiveError> {
 ///
 /// // domain.archive() returns an ArchiveStore implementation
 /// let slots = domain.archive().slots_by_address(&address_bytes, start, end)?;
+/// # Ok(())
+/// # }
 /// ```
 pub trait CardanoArchiveIndexExt: ArchiveStore {
     // ============ Archive Slot Queries ============

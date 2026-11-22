@@ -274,30 +274,3 @@ fn renumbering_moves_bytes() {
          the whole field registry unable to see a renumbering at all",
     );
 }
-
-/// Print the current encodings, for the one legitimate reason to need them:
-/// pinning a **new** revision after a deliberate field append.
-///
-/// Never a way to refresh an existing pin. A golden that disagrees with a
-/// re-run on unchanged code is a determinism defect; a golden that disagrees
-/// after a code change is the change being breaking. Both are findings, and
-/// neither is fixed here.
-///
-/// ```text
-/// cargo test -p dolos-snapshot --test field_registry -- --ignored --nocapture
-/// ```
-#[test]
-#[ignore = "prints goldens for a new revision; never re-pins an existing one"]
-fn print_current_canary_encodings() {
-    for entry in registry::registry() {
-        let (_, encoded) = (entry.encode)();
-        println!("{} rev {}", entry.ns, schema_rev(entry.ns));
-        println!("{}", hex::encode(&encoded));
-    }
-
-    for table in registry::enums::tables() {
-        for (name, bytes) in (table.encode)() {
-            println!("{}::{name} {}", table.name, hex::encode(&bytes));
-        }
-    }
-}

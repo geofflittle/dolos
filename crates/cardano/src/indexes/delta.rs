@@ -32,7 +32,19 @@ use crate::pallas_extras;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// # use dolos_cardano::indexes::CardanoIndexDeltaBuilder;
+/// # use dolos_core::{BlockSlot, IndexedTx, TxoRef};
+/// # use pallas::ledger::{addresses::Address, traverse::MultiEraOutput};
+/// # fn example(
+/// #     slot: BlockSlot,
+/// #     block_hash: Vec<u8>,
+/// #     block_number: u64,
+/// #     tx_hash: Vec<u8>,
+/// #     address: Address,
+/// #     txo_ref: TxoRef,
+/// #     output: MultiEraOutput<'_>,
+/// # ) {
 /// let mut builder = CardanoIndexDeltaBuilder::new();
 ///
 /// // Start processing a block
@@ -45,6 +57,7 @@ use crate::pallas_extras;
 ///
 /// // Take both halves
 /// let (utxo_tags, archive) = builder.into_parts();
+/// # }
 /// ```
 #[derive(Default)]
 pub struct CardanoIndexDeltaBuilder {

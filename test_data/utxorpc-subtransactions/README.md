@@ -63,27 +63,9 @@ helper, leaving production resolution unchanged. The child-only test fails with
 `as_output: None`; the captured-pair test passes. The same consumer executable
 also fails against that baseline server and passes against the fixed server.
 
-Build the companion consumer test in `../sundae-sync-v2`:
-
-```sh
-cargo test --locked --test dolos_subtransactions --no-run --message-format=json
-```
-
-Use the `executable` path from that command's compiler-artifact message for the
-`dolos_subtransactions` target (not a guessed filename):
-
-```sh
-SUNDAE_SYNC_SUBTX_TEST_BIN=/absolute/path/to/test-executable \
-  cargo test --locked -p dolos --lib \
-  serve::grpc::v1::subtransaction_tests::sundae_sync_consumes_child_inputs_over_v1 \
-  -- --exact --ignored --nocapture
-```
-
-Both processes have timeouts. No running node, signing key, AWS credentials or
-production resource is required. The listener is bound before starting the
-consumer, and background tasks and the child process are cleaned up on failure.
-Do not run the consumer test directly against a live endpoint: it expects the
-isolated synthetic fixture and injected Apply/Undo sequence.
+The paired consumer test is no longer in Dolos, because its consumer target
+`dolos_subtransactions` is on no published sundae-sync-v2 branch. The
+`evidence/consumer-*.txt` files are its recorded runs.
 
 Exact dependency revisions, decoded-byte checksums and verification results are
 recorded in `provenance.json` and `verification.json`. No dependency upgrade is

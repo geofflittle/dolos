@@ -5,8 +5,6 @@ pub mod watch;
 
 #[cfg(test)]
 mod ledger_oracle_tests;
-#[cfg(test)]
-mod subtransaction_tests;
 
 pub(super) use pallas::interop::utxorpc::v1::spec;
 

@@ -1,13 +1,7 @@
 //! Restoring a node from a stele in a registry.
 //!
 //! Everything here needs a **registry**, and spawns one: `docker run` of an OCI
-//! Distribution server, torn down on the way out. So everything here is
-//! `#[ignore]`d, and an `#[ignore]`d test that was never executed proves
-//! nothing — run it with:
-//!
-//! ```text
-//! cargo test -p dolos-snapshot --test restore_registry -- --ignored --nocapture
-//! ```
+//! Distribution server, torn down on the way out.
 //!
 //! `STELAE_TEST_REGISTRY_IMAGE` chooses the server (default `registry:2`), the
 //! same knob `tests/publish.rs` and the stelae repo's `tests/oci.rs` use.
@@ -221,7 +215,6 @@ fn target<B: ToyStores>(blank: &Blank<B>) -> restore::Target<'_, impl ArchiveSto
 /// happened to reproduce the export's own mistake would survive a comparison
 /// against the export and not this one.
 #[test]
-#[ignore]
 fn a_registry_restore_is_a_directory_restore() {
     let fixture = Fixture::spawn();
     let node = Node::build();
@@ -332,7 +325,6 @@ fn a_registry_restore_is_a_directory_restore() {
 
 /// Killed over the wire, resumed over the wire.
 #[test]
-#[ignore]
 fn a_killed_registry_restore_resumes_where_it_stopped() {
     let fixture = Fixture::spawn();
     let node = Node::build();
@@ -442,7 +434,6 @@ fn a_killed_registry_restore_resumes_where_it_stopped() {
 /// is the resume rule and the delta assertion in one run, which is what they
 /// are.
 #[test]
-#[ignore]
 fn a_pre_seeded_node_fetches_only_what_it_lacks() {
     let fixture = Fixture::spawn();
     let node = Node::build();
@@ -537,7 +528,6 @@ fn a_pre_seeded_node_fetches_only_what_it_lacks() {
 
 /// A point that names no stele fails as a refusal, not as a partial restore.
 #[test]
-#[ignore]
 fn a_point_that_names_no_stele_is_refused() {
     let fixture = Fixture::spawn();
     let node = Node::build();
@@ -586,7 +576,6 @@ fn a_point_that_names_no_stele_is_refused() {
 /// this fixture did not manage to put behind htpasswd would run anonymous, and
 /// every other test in this file would pass unchanged.
 #[test]
-#[ignore]
 fn a_node_authenticates_with_the_credentials_it_was_given() {
     let fixture = Fixture::spawn();
     let node = Node::build();
@@ -854,7 +843,6 @@ fn exact_of<A: ArchiveStore>(store: &A) -> Vec<ExactRecord> {
 /// announced once at the end, is that the deltas sum to the same number the
 /// manifest states independently.
 #[test]
-#[ignore]
 fn a_registry_restore_reports_every_byte_it_pulls() {
     let fixture = Fixture::spawn();
     let node = Node::build();
@@ -923,7 +911,6 @@ fn a_registry_restore_reports_every_byte_it_pulls() {
 /// layer the resume skipped contributes no blob and no bytes, and the counts
 /// still add up to the plan's.
 #[test]
-#[ignore]
 fn a_resumed_registry_restore_reports_what_it_skipped() {
     let fixture = Fixture::spawn();
     let node = Node::build();

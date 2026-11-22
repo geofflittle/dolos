@@ -160,7 +160,6 @@ fn assert_archive_is_frames_and_reads_back(workspace: &ScenarioWorkspace) {
 macro_rules! test_for_scenario {
     ($name:ident, $func:ident, $scenario:expr) => {
         #[test]
-        #[ignore]
         fn $name() {
             $func(&ScenarioWorkspace::new(&SCENARIOS[$scenario]));
         }

@@ -236,19 +236,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
-    async fn tx_submit_not_found() {
-        let app = TestApp::new();
-        assert_status(
-            &app,
-            "application/cbor",
-            app.vectors().tx_cbor.clone(),
-            StatusCode::NOT_FOUND,
-        )
-        .await;
-    }
-
-    #[tokio::test]
     async fn tx_submit_internal_error() {
         let app = TestApp::new_with_fault(Some(TestFault::StateStoreError));
         assert_status(

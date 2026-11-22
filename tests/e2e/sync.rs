@@ -13,8 +13,6 @@ fn daemon_syncs(workspace: &ScenarioWorkspace) {
 
     reset_and_bootstrap(workspace);
 
-    let before = fetch_summary(workspace);
-
     let mut cmd = prepare_scenario_process(workspace);
 
     let handle = cmd
@@ -37,14 +35,6 @@ fn daemon_syncs(workspace: &ScenarioWorkspace) {
 
     let after = fetch_summary(workspace);
 
-    let before_tip = before
-        .wal
-        .tip_slot
-        .into_iter()
-        .chain(before.archive.tip_slot)
-        .chain(before.state.tip_slot)
-        .max()
-        .unwrap_or_default();
     let after_tip = after
         .wal
         .tip_slot
@@ -54,9 +44,10 @@ fn daemon_syncs(workspace: &ScenarioWorkspace) {
         .max()
         .unwrap_or_default();
 
+    // A relay bootstrap writes no store, so the daemon starts from no tip.
     assert!(
-        after_tip > before_tip,
-        "expected tip to advance slots for {}, before={before_tip}, after={after_tip}",
+        after_tip > 0,
+        "expected tip to advance slots for {}, after={after_tip}",
         workspace.name()
     );
 }
@@ -64,7 +55,6 @@ fn daemon_syncs(workspace: &ScenarioWorkspace) {
 macro_rules! test_for_scenario {
     ($name:ident, $func:ident, $scenario:expr) => {
         #[test]
-        #[ignore]
         fn $name() {
             $func(&ScenarioWorkspace::new(&SCENARIOS[$scenario]));
         }

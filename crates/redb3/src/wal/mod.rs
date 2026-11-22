@@ -612,11 +612,19 @@ where
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
+    /// # use dolos_core::{BlockSlot, ChainPoint, EntityDelta};
+    /// # use dolos_redb3::wal::{RedbWalError, RedbWalStore};
+    /// # fn example<T>(wal: &RedbWalStore<T>, slot: BlockSlot) -> Result<Option<ChainPoint>, RedbWalError>
+    /// # where
+    /// #     T: EntityDelta + serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
+    /// # {
     /// let result = wal.approximate_slot_with_retry(
     ///     slot,
-    ///     |retry| slot - 100 * retry..=slot + 100 * retry
+    ///     |retry| slot - 100 * retry as u64..=slot + 100 * retry as u64
     /// )?;
+    /// # Ok(result)
+    /// # }
     /// ```
     pub fn approximate_slot_with_retry<F, R>(
         &self,

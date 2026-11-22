@@ -921,7 +921,6 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    #[ignore = "seeds from the committed ledger corpora, run in release"]
     async fn a_seeded_record_leaves_its_pools_dreps_proposals_and_committee_in_dolos_state() {
         let corpus = load(CorpusKind::Ic);
         let records = || corpus.kept().flat_map(|run| run.records());

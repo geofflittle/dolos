@@ -96,32 +96,6 @@ pub fn counts(tally: &judgement::Tally) -> BTreeMap<CellKey, usize> {
     counts
 }
 
-/// The count of each member in the `head` counts with the counts `part` adds
-/// replaced by the counts of `rest`, or the first member whose head count is
-/// below the count `part` adds or, when counted, absent from `head`.
-pub fn replace_part(
-    members: &[Member],
-    head: &BTreeMap<String, usize>,
-    part: &BTreeMap<CellKey, usize>,
-    rest: &BTreeMap<CellKey, usize>,
-) -> Result<BTreeMap<CellKey, usize>, String> {
-    let mut counts = BTreeMap::new();
-    for Member { cell, reach } in members {
-        let held = match (head.get(&cell.to_string()), reach) {
-            (Some(held), _) => *held,
-            (None, Reach::Excluded { .. }) => 0,
-            (None, Reach::Counted) => return Err(format!("{cell} head=none")),
-        };
-        let added = part.get(cell).copied().unwrap_or(0);
-        let kept = rest.get(cell).copied().unwrap_or(0);
-        let Some(others) = held.checked_sub(added) else {
-            return Err(format!("{cell} head={held} part={added}"));
-        };
-        counts.insert(cell.clone(), others + kept);
-    }
-    Ok(counts)
-}
-
 /// The coverage lines of `members` against the `counts` and the `committed`
 /// counts, with the candidate line of each counted member's count, adding a
 /// verdict per member to `out`, which fails for a counted member below its
@@ -410,68 +384,6 @@ mod tests {
             &mut out,
         );
         assert_eq!(above.last().unwrap(), "coverage=FAIL leaf:A");
-    }
-
-    fn counted(text: &str) -> BTreeMap<CellKey, usize> {
-        let parsed = committed(text).into_iter();
-        parsed
-            .map(|(c, n)| (leaf(&c["leaf:".len()..]), n))
-            .collect()
-    }
-
-    fn replaced(part: &str, rest: &str) -> Result<BTreeMap<CellKey, usize>, String> {
-        let head = committed("leaf:A 1\nleaf:B 2\n");
-        replace_part(&members(), &head, &counted(part), &counted(rest))
-    }
-
-    #[test]
-    fn the_head_counts_with_a_part_that_adds_nothing_are_the_head_counts_and_pass() {
-        let view = replaced("leaf:A 1\nleaf:B 1\n", "leaf:A 1\nleaf:B 1\n").unwrap();
-        assert_eq!(view, counted("leaf:A 1\nleaf:B 2\nleaf:C 0\n"));
-        let mut out = judgement::Tally::default();
-        let lines = table(
-            &members(),
-            &committed("leaf:A 1\nleaf:B 2\n"),
-            &view,
-            &mut out,
-        );
-        assert_eq!(lines.last().unwrap(), "coverage=PASS");
-    }
-
-    #[test]
-    fn the_head_counts_with_a_part_replaced_by_less_fail_on_the_cell_it_lowers() {
-        let view = replaced("leaf:A 1\nleaf:B 1\n", "leaf:B 1\n").unwrap();
-        assert_eq!(view, counted("leaf:A 0\nleaf:B 2\nleaf:C 0\n"));
-        let mut out = judgement::Tally::default();
-        let lines = table(
-            &members(),
-            &committed("leaf:A 1\nleaf:B 2\n"),
-            &view,
-            &mut out,
-        );
-        assert_eq!(lines.last().unwrap(), "coverage=FAIL leaf:A");
-        let failing: Vec<String> = out.failing.iter().map(Verdict::to_string).collect();
-        assert_eq!(
-            failing,
-            [
-                "VERDICT judge=coverage entry=none record=selection cells=leaf:A \
-              outcome=disagree records=0 committed=1"
-            ]
-        );
-    }
-
-    #[test]
-    fn a_part_above_the_head_count_and_a_counted_member_the_head_omits_are_refused() {
-        assert_eq!(
-            replaced("leaf:A 2\n", "").unwrap_err(),
-            "leaf:A head=1 part=2"
-        );
-        let head = committed("leaf:B 2\n");
-        let none = BTreeMap::new();
-        assert_eq!(
-            replace_part(&members(), &head, &none, &none).unwrap_err(),
-            "leaf:A head=none"
-        );
     }
 
     #[test]

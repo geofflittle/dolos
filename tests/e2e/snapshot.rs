@@ -167,7 +167,6 @@ fn snapshot_roundtrip(workspace: &ScenarioWorkspace) {
 }
 
 #[test]
-#[ignore]
 fn snapshot_roundtrip_for_preview_full_explicit() {
     snapshot_roundtrip(&ScenarioWorkspace::new(&SCENARIOS[0]));
 }

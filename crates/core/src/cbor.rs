@@ -35,8 +35,9 @@ use serde::{Deserialize, Serialize};
 /// For anything that genuinely fits in 64 bits, keep `u64`: this type costs 16
 /// bytes on disk regardless of magnitude.
 ///
-/// ```ignore
+/// ```
 /// use dolos_core::cbor;
+/// # use pallas::codec::minicbor::{self, Decode, Encode};
 ///
 /// #[derive(Encode, Decode)]
 /// struct Stats {

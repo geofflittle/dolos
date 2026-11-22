@@ -1,13 +1,7 @@
 //! Verifying and inspecting a published stele, end to end.
 //!
 //! Everything here needs a **registry**, and spawns one: `docker run` of an
-//! OCI Distribution server, torn down on the way out. So everything here is
-//! `#[ignore]`d, and an `#[ignore]`d test that was never executed proves
-//! nothing — run it with:
-//!
-//! ```text
-//! cargo test -p dolos-snapshot --test snapshot_verify -- --ignored --nocapture
-//! ```
+//! OCI Distribution server, torn down on the way out.
 //!
 //! ## What this suite proves
 //!
@@ -63,7 +57,6 @@ const EPOCH_0: usize = 4;
 /// transport half of the trust-gap closure — every attested blob streamed and
 /// checked, whether or not this publish built it.
 #[test]
-#[ignore = "spawns a registry"]
 fn a_freshly_published_stele_verifies_clean() {
     let fixture = Fixture::spawn();
     let node = Node::build();
@@ -110,7 +103,6 @@ fn a_freshly_published_stele_verifies_clean() {
 /// the two documents still agree — and they are simply not the layer. Only
 /// the streaming check can catch it, and the refusal has to say which layer.
 #[test]
-#[ignore = "spawns a registry"]
 fn a_blob_that_is_not_the_layer_is_refused_with_the_layer_named() {
     let fixture = Fixture::spawn();
     let distribution = Distribution::new(&fixture);
@@ -158,7 +150,6 @@ fn a_blob_that_is_not_the_layer_is_refused_with_the_layer_named() {
 /// A manifest `diffId` annotation that disagrees with the inscription,
 /// refused at the pull with the layer position and both identities named.
 #[test]
-#[ignore = "spawns a registry"]
 fn a_diff_id_annotation_that_disagrees_is_refused() {
     let fixture = Fixture::spawn();
     let distribution = Distribution::new(&fixture);
@@ -191,7 +182,6 @@ fn a_diff_id_annotation_that_disagrees_is_refused() {
 /// registry serving a document this code never wrote. The refusal happens at
 /// parse, naming the gap.
 #[test]
-#[ignore = "spawns a registry"]
 fn a_history_that_skips_a_sequence_is_refused() {
     let fixture = Fixture::spawn();
     let distribution = Distribution::new(&fixture);
@@ -243,7 +233,6 @@ fn a_history_that_skips_a_sequence_is_refused() {
 /// different epoch" is — and it costs a comparison of two sequences, not
 /// hours of compression.
 #[test]
-#[ignore = "spawns a registry"]
 fn a_reproduction_passes_at_the_published_epoch_and_fails_at_another() {
     let fixture = Fixture::spawn();
     let node = Node::build();
@@ -305,7 +294,6 @@ fn a_reproduction_passes_at_the_published_epoch_and_fails_at_another() {
 /// bytes to the same `Following::read` that `digest --chain-from` calls, and
 /// the reproduction arrives at the digest of the stele published against it.
 #[test]
-#[ignore = "spawns a registry"]
 fn an_inspection_reports_the_manifest_and_its_json_chains_a_digest() {
     let fixture = Fixture::spawn();
     let node = Node::build();
@@ -395,7 +383,7 @@ impl Distribution {
 
     /// Every socket operation is bounded, for the reason the fixture's
     /// `wait_until_ready` bounds its own: a registry that accepts and then says
-    /// nothing turns an `#[ignore]`d end-to-end test into a CI job that hangs
+    /// nothing turns an end-to-end test into a CI job that hangs
     /// rather than one that fails with a message. A loopback exchange of a few
     /// test-sized blobs has no legitimate use for more than this.
     const PATIENCE: std::time::Duration = std::time::Duration::from_secs(30);

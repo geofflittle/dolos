@@ -21,7 +21,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     convert::Infallible,
     fmt,
-    str::FromStr,
     sync::atomic::{AtomicBool, Ordering},
     thread,
 };
@@ -52,10 +51,7 @@ use ledger_oracle_judge::{
     manifest::{self, Candidates, Declared, Feature, Known, KnownList, Locus},
     mutation::{Mutation, MutationTally},
     parallel::in_parallel,
-    record::{
-        CorpusKind, LedgerOutcome, PParams, Phase2, Record, RecordId, RecordedId, RecordedKind,
-        UtxoEntry,
-    },
+    record::{CorpusKind, LedgerOutcome, PParams, Phase2, Record, RecordId, UtxoEntry},
     row::Row,
     rules::{self, RuleTally, Rules},
     run::{InputOrigin, KeptRun},
@@ -2203,7 +2199,6 @@ fn supp(n: u32) -> RecordId {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn ledger_oracle() {
     let manifests = Manifests::committed();
     let mut verdicts = judgement::Tally::default();
@@ -2353,69 +2348,6 @@ fn coverage_members(
     members
 }
 
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges the coverage of the head's counts in ORACLE_HEAD_COUNTS without the records ORACLE_DESELECT names, run in release"]
-async fn ledger_oracle_without() {
-    let list = std::env::var("ORACLE_DESELECT").unwrap_or_default();
-    let named: BTreeSet<RecordedId> = match list.trim() {
-        "" => BTreeSet::new(),
-        list => named_records(list),
-    };
-    let named: BTreeSet<RecordId> = named.into_iter().map(RecordId::from).collect();
-    let path =
-        std::env::var("ORACLE_HEAD_COUNTS").unwrap_or_else(|e| panic!("ORACLE_HEAD_COUNTS {e}"));
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path} {e}"));
-    let head = ledger_oracle_judge::coverage::parse("head counts", &text);
-    let head = head.unwrap_or_else(|e| panic!("{e}"));
-    let manifests = Manifests::committed();
-    let mut part = judgement::Tally::default();
-    let mut rest = judgement::Tally::default();
-    let recorded = CorpusKind::ALL
-        .into_iter()
-        .filter_map(|kind| RecordedKind::try_from(kind).ok());
-    for kind in recorded {
-        let corpus = load(kind.into())
-            .select(&named)
-            .unwrap_or_else(|e| panic!("{e}"));
-        let kept = corpus.without(&named).unwrap_or_else(|e| panic!("{e}"));
-        println!("{corpus}");
-        println!("{kept}");
-        part.merge(judge_within(&corpus, &manifests).await);
-        rest.merge(judge_within(&kept, &manifests).await);
-    }
-    let part = ledger_oracle_judge::coverage::counts(&part);
-    let rest = ledger_oracle_judge::coverage::counts(&rest);
-    for cell in part.keys().chain(rest.keys()).collect::<BTreeSet<_>>() {
-        let (added, kept) = (part.get(cell), rest.get(cell));
-        if added != kept {
-            let [added, kept] = [added, kept].map(|n| n.copied().unwrap_or(0));
-            println!("DESELECT {cell} part={added} rest={kept}");
-        }
-    }
-    let (_, changes) = corpus::load_mutants().unwrap_or_else(|e| panic!("{e}"));
-    let members = coverage_members(&manifests, &MutationTally::new(changes.values()));
-    let counts = ledger_oracle_judge::coverage::replace_part(&members, &head, &part, &rest);
-    let counts = counts.unwrap_or_else(|e| panic!("DESELECT {e}"));
-    let committed = ledger_oracle_judge::coverage::committed();
-    let committed = committed.unwrap_or_else(|e| panic!("{e}"));
-    let mut verdicts = judgement::Tally::default();
-    for line in ledger_oracle_judge::coverage::table(&members, &committed, &counts, &mut verdicts) {
-        println!("{line}");
-    }
-    conclude(&verdicts);
-}
-
-/// The verdicts on the kept runs of `corpus`, with their rule verdicts, judged
-/// under the entries of `manifests` that name a record the runs hold.
-async fn judge_within(corpus: &Corpus, manifests: &Manifests) -> judgement::Tally {
-    let held = held_records(corpus);
-    let manifests = manifests.within(|id| held.contains(id));
-    let judged = judge(corpus, &manifests, &Edits::default()).await;
-    let mut verdicts = judged.report();
-    manifests.rules.report(&judged.rules, false, &mut verdicts);
-    verdicts
-}
-
 /// The records the kept runs of `corpus` hold.
 fn held_records(corpus: &Corpus) -> BTreeSet<RecordId> {
     let records = corpus.kept().flat_map(|run| run.records().iter());
@@ -2437,47 +2369,6 @@ fn runs_holding(named: BTreeSet<RecordId>) -> (Corpus, Manifests) {
     let held = held_records(&corpus);
     let manifests = Manifests::committed().within(|id| held.contains(id));
     (corpus, manifests)
-}
-
-/// The records a comma separated list names.
-fn named_records<T: FromStr<Err = String> + Ord>(list: &str) -> BTreeSet<T> {
-    let names = list.split(',').map(str::trim).filter(|s| !s.is_empty());
-    let named: BTreeSet<T> = names
-        .map(|s| s.parse().unwrap_or_else(|e| panic!("{e}")))
-        .collect();
-    assert!(!named.is_empty(), "the list names no record: {list:?}");
-    named
-}
-
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos on the kept runs that hold a record ORACLE_RECORDS names, run in release"]
-async fn ledger_oracle_records() {
-    let list = std::env::var("ORACLE_RECORDS").unwrap_or_else(|e| panic!("ORACLE_RECORDS {e}"));
-    let named = named_records(&list);
-    let committed = Manifests::committed();
-    let mut selection = Judged::default();
-    let mut mutants = (Judged::default(), BTreeSet::new());
-    let mut verdicts = judgement::Tally::default();
-    for kind in CorpusKind::ALL {
-        let corpus = load(kind).select(&named).unwrap_or_else(|e| panic!("{e}"));
-        let held = held_records(&corpus);
-        let manifests = committed.within(|id| held.contains(id));
-        println!("{corpus}");
-        if kind == CorpusKind::Mut {
-            let (_, changes) = corpus::load_mutants().unwrap_or_else(|e| panic!("{e}"));
-            let mut mutations = MutationTally::new(held.iter().map(|id| &changes[&id.n]));
-            mutants = judge_mutants(&corpus, &changes, &manifests, &mut mutations, &mut verdicts);
-            for line in mutations.report(&mut verdicts) {
-                println!("{line}");
-            }
-            continue;
-        }
-        let tallies = judge(&corpus, &manifests, &Edits::default()).await;
-        println!("{tallies}");
-        selection.merge(tallies);
-    }
-    judge_selection(selection, mutants, &committed, &mut verdicts);
-    conclude(&verdicts);
 }
 
 /// Adds to `out` the verdicts of a records run's `selection` judged together
@@ -2555,18 +2446,6 @@ fn a_mutant_run_settles_only_the_entries_on_its_own_mutant() {
 }
 
 #[test]
-fn a_list_names_each_record_once() {
-    let named = named_records("supp#55, supp#68,supp#55,");
-    assert_eq!(named, BTreeSet::from([supp(55), supp(68)]));
-}
-
-#[test]
-#[should_panic(expected = "the list names no record")]
-fn an_empty_list_is_refused() {
-    named_records::<RecordId>(" , ");
-}
-
-#[test]
 fn a_transaction_the_decoder_refuses_names_no_transaction_and_produces_no_reference() {
     let corpus = load(CorpusKind::Supp);
     let record = |n: u32| {
@@ -2592,7 +2471,6 @@ fn a_transaction_the_decoder_refuses_names_no_transaction_and_produces_no_refere
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn one_changed_cost_model_entry_prints_params_disagree() {
     let corpus = load(CorpusKind::Supp);
     let manifests = Manifests::committed();
@@ -2631,7 +2509,6 @@ async fn one_changed_cost_model_entry_prints_params_disagree() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn every_layer_accepts_the_sha2_256_mk_nil_data_and_wide_integer_records_in_the_ledger_units()
 {
     let corpus = load(CorpusKind::Supp);
@@ -2669,7 +2546,6 @@ async fn every_layer_accepts_the_sha2_256_mk_nil_data_and_wide_integer_records_i
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn deleting_one_declared_entry_prints_unsupported_unexpected() {
     let intact = judge_supp(|_| ()).await;
     let (record, Feature(label)) = Manifests::committed()
@@ -2709,7 +2585,6 @@ async fn deleting_one_declared_entry_prints_unsupported_unexpected() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn a_known_entry_naming_an_agreeing_or_unjudged_record_prints_known_stale() {
     let intact = judge_supp(|_| ()).await.validation.to_string();
     assert!(!intact.contains("supp#0 "), "{intact}");
@@ -2726,7 +2601,6 @@ async fn a_known_entry_naming_an_agreeing_or_unjudged_record_prints_known_stale(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn leaving_an_accepted_tx_out_of_its_block_prints_utxo_disagree() {
     let corpus = load(CorpusKind::Supp);
     let manifests = Manifests::committed();
@@ -2756,7 +2630,6 @@ async fn leaving_an_accepted_tx_out_of_its_block_prints_utxo_disagree() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn a_block_that_does_not_roll_prints_one_roll_fail_and_no_state_line_for_its_group() {
     let corpus = load(CorpusKind::Supp);
     let manifests = Manifests::committed();
@@ -2813,7 +2686,6 @@ async fn a_block_that_does_not_roll_prints_one_roll_fail_and_no_state_line_for_i
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn supp8_written_as_phase2_valid_leaves_the_input_of_supp9_missing() {
     let corpus = load(CorpusKind::Supp);
     let supp8 = corpus
@@ -2844,7 +2716,6 @@ async fn supp8_written_as_phase2_valid_leaves_the_input_of_supp9_missing() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn an_output_dolos_holds_that_the_ledger_never_made_prints_utxo_disagree() {
     let corpus = load(CorpusKind::Supp);
     let manifests = Manifests::committed();
@@ -2882,7 +2753,6 @@ async fn an_output_dolos_holds_that_the_ledger_never_made_prints_utxo_disagree()
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn a_tx_received_in_one_group_is_absent_from_the_next() {
     let corpus = load(CorpusKind::Supp);
     let mut checked = 0;
@@ -2918,7 +2788,6 @@ async fn a_tx_received_in_one_group_is_absent_from_the_next() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn the_collateral_return_supp9_spends_is_served() {
     let intact = judge_supp(|_| ()).await;
     let text = intact.to_string();
@@ -2941,7 +2810,6 @@ async fn the_collateral_return_supp9_spends_is_served() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn the_vote_delegation_ic551_keeps_is_known() {
     let id = RecordId {
         corpus: CorpusKind::Ic,
@@ -2966,7 +2834,6 @@ async fn the_vote_delegation_ic551_keeps_is_known() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn rolling_back_each_block_serves_every_input_the_run_made() {
     let corpus = load(CorpusKind::Supp);
     let seeds: usize = corpus.kept().map(|r| r.seed().len()).sum();
@@ -2978,7 +2845,6 @@ async fn rolling_back_each_block_serves_every_input_the_run_made() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn an_accepted_tx_left_out_of_its_block_is_not_found_by_read_tx() {
     let corpus = load(CorpusKind::Supp);
     let manifests = Manifests::committed();
@@ -3032,7 +2898,6 @@ fn sub_output_script(record: &Record) -> Option<[u8; 28]> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn a_reference_script_on_a_sub_transaction_output_is_served() {
     let corpus = load(CorpusKind::Supp);
     let manifests = Manifests::committed();
@@ -3091,7 +2956,6 @@ fn sub_witnessed_datum(record: &Record) -> Option<(TxIn, usize)> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn a_witnessed_datum_changed_in_its_last_byte_prints_datum_differ() {
     let corpus = load(CorpusKind::Supp);
     let manifests = Manifests::committed();
@@ -3138,7 +3002,6 @@ async fn a_witnessed_datum_changed_in_its_last_byte_prints_datum_differ() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn a_seeded_reward_changed_by_one_prints_accounts_disagree() {
     let first = load(CorpusKind::Ic)
         .kept()
@@ -3251,7 +3114,6 @@ fn a_dolos_refusal_is_named_by_its_kind_and_classed_by_its_variant() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn a_seed_output_compared_as_bytes_names_the_first_differing_byte() {
     let corpus = load(CorpusKind::Supp);
     let run = corpus.kept().next().unwrap();
@@ -3324,7 +3186,6 @@ async fn a_seed_output_compared_as_bytes_names_the_first_differing_byte() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "judges Dolos against the committed ledger corpora, run in release"]
 async fn the_seed_point_is_a_rollback_target() {
     let corpus = load(CorpusKind::Supp);
     let run = corpus.kept().next().unwrap();

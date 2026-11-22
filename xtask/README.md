@@ -149,8 +149,8 @@ cargo xtask e2e-test
 
 Executes:
 
-- `cargo test --test smoke -- --ignored --nocapture`
-- `cargo test --test sync -- --ignored --nocapture`
+- `cargo test --test smoke -- --nocapture`
+- `cargo test --test sync -- --nocapture`
 
 ## Typical workflow
 

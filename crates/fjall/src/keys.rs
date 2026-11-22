@@ -61,10 +61,13 @@ pub mod dim_prefix {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
+/// # use dolos_fjall::keys::hash_dimension;
 /// // These produce different hashes:
-/// hash_dimension("utxo", "address")   // hashes "utxo:address"
-/// hash_dimension("block", "address")  // hashes "block:address"
+/// assert_ne!(
+///     hash_dimension("utxo", "address"),  // hashes "utxo:address"
+///     hash_dimension("block", "address"), // hashes "block:address"
+/// );
 /// ```
 pub fn hash_dimension(prefix: &str, dim: &str) -> [u8; DIM_HASH_SIZE] {
     let mut hasher = Xxh3::new();

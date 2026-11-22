@@ -350,12 +350,8 @@ mod tests {
 
     /// End-to-end check against the real R2 endpoint: download a small prefix
     /// in many small chunks through the ring buffer and confirm the bytes
-    /// match a single plain ranged GET of the same prefix. Ignored by
-    /// default (network + ~5 MB transfer); run with:
-    ///   cargo test --bin dolos ranged_matches_direct_fetch -- --ignored
-    /// --nocapture
+    /// match a single plain ranged GET of the same prefix.
     #[test]
-    #[ignore]
     fn ranged_matches_direct_fetch() {
         // 5 MiB total in 1 MiB chunks => 5 chunks, exercising the 4-part window
         // (so the downloader must block on a permit at least once) and a final

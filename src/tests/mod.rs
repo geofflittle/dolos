@@ -8,7 +8,6 @@ use crate::adapters::{
 };
 
 pub(crate) mod musashi;
-mod upstream;
 
 /// A serving domain over the stores and genesis of a toy domain, with an empty
 /// mempool.

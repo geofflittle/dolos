@@ -547,62 +547,6 @@ mod made_in_block_tests {
         assert_eq!(served, HashSet::from([held]));
     }
 
-    /// A block holding `count` transactions, the fixture block's transactions
-    /// repeated in order.
-    fn with_txs(count: usize) -> Vec<u8> {
-        let (raw, _) = spends_its_own_sub_output();
-        let (era, mut block): (u16, dijkstra::Block) = minicbor::decode(&raw).unwrap();
-        let txs: Vec<_> = block
-            .block_body
-            .transactions
-            .iter()
-            .cycle()
-            .take(count)
-            .cloned()
-            .collect();
-        block.block_body.transactions = MaybeIndefArray::Def(txs);
-        minicbor::to_vec((era, block)).unwrap()
-    }
-
-    #[test]
-    #[ignore = "a timing, run by hand"]
-    fn time_finding_one_transaction_against_the_size_of_its_block() {
-        use std::time::{Duration, Instant};
-        let calls = 100;
-        for count in [10, 100, 1000] {
-            let raw = with_txs(count);
-            let block = MultiEraBlock::decode(&raw).unwrap();
-            let first = block.txs()[0].hash();
-            HASHED.with(|x| x.set(0));
-            let txs = BlockTxs::hashed_by(&block, counted);
-            resolve_one(&txs.applied(first.as_slice()).unwrap());
-            let hashed = HASHED.with(|x| x.get());
-            let (mut decode, mut hash, mut find) = (Duration::ZERO, Duration::ZERO, Duration::ZERO);
-            for _ in 0..calls {
-                let start = Instant::now();
-                let block = MultiEraBlock::decode(&raw).unwrap();
-                decode += start.elapsed();
-                let start = Instant::now();
-                let applied = dolos_core::applied_txs(&block);
-                applied.iter().for_each(|(_, tx)| {
-                    std::hint::black_box(tx.hash());
-                });
-                hash += start.elapsed();
-                let start = Instant::now();
-                let txs = BlockTxs::of(&block);
-                resolve_one(&txs.applied(first.as_slice()).unwrap());
-                find += start.elapsed();
-            }
-            println!(
-                "FIND txs={count} bytes={} hashed={hashed} decode_us={} hash_pass_us={} find_us={}",
-                raw.len(),
-                decode.as_micros() / calls,
-                hash.as_micros() / calls,
-                find.as_micros() / calls
-            );
-        }
-    }
-
     #[test]
     fn an_input_the_block_does_not_make_is_served_only_from_the_context() {
         let (raw, made) = spends_its_own_sub_output();

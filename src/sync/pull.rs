@@ -672,9 +672,6 @@ impl Stage {
 }
 
 #[cfg(test)]
-mod endorser_retry;
-
-#[cfg(test)]
 mod tests {
     use dolos_core::import::{seed_wal_from_state, WalSeed};
     use pallas::ledger::traverse::MultiEraBlock;

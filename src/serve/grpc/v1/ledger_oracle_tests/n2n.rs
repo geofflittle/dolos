@@ -1,16 +1,10 @@
 //! Judges a Leios peer's node to node session against the blocks Dolos serves.
 
-use std::{
-    collections::VecDeque,
-    fmt, fs,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{collections::VecDeque, fmt, time::Duration};
 
 use pallas::{
     codec::minicbor,
     crypto::hash::Hash,
-    ledger::traverse::MultiEraHeader,
     network2::{
         behavior::initiator::{DisconnectReason, InitiatorCommand, InitiatorEvent},
         protocol::{
@@ -23,26 +17,13 @@ use pallas::{
         },
     },
 };
-use serde::de::DeserializeOwned;
-use tokio::{
-    io::{AsyncReadExt as _, AsyncWriteExt as _},
-    net::TcpStream,
-    time::{timeout, timeout_at, Instant},
-};
+use tokio::time::{timeout_at, Instant};
 
-use super::super::spec::sync as s;
-use super::endorser::{block_txs, listed, tx_id, Listed};
-use crate::sync::{
-    leios::{
-        proposal, AnnouncedEndorserBlock, Error, LeiosClient, LeiosTransport, ManagerTransport,
-        FETCH_TIMEOUT, TXS_PER_REQUEST,
-    },
-    pull::announced_by,
+use super::endorser::{listed, tx_id, Listed};
+use crate::sync::leios::{
+    proposal, AnnouncedEndorserBlock, Error, LeiosClient, LeiosTransport, FETCH_TIMEOUT,
+    TXS_PER_REQUEST,
 };
-
-/// How long the session waits for the handshake, and then for the first
-/// notification.
-const SESSION_WAIT: Duration = Duration::from_secs(60);
 
 /// What a peer session delivered, recorded as each event arrived.
 #[derive(Debug, Default)]
@@ -59,18 +40,6 @@ struct Heard {
 impl Heard {
     fn notifications(&self) -> usize {
         self.announcements.len() + self.offers + self.txs_offers + self.votes
-    }
-
-    /// The announcements that decode as a Dijkstra header announcing an
-    /// endorser block.
-    fn announcing(&self) -> usize {
-        self.announcements
-            .iter()
-            .filter(|cbor| {
-                MultiEraHeader::decode(7, None, cbor)
-                    .is_ok_and(|header| header.eb_announcement().is_some())
-            })
-            .count()
     }
 }
 
@@ -235,30 +204,6 @@ fn recorded_proposals(magic: u64) -> Vec<(&'static str, Vec<u8>)> {
         ("v16-four-fields", proposed(four_fields)),
         ("other-magic", proposed(proposal(magic + 1))),
     ]
-}
-
-/// The peer's reply to one handshake proposal sent alone on a fresh
-/// connection, read from its handshake segments until it decodes.
-async fn reply_to(peer: &str, proposal: &[u8]) -> std::io::Result<Vec<u8>> {
-    let mut stream = TcpStream::connect(peer).await?;
-    let mut segment = vec![0u8; 4];
-    segment.extend_from_slice(&0u16.to_be_bytes());
-    segment.extend_from_slice(&(proposal.len() as u16).to_be_bytes());
-    segment.extend_from_slice(proposal);
-    stream.write_all(&segment).await?;
-    let mut reply = Vec::new();
-    loop {
-        let mut header = [0u8; 8];
-        stream.read_exact(&mut header).await?;
-        let mut payload = vec![0u8; u16::from_be_bytes([header[6], header[7]]) as usize];
-        stream.read_exact(&mut payload).await?;
-        if u16::from_be_bytes([header[4], header[5]]) & 0x7fff == 0 {
-            reply.extend(payload);
-        }
-        if minicbor::decode::<Message<VersionData>>(&reply).is_ok() {
-            return Ok(reply);
-        }
-    }
 }
 
 /// What a handshake reply says of the proposal it answers.
@@ -522,206 +467,11 @@ async fn session<T: LeiosTransport>(
     }
 }
 
-/// The endorser blocks the served blocks certify, for each certifying block
-/// whose parent was also read, with a line for each certifying block whose
-/// parent was not.
-fn certified(natives: &[Vec<u8>]) -> (Vec<Certified>, Vec<String>) {
-    let headers: Vec<MultiEraHeader> = natives
-        .iter()
-        .map(|native| {
-            MultiEraHeader::decode_from_block(native)
-                .unwrap_or_else(|e| panic!("N2N a served block's header does not decode: {e}"))
-        })
-        .collect();
-    let mut found = Vec::new();
-    let mut unpaired = Vec::new();
-    for (native, header) in natives.iter().zip(&headers) {
-        if header.block_body_contains_leios_cert() != Some(true) {
-            continue;
-        }
-        let Some(parent) = headers
-            .iter()
-            .find(|p| Some(p.hash()) == header.previous_hash())
-        else {
-            unpaired.push(format!(
-                "N2N certifying_slot={} parent=unread",
-                header.slot()
-            ));
-            continue;
-        };
-        let announced = announced_by(Some(parent), header)
-            .unwrap_or_else(|e| panic!("N2N certifying_slot={} {e}", header.slot()))
-            .unwrap_or_else(|| panic!("N2N certifying_slot={} certifies nothing", header.slot()));
-        let served = block_txs(native)
-            .unwrap_or_else(|e| panic!("N2N certifying_slot={} {e}", header.slot()));
-        found.push(Certified {
-            certifying_slot: header.slot(),
-            announced,
-            served,
-        });
-    }
-    (found, unpaired)
-}
-
-fn read<T: DeserializeOwned>(dir: &Path, name: &str) -> T {
-    let path = dir.join(name);
-    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("N2N {} {e}", path.display()));
-    serde_json::from_str(&text).unwrap_or_else(|e| panic!("N2N {} {e}", path.display()))
-}
-
-/// The files in the reads directory whose names start with the prefix, in name
-/// order.
-fn files(dir: &Path, prefix: &str) -> Vec<String> {
-    let entries = fs::read_dir(dir).unwrap_or_else(|e| panic!("N2N {} {e}", dir.display()));
-    let mut names: Vec<String> = entries
-        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-        .filter(|name| name.starts_with(prefix))
-        .collect();
-    names.sort();
-    names
-}
-
-/// The native bytes of each block the reads dir holds a FetchBlock answer for.
-fn served_natives(dir: &Path) -> Vec<Vec<u8>> {
-    let mut names = files(dir, "block-");
-    names.extend(files(dir, "parent-"));
-    names
-        .iter()
-        .map(|name| {
-            let response: s::FetchBlockResponse = read(dir, name);
-            response
-                .block
-                .unwrap_or_else(|| panic!("N2N {name} serves no block"))
-                .native_bytes
-                .to_vec()
-        })
-        .collect()
-}
-
-/// The reads dir the environment variable `var` names, and the address and
-/// magic of the peer its `peer` file names.
-fn reads(var: &str) -> (PathBuf, String, u64) {
-    let dir = PathBuf::from(
-        std::env::var(var).unwrap_or_else(|_| panic!("{var} names the reads directory")),
-    );
-    let text = std::fs::read_to_string(dir.join("peer")).expect("N2N peer");
-    let (peer, magic) = text.trim().split_once(' ').expect("an address and a magic");
-    let magic = magic.parse().expect("a network magic");
-    (dir, peer.to_string(), magic)
-}
-
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "talks node to node with the peer LIVE_DIR/peer names and judges it against the FetchBlock answers LIVE_DIR holds"]
-async fn n2n() {
-    let (dir, peer, magic) = reads("LIVE_DIR");
-    let natives = served_natives(&dir);
-    let (certified, unpaired) = certified(&natives);
-    for line in &unpaired {
-        println!("{line}");
-    }
-
-    let transport = ManagerTransport::connect(&peer, magic, |_| true).expect("N2N peer address");
-    let session = session(transport, &peer, magic, &certified, SESSION_WAIT).await;
-
-    println!(
-        "N2N {} peer={peer} asked_magic={magic} node_version=none",
-        session.handshake
-    );
-    println!(
-        "N2N notify={} announcements={} announcing={} offers={} txs_offers={} votes={}",
-        if session.heard.notifications() > 0 {
-            "PASS"
-        } else {
-            "FAIL"
-        },
-        session.heard.announcements.len(),
-        session.heard.announcing(),
-        session.heard.offers,
-        session.heard.txs_offers,
-        session.heard.votes,
-    );
-    for (block, fetched) in &session.fetched {
-        println!(
-            "N2N {fetched} certifying_slot={} eb_slot={} eb={} size={} served_txs={}",
-            block.certifying_slot,
-            block.announced.slot,
-            block.announced.hash,
-            block.announced.size,
-            block.served.len()
-        );
-    }
-    println!(
-        "N2N RESULT {} served_blocks={} certified={} fetched={} ended={}",
-        if session.passed() { "PASS" } else { "FAIL" },
-        natives.len(),
-        certified.len(),
-        session.fetched.len(),
-        session
-            .heard
-            .ended
-            .map_or("no".to_string(), |r| format!("{r:?}"))
-    );
-    assert!(session.passed(), "the node to node session disagrees");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "records the replies of the peer FIXTURE_DIR/peer names to each recorded proposal, and its endorser block certified at the slot FIXTURE_DIR/slot names, into FIXTURE_DIR/out"]
-async fn record_n2n() {
-    let (dir, peer, magic) = reads("FIXTURE_DIR");
-    let out = dir.join("out");
-    std::fs::create_dir_all(&out).unwrap();
-
-    let mut lines = Vec::new();
-    for (name, proposal) in recorded_proposals(magic) {
-        let reply = timeout(SESSION_WAIT, reply_to(&peer, &proposal))
-            .await
-            .unwrap_or_else(|_| panic!("N2N no reply to {name}"))
-            .unwrap_or_else(|e| panic!("N2N {name} {e}"));
-        println!("N2N recorded {name} {:?}", Reply::of(&reply));
-        lines.push(format!(
-            "{name} {} {}",
-            hex::encode(&proposal),
-            hex::encode(&reply)
-        ));
-    }
-    std::fs::write(out.join("handshake.txt"), lines.join("\n") + "\n").unwrap();
-
-    let slot: u64 = std::fs::read_to_string(dir.join("slot"))
-        .expect("N2N slot")
-        .trim()
-        .parse()
-        .expect("a slot");
-    let (certified, _) = certified(&served_natives(&dir));
-    let certified = certified
-        .into_iter()
-        .find(|c| c.certifying_slot == slot)
-        .unwrap_or_else(|| panic!("N2N no block read certifies at slot {slot}"));
-    let transport = ManagerTransport::connect(&peer, magic, |_| true).expect("N2N peer address");
-    let mut recording = Recording::new(transport);
-    let txs =
-        LeiosClient::with_transport(&mut recording, peer.clone(), TXS_PER_REQUEST, FETCH_TIMEOUT)
-            .fetch(&certified.announced)
-            .await
-            .unwrap_or_else(|e| panic!("N2N {e}"));
-    let body = recording.heard.bodies.pop().expect("N2N a fetched body");
-    let fetch = RecordedFetch {
-        certified,
-        body,
-        txs,
-    };
-    println!(
-        "N2N recorded fetch certifying_slot={} txs={} served={}",
-        fetch.certified.certifying_slot,
-        fetch.txs.len(),
-        fetch.certified.served.len()
-    );
-    std::fs::write(out.join("fetch.txt"), fetch.render()).unwrap();
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::sync::leios::tests::{endorser_block_responder, real_eb};
+    use crate::sync::leios::ManagerTransport;
 
     /// The magic of the network the fixtures were recorded on.
     const MAGIC: u64 = 164;

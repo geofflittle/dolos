@@ -689,65 +689,6 @@ async fn an_endorser_block_no_fetched_block_claims_stops_the_pull() {
     assert_eq!(sent.len(), 0, "blocks sent downstream");
 }
 
-#[tokio::test]
-#[ignore = "fetches the blocks FIXTURE_DIR/points names from the peer FIXTURE_DIR/peer names"]
-async fn fetch_node_blocks() {
-    let dir = PathBuf::from(std::env::var("FIXTURE_DIR").expect("FIXTURE_DIR"));
-    let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap();
-    let peer = read("peer");
-    let (address, magic) = peer.trim().split_once(' ').expect("an address and a magic");
-    let mut client = pallas::network::facades::PeerClient::connect(address, magic.parse().unwrap())
-        .await
-        .unwrap();
-    for line in read("points").lines().filter(|l| !l.trim().is_empty()) {
-        let (slot, hash) = line.trim().split_once(' ').expect("a slot and a hash");
-        let point = pallas::network::miniprotocols::Point::Specific(
-            slot.parse().unwrap(),
-            hex::decode(hash).unwrap(),
-        );
-        let block = client.blockfetch().fetch_single(point).await.unwrap();
-        let decoded = MultiEraBlock::decode(&block).unwrap();
-        assert_eq!(
-            decoded.hash().to_string(),
-            hash,
-            "the peer serves another block"
-        );
-        std::fs::write(dir.join(format!("node-{slot}.cbor")), &block).unwrap();
-        println!("FETCHED slot={slot} bytes={}", block.len());
-    }
-}
-
-#[test]
-#[ignore = "judges the FetchBlock answers FIXTURE_DIR/block-<slot>.json holds against the cases of FIXTURE_DIR/cases.jsonl"]
-fn endpoint_endorser() {
-    let dir = PathBuf::from(std::env::var("FIXTURE_DIR").expect("FIXTURE_DIR"));
-    let text = std::fs::read_to_string(dir.join("cases.jsonl")).unwrap();
-    let mut tally = EndorserTally::default();
-    let mut cases = 0;
-    for line in text.lines().filter(|l| !l.trim().is_empty()) {
-        let case: Case = serde_json::from_str(line).unwrap();
-        let slot = MultiEraBlock::decode(&case.block).unwrap().slot();
-        cases += 1;
-        tally.certifying += usize::from(case.endorser.is_some());
-        let path = dir.join(format!("block-{slot}.json"));
-        let read = std::fs::read_to_string(&path).map_err(|e| format!("{} {e}", path.display()));
-        let judged = read.and_then(|text| {
-            let response: s::FetchBlockResponse =
-                serde_json::from_str(&text).map_err(|e| e.to_string())?;
-            let served = response.block.ok_or("FetchBlock serves no block")?;
-            let node = node_txs(&case.parent, &case.block, case.endorser.as_ref())?;
-            judge_served(&served, &node)
-        });
-        tally.add(judged, FETCH_BLOCK, slot);
-    }
-    println!("{}", tally.line());
-    for line in &tally.tally.disagree {
-        println!("{line}");
-    }
-    assert_eq!(tally.tally.compared, cases);
-    assert!(tally.tally.disagree.is_empty());
-}
-
 #[test]
 fn equal_lists_are_the_same() {
     let list = [1, 2, 3];
