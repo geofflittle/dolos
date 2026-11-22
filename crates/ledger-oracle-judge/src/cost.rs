@@ -83,6 +83,16 @@ impl fmt::Display for CostTallies {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn planted_small_test_over_its_limit() {
+        std::thread::sleep(std::time::Duration::from_secs(61));
+    }
+
+    #[test]
+    fn planted_small_test_under_its_limit() {
+        std::thread::sleep(std::time::Duration::from_secs(50));
+    }
     use crate::{
         judgement::RunVerdict,
         record::{FailurePath, NonEmpty},
