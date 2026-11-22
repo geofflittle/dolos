@@ -246,9 +246,9 @@ fn assets<A: minicbor::Encode<()>>(m: &d::Multiasset<A>) -> Value {
 }
 
 fn output(x: &d::TransactionOutput) -> Value {
-    use pallas_primitives::{alonzo, babbage::GenTransactionOutput, conway};
+    use pallas_primitives::{alonzo, conway};
     match x {
-        GenTransactionOutput::Legacy(o) => {
+        d::TransactionOutput::Legacy(o) => {
             let (coin, multi) = match &o.amount {
                 alonzo::Value::Coin(c) => (cb(c), map([])),
                 alonzo::Value::Multiasset(c, m) => (cb(c), assets(m)),
@@ -266,8 +266,8 @@ fn output(x: &d::TransactionOutput) -> Value {
                 ("script", Value::Null),
             ])
         }
-        GenTransactionOutput::PostAlonzo(o) => {
-            let (coin, multi) = match &o.value {
+        d::TransactionOutput::PostAlonzo(o) => {
+            let (coin, multi) = match &*o.value {
                 conway::Value::Coin(c) => (cb(c), map([])),
                 conway::Value::Multiasset(c, m) => (cb(c), assets(m)),
             };
@@ -375,8 +375,8 @@ fn top_guards(x: Option<&d::RequiredTopLevelGuards>) -> Value {
     }
 }
 
-fn donation(x: Option<&pallas_codec::utils::PositiveCoin>) -> Value {
-    cb(&x.map(u64::from).unwrap_or(0))
+fn donation(x: Option<&d::PositiveCoin>) -> Value {
+    cb(&x.map(|coin| u64::from(**coin)).unwrap_or(0))
 }
 
 /// The fields a top level body and a sub transaction body both hold, by the
@@ -908,11 +908,11 @@ impl ComparedLayer for Decoding {
         same_reason(reason, refusal)
     }
 
-    fn allowance(&self, row: &Row, key: &Key<WholeInput>) -> Option<Allowance<Decoded, Refusal>> {
+    fn allowance(&self, _row: &Row, key: &Key<WholeInput>) -> Option<Allowance<Decoded, Refusal>> {
         differences::LIST
             .iter()
-            .find(|(class, rules, _)| *class == key.class && rules.cover(row))
-            .map(|(_, _, a)| Allowance {
+            .find(|(class, _)| *class == key.class)
+            .map(|(_, a)| Allowance {
                 allowed: a.allowed,
                 shown: a.shown,
             })
@@ -1458,7 +1458,7 @@ fn run() {
     failures.extend(credit_failures(&rules, &credit, UNCREDITED, &kinds));
     let listed: Vec<(&str, Allowed)> = differences::LIST
         .iter()
-        .map(|(class, _, a)| (*class, a.allowed))
+        .map(|(class, a)| (*class, a.allowed))
         .collect();
     failures.extend(judged.tally.unused(&listed, records.classes()));
     assert!(failures.is_empty(), "{}", failures.join("\n"));

@@ -1,10 +1,10 @@
 diff --git a/pallas-primitives/src/dijkstra/model.rs b/pallas-primitives/src/dijkstra/model.rs
-index b8c36d342..3bb8ce87f 100644
+index eda0ef3b1..5a99ba49e 100644
 --- a/pallas-primitives/src/dijkstra/model.rs
 +++ b/pallas-primitives/src/dijkstra/model.rs
-@@ -198,12 +198,7 @@ tag_preserving_set!(NonEmptySet, "a nonempty set", 1);
- fn decode_fraction(
+@@ -272,12 +272,7 @@ fn decode_fraction<C>(
      d: &mut minicbor::Decoder<'_>,
+     _ctx: &mut C,
  ) -> Result<RationalNumber, minicbor::decode::Error> {
 -    let tag = d.tag()?.as_u64();
 -    if tag != 30 {
