@@ -147,10 +147,8 @@ Run the e2e smoke + sync test suites.
 cargo xtask e2e-test
 ```
 
-Executes:
-
-- `cargo test --test smoke -- --nocapture`
-- `cargo test --test sync -- --nocapture`
+Executes `cargo nextest run --test smoke --test sync --no-capture --no-tests fail`,
+which holds each test to its size's time limit from `.config/nextest.toml`.
 
 ## Typical workflow
 

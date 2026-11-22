@@ -371,6 +371,7 @@ filter = '''
       | test(=evaluation_round_trips_and_ranks_the_dictionary)
       | test(=smoke_preset_runs_every_workload_and_verifies_bodies)
     ))
+  | binary_id(dolos::epoch_pots)
 '''
 test-group = "medium"
 slow-timeout = { period = "300s", terminate-after = 1 }

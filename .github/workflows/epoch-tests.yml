@@ -55,6 +55,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.151
+
       - name: Cargo cache
         uses: actions/cache@v6
         with:
@@ -90,7 +94,7 @@ jobs:
       - name: Run epoch test
         env:
           DOLOS_FIXTURE_DIR: /tmp/fixtures
-        run: cargo test --test epoch_pots -- --nocapture
+        run: cargo nextest run --test epoch_pots --no-capture --no-tests fail
 
       - name: Cleanup
         if: always()

@@ -2,6 +2,19 @@ name: Test
 
 on:
   workflow_call:
+    inputs:
+      archive:
+        description: The name of the artifact that holds the archived tests.
+        type: string
+        default: nextest-archive
+      cargo-args:
+        description: The cargo arguments that choose the packages and features to test.
+        type: string
+        default: ""
+      save-cache:
+        description: Whether the build job saves its cache.
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -31,24 +44,32 @@ jobs:
           tool: cargo-nextest@0.9.151
       - uses: Swatinem/rust-cache@v2
         with:
-          # This job and `all-features` restore one multi GB entry, which this
-          # job saves.
+          # Every caller restores one multi GB entry, which the default caller
+          # saves.
           shared-key: test-ubuntu-latest
+          save-if: ${{ inputs.save-cache }}
 
       - name: Archive the tests
-        run: cargo nextest archive --workspace --all-targets --archive-file nextest-archive.tar.zst
+        env:
+          CARGO_ARGS: ${{ inputs.cargo-args }}
+        run: |
+          # shellcheck disable=SC2086
+          cargo nextest archive --workspace --all-targets $CARGO_ARGS --archive-file nextest-archive.tar.zst
 
       - uses: actions/upload-artifact@v4
         with:
-          name: nextest-archive
+          name: ${{ inputs.archive }}
           path: nextest-archive.tar.zst
           retention-days: 1
 
       # Doctests are small tests that nextest cannot archive.
       - name: Run the doctests
         env:
+          CARGO_ARGS: ${{ inputs.cargo-args }}
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: timeout 60
-        run: cargo test --workspace --doc
+        run: |
+          # shellcheck disable=SC2086
+          cargo test --workspace --doc $CARGO_ARGS
 
   sized:
     name: Test (${{ matrix.size }})
@@ -67,7 +88,7 @@ jobs:
           tool: cargo-nextest@0.9.151
       - uses: actions/download-artifact@v4
         with:
-          name: nextest-archive
+          name: ${{ inputs.archive }}
 
       # The tests read `CARGO_BIN_EXE_dolos` and `CARGO_TARGET_TMPDIR` as
       # compiled, so the archive unpacks into the checkout.

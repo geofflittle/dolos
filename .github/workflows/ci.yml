@@ -86,24 +86,11 @@ jobs:
   # default-features run. Remove the exclusions once the fixtures build
   # epoch-coherent domains (see AGENTS.md, "Code Verification Requirements").
   all-features:
-    name: Test (all features)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-2026-09-04
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: test-ubuntu-latest
-          save-if: false
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest@0.9.151
-      # The judge is a medium test that the judge job of docker.yml runs in release.
-      - run: cargo nextest run --workspace --all-targets --all-features --no-fail-fast --no-tests fail --run-ignored all --exclude dolos-minibf --exclude dolos-minikupo --exclude dolos-trp -E 'not (package(dolos) & kind(lib) & test(=serve::grpc::v1::ledger_oracle_tests::ledger_oracle))'
+    uses: ./.github/workflows/test.yml
+    with:
+      archive: nextest-archive-all-features
+      cargo-args: --all-features --exclude dolos-minibf --exclude dolos-minikupo --exclude dolos-trp
+      save-cache: false
 
   # Keep the snapshot profile independently embeddable. The workspace build
   # can unify features through the Dolos binary, while an external consumer

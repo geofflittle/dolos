@@ -54,11 +54,12 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::E2eTest => {
-            println!("Running smoke tests...");
-            cmd!(sh, "cargo test --test smoke -- --nocapture").run()?;
-
-            println!("Running sync tests...");
-            cmd!(sh, "cargo test --test sync -- --nocapture").run()?;
+            println!("Running smoke and sync tests...");
+            cmd!(
+                sh,
+                "cargo nextest run --test smoke --test sync --no-capture --no-tests fail"
+            )
+            .run()?;
         }
         Commands::Perf(cmd) => perf::run(cmd)?,
         Commands::ArchiveBench(cmd) => perf::storage::run(cmd)?,
