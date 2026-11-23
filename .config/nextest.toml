@@ -11,6 +11,11 @@ large = { max-threads = "num-cpus" }
 filter = 'binary_id(dolos::smoke) | binary_id(dolos::snapshot) | binary_id(dolos::sync)'
 threads-required = "num-test-threads"
 
+# The count of normalisation pairs read from the dataset shows in every run.
+[[profile.default.overrides]]
+filter = 'binary_id(ledger-oracle-judge::normalization) & test(=the_normalization_directory_holds_exactly_the_listed_pairs)'
+success-output = "immediate"
+
 [[profile.default.overrides]]
 filter = '''
     binary_id(dolos-snapshot::restore_registry)
@@ -239,6 +244,7 @@ filter = '''
       test(/^http::tests::/)
       | test(/^relay::tests::/)
     ))
+  | binary_id(ledger-oracle-judge::normalization)
   | binary_id(ledger-oracle-judge::records)
   | (binary_id(ledger-oracle-judge::interface) & (
       test(=a_declared_class_with_no_observation_fails)

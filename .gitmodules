@@ -1,0 +1,4 @@
+[submodule "test_data/cardano-cbor-dataset"]
+	path = test_data/cardano-cbor-dataset
+	url = https://github.com/r2rationality/cardano-cbor-dataset.git
+	shallow = true

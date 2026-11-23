@@ -13,6 +13,7 @@ pub mod judgement;
 pub mod ledger_state;
 pub mod manifest;
 pub mod mutation;
+pub mod normalize;
 pub mod parallel;
 pub mod params;
 pub mod record;

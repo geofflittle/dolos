@@ -8,6 +8,9 @@ publish = false
 [dependencies]
 flate2 = "1.0.34"
 hex.workspace = true
+minicbor.workspace = true
+num-bigint.workspace = true
+num-rational.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
