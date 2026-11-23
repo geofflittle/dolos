@@ -1,8 +1,5 @@
 //! The Conway values of the cardano-cbor-dataset read by a build of pallas
-//! without `unstable`, each compared with a base build's reading of it. A run
-//! with `STABLE_READINGS_WRITE` writes this build's readings to that file. A
-//! run with `STABLE_READINGS_BASE` compares this build's readings with that
-//! file's.
+//! without `unstable`, each compared with a base build's reading of it.
 
 #[cfg(feature = "unstable")]
 compile_error!(
