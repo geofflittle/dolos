@@ -1,8 +1,7 @@
 //! Values of one era of the cardano-cbor-dataset read by pallas, each judged
 //! against the ledger's verdict and re-encoding of it.
 
-/// A rule read as the type `$t`, with `unrawed` when the type keeps bytes as
-/// read inside it.
+/// A rule read as the type `$t`.
 macro_rules! read {
     ($t:ty) => {
         crate::dataset::Reader::Type(crate::dataset::RuleType {
@@ -10,15 +9,6 @@ macro_rules! read {
             exact: read_as!(
                 pallas_primitives::KeepRaw<'_, $t>,
                 crate::dataset::plain::kept
-            ),
-        })
-    };
-    ($t:ty, unrawed) => {
-        crate::dataset::Reader::Type(crate::dataset::RuleType {
-            normalized: read_as!($t, crate::dataset::plain::unrawed),
-            exact: read_as!(
-                pallas_primitives::KeepRaw<'_, $t>,
-                crate::dataset::plain::kept_unrawed
             ),
         })
     };
@@ -59,7 +49,6 @@ macro_rules! read_as {
 mod changes;
 mod corpus;
 pub mod differences;
-#[macro_use]
 pub mod plain;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -78,18 +67,18 @@ use ledger_oracle_judge::comparison::{
 };
 use ledger_oracle_judge::normalize::normalize;
 use ledger_oracle_judge::parallel::in_parallel;
-use plain::Plain;
 
 /// The dataset submodule, relative to the Dolos tree.
 const SUBMODULE: &str = "test_data/cardano-cbor-dataset";
 
 /// What pallas makes of one input: how much of it the value took, the
-/// encoding pallas writes at the rule's position, the encoding written from
-/// the value alone and whether the written encoding reads back as the value.
+/// encoding pallas writes at the rule's position, the encoding of the value
+/// inside any bytes kept as read there and whether the written encoding reads
+/// back as the value.
 pub struct Reading {
     pub consumed: usize,
     pub encoding: Result<Vec<u8>, String>,
-    pub plain: Plain,
+    pub plain: Result<Vec<u8>, String>,
     pub round_trip: Result<(), String>,
 }
 
@@ -253,7 +242,7 @@ impl Dataset {
                 .map_err(|e| format!("it does not encode: {e}"))?;
             normalize(bytes).map_err(|e| format!("no normal form: {e}"))
         };
-        let value = normal(&reading.plain.encoding);
+        let value = normal(&reading.plain);
         let read = normal(&Ok(row.input[..reading.consumed].to_vec()));
         evidence.trailing = row.input.len() - reading.consumed;
         evidence.stopped_inside = stopped_inside(&row.input, reading.consumed);
@@ -262,10 +251,7 @@ impl Dataset {
             (Ok(read), Ok(written)) if *read == written
         );
         evidence.round_trip = reading.round_trip.clone();
-        evidence.changes = match reading.plain.raw_left {
-            true => Err("the value holds bytes kept as read".to_owned()),
-            false => changes_between(&read, &value).map(|c| self.ledger_forms.told(c)),
-        };
+        evidence.changes = changes_between(&read, &value).map(|c| self.ledger_forms.told(c));
         if let Reference::Accepts(accepted) = &row.reference {
             let ledger = accepted
                 .encoding
@@ -932,17 +918,6 @@ fn a_class_directory_that_is_no_sample_kind_fails() {
         corpus::SampleKind::from_dir("invalid-zap-3"),
         Some(corpus::SampleKind::Zap(3))
     );
-}
-
-#[test]
-fn a_value_holding_bytes_kept_as_read_is_told_apart() {
-    let pair = [0x82, 0x01, 0x02];
-    let nested = read_as!((u64, pallas_primitives::KeepRaw<'_, u64>), plain::whole);
-    let whole = read_as!((u64, u64), plain::whole);
-    let outer = read_as!(pallas_primitives::KeepRaw<'_, (u64, u64)>, plain::kept);
-    assert!(nested(&pair).expect("read").plain.raw_left);
-    assert!(!whole(&pair).expect("read").plain.raw_left);
-    assert!(!outer(&pair).expect("read").plain.raw_left);
 }
 
 #[test]

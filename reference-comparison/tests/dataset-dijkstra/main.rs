@@ -4,7 +4,6 @@
 #[path = "../dataset/mod.rs"]
 mod dataset;
 mod rules;
-mod unraw;
 
 use dataset::Era;
 use dataset::differences::*;
