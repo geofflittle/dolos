@@ -6,31 +6,47 @@ publish = false
 
 [workspace]
 
+[features]
+default = ["unstable"]
+unstable = ["pallas/unstable", "pallas-primitives/unstable"]
+stable = []
+
 [dev-dependencies]
 ledger-oracle-judge = { path = "../crates/ledger-oracle-judge" }
-pallas = { path = "../../pallas-head/pallas", features = ["unstable"] }
+pallas = { path = "../../pallas-head/pallas" }
 pallas-codec = { path = "../../pallas-head/pallas-codec" }
 pallas-crypto = { path = "../../pallas-head/pallas-crypto" }
-pallas-primitives = { path = "../../pallas-head/pallas-primitives", features = ["unstable"] }
+pallas-primitives = { path = "../../pallas-head/pallas-primitives" }
 serde_json = "1.0.140"
+sha2 = "0.10"
 hex = "0.4.3"
 
 [[test]]
 name = "decode"
 path = "tests/decode/main.rs"
+required-features = ["unstable"]
 
 [[test]]
 name = "networking"
 path = "tests/networking/main.rs"
+required-features = ["unstable"]
 
 [[test]]
 name = "mapping"
 path = "tests/mapping/main.rs"
+required-features = ["unstable"]
 
 [[test]]
 name = "dataset-conway"
 path = "tests/dataset-conway/main.rs"
+required-features = ["unstable"]
 
 [[test]]
 name = "dataset-dijkstra"
 path = "tests/dataset-dijkstra/main.rs"
+required-features = ["unstable"]
+
+[[test]]
+name = "stable-conway"
+path = "tests/stable-conway/main.rs"
+required-features = ["stable"]

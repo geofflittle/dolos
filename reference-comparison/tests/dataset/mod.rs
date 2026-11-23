@@ -47,7 +47,7 @@ macro_rules! read_as {
 }
 
 mod changes;
-mod corpus;
+pub mod corpus;
 pub mod differences;
 pub mod plain;
 
@@ -69,7 +69,7 @@ use ledger_oracle_judge::normalize::normalize;
 use ledger_oracle_judge::parallel::in_parallel;
 
 /// The dataset submodule, relative to the Dolos tree.
-const SUBMODULE: &str = "test_data/cardano-cbor-dataset";
+pub const SUBMODULE: &str = "test_data/cardano-cbor-dataset";
 
 /// What pallas makes of one input: how much of it the value took, the
 /// encoding pallas writes at the rule's position, the encoding of the value
@@ -492,13 +492,13 @@ struct RuleCounts {
     failed: usize,
 }
 
-fn tree() -> PathBuf {
+pub fn tree() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
 }
 
 /// The rules the generator, the corpus and the pallas table name, refused
 /// unless all three name the same rules.
-fn checked_rules(
+pub fn checked_rules(
     generator: &[GeneratorRule],
     dirs: &[String],
     table: &[(&'static str, Reader)],
@@ -722,9 +722,14 @@ fn unused_differences(
 
 /// Runs an era on a thread whose stack holds pallas's deepest reading.
 pub fn run_on_large_stack(era: &'static Era) {
+    on_large_stack(move || run(era));
+}
+
+/// Runs `f` on a thread whose stack holds pallas's deepest reading.
+pub fn on_large_stack(f: impl FnOnce() + Send + 'static) {
     let outcome = std::thread::Builder::new()
         .stack_size(1 << 28)
-        .spawn(|| run(era))
+        .spawn(f)
         .expect("spawn")
         .join();
     if let Err(e) = outcome {

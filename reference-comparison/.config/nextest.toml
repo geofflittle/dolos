@@ -5,13 +5,13 @@
 small = { max-threads = "num-cpus" }
 medium = { max-threads = "num-cpus" }
 
-# The count per rule of samples judged, allowed and failed shows in every run.
+# The count per rule of samples judged or compared shows in every run.
 [[profile.default.overrides]]
-filter = "binary_id(reference-comparison::dataset-*) & test(/^pallas_reads_the_[a-z]+_dataset_as_the_ledger_does$/)"
+filter = "(binary_id(reference-comparison::dataset-*) | binary_id(reference-comparison::stable-*)) & test(/^pallas_reads_the_[a-z]+_dataset_as_the_(ledger|base)_does$/)"
 success-output = "immediate"
 
 [[profile.default.overrides]]
-filter = "test(/^(pallas_decodes_what_the_ledger_writes|pallas_maps_the_datums_the_ledger_finds|pallas_reads_the_utxo_replies_the_ledger_writes|pallas_reads_the_[a-z]+_dataset_as_the_ledger_does)$/)"
+filter = "test(/^(pallas_decodes_what_the_ledger_writes|pallas_maps_the_datums_the_ledger_finds|pallas_reads_the_utxo_replies_the_ledger_writes|pallas_reads_the_[a-z]+_dataset_as_the_(ledger|base)_does)$/)"
 test-group = "medium"
 slow-timeout = { period = "300s", terminate-after = 1 }
 
