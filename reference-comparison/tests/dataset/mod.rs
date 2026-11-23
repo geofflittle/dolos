@@ -69,12 +69,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use changes::Change;
+use changes::{Change, Place, Reform, reform};
 use corpus::{Encoding, GeneratorRule};
 use differences::{Evidence, Known};
 use ledger_oracle_judge::comparison::{
     self, Allowance, Allowed, Answer, ComparedLayer, Expected, Key, Layer, LayerRun, Outcome,
-    Records, Reference, Row, catch, kinds_from_env,
+    Owner, Records, Reference, Row, catch, kinds_from_env,
 };
 use ledger_oracle_judge::normalize::normalize;
 use ledger_oracle_judge::parallel::in_parallel;
@@ -119,6 +119,7 @@ impl RuleType {
 pub enum Reader {
     Type(RuleType),
     NoType { why: &'static str },
+    Owned { why: &'static str, owner: Owner },
 }
 
 /// An era of the corpus: its directory, the generator's rule table for it,
@@ -200,11 +201,13 @@ pub struct Sample {
     expected: Option<Vec<u8>>,
 }
 
-/// An era's rules that pallas has a type for, for each the ledger's encodings
-/// of the samples it accepts, and the era's differences the run lets pass.
+/// An era's rules that pallas has a type for, for each the normal form of the
+/// ledger's encodings of the samples it accepts, the forms the ledger writes
+/// embedded encodings in, and the era's differences the run lets pass.
 struct Dataset {
     rules: BTreeMap<String, Rule>,
     accepted: BTreeMap<String, BTreeSet<Vec<u8>>>,
+    ledger_forms: LedgerForms,
     differences: &'static [Known],
 }
 
@@ -261,13 +264,14 @@ impl Dataset {
         evidence.round_trip = reading.round_trip.clone();
         evidence.changes = match reading.plain.raw_left {
             true => Err("the value holds bytes kept as read".to_owned()),
-            false => changes_between(&read, &value),
+            false => changes_between(&read, &value).map(|c| self.ledger_forms.told(c)),
         };
         if let Reference::Accepts(accepted) = &row.reference {
             let ledger = accepted
                 .encoding
-                .clone()
-                .ok_or_else(|| "no ledger encoding".to_owned());
+                .as_deref()
+                .ok_or_else(|| "no ledger encoding".to_owned())
+                .and_then(ledger_normal);
             evidence.ledger_changes = changes_between(&ledger, &normal(&reading.encoding));
         }
         let accepted = self.accepted.get(key.value_kind());
@@ -308,6 +312,50 @@ fn refused_at(refusal: &str) -> Option<usize> {
     digits.parse().ok()
 }
 
+/// Each way the ledger writes an embedded encoding in another form than the
+/// one it reads, by the place of the embedded encoding, from the samples it
+/// accepts.
+struct LedgerForms(BTreeSet<(Place, Reform)>);
+
+impl LedgerForms {
+    /// The forms in the ledger's encodings of the accepted samples, each
+    /// given as its input beside the ledger's encoding.
+    fn learned<'a>(accepted: impl IntoIterator<Item = (&'a [u8], &'a [u8])>) -> Self {
+        let mut forms = BTreeSet::new();
+        for (input, expected) in accepted {
+            let input = normalize(input).map_err(|e| e.to_string());
+            let found = changes_between(&input, &ledger_normal(expected));
+            for change in found.into_iter().flatten() {
+                if let Change::EmbeddedForm { place, from, to } = change {
+                    forms.extend(reform(&from, &to).map(|r| (place, r)));
+                }
+            }
+        }
+        LedgerForms(forms)
+    }
+
+    /// The changes with each embedded encoding written as the ledger writes
+    /// one in that place told as the ledger's form.
+    fn told(&self, changes: BTreeSet<Change>) -> BTreeSet<Change> {
+        changes
+            .into_iter()
+            .map(|change| match change {
+                Change::EmbeddedForm { place, from, to }
+                    if reform(&from, &to).is_some_and(|r| self.0.contains(&(place.clone(), r))) =>
+                {
+                    Change::EmbeddedLedgerForm
+                }
+                change => change,
+            })
+            .collect()
+    }
+}
+
+/// The normal form of the ledger's encoding of a sample.
+fn ledger_normal(expected: &[u8]) -> Result<Vec<u8>, String> {
+    normalize(expected).map_err(|e| format!("the ledger's encoding has no normal form: {e}"))
+}
+
 /// The changes that turn the first normal form encoding into the second.
 fn changes_between(
     from: &Result<Vec<u8>, String>,
@@ -336,17 +384,20 @@ fn first_difference((a_name, a): (&str, &[u8]), (b_name, b): (&str, &[u8])) -> S
 }
 
 fn bytes_seen(encoding: Encoding, pallas: &Result<Vec<u8>, String>, expected: &[u8]) -> Seen {
-    let pallas = match (encoding, pallas) {
+    let (pallas, expected) = match (encoding, pallas) {
         (_, Err(e)) => return Seen::Differs(format!("it does not encode: {e}")),
-        (Encoding::Exact, Ok(bytes)) => bytes.clone(),
-        (Encoding::Normalized, Ok(bytes)) => match normalize(bytes) {
-            Ok(normal) => normal,
-            Err(e) => return Seen::Differs(format!("its encoding has no normal form: {e}")),
+        (Encoding::Exact, Ok(bytes)) => (bytes.clone(), expected.to_vec()),
+        (Encoding::Normalized, Ok(bytes)) => match (normalize(bytes), ledger_normal(expected)) {
+            (Ok(pallas), Ok(expected)) => (pallas, expected),
+            (Err(e), _) => {
+                return Seen::Differs(format!("its encoding has no normal form: {e}"));
+            }
+            (_, Err(e)) => return Seen::Differs(e),
         },
     };
     match pallas == expected {
         true => Seen::Same,
-        false => Seen::Differs(first_difference(("ledger", expected), ("pallas", &pallas))),
+        false => Seen::Differs(first_difference(("ledger", &expected), ("pallas", &pallas))),
     }
 }
 
@@ -491,15 +542,25 @@ fn checked_rules(
     failures
 }
 
-/// A failure for each tabled rule that pallas has no type for.
+/// A failure for each tabled rule that pallas has no type for and nothing
+/// owns.
 fn untyped(table: &[(&'static str, Reader)]) -> Vec<String> {
     table
         .iter()
         .filter_map(|(rule, reader)| match reader {
-            Reader::Type(_) => None,
+            Reader::Type(_) | Reader::Owned { .. } => None,
             Reader::NoType { why } => Some(format!("rule {rule} has no pallas type: {why}")),
         })
         .collect()
+}
+
+/// Why pallas has no type for a rule, with the owner that accepts that.
+fn no_type(reader: &Reader) -> Option<String> {
+    match reader {
+        Reader::Type(_) => None,
+        Reader::NoType { why } => Some((*why).to_owned()),
+        Reader::Owned { why, owner } => Some(format!("{why}, {owner}")),
+    }
 }
 
 /// The ledger commit the corpus report of an era names as the
@@ -549,22 +610,33 @@ fn run(era: &Era) {
             if let Reference::Accepts(a) = &row.reference {
                 let encoding = a
                     .encoding
-                    .clone()
+                    .as_deref()
                     .expect("an accepted sample has its encoding");
-                accepted.entry(rule.clone()).or_default().insert(encoding);
+                let normal = ledger_normal(encoding).unwrap_or_else(|e| panic!("{rule}: {e}"));
+                accepted.entry(rule.clone()).or_default().insert(normal);
             }
         }
     }
+    let ledger_forms = LedgerForms::learned(records.iter().flat_map(|(_, records)| {
+        records
+            .rows()
+            .iter()
+            .filter_map(|row| match &row.reference {
+                Reference::Accepts(a) => Some((&row.input[..], a.encoding.as_deref()?)),
+                Reference::Refuses(_) => None,
+            })
+    }));
     let readers: BTreeMap<&str, Reader> = era.rules.iter().copied().collect();
     let layer = Arc::new(Dataset {
         rules: generator
             .iter()
             .filter_map(|r| match readers[r.name.as_str()] {
                 Reader::Type(t) => Some((r.name.clone(), (r.encoding, t.read(r.encoding)))),
-                Reader::NoType { .. } => None,
+                Reader::NoType { .. } | Reader::Owned { .. } => None,
             })
             .collect(),
         accepted,
+        ledger_forms,
         differences: era.differences,
     });
     let kinds = kinds_from_env();
@@ -594,12 +666,13 @@ fn run(era: &Era) {
             failures.push(format!("rule {rule} has no sample"));
         }
         let Some(run) = run_of.get(&i) else {
-            if let Reader::NoType { why } = readers[rule.as_str()] {
-                println!(
-                    "{rule:<28} {:>7} {:>12} {:>7} {:>7} {:>7}  no pallas type: {why}",
-                    counts.samples, "-", "-", "-", "-"
-                );
-            }
+            let Some(why) = no_type(&readers[rule.as_str()]) else {
+                continue;
+            };
+            println!(
+                "{rule:<28} {:>7} {:>12} {:>7} {:>7} {:>7}  no pallas type: {why}",
+                counts.samples, "-", "-", "-", "-"
+            );
             continue;
         };
         for j in &run.judgements {
@@ -824,6 +897,34 @@ fn a_rule_with_no_pallas_type_is_tabled_and_fails() {
 }
 
 #[test]
+fn a_rule_with_no_pallas_type_and_an_owner_is_tabled_and_passes() {
+    let mut rules = table(&["coin"]);
+    rules.push((
+        "slot",
+        Reader::Owned {
+            why: "pallas reads slots in another form",
+            owner: Owner::Decision {
+                date: "2026-10-02",
+                words: "keep the other form",
+            },
+        },
+    ));
+    assert_eq!(
+        checked_rules(
+            &generated(&["coin", "slot"], Encoding::Normalized),
+            &["coin".to_owned(), "slot".to_owned()],
+            &rules,
+        ),
+        Vec::<String>::new()
+    );
+    assert_eq!(untyped(&rules), Vec::<String>::new());
+    assert_eq!(
+        no_type(&rules[1].1).as_deref(),
+        Some("pallas reads slots in another form, decision of 2026-10-02: \"keep the other form\"")
+    );
+}
+
+#[test]
 fn a_class_directory_that_is_no_sample_kind_fails() {
     assert_eq!(corpus::SampleKind::from_dir("invalid-zap-x"), None);
     assert_eq!(corpus::SampleKind::from_dir("unknown"), None);
@@ -899,4 +1000,85 @@ fn a_normalized_encoding_is_compared_after_normalisation() {
         bytes_seen(Encoding::Normalized, &Ok(vec![0x82, 0x01, 0x03]), &definite),
         Seen::Differs(_)
     ));
+}
+
+#[cfg(test)]
+fn a_ledger_writing_key_3_definite() -> LedgerForms {
+    let (input, expected) = (bytes_of("a103d818449f0102ff"), bytes_of("a103d81843820102"));
+    LedgerForms::learned([(&input[..], &expected[..])])
+}
+
+#[cfg(test)]
+fn embedded_form(place: Place, from: &str, to: &str) -> Change {
+    Change::EmbeddedForm {
+        place,
+        from: bytes_of(from),
+        to: bytes_of(to),
+    }
+}
+
+#[test]
+fn an_embedded_form_the_ledger_is_not_seen_writing_stays_told() {
+    let ledger = a_ledger_writing_key_3_definite();
+    let key_3 = Place::under(&changes::Item::Leaf(vec![0x03]));
+    let datum = Place::under(&changes::Item::Leaf(vec![0x02])).at(1);
+    for other in [
+        embedded_form(key_3.clone(), "9f0102ff", "98020102"),
+        embedded_form(datum, "9f0102ff", "820102"),
+        embedded_form(key_3.clone(), "9f9f01ff02ff", "82810102"),
+    ] {
+        assert_eq!(ledger.told([other.clone()].into()), [other].into());
+    }
+    let nothing = LedgerForms::learned([]);
+    let same = embedded_form(key_3, "9f0102ff", "820102");
+    assert_eq!(nothing.told([same.clone()].into()), [same].into());
+}
+
+#[test]
+fn an_embedded_form_the_ledger_writes_in_that_place_is_told_as_the_ledger_form() {
+    let ledger = a_ledger_writing_key_3_definite();
+    let key_3 = Place::under(&changes::Item::Leaf(vec![0x03]));
+    for same in [
+        embedded_form(key_3.clone(), "9f0102ff", "820102"),
+        embedded_form(key_3, "9f0103ff", "820103"),
+    ] {
+        assert_eq!(
+            ledger.told([same, Change::EntriesReordered].into()),
+            [Change::EmbeddedLedgerForm, Change::EntriesReordered].into()
+        );
+    }
+}
+
+#[cfg(test)]
+fn bytes_of(text: &str) -> Vec<u8> {
+    hex::decode(text).expect("hex")
+}
+
+#[test]
+fn another_rational_differs_from_the_ledger_unreduced_one() {
+    let two_fourths = hex::decode("d81e820204").expect("hex");
+    let three_fourths = hex::decode("d81e820304").expect("hex");
+    let one_half = hex::decode("d81e820102").expect("hex");
+    assert!(matches!(
+        bytes_seen(Encoding::Normalized, &Ok(three_fourths), &two_fourths),
+        Seen::Differs(_)
+    ));
+    assert!(matches!(
+        bytes_seen(Encoding::Exact, &Ok(one_half), &two_fourths),
+        Seen::Differs(_)
+    ));
+}
+
+#[test]
+fn the_ledger_unreduced_rational_is_normalised_too() {
+    let two_fourths = hex::decode("d81e820204").expect("hex");
+    let one_half = hex::decode("d81e820102").expect("hex");
+    assert_eq!(
+        bytes_seen(Encoding::Normalized, &Ok(two_fourths.clone()), &two_fourths),
+        Seen::Same
+    );
+    assert_eq!(
+        bytes_seen(Encoding::Normalized, &Ok(one_half), &two_fourths),
+        Seen::Same
+    );
 }

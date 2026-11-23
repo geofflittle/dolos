@@ -10,7 +10,16 @@ use pallas_primitives::{
     UnitInterval, VrfKeyhash, dijkstra,
 };
 
+use ledger_oracle_judge::comparison::Owner;
+
 use crate::dataset::Reader;
+
+/// The pallas maintainer's decision that pallas reads the endorser block as
+/// the wire's map of hash to size.
+const WIRE_MAP: Owner = Owner::Decision {
+    date: "2026-10-02",
+    words: "Your notes say the wire is a map of hash to word32, which I'd trust over the draft",
+};
 
 /// Each rule and how pallas reads it.
 pub const RULES: &[(&str, Reader)] = &[
@@ -87,11 +96,18 @@ pub const RULES: &[(&str, Reader)] = &[
     ),
     (
         "eb_reference",
-        Reader::NoType {
+        Reader::Owned {
             why: "pallas reads eb_references as a map of hash to size, with no type for one reference",
+            owner: WIRE_MAP,
         },
     ),
-    ("eb_references", read!(dijkstra::EndorserBlock)),
+    (
+        "eb_references",
+        Reader::Owned {
+            why: "pallas reads the endorser block as a map of hash to size, not this list of pairs",
+            owner: WIRE_MAP,
+        },
+    ),
     (
         "eb_references_announcement",
         read!(dijkstra::EbAnnouncement),

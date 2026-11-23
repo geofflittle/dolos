@@ -3,11 +3,12 @@
 
 use std::collections::BTreeSet;
 
+use ledger_oracle_judge::normalize::normalize;
 use pallas_codec::minicbor::Decoder;
 use pallas_codec::minicbor::data::Type;
 
 /// One CBOR item of a normal form encoding.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Item {
     /// An item with no items inside, as its bytes.
     Leaf(Vec<u8>),
@@ -21,7 +22,7 @@ const SET: u64 = 258;
 
 /// A change from the first encoding to the second that keeps every other
 /// item in place.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Change {
     /// A set tag is written where none was.
     SetTagAdded,
@@ -49,6 +50,96 @@ pub enum Change {
     NullsAdded,
     /// An output written as a legacy array is written as a map.
     OutputAsMap,
+    /// An embedded encoding is written as another form of the same item.
+    EmbeddedForm {
+        place: Place,
+        from: Vec<u8>,
+        to: Vec<u8>,
+    },
+    /// An embedded encoding is written in the form the ledger writes for the
+    /// bytes read.
+    EmbeddedLedgerForm,
+}
+
+/// The position of an item in an encoding: the key of the nearest map entry
+/// holding it, and its positions in the arrays inside that entry's value.
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Place {
+    key: Option<Item>,
+    positions: Vec<usize>,
+}
+
+impl Place {
+    /// The place of the value of a map entry with this key.
+    pub fn under(key: &Item) -> Place {
+        Place {
+            key: Some(key.clone()),
+            positions: Vec::new(),
+        }
+    }
+
+    /// The place of the item at this position of an array in this place.
+    pub fn at(&self, position: usize) -> Place {
+        let mut place = self.clone();
+        place.positions.push(position);
+        place
+    }
+}
+
+/// The heads that one encoding of an item writes another way than another
+/// encoding of it, each by its path in the item with its first byte in each.
+pub type Reform = BTreeSet<(Vec<usize>, u8, u8)>;
+
+/// The heads written another way, when both encodings are one whole item
+/// with items in the same paths and some head differs.
+pub fn reform(from: &[u8], to: &[u8]) -> Option<Reform> {
+    let (from, to) = (heads(from)?, heads(to)?);
+    let same_paths = from.len() == to.len() && from.iter().zip(&to).all(|(f, t)| f.0 == t.0);
+    let reform: Reform = from
+        .into_iter()
+        .zip(to)
+        .filter(|(f, t)| f.1 != t.1)
+        .map(|((path, f), (_, t))| (path, f, t))
+        .collect();
+    (same_paths && !reform.is_empty()).then_some(reform)
+}
+
+/// The first byte of each item's head in one whole encoding, by the item's
+/// path.
+fn heads(bytes: &[u8]) -> Option<Vec<(Vec<usize>, u8)>> {
+    let mut d = Decoder::new(bytes);
+    let mut found = Vec::new();
+    head(&mut d, &mut Vec::new(), &mut found)?;
+    (d.position() == bytes.len()).then_some(found)
+}
+
+fn head(
+    d: &mut Decoder<'_>,
+    path: &mut Vec<usize>,
+    found: &mut Vec<(Vec<usize>, u8)>,
+) -> Option<()> {
+    found.push((path.clone(), *d.input().get(d.position())?));
+    let len = match d.datatype().ok()? {
+        Type::Array | Type::ArrayIndef => d.array().ok()?,
+        Type::Map | Type::MapIndef => d.map().ok()?.map(|n| n.saturating_mul(2)),
+        Type::Tag => d.tag().ok().map(|_| Some(1))?,
+        _ => return d.skip().ok(),
+    };
+    let mut i = 0;
+    loop {
+        match len {
+            Some(n) if i == n => return Some(()),
+            None if d.datatype().ok()? == Type::Break => {
+                d.set_position(d.position() + 1);
+                return Some(());
+            }
+            _ => {}
+        }
+        path.push(usize::try_from(i).ok()?);
+        head(d, path, found)?;
+        path.pop();
+        i += 1;
+    }
 }
 
 /// The encoding of a null.
@@ -113,18 +204,31 @@ fn item(d: &mut Decoder<'_>) -> Result<Item, String> {
 /// listed change makes.
 pub fn changes(from: &Item, to: &Item) -> Result<BTreeSet<Change>, String> {
     let mut found = BTreeSet::new();
-    compare(from, to, &mut found)?;
+    compare(from, to, &Place::default(), &mut found)?;
     Ok(found)
 }
 
-fn compare(from: &Item, to: &Item, found: &mut BTreeSet<Change>) -> Result<(), String> {
+fn compare(
+    from: &Item,
+    to: &Item,
+    place: &Place,
+    found: &mut BTreeSet<Change>,
+) -> Result<(), String> {
     match (from, to) {
         _ if from == to => Ok(()),
         (Item::Tag(EMBEDDED, f), Item::Tag(EMBEDDED, t)) if embedded_prefix(f, t) => {
             found.insert(Change::EmbeddedBytesDropped);
             Ok(())
         }
-        (Item::Tag(a, f), Item::Tag(b, t)) if a == b => compare(f, t, found),
+        (Item::Tag(EMBEDDED, f), Item::Tag(EMBEDDED, t)) if same_item(f, t) => {
+            found.insert(Change::EmbeddedForm {
+                place: place.clone(),
+                from: byte_content(f).unwrap_or_default().to_vec(),
+                to: byte_content(t).unwrap_or_default().to_vec(),
+            });
+            Ok(())
+        }
+        (Item::Tag(a, f), Item::Tag(b, t)) if a == b => compare(f, t, place, found),
         (Item::Tag(a, f), Item::Tag(b, t))
             if (*a == FRACTION || *b == FRACTION) && same_ratio(f, t) =>
         {
@@ -133,15 +237,15 @@ fn compare(from: &Item, to: &Item, found: &mut BTreeSet<Change>) -> Result<(), S
         }
         (Item::Tag(SET, f), _) => {
             found.insert(Change::SetTagDropped);
-            compare(f, to, found)
+            compare(f, to, place, found)
         }
         (_, Item::Tag(SET, t)) => {
             found.insert(Change::SetTagAdded);
-            compare(from, t, found)
+            compare(from, t, place, found)
         }
-        (Item::Tag(_, f), Item::Tag(b, t)) => {
+        (Item::Tag(_, f), Item::Tag(b, _)) => {
             found.insert(retagged(*b));
-            compare(f, t, found)
+            compare(&Item::Tag(*b, f.clone()), to, place, found)
         }
         (Item::Array(f), Item::Array(t)) if t.len() <= f.len() => {
             if t.len() < f.len() {
@@ -151,7 +255,8 @@ fn compare(from: &Item, to: &Item, found: &mut BTreeSet<Change>) -> Result<(), S
             let in_place = f
                 .iter()
                 .zip(t)
-                .try_for_each(|(a, b)| compare(a, b, &mut inner));
+                .enumerate()
+                .try_for_each(|(i, (a, b))| compare(a, b, &place.at(i), &mut inner));
             match in_place {
                 Ok(()) => {
                     found.extend(inner);
@@ -173,16 +278,17 @@ fn compare(from: &Item, to: &Item, found: &mut BTreeSet<Change>) -> Result<(), S
             compare(
                 &Item::Array(f.clone()),
                 &Item::Array(t[..f.len()].to_vec()),
+                place,
                 found,
             )
         }
-        (Item::Map(f), Item::Map(t)) => compare_maps(f, t, found),
+        (Item::Map(f), Item::Map(t)) => compare_maps(f, t, place, found),
         (Item::Array(f), Item::Map(t)) if output_fields(f, t).is_some() => {
             found.insert(Change::OutputAsMap);
             output_fields(f, t)
                 .unwrap_or_default()
                 .into_iter()
-                .try_for_each(|(a, b)| compare(a, b, found))
+                .try_for_each(|(a, b, at)| compare(a, b, &at, found))
         }
         _ => Err(super::shortened(format!("{from:?} against {to:?}"))),
     }
@@ -201,6 +307,15 @@ fn byte_content(item: &Item) -> Option<&[u8]> {
 fn embedded_prefix(from: &Item, to: &Item) -> bool {
     match (byte_content(from), byte_content(to)) {
         (Some(f), Some(t)) => t.len() < f.len() && f.starts_with(t),
+        _ => false,
+    }
+}
+
+/// Whether two embedded encodings are each one whole item with the same
+/// normal form.
+fn same_item(from: &Item, to: &Item) -> bool {
+    match (byte_content(from), byte_content(to)) {
+        (Some(f), Some(t)) => normalize(f).is_ok_and(|f| normalize(t).is_ok_and(|t| f == t)),
         _ => false,
     }
 }
@@ -226,25 +341,30 @@ fn same_ratio(from: &Item, to: &Item) -> bool {
 }
 
 /// Each item of a legacy output array beside the field of an output map
-/// that holds it, when the map holds the array's address, value and datum
-/// hash and nothing else.
+/// that holds it and that field's place, when the map holds the array's
+/// address, value and datum hash and nothing else.
 fn output_fields<'a>(
     array: &'a [Item],
     map: &'a [(Item, Item)],
-) -> Option<Vec<(&'a Item, &'a Item)>> {
+) -> Option<Vec<(&'a Item, &'a Item, Place)>> {
     let field = |n: u8| {
         map.iter()
             .find(|(k, _)| *k == Item::Leaf(vec![n]))
-            .map(|(_, v)| v)
+            .map(|(k, v)| (v, Place::under(k)))
     };
     if !(2..=3).contains(&array.len()) || map.len() != array.len() {
         return None;
     }
-    let mut fields = vec![(&array[0], field(0)?), (&array[1], field(1)?)];
+    let (address, at_address) = field(0)?;
+    let (value, at_value) = field(1)?;
+    let mut fields = vec![
+        (&array[0], address, at_address),
+        (&array[1], value, at_value),
+    ];
     if let Some(hash) = array.get(2) {
         match field(2)? {
-            Item::Array(datum) if datum.len() == 2 && datum[0] == Item::Leaf(vec![0]) => {
-                fields.push((hash, &datum[1]));
+            (Item::Array(datum), at) if datum.len() == 2 && datum[0] == Item::Leaf(vec![0]) => {
+                fields.push((hash, &datum[1], at.at(1)));
             }
             _ => return None,
         }
@@ -261,6 +381,7 @@ fn sorted(items: &[Item]) -> Vec<String> {
 fn compare_maps(
     from: &[(Item, Item)],
     to: &[(Item, Item)],
+    place: &Place,
     found: &mut BTreeSet<Change>,
 ) -> Result<(), String> {
     let mut keys: Vec<&Item> = Vec::new();
@@ -282,7 +403,9 @@ fn compare_maps(
                     .filter(|k| !to.iter().any(|(t, _)| t == **k))
                     .find_map(|k| {
                         let mut inner = BTreeSet::new();
-                        compare(k, key, &mut inner).ok().map(|()| (*k, inner))
+                        compare(k, key, place, &mut inner)
+                            .ok()
+                            .map(|()| (*k, inner))
                     })
                     .ok_or_else(|| {
                         super::shortened(format!("an entry with key {key:?} is added"))
@@ -304,11 +427,11 @@ fn compare_maps(
     if kept != read_keys {
         found.insert(Change::EntriesReordered);
     }
-    for ((_, value), read_key) in to.iter().zip(&read_keys) {
+    for ((key, value), read_key) in to.iter().zip(&read_keys) {
         let mut tried = Err(String::new());
         for (_, candidate) in from.iter().filter(|(k, _)| k == *read_key) {
             let mut inner = BTreeSet::new();
-            tried = compare(candidate, value, &mut inner).map(|()| inner);
+            tried = compare(candidate, value, &Place::under(key), &mut inner).map(|()| inner);
             if tried.is_ok() {
                 break;
             }
@@ -390,6 +513,78 @@ mod tests {
             Ok([Change::EmbeddedBytesDropped].into())
         );
         assert!(changed("d8184100", "d8184200ff").is_err());
+    }
+
+    #[test]
+    fn another_item_in_an_embedded_encoding_is_no_listed_change() {
+        assert!(changed("d8184100", "d8184101").is_err());
+        assert!(changed("d818449f0102ff", "d81843820103").is_err());
+        assert!(changed("d81843820102", "d8184201ff").is_err());
+    }
+
+    #[test]
+    fn another_form_of_an_embedded_item_is_told_with_both_forms() {
+        assert_eq!(
+            changed("d818449f0102ff", "d81843820102"),
+            Ok([Change::EmbeddedForm {
+                place: Place::default(),
+                from: vec![0x9f, 0x01, 0x02, 0xff],
+                to: vec![0x82, 0x01, 0x02],
+            }]
+            .into())
+        );
+    }
+
+    #[test]
+    fn another_form_of_an_embedded_item_is_told_with_its_place() {
+        assert_eq!(
+            changed("a1028201d818449f0102ff", "a1028201d81843820102"),
+            Ok([Change::EmbeddedForm {
+                place: Place::under(&Item::Leaf(vec![0x02])).at(1),
+                from: vec![0x9f, 0x01, 0x02, 0xff],
+                to: vec![0x82, 0x01, 0x02],
+            }]
+            .into())
+        );
+    }
+
+    #[test]
+    fn another_form_of_an_item_embedded_under_another_tag_is_told_with_both_changes() {
+        assert_eq!(
+            changed("c5449f0102ff", "d81843820102"),
+            Ok([
+                Change::EmbeddedTag,
+                Change::EmbeddedForm {
+                    place: Place::default(),
+                    from: vec![0x9f, 0x01, 0x02, 0xff],
+                    to: vec![0x82, 0x01, 0x02],
+                }
+            ]
+            .into())
+        );
+        assert!(changed("c5449f0102ff", "d81843820103").is_err());
+    }
+
+    #[test]
+    fn encodings_with_items_in_other_paths_or_the_same_heads_have_no_reform() {
+        let bytes = |h: &str| hex::decode(h).expect("hex");
+        assert_eq!(reform(&bytes("820102"), &bytes("820102")), None);
+        assert_eq!(reform(&bytes("5f420102ff"), &bytes("5f41014102ff")), None);
+        assert_eq!(reform(&bytes("9f0102ff"), &bytes("83010203")), None);
+        assert_eq!(reform(&bytes("9f0102ff"), &bytes("820102ff")), None);
+    }
+
+    #[test]
+    fn a_head_written_another_way_is_a_reform_at_its_path() {
+        let bytes = |h: &str| hex::decode(h).expect("hex");
+        assert_eq!(
+            reform(&bytes("9f0102ff"), &bytes("820102")),
+            Some([(vec![], 0x9f, 0x82)].into())
+        );
+        assert_eq!(
+            reform(&bytes("82019f02ff"), &bytes("9802018102")),
+            Some([(vec![], 0x82, 0x98), (vec![1], 0x9f, 0x81)].into())
+        );
     }
 
     #[test]

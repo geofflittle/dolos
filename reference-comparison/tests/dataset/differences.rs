@@ -34,17 +34,19 @@ pub struct Evidence {
     /// Whether the encoding pallas writes reads back as its value, or how
     /// the value read back differs.
     pub round_trip: Result<(), String>,
-    /// Whether the normal form of the value's encoding is the ledger's
-    /// encoding of a sample of the same rule it accepts.
+    /// Whether the normal form of the value's encoding is the normal form of
+    /// the ledger's encoding of a sample of the same rule it accepts.
     pub same_as_accepted: bool,
 }
 
-/// The changes that keep a value as read: the CDDL makes the set tag optional
-/// and the ledger reads a map into a structure without order.
+/// The changes that keep a value as read: the CDDL makes the set tag
+/// optional, the ledger reads a map into a structure without order, and it
+/// writes an embedded encoding again in its own form.
 const AS_READ: &[Change] = &[
     Change::SetTagAdded,
     Change::SetTagDropped,
     Change::EntriesReordered,
+    Change::EmbeddedLedgerForm,
 ];
 
 /// The changes from the ledger's encoding to one kept as read, where the
@@ -89,11 +91,14 @@ impl Evidence {
     /// Whether the ledger's encoding becomes pallas's by `change` and by the
     /// ledger's own form.
     fn ledger_writes_other_than(&self, change: Change) -> bool {
-        only(&self.ledger_changes, LEDGER_FORM, &[change])
-            && self
-                .ledger_changes
-                .as_ref()
-                .is_ok_and(|c| c.contains(&change))
+        only(
+            &self.ledger_changes,
+            LEDGER_FORM,
+            std::slice::from_ref(&change),
+        ) && self
+            .ledger_changes
+            .as_ref()
+            .is_ok_and(|c| c.contains(&change))
     }
 
     /// Whether the ledger's encoding becomes pallas's by the ledger's own
