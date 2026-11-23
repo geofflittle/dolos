@@ -1,42 +1,23 @@
 //! Conway values of the cardano-cbor-dataset read by pallas, each judged
 //! against the ledger's verdict and re-encoding of it.
 
-/// A rule read as the type `$t` whose re-encoding is compared after the
-/// dataset's normalisation, with `unrawed` when the type keeps bytes as read
-/// inside it.
-macro_rules! normalized {
+/// A rule read as the type `$t`, with `unrawed` when the type keeps bytes as
+/// read inside it.
+macro_rules! read {
     ($t:ty) => {
-        (
-            crate::corpus::Encoding::Normalized,
-            read_as!($t, crate::plain::whole),
-        )
+        crate::RuleType {
+            normalized: read_as!($t, crate::plain::whole),
+            exact: read_as!(pallas_primitives::KeepRaw<'_, $t>, crate::plain::kept),
+        }
     };
     ($t:ty, unrawed) => {
-        (
-            crate::corpus::Encoding::Normalized,
-            read_as!($t, crate::plain::unrawed),
-        )
-    };
-}
-
-/// A rule read as the type `$t` behind `KeepRaw`, whose re-encoding is
-/// compared byte for byte, with `unrawed` when the type keeps bytes as read
-/// inside it.
-macro_rules! exact {
-    ($t:ty) => {
-        (
-            crate::corpus::Encoding::Exact,
-            read_as!(pallas_primitives::KeepRaw<'_, $t>, crate::plain::kept),
-        )
-    };
-    ($t:ty, unrawed) => {
-        (
-            crate::corpus::Encoding::Exact,
-            read_as!(
+        crate::RuleType {
+            normalized: read_as!($t, crate::plain::unrawed),
+            exact: read_as!(
                 pallas_primitives::KeepRaw<'_, $t>,
                 crate::plain::kept_unrawed
             ),
-        )
+        }
     };
 }
 
@@ -112,8 +93,26 @@ pub struct Reading {
 /// The pallas reading of a rule's input.
 pub type Read = fn(&[u8]) -> Result<Reading, String>;
 
+/// How pallas reads a rule whose re-encoding is compared after the dataset's
+/// normalisation, and how behind `KeepRaw` for one compared byte for byte.
+#[derive(Clone, Copy)]
+pub struct RuleType {
+    normalized: Read,
+    exact: Read,
+}
+
+impl RuleType {
+    /// The reading for a rule compared as `encoding`.
+    fn read(&self, encoding: Encoding) -> Read {
+        match encoding {
+            Encoding::Normalized => self.normalized,
+            Encoding::Exact => self.exact,
+        }
+    }
+}
+
 /// How pallas reads a rule and how its re-encoding is compared.
-pub type RuleType = (Encoding, Read);
+type Rule = (Encoding, Read);
 
 /// Text cut to a length a report line can hold.
 pub fn shortened(text: String) -> String {
@@ -177,7 +176,7 @@ pub enum Seen {
 
 /// One sample as pallas reads it.
 pub struct Sample {
-    rule: RuleType,
+    rule: Rule,
     input: Vec<u8>,
     expected: Option<Vec<u8>>,
 }
@@ -185,12 +184,12 @@ pub struct Sample {
 /// The Conway rules and, for each, the ledger's encodings of the samples it
 /// accepts.
 struct Dataset {
-    rules: BTreeMap<&'static str, RuleType>,
+    rules: BTreeMap<String, Rule>,
     accepted: BTreeMap<String, BTreeSet<Vec<u8>>>,
 }
 
 impl Dataset {
-    fn rule(&self, row: &Row) -> RuleType {
+    fn rule(&self, row: &Row) -> Rule {
         let name = row.class.split(' ').next().unwrap_or_default();
         *self
             .rules
@@ -440,7 +439,7 @@ fn tree() -> PathBuf {
 }
 
 /// The rules the generator, the corpus and the pallas table name, refused
-/// unless all three name the same rules and agree on how each is compared.
+/// unless all three name the same rules.
 fn checked_rules(
     generator: &[GeneratorRule],
     dirs: &[String],
@@ -466,16 +465,6 @@ fn checked_rules(
             for name in sa.difference(sb) {
                 failures.push(format!("the {a} names rule {name}, the {b} does not"));
             }
-        }
-    }
-    for rule in generator {
-        if let Some((_, (encoding, _))) = table.iter().find(|(n, _)| *n == rule.name)
-            && *encoding != rule.encoding
-        {
-            failures.push(format!(
-                "the generator compares {} as {:?}, the pallas table as {encoding:?}",
-                rule.name, rule.encoding
-            ));
         }
     }
     failures
@@ -514,8 +503,15 @@ fn run() {
             }
         }
     }
+    let readers: BTreeMap<&str, RuleType> = rules::RULES.iter().copied().collect();
     let layer = Arc::new(Dataset {
-        rules: rules::RULES.iter().copied().collect(),
+        rules: generator
+            .iter()
+            .map(|r| {
+                let read = readers[r.name.as_str()].read(r.encoding);
+                (r.name.clone(), (r.encoding, read))
+            })
+            .collect(),
         accepted,
     });
     let kinds = kinds_from_env();
@@ -609,11 +605,8 @@ fn pallas_reads_the_conway_dataset_as_the_ledger_does() {
 }
 
 #[cfg(test)]
-fn table(names: &[&'static str], encoding: Encoding) -> Vec<(&'static str, RuleType)> {
-    names
-        .iter()
-        .map(|n| (*n, (encoding, read_as!(u64, plain::whole))))
-        .collect()
+fn table(names: &[&'static str]) -> Vec<(&'static str, RuleType)> {
+    names.iter().map(|n| (*n, read!(u64))).collect()
 }
 
 #[cfg(test)]
@@ -632,7 +625,7 @@ fn rules_named_alike_everywhere_pass() {
     let failures = checked_rules(
         &generated(&["coin", "slot"], Encoding::Normalized),
         &["coin".to_owned(), "slot".to_owned()],
-        &table(&["coin", "slot"], Encoding::Normalized),
+        &table(&["coin", "slot"]),
     );
     assert_eq!(failures, Vec::<String>::new());
 }
@@ -642,7 +635,7 @@ fn a_rule_the_table_lacks_fails() {
     let failures = checked_rules(
         &generated(&["coin", "slot"], Encoding::Normalized),
         &["coin".to_owned(), "slot".to_owned()],
-        &table(&["coin"], Encoding::Normalized),
+        &table(&["coin"]),
     );
     assert_eq!(
         failures,
@@ -658,7 +651,7 @@ fn a_rule_directory_the_generator_lacks_fails() {
     let failures = checked_rules(
         &generated(&["coin"], Encoding::Normalized),
         &["coin".to_owned(), "slot".to_owned()],
-        &table(&["coin", "slot"], Encoding::Normalized),
+        &table(&["coin", "slot"]),
     );
     assert_eq!(
         failures,
@@ -670,24 +663,11 @@ fn a_rule_directory_the_generator_lacks_fails() {
 }
 
 #[test]
-fn a_rule_compared_another_way_fails() {
-    let failures = checked_rules(
-        &generated(&["coin"], Encoding::Exact),
-        &["coin".to_owned()],
-        &table(&["coin"], Encoding::Normalized),
-    );
-    assert_eq!(
-        failures,
-        ["the generator compares coin as Exact, the pallas table as Normalized"]
-    );
-}
-
-#[test]
 fn a_rule_tabled_twice_fails() {
     let failures = checked_rules(
         &generated(&["coin"], Encoding::Normalized),
         &["coin".to_owned()],
-        &table(&["coin", "coin"], Encoding::Normalized),
+        &table(&["coin", "coin"]),
     );
     assert_eq!(failures, ["the pallas table names a rule twice"]);
 }
