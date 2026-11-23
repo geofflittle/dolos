@@ -29,6 +29,10 @@ pub enum Change {
     SetTagDropped,
     /// A tag is written with another number.
     TagNumber,
+    /// A fraction is written under its tag where another tag was.
+    FractionTag,
+    /// An embedded encoding is written under its tag where another tag was.
+    EmbeddedTag,
     /// Items at the end of an array are left out.
     ItemsDropped,
     /// Entries of a map with the same key are written as one.
@@ -55,6 +59,15 @@ const FRACTION: u64 = 30;
 
 /// The tag of an embedded encoding.
 const EMBEDDED: u64 = 24;
+
+/// The change of a tag written as `written` where another number was.
+fn retagged(written: u64) -> Change {
+    match written {
+        FRACTION => Change::FractionTag,
+        EMBEDDED => Change::EmbeddedTag,
+        _ => Change::TagNumber,
+    }
+}
 
 /// The items of a normal form encoding.
 pub fn items(cbor: &[u8]) -> Result<Item, String> {
@@ -115,7 +128,7 @@ fn compare(from: &Item, to: &Item, found: &mut BTreeSet<Change>) -> Result<(), S
         (Item::Tag(a, f), Item::Tag(b, t))
             if (*a == FRACTION || *b == FRACTION) && same_ratio(f, t) =>
         {
-            found.insert(Change::TagNumber);
+            found.insert(retagged(*b));
             Ok(())
         }
         (Item::Tag(SET, f), _) => {
@@ -126,8 +139,8 @@ fn compare(from: &Item, to: &Item, found: &mut BTreeSet<Change>) -> Result<(), S
             found.insert(Change::SetTagAdded);
             compare(from, t, found)
         }
-        (Item::Tag(_, f), Item::Tag(_, t)) => {
-            found.insert(Change::TagNumber);
+        (Item::Tag(_, f), Item::Tag(b, t)) => {
+            found.insert(retagged(*b));
             compare(f, t, found)
         }
         (Item::Array(f), Item::Array(t)) if t.len() <= f.len() => {
@@ -336,7 +349,7 @@ mod tests {
     fn a_set_tag_and_a_tag_number_are_told() {
         assert_eq!(
             changed("828101c4820101", "82d901028101d81e820101"),
-            Ok([Change::SetTagAdded, Change::TagNumber].into())
+            Ok([Change::SetTagAdded, Change::FractionTag].into())
         );
     }
 
@@ -356,9 +369,18 @@ mod tests {
     fn a_fraction_under_another_tag_is_told_by_its_ratio() {
         assert_eq!(
             changed("c4820204", "d81e820102"),
-            Ok([Change::TagNumber].into())
+            Ok([Change::FractionTag].into())
         );
         assert!(changed("c4820204", "d81e820103").is_err());
+    }
+
+    #[test]
+    fn an_embedded_encoding_under_another_tag_is_told_apart_from_a_fraction() {
+        assert_ne!(
+            changed("c54101", "d8184101"),
+            changed("c4820204", "d81e820102")
+        );
+        assert_ne!(changed("c54101", "d8184101"), changed("c54101", "c64101"));
     }
 
     #[test]

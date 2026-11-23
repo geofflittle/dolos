@@ -63,7 +63,8 @@ const LEDGER_FORM: &[Change] = &[
 const OWNED: &[Change] = &[
     Change::DuplicateKeysMerged,
     Change::EntriesDropped,
-    Change::TagNumber,
+    Change::FractionTag,
+    Change::EmbeddedTag,
     Change::ItemsDropped,
     Change::EmbeddedBytesDropped,
     Change::NullsAdded,
@@ -153,12 +154,20 @@ const FRACTION_ANY_TAG: Owner = Owner::Defect {
     defect: "a rational reads any tag",
 };
 
+const EMBEDDED_ANY_TAG: Owner = Owner::Defect {
+    defect: "an embedded encoding reads any tag",
+};
+
+const STRING_DEFINITE: Owner = Owner::Defect {
+    defect: "text and embedded bytes are read in definite length only",
+};
+
 const NO_FIELD_FOR_KEY: Owner = Owner::Defect {
-    defect: "a Conway map decoder drops an entry whose key its type has no field for",
+    defect: "a map decoder drops an entry whose key its type has no field for",
 };
 
 const REPEATED_KEY_MERGED: Owner = Owner::Defect {
-    defect: "a Conway map decoder keeps one entry of a repeated key",
+    defect: "a map decoder keeps one entry of a repeated key",
 };
 
 const EMBEDDED_REST_DROPPED: Owner = Owner::Defect {
@@ -200,6 +209,16 @@ fn differs(answer: &Answer<Seen, String>) -> bool {
 /// Whether a byte starts an indefinite array.
 fn indefinite_array(byte: u8) -> bool {
     byte == 0x9f
+}
+
+/// Whether a byte starts indefinite text.
+fn indefinite_text(byte: u8) -> bool {
+    byte == 0x7f
+}
+
+/// Whether a byte starts indefinite bytes.
+fn indefinite_bytes(byte: u8) -> bool {
+    byte == 0x5f
 }
 
 /// Whether a byte starts a negative integer or a big number.
@@ -274,9 +293,7 @@ pub const PART_READ_ENDS_INSIDE: Known = known(
     Disagreement::Accepts,
     PART_READ,
     accepts,
-    |e| {
-        e.axis == Axis::Verdict && e.refused_by_ledger && e.refusal.is_none() && e.stopped_inside
-    },
+    |e| e.axis == Axis::Verdict && e.refused_by_ledger && e.refusal.is_none() && e.stopped_inside,
 );
 
 pub const MISSING_LAST_FIELD_NULL: Known = known(
@@ -320,7 +337,31 @@ pub const FRACTION_UNDER_ANY_TAG: Known = known(
     Disagreement::Accepts,
     FRACTION_ANY_TAG,
     accepts,
-    |e| refused_and_read_whole(e) && e.first_owned(Change::TagNumber),
+    |e| refused_and_read_whole(e) && e.first_owned(Change::FractionTag),
+);
+
+pub const EMBEDDED_UNDER_ANY_TAG: Known = known(
+    "an embedded encoding is read under any tag",
+    Disagreement::Accepts,
+    EMBEDDED_ANY_TAG,
+    accepts,
+    |e| refused_and_read_whole(e) && e.first_owned(Change::EmbeddedTag),
+);
+
+pub const INDEFINITE_TEXT: Known = known(
+    "indefinite text is refused",
+    Disagreement::Refuses,
+    STRING_DEFINITE,
+    refuses,
+    |e| refused_by_pallas(e) && e.refuses_at("expected text (definite length)", indefinite_text),
+);
+
+pub const INDEFINITE_EMBEDDED_BYTES: Known = known(
+    "indefinite bytes are refused where an embedded encoding is read",
+    Disagreement::Refuses,
+    STRING_DEFINITE,
+    refuses,
+    |e| refused_by_pallas(e) && e.refuses_at("expected bytes (definite length)", indefinite_bytes),
 );
 
 pub const EMBEDDED_REST: Known = known(
