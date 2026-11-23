@@ -1109,6 +1109,25 @@ impl Records {
         })
     }
 
+    /// Records of `layer` read from a corpus that is not a record file, with
+    /// no target changes.
+    pub fn new(
+        pin: String,
+        generator: String,
+        layer: Layer,
+        classes: Vec<String>,
+        rows: Vec<Row>,
+    ) -> Records {
+        Records {
+            pin,
+            generator,
+            layer,
+            classes,
+            targets: Vec::new(),
+            rows,
+        }
+    }
+
     /// The changes the records name as targets, empty when the header names
     /// none.
     pub fn targets(&self) -> &[Target] {

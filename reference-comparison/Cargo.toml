@@ -26,3 +26,7 @@ path = "tests/networking/main.rs"
 [[test]]
 name = "mapping"
 path = "tests/mapping/main.rs"
+
+[[test]]
+name = "dataset"
+path = "tests/dataset/main.rs"
