@@ -171,7 +171,7 @@ fn compare(from: &Item, to: &Item, found: &mut BTreeSet<Change>) -> Result<(), S
                 .into_iter()
                 .try_for_each(|(a, b)| compare(a, b, found))
         }
-        _ => Err(crate::shortened(format!("{from:?} against {to:?}"))),
+        _ => Err(super::shortened(format!("{from:?} against {to:?}"))),
     }
 }
 
@@ -272,7 +272,7 @@ fn compare_maps(
                         compare(k, key, &mut inner).ok().map(|()| (*k, inner))
                     })
                     .ok_or_else(|| {
-                        crate::shortened(format!("an entry with key {key:?} is added"))
+                        super::shortened(format!("an entry with key {key:?} is added"))
                     })?;
                 found.extend(inner);
                 read

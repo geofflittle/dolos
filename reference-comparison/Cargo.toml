@@ -28,5 +28,9 @@ name = "mapping"
 path = "tests/mapping/main.rs"
 
 [[test]]
-name = "dataset"
-path = "tests/dataset/main.rs"
+name = "dataset-conway"
+path = "tests/dataset-conway/main.rs"
+
+[[test]]
+name = "dataset-dijkstra"
+path = "tests/dataset-dijkstra/main.rs"

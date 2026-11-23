@@ -1,21 +1,24 @@
-//! Conway and Dijkstra values of the cardano-cbor-dataset read by pallas,
-//! each judged against the ledger's verdict and re-encoding of it.
+//! Values of one era of the cardano-cbor-dataset read by pallas, each judged
+//! against the ledger's verdict and re-encoding of it.
 
 /// A rule read as the type `$t`, with `unrawed` when the type keeps bytes as
 /// read inside it.
 macro_rules! read {
     ($t:ty) => {
-        crate::Reader::Type(crate::RuleType {
-            normalized: read_as!($t, crate::plain::whole),
-            exact: read_as!(pallas_primitives::KeepRaw<'_, $t>, crate::plain::kept),
+        crate::dataset::Reader::Type(crate::dataset::RuleType {
+            normalized: read_as!($t, crate::dataset::plain::whole),
+            exact: read_as!(
+                pallas_primitives::KeepRaw<'_, $t>,
+                crate::dataset::plain::kept
+            ),
         })
     };
     ($t:ty, unrawed) => {
-        crate::Reader::Type(crate::RuleType {
-            normalized: read_as!($t, crate::plain::unrawed),
+        crate::dataset::Reader::Type(crate::dataset::RuleType {
+            normalized: read_as!($t, crate::dataset::plain::unrawed),
             exact: read_as!(
                 pallas_primitives::KeepRaw<'_, $t>,
-                crate::plain::kept_unrawed
+                crate::dataset::plain::kept_unrawed
             ),
         })
     };
@@ -25,7 +28,7 @@ macro_rules! read {
 /// `$plain`.
 macro_rules! read_as {
     ($t:ty, $plain:expr) => {{
-        fn read(input: &[u8]) -> Result<crate::Reading, String> {
+        fn read(input: &[u8]) -> Result<crate::dataset::Reading, String> {
             let mut decoder = pallas_codec::minicbor::Decoder::new(input);
             let value: $t = decoder.decode().map_err(|e| e.to_string())?;
             let consumed = decoder.position();
@@ -34,7 +37,7 @@ macro_rules! read_as {
             let round_trip = match &encoding {
                 Ok(bytes) => match pallas_codec::minicbor::decode::<$t>(bytes) {
                     Ok(again) if again == value => Ok(()),
-                    Ok(again) => Err(crate::first_text_difference(
+                    Ok(again) => Err(crate::dataset::first_text_difference(
                         &format!("{value:?}"),
                         &format!("{again:?}"),
                     )),
@@ -42,23 +45,22 @@ macro_rules! read_as {
                 },
                 Err(e) => Err(format!("it does not encode: {e}")),
             };
-            Ok(crate::Reading {
+            Ok(crate::dataset::Reading {
                 consumed,
                 encoding,
                 plain,
                 round_trip,
             })
         }
-        read as crate::Read
+        read as crate::dataset::Read
     }};
 }
 
 mod changes;
-mod conway_rules;
 mod corpus;
-mod differences;
-mod dijkstra_rules;
-mod plain;
+pub mod differences;
+#[macro_use]
+pub mod plain;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -85,10 +87,10 @@ const SUBMODULE: &str = "test_data/cardano-cbor-dataset";
 /// encoding pallas writes at the rule's position, the encoding written from
 /// the value alone and whether the written encoding reads back as the value.
 pub struct Reading {
-    consumed: usize,
-    encoding: Result<Vec<u8>, String>,
-    plain: Plain,
-    round_trip: Result<(), String>,
+    pub consumed: usize,
+    pub encoding: Result<Vec<u8>, String>,
+    pub plain: Plain,
+    pub round_trip: Result<(), String>,
 }
 
 /// The pallas reading of a rule's input.
@@ -98,8 +100,8 @@ pub type Read = fn(&[u8]) -> Result<Reading, String>;
 /// normalisation, and how behind `KeepRaw` for one compared byte for byte.
 #[derive(Clone, Copy)]
 pub struct RuleType {
-    normalized: Read,
-    exact: Read,
+    pub normalized: Read,
+    pub exact: Read,
 }
 
 impl RuleType {
@@ -121,26 +123,12 @@ pub enum Reader {
 
 /// An era of the corpus: its directory, the generator's rule table for it,
 /// how pallas reads each rule and the differences the run lets pass.
-struct Era {
-    dir: &'static str,
-    generator_table: &'static str,
-    rules: &'static [(&'static str, Reader)],
-    differences: &'static [Known],
+pub struct Era {
+    pub dir: &'static str,
+    pub generator_table: &'static str,
+    pub rules: &'static [(&'static str, Reader)],
+    pub differences: &'static [Known],
 }
-
-const CONWAY: Era = Era {
-    dir: "conway",
-    generator_table: "conwayRules",
-    rules: conway_rules::RULES,
-    differences: differences::CONWAY,
-};
-
-const DIJKSTRA: Era = Era {
-    dir: "dijkstra",
-    generator_table: "dijkstraRules",
-    rules: dijkstra_rules::RULES,
-    differences: differences::DIJKSTRA,
-};
 
 /// How pallas reads a rule and how its re-encoding is compared.
 type Rule = (Encoding, Read);
@@ -674,7 +662,7 @@ fn unused_differences(
 }
 
 /// Runs an era on a thread whose stack holds pallas's deepest reading.
-fn run_on_large_stack(era: &'static Era) {
+pub fn run_on_large_stack(era: &'static Era) {
     let outcome = std::thread::Builder::new()
         .stack_size(1 << 28)
         .spawn(|| run(era))
@@ -683,16 +671,6 @@ fn run_on_large_stack(era: &'static Era) {
     if let Err(e) = outcome {
         std::panic::resume_unwind(e);
     }
-}
-
-#[test]
-fn pallas_reads_the_conway_dataset_as_the_ledger_does() {
-    run_on_large_stack(&CONWAY);
-}
-
-#[test]
-fn pallas_reads_the_dijkstra_dataset_as_the_ledger_does() {
-    run_on_large_stack(&DIJKSTRA);
 }
 
 #[cfg(test)]

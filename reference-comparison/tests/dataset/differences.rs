@@ -1,6 +1,9 @@
 //! The differences between pallas's reading of a sample and the ledger's that
 //! the run lets pass, each with what holds it and what in the sample shows it.
 
+// Each era's test target lists the differences it shows from these.
+#![allow(dead_code)]
+
 use std::collections::BTreeSet;
 
 use ledger_oracle_judge::comparison::{Allowance, Allowed, Answer, Commit, Disagreement, Owner};
@@ -230,7 +233,7 @@ const fn known(
     }
 }
 
-const OTHER_FORM_KEPT: Known = known(
+pub const OTHER_FORM_KEPT: Known = known(
     "a value the ledger accepts in another form is kept as read",
     Disagreement::Accepts,
     KEPT_AS_READ,
@@ -238,7 +241,7 @@ const OTHER_FORM_KEPT: Known = known(
     |e| refused_and_read_whole(e) && e.same_as_accepted,
 );
 
-const REFUSED_CONTENT_KEPT: Known = known(
+pub const REFUSED_CONTENT_KEPT: Known = known(
     "a value kept as read whose content the ledger refuses",
     Disagreement::Accepts,
     CONTENT_IN_VALIDATE,
@@ -246,7 +249,7 @@ const REFUSED_CONTENT_KEPT: Known = known(
     |e| refused_and_read_whole(e) && !e.same_as_accepted && e.kept(),
 );
 
-const OTHER_ENCODING_KEPT: Known = known(
+pub const OTHER_ENCODING_KEPT: Known = known(
     "the ledger writes another encoding of a value kept as read",
     Disagreement::Values,
     KEPT_AS_READ,
@@ -258,7 +261,7 @@ const OTHER_ENCODING_KEPT: Known = known(
     },
 );
 
-const EXTRA_ITEM: Known = known(
+pub const EXTRA_ITEM: Known = known(
     "an extra array item is dropped",
     Disagreement::Accepts,
     EXTRA_ITEM_DROPPED,
@@ -266,112 +269,104 @@ const EXTRA_ITEM: Known = known(
     |e| refused_and_read_whole(e) && e.first_owned(Change::ItemsDropped),
 );
 
-/// The Dijkstra differences, each held by a rule or an upstream commit.
-pub const DIJKSTRA: &[Known] = &[
-    OTHER_FORM_KEPT,
-    REFUSED_CONTENT_KEPT,
-    OTHER_ENCODING_KEPT,
-    EXTRA_ITEM,
-];
+pub const PART_READ_ENDS_INSIDE: Known = known(
+    "a value is returned after reading part of an item",
+    Disagreement::Accepts,
+    PART_READ,
+    accepts,
+    |e| {
+        e.axis == Axis::Verdict && e.refused_by_ledger && e.refusal.is_none() && e.stopped_inside
+    },
+);
 
-/// The Conway differences.
-pub const CONWAY: &[Known] = &[
-    OTHER_FORM_KEPT,
-    REFUSED_CONTENT_KEPT,
-    OTHER_ENCODING_KEPT,
-    known(
-        "a value is returned after reading part of an item",
-        Disagreement::Accepts,
-        PART_READ,
-        accepts,
-        |e| {
-            e.axis == Axis::Verdict
-                && e.refused_by_ledger
-                && e.refusal.is_none()
-                && e.stopped_inside
-        },
-    ),
-    known(
-        "a missing last field is read as null",
-        Disagreement::Accepts,
-        MISSING_AS_NULL,
-        accepts,
-        |e| refused_and_read_whole(e) && e.first_owned(Change::NullsAdded),
-    ),
-    known(
-        "an entry of a repeated key is dropped",
-        Disagreement::Accepts,
-        REPEATED_KEY_MERGED,
-        accepts,
-        |e| refused_and_read_whole(e) && e.first_owned(Change::DuplicateKeysMerged),
-    ),
-    known(
-        "an entry whose key the type has no field for is dropped",
-        Disagreement::Accepts,
-        NO_FIELD_FOR_KEY,
-        accepts,
-        |e| refused_and_read_whole(e) && e.first_owned(Change::EntriesDropped),
-    ),
-    known(
-        "an entry whose key the type has no field for is dropped",
-        Disagreement::Values,
-        NO_FIELD_FOR_KEY,
-        differs,
-        |e| {
-            e.axis == Axis::Bytes
-                && e.round_trip.is_ok()
-                && e.ledger_writes_other_than(Change::EntriesDropped)
-        },
-    ),
-    known(
-        "a fraction is read under any tag",
-        Disagreement::Accepts,
-        FRACTION_ANY_TAG,
-        accepts,
-        |e| refused_and_read_whole(e) && e.first_owned(Change::TagNumber),
-    ),
-    EXTRA_ITEM,
-    known(
-        "bytes after the first item of an embedded encoding are dropped",
-        Disagreement::Accepts,
-        EMBEDDED_REST_DROPPED,
-        accepts,
-        |e| refused_and_read_whole(e) && e.first_owned(Change::EmbeddedBytesDropped),
-    ),
-    known(
-        "cost models of unknown languages are not written",
-        Disagreement::Values,
-        COST_MODELS_UNWRITTEN,
-        differs,
-        |e| {
-            !e.refused_by_ledger
-                && e.unknown_cost_models_lost()
-                && match e.axis {
-                    Axis::RoundTrip => true,
-                    Axis::Bytes => e.ledger_writes_other_than(Change::EntriesDropped),
-                    Axis::Verdict => false,
-                }
-        },
-    ),
-    known(
-        "an indefinite array is refused where a flat enum is read",
-        Disagreement::Refuses,
-        FLAT_ENUM_DEFINITE,
-        refuses,
-        |e| refused_by_pallas(e) && e.refuses_with("flat enum requires definite-length array"),
-    ),
-    known(
-        "an indefinite array is refused where a pair is read",
-        Disagreement::Refuses,
-        PAIR_DEFINITE,
-        refuses,
-        |e| refused_by_pallas(e) && e.refuses_at("invalid 2-tuple length", indefinite_array),
-    ),
-    known(
-        "a fraction number beyond u64 is refused",
-        Disagreement::Refuses,
-        TYPE_CANNOT_HOLD,
-        refuses,
-        |e| refused_by_pallas(e) && e.refuses_at("expected u64", beyond_u64),
-    ),
-];
+pub const MISSING_LAST_FIELD_NULL: Known = known(
+    "a missing last field is read as null",
+    Disagreement::Accepts,
+    MISSING_AS_NULL,
+    accepts,
+    |e| refused_and_read_whole(e) && e.first_owned(Change::NullsAdded),
+);
+
+pub const REPEATED_KEY_DROPPED: Known = known(
+    "an entry of a repeated key is dropped",
+    Disagreement::Accepts,
+    REPEATED_KEY_MERGED,
+    accepts,
+    |e| refused_and_read_whole(e) && e.first_owned(Change::DuplicateKeysMerged),
+);
+
+pub const UNKNOWN_KEY_DROPPED: Known = known(
+    "an entry whose key the type has no field for is dropped",
+    Disagreement::Accepts,
+    NO_FIELD_FOR_KEY,
+    accepts,
+    |e| refused_and_read_whole(e) && e.first_owned(Change::EntriesDropped),
+);
+
+pub const UNKNOWN_KEY_UNWRITTEN: Known = known(
+    "an entry whose key the type has no field for is dropped",
+    Disagreement::Values,
+    NO_FIELD_FOR_KEY,
+    differs,
+    |e| {
+        e.axis == Axis::Bytes
+            && e.round_trip.is_ok()
+            && e.ledger_writes_other_than(Change::EntriesDropped)
+    },
+);
+
+pub const FRACTION_UNDER_ANY_TAG: Known = known(
+    "a fraction is read under any tag",
+    Disagreement::Accepts,
+    FRACTION_ANY_TAG,
+    accepts,
+    |e| refused_and_read_whole(e) && e.first_owned(Change::TagNumber),
+);
+
+pub const EMBEDDED_REST: Known = known(
+    "bytes after the first item of an embedded encoding are dropped",
+    Disagreement::Accepts,
+    EMBEDDED_REST_DROPPED,
+    accepts,
+    |e| refused_and_read_whole(e) && e.first_owned(Change::EmbeddedBytesDropped),
+);
+
+pub const UNKNOWN_COST_MODELS: Known = known(
+    "cost models of unknown languages are not written",
+    Disagreement::Values,
+    COST_MODELS_UNWRITTEN,
+    differs,
+    |e| {
+        !e.refused_by_ledger
+            && e.unknown_cost_models_lost()
+            && match e.axis {
+                Axis::RoundTrip => true,
+                Axis::Bytes => e.ledger_writes_other_than(Change::EntriesDropped),
+                Axis::Verdict => false,
+            }
+    },
+);
+
+pub const FLAT_ENUM_INDEFINITE: Known = known(
+    "an indefinite array is refused where a flat enum is read",
+    Disagreement::Refuses,
+    FLAT_ENUM_DEFINITE,
+    refuses,
+    |e| refused_by_pallas(e) && e.refuses_with("flat enum requires definite-length array"),
+);
+
+pub const PAIR_INDEFINITE: Known = known(
+    "an indefinite array is refused where a pair is read",
+    Disagreement::Refuses,
+    PAIR_DEFINITE,
+    refuses,
+    |e| refused_by_pallas(e) && e.refuses_at("invalid 2-tuple length", indefinite_array),
+);
+
+pub const FRACTION_BEYOND_U64: Known = known(
+    "a fraction number beyond u64 is refused",
+    Disagreement::Refuses,
+    TYPE_CANNOT_HOLD,
+    refuses,
+    |e| refused_by_pallas(e) && e.refuses_at("expected u64", beyond_u64),
+);

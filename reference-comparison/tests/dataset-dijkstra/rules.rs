@@ -10,7 +10,7 @@ use pallas_primitives::{
     UnitInterval, VrfKeyhash, dijkstra,
 };
 
-use super::Reader;
+use crate::dataset::Reader;
 
 /// Each rule and how pallas reads it.
 pub const RULES: &[(&str, Reader)] = &[
