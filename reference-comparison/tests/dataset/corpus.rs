@@ -1,5 +1,5 @@
-//! The cardano-cbor-dataset corpus read into rows: the generator's Conway
-//! rules, and each rule's samples with the ledger's answer for them.
+//! The cardano-cbor-dataset corpus read into rows: the generator's rules for
+//! an era, and each rule's samples with the ledger's answer for them.
 
 use std::{fs, path::Path, process::Command};
 
@@ -14,7 +14,7 @@ pub enum Encoding {
     Normalized,
 }
 
-/// A rule the generator lists for Conway and how its encoding is compared.
+/// A rule the generator lists for an era and how its encoding is compared.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeneratorRule {
     pub name: String,
@@ -81,14 +81,13 @@ pub fn checked_out_pin(manifest_dir: &Path, submodule: &str) -> Result<String, S
     }
 }
 
-/// The Conway rules the generator's rule table lists, in its order.
-pub fn generator_rules(source: &str) -> Result<Vec<GeneratorRule>, String> {
-    let mut lines = source
-        .lines()
-        .skip_while(|l| !l.starts_with("conwayRules ="));
+/// The rules the generator's rule table named `table` lists, in its order.
+pub fn generator_rules(source: &str, table: &str) -> Result<Vec<GeneratorRule>, String> {
+    let start = format!("{table} =");
+    let mut lines = source.lines().skip_while(|l| !l.starts_with(&start));
     lines
         .next()
-        .ok_or("the generator source has no conwayRules table")?;
+        .ok_or_else(|| format!("the generator source has no {table} table"))?;
     let mut rules = Vec::new();
     for line in lines.take_while(|l| l.is_empty() || l.starts_with(' ')) {
         let item = line
@@ -105,11 +104,16 @@ pub fn generator_rules(source: &str) -> Result<Vec<GeneratorRule>, String> {
         }
         let constructor = item.split_whitespace().next().unwrap_or_default();
         let encoding = match constructor {
-            "mkRule" | "mkAnnotatorRule" | "mkPositiveMultiAssetRule" => Encoding::Normalized,
+            "mkRule"
+            | "mkAnnotatorRule"
+            | "mkPositiveMultiAssetRule"
+            | "mkSubTransactionsRule"
+            | "mkRequiredTopLevelGuardsRule"
+            | "mkGuardsRule" => Encoding::Normalized,
             "mkByteExactRule" | "mkByteExactAnnotatorRule" => Encoding::Exact,
             _ => {
                 return Err(format!(
-                    "the Conway rule table has a line this reader does not know: {line:?}"
+                    "the {table} table has a line this reader does not know: {line:?}"
                 ));
             }
         };
@@ -122,7 +126,7 @@ pub fn generator_rules(source: &str) -> Result<Vec<GeneratorRule>, String> {
         rules.push(GeneratorRule { name, encoding });
     }
     match rules.is_empty() {
-        true => Err("the Conway rule table lists no rule".to_owned()),
+        true => Err(format!("the {table} table lists no rule")),
         false => Ok(rules),
     }
 }

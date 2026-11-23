@@ -36,8 +36,8 @@ pub struct Evidence {
     pub same_as_accepted: bool,
 }
 
-/// The changes that keep a value as read: the Conway CDDL makes the set tag
-/// optional and the ledger reads a map into a structure without order.
+/// The changes that keep a value as read: the CDDL makes the set tag optional
+/// and the ledger reads a map into a structure without order.
 const AS_READ: &[Change] = &[
     Change::SetTagAdded,
     Change::SetTagDropped,
@@ -230,32 +230,55 @@ const fn known(
     }
 }
 
-pub const LIST: &[Known] = &[
-    known(
-        "a value the ledger accepts in another form is kept as read",
-        Disagreement::Accepts,
-        KEPT_AS_READ,
-        accepts,
-        |e| refused_and_read_whole(e) && e.same_as_accepted,
-    ),
-    known(
-        "a value kept as read whose content the ledger refuses",
-        Disagreement::Accepts,
-        CONTENT_IN_VALIDATE,
-        accepts,
-        |e| refused_and_read_whole(e) && !e.same_as_accepted && e.kept(),
-    ),
-    known(
-        "the ledger writes another encoding of a value kept as read",
-        Disagreement::Values,
-        KEPT_AS_READ,
-        differs,
-        |e| {
-            e.axis == Axis::Bytes
-                && !e.refused_by_ledger
-                && (e.written_as_read || (e.kept() && e.ledger_form_only()))
-        },
-    ),
+const OTHER_FORM_KEPT: Known = known(
+    "a value the ledger accepts in another form is kept as read",
+    Disagreement::Accepts,
+    KEPT_AS_READ,
+    accepts,
+    |e| refused_and_read_whole(e) && e.same_as_accepted,
+);
+
+const REFUSED_CONTENT_KEPT: Known = known(
+    "a value kept as read whose content the ledger refuses",
+    Disagreement::Accepts,
+    CONTENT_IN_VALIDATE,
+    accepts,
+    |e| refused_and_read_whole(e) && !e.same_as_accepted && e.kept(),
+);
+
+const OTHER_ENCODING_KEPT: Known = known(
+    "the ledger writes another encoding of a value kept as read",
+    Disagreement::Values,
+    KEPT_AS_READ,
+    differs,
+    |e| {
+        e.axis == Axis::Bytes
+            && !e.refused_by_ledger
+            && (e.written_as_read || (e.kept() && e.ledger_form_only()))
+    },
+);
+
+const EXTRA_ITEM: Known = known(
+    "an extra array item is dropped",
+    Disagreement::Accepts,
+    EXTRA_ITEM_DROPPED,
+    accepts,
+    |e| refused_and_read_whole(e) && e.first_owned(Change::ItemsDropped),
+);
+
+/// The Dijkstra differences, each held by a rule or an upstream commit.
+pub const DIJKSTRA: &[Known] = &[
+    OTHER_FORM_KEPT,
+    REFUSED_CONTENT_KEPT,
+    OTHER_ENCODING_KEPT,
+    EXTRA_ITEM,
+];
+
+/// The Conway differences.
+pub const CONWAY: &[Known] = &[
+    OTHER_FORM_KEPT,
+    REFUSED_CONTENT_KEPT,
+    OTHER_ENCODING_KEPT,
     known(
         "a value is returned after reading part of an item",
         Disagreement::Accepts,
@@ -307,13 +330,7 @@ pub const LIST: &[Known] = &[
         accepts,
         |e| refused_and_read_whole(e) && e.first_owned(Change::TagNumber),
     ),
-    known(
-        "an extra array item is dropped",
-        Disagreement::Accepts,
-        EXTRA_ITEM_DROPPED,
-        accepts,
-        |e| refused_and_read_whole(e) && e.first_owned(Change::ItemsDropped),
-    ),
+    EXTRA_ITEM,
     known(
         "bytes after the first item of an embedded encoding are dropped",
         Disagreement::Accepts,

@@ -10,10 +10,10 @@ use pallas_primitives::{
     UnitInterval, VrfKeyhash, alonzo, conway,
 };
 
-use super::RuleType;
+use super::Reader;
 
 /// Each rule and how pallas reads it.
-pub const RULES: &[(&str, RuleType)] = &[
+pub const RULES: &[(&str, Reader)] = &[
     ("%constr<plutus_data>", read!(Constr<PlutusData>)),
     (
         "%multiasset<positive_coin>",

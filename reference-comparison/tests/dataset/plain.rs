@@ -2,8 +2,8 @@
 //! from bytes it kept as read.
 
 use pallas_codec::minicbor::{self, Encode};
-use pallas_codec::utils::{CborWrap, NonEmptySet, Nullable};
-use pallas_primitives::{KeepRaw, PlutusData, alonzo, babbage, conway};
+use pallas_codec::utils::{CborWrap, MaybeIndefArray, NonEmptySet, Nullable};
+use pallas_primitives::{KeepRaw, PlutusData, alonzo, babbage, conway, dijkstra};
 
 /// The encoding of a value and whether bytes kept as read are left in it.
 pub struct Plain {
@@ -99,7 +99,11 @@ holds_no_raw!(
     conway::NativeScript,
     PlutusData,
     conway::Redeemers,
-    alonzo::TransactionOutput
+    alonzo::TransactionOutput,
+    dijkstra::Header,
+    dijkstra::AuxiliaryData,
+    dijkstra::NativeScript,
+    dijkstra::Redeemers
 );
 
 impl<T: Unraw> Unraw for KeepRaw<'_, T> {
@@ -141,6 +145,25 @@ impl<T: Unraw + Clone> Unraw for NonEmptySet<T> {
         items.unraw();
         if let Ok(set) = NonEmptySet::try_from(items) {
             *self = set;
+        }
+    }
+}
+
+impl<T: Unraw + Clone> Unraw for dijkstra::NonEmptySet<T> {
+    fn unraw(&mut self) {
+        let arm = self.arm();
+        let mut items = self.clone().into_vec();
+        items.unraw();
+        if let Ok(set) = dijkstra::NonEmptySet::try_from(items) {
+            *self = set.with_arm(arm);
+        }
+    }
+}
+
+impl<T: Unraw> Unraw for MaybeIndefArray<T> {
+    fn unraw(&mut self) {
+        match self {
+            MaybeIndefArray::Def(items) | MaybeIndefArray::Indef(items) => items.unraw(),
         }
     }
 }
@@ -204,6 +227,73 @@ impl Unraw for babbage::DatumOption<'_> {
 impl Unraw for conway::ScriptRef<'_> {
     fn unraw(&mut self) {
         if let conway::ScriptRef::NativeScript(script) = self {
+            script.unraw();
+        }
+    }
+}
+
+impl Unraw for dijkstra::Block<'_> {
+    fn unraw(&mut self) {
+        self.header.unraw();
+        self.block_body.unraw();
+    }
+}
+
+impl Unraw for dijkstra::BlockBody<'_> {
+    fn unraw(&mut self) {
+        self.transactions.unraw();
+    }
+}
+
+impl Unraw for dijkstra::BlockTransaction<'_> {
+    fn unraw(&mut self) {
+        self.transaction_body.unraw();
+        self.transaction_witness_set.unraw();
+        self.auxiliary_data.unraw();
+    }
+}
+
+impl Unraw for dijkstra::MempoolTransaction<'_> {
+    fn unraw(&mut self) {
+        self.transaction_body.unraw();
+        self.transaction_witness_set.unraw();
+        self.auxiliary_data.unraw();
+    }
+}
+
+impl Unraw for dijkstra::TransactionBody<'_> {
+    fn unraw(&mut self) {
+        self.outputs.unraw();
+        self.collateral_return.unraw();
+        self.sub_transactions.unraw();
+    }
+}
+
+impl Unraw for dijkstra::SubTransactionBody<'_> {
+    fn unraw(&mut self) {
+        self.outputs.unraw();
+    }
+}
+
+impl Unraw for dijkstra::SubTransaction<'_> {
+    fn unraw(&mut self) {
+        self.sub_transaction_body.unraw();
+        self.transaction_witness_set.unraw();
+        self.auxiliary_data.unraw();
+    }
+}
+
+impl Unraw for dijkstra::WitnessSet<'_> {
+    fn unraw(&mut self) {
+        self.native_script.unraw();
+        self.plutus_data.unraw();
+        self.redeemer.unraw();
+    }
+}
+
+impl Unraw for dijkstra::ScriptRef<'_> {
+    fn unraw(&mut self) {
+        if let dijkstra::ScriptRef::NativeScript(script) = self {
             script.unraw();
         }
     }

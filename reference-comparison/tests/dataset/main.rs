@@ -1,23 +1,23 @@
-//! Conway values of the cardano-cbor-dataset read by pallas, each judged
-//! against the ledger's verdict and re-encoding of it.
+//! Conway and Dijkstra values of the cardano-cbor-dataset read by pallas,
+//! each judged against the ledger's verdict and re-encoding of it.
 
 /// A rule read as the type `$t`, with `unrawed` when the type keeps bytes as
 /// read inside it.
 macro_rules! read {
     ($t:ty) => {
-        crate::RuleType {
+        crate::Reader::Type(crate::RuleType {
             normalized: read_as!($t, crate::plain::whole),
             exact: read_as!(pallas_primitives::KeepRaw<'_, $t>, crate::plain::kept),
-        }
+        })
     };
     ($t:ty, unrawed) => {
-        crate::RuleType {
+        crate::Reader::Type(crate::RuleType {
             normalized: read_as!($t, crate::plain::unrawed),
             exact: read_as!(
                 pallas_primitives::KeepRaw<'_, $t>,
                 crate::plain::kept_unrawed
             ),
-        }
+        })
     };
 }
 
@@ -54,10 +54,11 @@ macro_rules! read_as {
 }
 
 mod changes;
+mod conway_rules;
 mod corpus;
 mod differences;
+mod dijkstra_rules;
 mod plain;
-mod rules;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -68,7 +69,7 @@ use std::time::Duration;
 
 use changes::Change;
 use corpus::{Encoding, GeneratorRule};
-use differences::{Evidence, LIST};
+use differences::{Evidence, Known};
 use ledger_oracle_judge::comparison::{
     self, Allowance, Allowed, Answer, ComparedLayer, Expected, Key, Layer, LayerRun, Outcome,
     Records, Reference, Row, catch, kinds_from_env,
@@ -110,6 +111,36 @@ impl RuleType {
         }
     }
 }
+
+/// The pallas type a rule's table entry names, or why pallas has none.
+#[derive(Clone, Copy)]
+pub enum Reader {
+    Type(RuleType),
+    NoType { why: &'static str },
+}
+
+/// An era of the corpus: its directory, the generator's rule table for it,
+/// how pallas reads each rule and the differences the run lets pass.
+struct Era {
+    dir: &'static str,
+    generator_table: &'static str,
+    rules: &'static [(&'static str, Reader)],
+    differences: &'static [Known],
+}
+
+const CONWAY: Era = Era {
+    dir: "conway",
+    generator_table: "conwayRules",
+    rules: conway_rules::RULES,
+    differences: differences::CONWAY,
+};
+
+const DIJKSTRA: Era = Era {
+    dir: "dijkstra",
+    generator_table: "dijkstraRules",
+    rules: dijkstra_rules::RULES,
+    differences: differences::DIJKSTRA,
+};
 
 /// How pallas reads a rule and how its re-encoding is compared.
 type Rule = (Encoding, Read);
@@ -181,11 +212,12 @@ pub struct Sample {
     expected: Option<Vec<u8>>,
 }
 
-/// The Conway rules and, for each, the ledger's encodings of the samples it
-/// accepts.
+/// An era's rules that pallas has a type for, for each the ledger's encodings
+/// of the samples it accepts, and the era's differences the run lets pass.
 struct Dataset {
     rules: BTreeMap<String, Rule>,
     accepted: BTreeMap<String, BTreeSet<Vec<u8>>>,
+    differences: &'static [Known],
 }
 
 impl Dataset {
@@ -397,7 +429,8 @@ impl ComparedLayer for Dataset {
 
     fn allowance(&self, row: &Row, key: &Key<Axis>) -> Option<Allowance<Seen, String>> {
         let evidence = self.evidence(row, key)?;
-        LIST.iter()
+        self.differences
+            .iter()
             .find(|known| (known.shows)(&evidence))
             .map(|known| Allowance {
                 allowed: known.allowance.allowed,
@@ -443,7 +476,7 @@ fn tree() -> PathBuf {
 fn checked_rules(
     generator: &[GeneratorRule],
     dirs: &[String],
-    table: &[(&'static str, RuleType)],
+    table: &[(&'static str, Reader)],
 ) -> Vec<String> {
     let mut failures = Vec::new();
     let names = |it: &mut dyn Iterator<Item = String>| it.collect::<Vec<_>>();
@@ -470,23 +503,54 @@ fn checked_rules(
     failures
 }
 
-fn run() {
+/// A failure for each tabled rule that pallas has no type for.
+fn untyped(table: &[(&'static str, Reader)]) -> Vec<String> {
+    table
+        .iter()
+        .filter_map(|(rule, reader)| match reader {
+            Reader::Type(_) => None,
+            Reader::NoType { why } => Some(format!("rule {rule} has no pallas type: {why}")),
+        })
+        .collect()
+}
+
+/// The ledger commit the corpus report of an era names as the
+/// implementation that wrote the expected answers.
+fn ledger_commit(dataset: &Path, era: &str) -> Result<String, String> {
+    let path = dataset.join(format!("dataset/reports/{era}/haskell-latest.json"));
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let report: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    report["implementation_commit"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("{}: no implementation_commit", path.display()))
+}
+
+fn run(era: &Era) {
     let pin = corpus::checked_out_pin(&tree(), SUBMODULE).unwrap_or_else(|e| panic!("{e}"));
     let dataset = tree().join(SUBMODULE);
     let source = std::fs::read_to_string(dataset.join("app/Generation/EraSpec.hs"))
         .unwrap_or_else(|e| panic!("the generator source: {e}"));
-    let generator = corpus::generator_rules(&source).unwrap_or_else(|e| panic!("{e}"));
-    let era = dataset.join("dataset/conway");
-    let dirs = corpus::rule_dirs(&era).unwrap_or_else(|e| panic!("{e}"));
-    let mut failures = checked_rules(&generator, &dirs, rules::RULES);
+    let generator =
+        corpus::generator_rules(&source, era.generator_table).unwrap_or_else(|e| panic!("{e}"));
+    let ledger = ledger_commit(&dataset, era.dir).unwrap_or_else(|e| panic!("{e}"));
+    println!(
+        "cardano-cbor-dataset {pin}, {} written by ledger {ledger}",
+        era.dir
+    );
+    let era_dir = dataset.join("dataset").join(era.dir);
+    let dirs = corpus::rule_dirs(&era_dir).unwrap_or_else(|e| panic!("{e}"));
+    let mut failures = checked_rules(&generator, &dirs, era.rules);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+    failures.extend(untyped(era.rules));
 
     let records: Vec<(String, Records)> = dirs
         .iter()
         .map(|rule| {
             let (classes, rows) =
-                corpus::rule_rows(rule, &era.join(rule)).unwrap_or_else(|e| panic!("{e}"));
-            let generator = format!("cardano-cbor-dataset {pin} dataset/conway/{rule}");
+                corpus::rule_rows(rule, &era_dir.join(rule)).unwrap_or_else(|e| panic!("{e}"));
+            let generator = format!("cardano-cbor-dataset {pin} dataset/{}/{rule}", era.dir);
             let records = Records::new(pin.clone(), generator, Layer::Decode, classes, rows);
             (rule.clone(), records)
         })
@@ -503,33 +567,37 @@ fn run() {
             }
         }
     }
-    let readers: BTreeMap<&str, RuleType> = rules::RULES.iter().copied().collect();
+    let readers: BTreeMap<&str, Reader> = era.rules.iter().copied().collect();
     let layer = Arc::new(Dataset {
         rules: generator
             .iter()
-            .map(|r| {
-                let read = readers[r.name.as_str()].read(r.encoding);
-                (r.name.clone(), (r.encoding, read))
+            .filter_map(|r| match readers[r.name.as_str()] {
+                Reader::Type(t) => Some((r.name.clone(), (r.encoding, t.read(r.encoding)))),
+                Reader::NoType { .. } => None,
             })
             .collect(),
         accepted,
+        differences: era.differences,
     });
     let kinds = kinds_from_env();
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
-    let indices: Vec<usize> = (0..records.len()).collect();
+    let indices: Vec<usize> = (0..records.len())
+        .filter(|i| layer.rules.contains_key(&records[*i].0))
+        .collect();
     let runs: Vec<LayerRun<'_, Axis>> = in_parallel(
         &indices,
         threads,
         |i| records[*i].1.rows().iter().map(|row| row.input.len()).sum(),
         |i| comparison::compare(&layer, &records[*i].1, &kinds),
     );
+    let run_of: BTreeMap<usize, &LayerRun<'_, Axis>> = indices.iter().copied().zip(&runs).collect();
 
     let mut used: BTreeMap<Allowed, usize> = BTreeMap::new();
     println!(
         "{:<28} {:>7} {:>12} {:>7} {:>7} {:>7}  allowed with owner",
         "rule", "samples", "observations", "agree", "allowed", "failed"
     );
-    for ((rule, records), run) in records.iter().zip(&runs) {
+    for (i, (rule, records)) in records.iter().enumerate() {
         let mut counts = RuleCounts {
             samples: records.rows().len(),
             ..RuleCounts::default()
@@ -537,6 +605,15 @@ fn run() {
         if counts.samples == 0 {
             failures.push(format!("rule {rule} has no sample"));
         }
+        let Some(run) = run_of.get(&i) else {
+            if let Reader::NoType { why } = readers[rule.as_str()] {
+                println!(
+                    "{rule:<28} {:>7} {:>12} {:>7} {:>7} {:>7}  no pallas type: {why}",
+                    counts.samples, "-", "-", "-", "-"
+                );
+            }
+            continue;
+        };
         for j in &run.judgements {
             counts.observations += 1;
             match &j.outcome {
@@ -571,16 +648,20 @@ fn run() {
             }
         }
     }
-    failures.extend(unused_differences(&used, kinds.is_empty()));
+    failures.extend(unused_differences(era.differences, &used, kinds.is_empty()));
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// Each listed difference that fails the run: one listed twice, or, in a run
 /// of every kind, one no observation was allowed by.
-fn unused_differences(used: &BTreeMap<Allowed, usize>, every_kind: bool) -> Vec<String> {
+fn unused_differences(
+    list: &[Known],
+    used: &BTreeMap<Allowed, usize>,
+    every_kind: bool,
+) -> Vec<String> {
     let mut failures = Vec::new();
     let mut seen = BTreeSet::new();
-    for known in LIST {
+    for known in list {
         let allowed = known.allowance.allowed;
         if !seen.insert(allowed) {
             failures.push(format!("{allowed} is listed twice"));
@@ -592,11 +673,11 @@ fn unused_differences(used: &BTreeMap<Allowed, usize>, every_kind: bool) -> Vec<
     failures
 }
 
-#[test]
-fn pallas_reads_the_conway_dataset_as_the_ledger_does() {
+/// Runs an era on a thread whose stack holds pallas's deepest reading.
+fn run_on_large_stack(era: &'static Era) {
     let outcome = std::thread::Builder::new()
         .stack_size(1 << 28)
-        .spawn(run)
+        .spawn(|| run(era))
         .expect("spawn")
         .join();
     if let Err(e) = outcome {
@@ -604,8 +685,18 @@ fn pallas_reads_the_conway_dataset_as_the_ledger_does() {
     }
 }
 
+#[test]
+fn pallas_reads_the_conway_dataset_as_the_ledger_does() {
+    run_on_large_stack(&CONWAY);
+}
+
+#[test]
+fn pallas_reads_the_dijkstra_dataset_as_the_ledger_does() {
+    run_on_large_stack(&DIJKSTRA);
+}
+
 #[cfg(test)]
-fn table(names: &[&'static str]) -> Vec<(&'static str, RuleType)> {
+fn table(names: &[&'static str]) -> Vec<(&'static str, Reader)> {
     names.iter().map(|n| (*n, read!(u64))).collect()
 }
 
@@ -675,7 +766,7 @@ fn a_rule_tabled_twice_fails() {
 #[test]
 fn the_generator_table_is_read_with_its_encodings() {
     let source = "conwayRules :: [GenerationRule]\nconwayRules =\n  let version = eraProtVerHigh @ConwayEra\n   in [ mkAnnotatorRule @(Block (Header StandardCrypto) ConwayEra) version \"block\",\n        mkByteExactRule @(TxBody TopTx ConwayEra) version \"transaction_body\",\n        -- a comment\n        mkPositiveMultiAssetRule version \"%multiasset<positive_coin>\",\n        mkRule @Coin version \"coin\"\n      ]\n\ndijkstraRules =\n   in [ mkRule @Coin version \"other\"\n";
-    let rules = corpus::generator_rules(source).expect("read");
+    let rules = corpus::generator_rules(source, "conwayRules").expect("read");
     let read: Vec<(&str, Encoding)> = rules
         .iter()
         .map(|r| (r.name.as_str(), r.encoding))
@@ -692,15 +783,66 @@ fn the_generator_table_is_read_with_its_encodings() {
 }
 
 #[test]
+fn the_dijkstra_generator_table_is_read_with_its_encodings() {
+    let source = "conwayRules =\n   in [ mkRule @Coin version \"other\"\n      ]\n\ndijkstraRules :: [GenerationRule]\ndijkstraRules =\n  let version = eraProtVerHigh @DijkstraEra\n   in [ -- A comment\n        -- over two lines.\n        mkByteExactAnnotatorRule @(Leios.Header StandardCrypto) version \"header\",\n        mkRule @(Hash HASH EraIndependentTx, Word32) version \"eb_reference\",\n        mkSubTransactionsRule version \"sub_transactions\",\n        mkRequiredTopLevelGuardsRule version \"required_top_level_guards\",\n        mkGuardsRule version \"guards\",\n        mkByteExactRule @(TxBody TopTx DijkstraEra) version \"transaction_body\"\n      ]\n\n-- | Next\neraSpecName :: EraSpec -> Text\n";
+    let rules = corpus::generator_rules(source, "dijkstraRules").expect("read");
+    let read: Vec<(&str, Encoding)> = rules
+        .iter()
+        .map(|r| (r.name.as_str(), r.encoding))
+        .collect();
+    assert_eq!(
+        read,
+        [
+            ("header", Encoding::Exact),
+            ("eb_reference", Encoding::Normalized),
+            ("sub_transactions", Encoding::Normalized),
+            ("required_top_level_guards", Encoding::Normalized),
+            ("guards", Encoding::Normalized),
+            ("transaction_body", Encoding::Exact),
+        ]
+    );
+}
+
+#[test]
 fn an_unknown_generator_constructor_fails() {
     let source = "conwayRules =\n   in [ mkStrangeRule @Coin version \"coin\"\n      ]\n";
-    let error = corpus::generator_rules(source).expect_err("an unknown constructor");
+    let error = corpus::generator_rules(source, "conwayRules").expect_err("an unknown constructor");
     assert!(error.contains("does not know"), "{error}");
 }
 
 #[test]
-fn a_source_with_no_conway_table_fails() {
-    assert!(corpus::generator_rules("dijkstraRules =\n   in [ ]\n").is_err());
+fn a_source_with_no_table_of_the_name_fails() {
+    let source = "dijkstraRules =\n   in [ mkRule @Coin version \"coin\"\n      ]\n";
+    assert!(corpus::generator_rules(source, "conwayRules").is_err());
+    assert!(corpus::generator_rules(source, "dijkstraRules").is_ok());
+}
+
+#[test]
+fn a_typed_table_has_no_untyped_rule() {
+    assert_eq!(untyped(&table(&["coin", "slot"])), Vec::<String>::new());
+}
+
+#[test]
+fn a_rule_with_no_pallas_type_is_tabled_and_fails() {
+    let mut rules = table(&["coin"]);
+    rules.push((
+        "slot",
+        Reader::NoType {
+            why: "no type reads it",
+        },
+    ));
+    assert_eq!(
+        checked_rules(
+            &generated(&["coin", "slot"], Encoding::Normalized),
+            &["coin".to_owned(), "slot".to_owned()],
+            &rules,
+        ),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        untyped(&rules),
+        ["rule slot has no pallas type: no type reads it"]
+    );
 }
 
 #[test]
