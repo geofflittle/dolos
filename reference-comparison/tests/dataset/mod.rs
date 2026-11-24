@@ -60,7 +60,7 @@ use std::time::Duration;
 
 use changes::{Change, Place, Reform, reform};
 use corpus::{Encoding, GeneratorRule};
-use differences::{Evidence, Known};
+use differences::{Compared, Evidence, Known, RefusedByLedger, RefusedByPallas};
 use ledger_oracle_judge::comparison::{
     self, Allowance, Allowed, Answer, ComparedLayer, Expected, Key, Layer, LayerRun, Outcome,
     Owner, Records, Reference, Row, catch, kinds_from_env,
@@ -209,32 +209,22 @@ impl Dataset {
             .unwrap_or_else(|| panic!("no pallas type reads {name}"))
     }
 
-    fn evidence(&self, row: &Row, key: &Key<Axis>) -> Option<Evidence> {
+    /// What pallas's reading of a sample shows for one observation, or why
+    /// it shows nothing.
+    fn evidence(&self, row: &Row, key: &Key<Axis>) -> Result<Evidence, String> {
         let (_, read) = self.rule(row);
         let input = row.input.clone();
-        let reading = catch(AssertUnwindSafe(move || read(&input))).ok()?;
-        let not_read = || Err("the sample is not read".to_owned());
-        let mut evidence = Evidence {
-            axis: key.axis,
-            refused_by_ledger: matches!(row.reference, Reference::Refuses(_)),
-            refusal: None,
-            refused_byte: None,
-            trailing: 0,
-            stopped_inside: false,
-            changes: not_read(),
-            ledger_changes: not_read(),
-            written_as_read: false,
-            round_trip: Err("the sample is not read".to_owned()),
-            same_as_accepted: false,
-        };
-        let reading = match reading {
-            Ok(reading) => reading,
-            Err(refusal) => {
-                evidence.refused_byte =
-                    refused_at(&refusal).and_then(|at| row.input.get(at).copied());
-                evidence.refusal = Some(refusal);
-                return Some(evidence);
+        let reading = catch(AssertUnwindSafe(move || read(&input)))
+            .map_err(|_| "the reading panics".to_owned())?;
+        let reading = match (reading, &row.reference) {
+            (Err(_), Reference::Refuses(_)) => return Err("both refuse the sample".to_owned()),
+            (Err(refusal), Reference::Accepts(_)) => {
+                return Ok(Evidence::RefusedByPallas(RefusedByPallas {
+                    refused_byte: refused_at(&refusal).and_then(|at| row.input.get(at).copied()),
+                    refusal,
+                }));
             }
+            (Ok(reading), _) => reading,
         };
         let normal = |bytes: &Result<Vec<u8>, String>| {
             let bytes = bytes
@@ -244,25 +234,32 @@ impl Dataset {
         };
         let value = normal(&reading.plain);
         let read = normal(&Ok(row.input[..reading.consumed].to_vec()));
-        evidence.trailing = row.input.len() - reading.consumed;
-        evidence.stopped_inside = stopped_inside(&row.input, reading.consumed);
-        evidence.written_as_read = matches!(
-            (&read, normal(&reading.encoding)),
-            (Ok(read), Ok(written)) if *read == written
-        );
-        evidence.round_trip = reading.round_trip.clone();
-        evidence.changes = changes_between(&read, &value).map(|c| self.ledger_forms.told(c));
-        if let Reference::Accepts(accepted) = &row.reference {
-            let ledger = accepted
-                .encoding
-                .as_deref()
-                .ok_or_else(|| "no ledger encoding".to_owned())
-                .and_then(ledger_normal);
-            evidence.ledger_changes = changes_between(&ledger, &normal(&reading.encoding));
+        let changes = changes_between(&read, &value).map(|c| self.ledger_forms.told(c));
+        match &row.reference {
+            Reference::Refuses(_) => {
+                let accepted = self.accepted.get(key.value_kind());
+                Ok(Evidence::RefusedByLedger(RefusedByLedger {
+                    trailing: row.input.len() - reading.consumed,
+                    stopped_inside: stopped_inside(&row.input, reading.consumed),
+                    changes,
+                    same_as_accepted: value.is_ok_and(|n| accepted.is_some_and(|a| a.contains(&n))),
+                }))
+            }
+            Reference::Accepts(accepted) => {
+                let ledger = accepted
+                    .encoding
+                    .as_deref()
+                    .ok_or_else(|| "no ledger encoding".to_owned())
+                    .and_then(ledger_normal);
+                let ledger_changes = changes_between(&ledger, &normal(&reading.encoding))?;
+                Ok(Evidence::Compared(Compared {
+                    axis: key.axis,
+                    changes,
+                    ledger_changes: self.ledger_forms.told_from_ledger(ledger_changes),
+                    round_trip: reading.round_trip,
+                }))
+            }
         }
-        let accepted = self.accepted.get(key.value_kind());
-        evidence.same_as_accepted = value.is_ok_and(|n| accepted.is_some_and(|a| a.contains(&n)));
-        Some(evidence)
     }
 
     /// What the evidence for one observation shows, for a report line.
@@ -272,11 +269,16 @@ impl Dataset {
             axis,
         };
         match self.evidence(row, &key) {
-            None => " (no evidence: the reading panics)".to_owned(),
-            Some(e) => format!(
-                " (changes from the bytes read {:?}, from the ledger's {:?}, {} trailing)",
-                e.changes, e.ledger_changes, e.trailing
+            Err(why) => format!(" (no evidence: {why})"),
+            Ok(Evidence::Compared(e)) => format!(
+                " (changes from the bytes read {:?}, from the ledger's {:?})",
+                e.changes, e.ledger_changes
             ),
+            Ok(Evidence::RefusedByLedger(e)) => format!(
+                " (changes from the bytes read {:?}, {} trailing)",
+                e.changes, e.trailing
+            ),
+            Ok(Evidence::RefusedByPallas(e)) => format!(" (refused: {})", e.refusal),
         }
     }
 }
@@ -323,11 +325,29 @@ impl LedgerForms {
     /// The changes with each embedded encoding written as the ledger writes
     /// one in that place told as the ledger's form.
     fn told(&self, changes: BTreeSet<Change>) -> BTreeSet<Change> {
+        self.told_by(changes, reform)
+    }
+
+    /// The changes from the ledger's encoding with each embedded encoding
+    /// the ledger writes in its own form for the one read in that place told
+    /// as the ledger's form.
+    fn told_from_ledger(&self, changes: BTreeSet<Change>) -> BTreeSet<Change> {
+        self.told_by(changes, |from, to| reform(to, from))
+    }
+
+    /// The changes with each embedded form `reformed` finds learned in its
+    /// place told as the ledger's form.
+    fn told_by(
+        &self,
+        changes: BTreeSet<Change>,
+        reformed: fn(&[u8], &[u8]) -> Option<Reform>,
+    ) -> BTreeSet<Change> {
         changes
             .into_iter()
             .map(|change| match change {
                 Change::EmbeddedForm { place, from, to }
-                    if reform(&from, &to).is_some_and(|r| self.0.contains(&(place.clone(), r))) =>
+                    if reformed(&from, &to)
+                        .is_some_and(|r| self.0.contains(&(place.clone(), r))) =>
                 {
                     Change::EmbeddedLedgerForm
                 }
@@ -342,7 +362,8 @@ fn ledger_normal(expected: &[u8]) -> Result<Vec<u8>, String> {
     normalize(expected).map_err(|e| format!("the ledger's encoding has no normal form: {e}"))
 }
 
-/// The changes that turn the first normal form encoding into the second.
+/// The changes that turn the first normal form encoding into the second, or
+/// the differences no listed change makes.
 fn changes_between(
     from: &Result<Vec<u8>, String>,
     to: &Result<Vec<u8>, String>,
@@ -350,6 +371,8 @@ fn changes_between(
     let items =
         |bytes: &Result<Vec<u8>, String>| changes::items(bytes.as_ref().map_err(Clone::clone)?);
     changes::changes(&items(from)?, &items(to)?)
+        .explained()
+        .map_err(|unexplained| shortened(format!("unexplained differences {unexplained:?}")))
 }
 
 /// Where two encodings first differ, with a few bytes of each from there.
@@ -453,10 +476,10 @@ impl ComparedLayer for Dataset {
     }
 
     fn allowance(&self, row: &Row, key: &Key<Axis>) -> Option<Allowance<Seen, String>> {
-        let evidence = self.evidence(row, key)?;
+        let evidence = self.evidence(row, key).ok()?;
         self.differences
             .iter()
-            .find(|known| (known.shows)(&evidence))
+            .find(|known| known.shows(&evidence))
             .map(|known| Allowance {
                 allowed: known.allowance.allowed,
                 shown: known.allowance.shown,
@@ -1047,6 +1070,128 @@ fn another_rational_differs_from_the_ledger_unreduced_one() {
         bytes_seen(Encoding::Exact, &Ok(one_half), &two_fourths),
         Seen::Differs(_)
     ));
+}
+
+#[cfg(test)]
+fn numbers(differences: &'static [Known]) -> Dataset {
+    let rule = |read: Read| (Encoding::Normalized, read);
+    Dataset {
+        rules: [
+            (
+                "coin".to_owned(),
+                rule(read_as!(u64, crate::dataset::plain::whole)),
+            ),
+            (
+                "coins".to_owned(),
+                rule(read_as!(Vec<u64>, crate::dataset::plain::whole)),
+            ),
+            (
+                "text".to_owned(),
+                rule(read_as!(String, crate::dataset::plain::whole)),
+            ),
+            (
+                "any".to_owned(),
+                rule(read_as!(
+                    pallas_codec::utils::AnyCbor,
+                    crate::dataset::plain::whole
+                )),
+            ),
+        ]
+        .into(),
+        accepted: [("coin".to_owned(), [bytes_of("01")].into())].into(),
+        ledger_forms: LedgerForms::learned([]),
+        differences,
+    }
+}
+
+#[cfg(test)]
+fn sample(class: &str, input: &str, ledger: Option<&str>) -> Row {
+    Row {
+        class: class.to_owned(),
+        variant: None,
+        input: bytes_of(input),
+        reference: match ledger {
+            Some(encoding) => Reference::Accepts(comparison::Accepted {
+                dump: serde_json::Value::Null,
+                encoding: Some(bytes_of(encoding)),
+            }),
+            None => Reference::Refuses("refused".to_owned()),
+        },
+        rules: Vec::new(),
+        site: None,
+        mutated: None,
+        base: None,
+    }
+}
+
+#[cfg(test)]
+const EVERY_VERDICT: &[Known] = &[
+    differences::OTHER_FORM_KEPT,
+    differences::OTHER_ENCODING_KEPT,
+    differences::SOURCE_FORM_KEPT,
+    differences::INDEFINITE_TEXT,
+];
+
+#[cfg(test)]
+fn allowed(row: &Row, axis: Axis) -> Option<String> {
+    let key = Key {
+        class: row.class.clone(),
+        axis,
+    };
+    numbers(EVERY_VERDICT)
+        .allowance(row, &key)
+        .map(|a| a.allowed.to_string())
+}
+
+#[cfg(test)]
+fn named(known: &Known) -> Option<String> {
+    Some(known.allowance.allowed.to_string())
+}
+
+#[test]
+fn an_accepted_value_the_ledger_writes_as_another_value_is_not_allowed() {
+    let row = sample("coin valid", "01", Some("02"));
+    assert_eq!(allowed(&row, Axis::Bytes), None);
+}
+
+#[test]
+fn a_transaction_the_ledger_writes_without_its_valid_flag_is_allowed() {
+    let row = sample("any valid", "84a0a0f5f6", Some("83a0a0f6"));
+    assert_eq!(
+        allowed(&row, Axis::Bytes),
+        named(&differences::SOURCE_FORM_KEPT)
+    );
+    let other_value = sample("any valid", "84a0a0f5f6", Some("83a0a1f6"));
+    assert_eq!(allowed(&other_value, Axis::Bytes), None);
+    let false_flag = sample("any valid", "84a0a0f4f6", Some("83a0a0f6"));
+    assert_eq!(allowed(&false_flag, Axis::Bytes), None);
+}
+
+#[test]
+fn an_accepted_value_the_ledger_writes_under_a_set_tag_is_allowed() {
+    let row = sample("coins valid", "820102", Some("d90102820102"));
+    assert_eq!(
+        allowed(&row, Axis::Bytes),
+        named(&differences::OTHER_ENCODING_KEPT)
+    );
+}
+
+#[test]
+fn indefinite_text_pallas_refuses_is_allowed() {
+    let row = sample("text valid", "7f6161ff", Some("6161"));
+    assert_eq!(
+        allowed(&row, Axis::Verdict),
+        named(&differences::INDEFINITE_TEXT)
+    );
+}
+
+#[test]
+fn a_value_the_ledger_refuses_and_accepts_in_another_form_is_allowed() {
+    let row = sample("coin invalid", "01", None);
+    assert_eq!(
+        allowed(&row, Axis::Verdict),
+        named(&differences::OTHER_FORM_KEPT)
+    );
 }
 
 #[test]

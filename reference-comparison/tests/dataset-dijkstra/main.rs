@@ -14,6 +14,7 @@ const DIJKSTRA: Era = Era {
     rules: rules::RULES,
     differences: &[
         OTHER_ENCODING_KEPT,
+        SOURCE_FORM_KEPT,
         INDEFINITE_TEXT,
         INDEFINITE_EMBEDDED_BYTES,
         PAIR_INDEFINITE,

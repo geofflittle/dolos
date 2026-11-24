@@ -10,16 +10,37 @@ use ledger_oracle_judge::comparison::{Allowance, Allowed, Answer, Commit, Disagr
 
 use super::{Axis, Change, Seen};
 
-/// What pallas's reading of one sample shows, for telling which listed
-/// difference it is.
-pub struct Evidence {
+/// What pallas's reading of one sample shows, by the two verdicts on it.
+pub enum Evidence {
+    Compared(Compared),
+    RefusedByPallas(RefusedByPallas),
+    RefusedByLedger(RefusedByLedger),
+}
+
+/// A sample both read, whose ledger encoding becomes pallas's by listed
+/// changes alone.
+pub struct Compared {
     pub axis: Axis,
-    pub refused_by_ledger: bool,
-    /// Why pallas refuses the sample, when it does.
-    pub refusal: Option<String>,
+    /// The changes from the bytes pallas read to its value's encoding, both
+    /// in normal form.
+    pub changes: Result<BTreeSet<Change>, String>,
+    /// The changes from the ledger's encoding to pallas's, in normal form.
+    pub ledger_changes: BTreeSet<Change>,
+    /// Whether the encoding pallas writes reads back as its value, or how
+    /// the value read back differs.
+    pub round_trip: Result<(), String>,
+}
+
+/// A sample the ledger reads and pallas refuses.
+pub struct RefusedByPallas {
+    pub refusal: String,
     /// The first byte of the item pallas refuses, when its refusal names a
     /// position.
     pub refused_byte: Option<u8>,
+}
+
+/// A sample the ledger refuses and pallas reads.
+pub struct RefusedByLedger {
     /// The bytes after the value pallas read.
     pub trailing: usize,
     /// Whether the bytes read end inside an item of the sample.
@@ -27,13 +48,6 @@ pub struct Evidence {
     /// The changes from the bytes pallas read to its value's encoding, both
     /// in normal form.
     pub changes: Result<BTreeSet<Change>, String>,
-    /// The changes from the ledger's encoding to pallas's, in normal form.
-    pub ledger_changes: Result<BTreeSet<Change>, String>,
-    /// Whether pallas writes the bytes it read, both in normal form.
-    pub written_as_read: bool,
-    /// Whether the encoding pallas writes reads back as its value, or how
-    /// the value read back differs.
-    pub round_trip: Result<(), String>,
     /// Whether the normal form of the value's encoding is the normal form of
     /// the ledger's encoding of a sample of the same rule it accepts.
     pub same_as_accepted: bool,
@@ -50,14 +64,26 @@ const AS_READ: &[Change] = &[
 ];
 
 /// The changes from the ledger's encoding to one kept as read, where the
-/// ledger writes a set or a map in its own order and its own set tag, and an
-/// output with no Babbage field as a legacy array.
+/// ledger writes a set or a map in its own order and its own set tag, an
+/// output with no Babbage field as a legacy array and an embedded encoding
+/// in its own form.
 const LEDGER_FORM: &[Change] = &[
     Change::SetTagAdded,
     Change::SetTagDropped,
     Change::EntriesReordered,
     Change::ItemsReordered,
     Change::OutputAsMap,
+    Change::EmbeddedLedgerForm,
+];
+
+/// The changes from the ledger's encoding to a form the ledger's decoder
+/// reads as the same value.
+const SOURCE_FORM: &[Change] = &[
+    Change::ValidFlagAdded,
+    Change::NullBlsKeyAdded,
+    Change::GuardKeyHashes,
+    Change::EmptyAssetsAdded,
+    Change::ByronPayloadForm,
 ];
 
 /// Each change a listed difference owns, in the order a sample showing
@@ -72,20 +98,15 @@ const OWNED: &[Change] = &[
     Change::NullsAdded,
 ];
 
-impl Evidence {
+/// Whether the value is the one read.
+fn kept(changes: &Result<BTreeSet<Change>, String>) -> bool {
+    changes.as_ref().is_ok_and(|c| only(c, AS_READ, &[]))
+}
+
+impl Compared {
     /// Whether the value is the one read.
     pub fn kept(&self) -> bool {
-        only(&self.changes, AS_READ, &[])
-    }
-
-    /// Whether the first owned change the value shows is `change`, every
-    /// other change it shows being owned or keeping it as read.
-    fn first_owned(&self, change: Change) -> bool {
-        let Ok(found) = &self.changes else {
-            return false;
-        };
-        only(&self.changes, AS_READ, OWNED)
-            && OWNED.iter().find(|c| found.contains(c)) == Some(&change)
+        kept(&self.changes)
     }
 
     /// Whether the ledger's encoding becomes pallas's by `change` and by the
@@ -95,10 +116,7 @@ impl Evidence {
             &self.ledger_changes,
             LEDGER_FORM,
             std::slice::from_ref(&change),
-        ) && self
-            .ledger_changes
-            .as_ref()
-            .is_ok_and(|c| c.contains(&change))
+        ) && self.ledger_changes.contains(&change)
     }
 
     /// Whether the ledger's encoding becomes pallas's by the ledger's own
@@ -107,14 +125,11 @@ impl Evidence {
         only(&self.ledger_changes, LEDGER_FORM, &[])
     }
 
-    /// Whether pallas refuses with `text`.
-    fn refuses_with(&self, text: &str) -> bool {
-        self.refusal.as_ref().is_some_and(|r| r.contains(text))
-    }
-
-    /// Whether pallas refuses an item whose first byte `holds` accepts.
-    fn refuses_at(&self, text: &str, holds: fn(u8) -> bool) -> bool {
-        self.refuses_with(text) && self.refused_byte.is_some_and(holds)
+    /// Whether the ledger's encoding becomes pallas's by a form its decoder
+    /// reads as the same value and by the ledger's own form.
+    fn ledger_writes_source_form(&self) -> bool {
+        only(&self.ledger_changes, LEDGER_FORM, SOURCE_FORM)
+            && SOURCE_FORM.iter().any(|c| self.ledger_changes.contains(c))
     }
 
     /// Whether the value read back loses the cost models of languages its
@@ -126,21 +141,74 @@ impl Evidence {
     }
 }
 
+impl RefusedByPallas {
+    /// Whether pallas refuses with `text`.
+    fn refuses_with(&self, text: &str) -> bool {
+        self.refusal.contains(text)
+    }
+
+    /// Whether pallas refuses an item whose first byte `holds` accepts.
+    fn refuses_at(&self, text: &str, holds: fn(u8) -> bool) -> bool {
+        self.refuses_with(text) && self.refused_byte.is_some_and(holds)
+    }
+}
+
+impl RefusedByLedger {
+    /// Whether the value is the one read.
+    pub fn kept(&self) -> bool {
+        kept(&self.changes)
+    }
+
+    /// Whether pallas reads no trailing bytes and the first owned change the
+    /// value shows is `change`, every other change it shows being owned or
+    /// keeping it as read.
+    fn read_whole_with(&self, change: Change) -> bool {
+        let Ok(found) = &self.changes else {
+            return false;
+        };
+        self.trailing == 0
+            && only(found, AS_READ, OWNED)
+            && OWNED.iter().find(|c| found.contains(c)) == Some(&change)
+    }
+}
+
 /// Whether every change found is one of `kept` or `owned`.
-fn only(found: &Result<BTreeSet<Change>, String>, kept: &[Change], owned: &[Change]) -> bool {
-    found
-        .as_ref()
-        .is_ok_and(|found| found.iter().all(|c| kept.contains(c) || owned.contains(c)))
+fn only(found: &BTreeSet<Change>, kept: &[Change], owned: &[Change]) -> bool {
+    found.iter().all(|c| kept.contains(c) || owned.contains(c))
+}
+
+/// The evidence a listed difference is shown by, one case per pair of
+/// verdicts.
+pub enum Shows {
+    Compared(fn(&Compared) -> bool),
+    RefusedByPallas(fn(&RefusedByPallas) -> bool),
+    RefusedByLedger(fn(&RefusedByLedger) -> bool),
 }
 
 /// A difference the run lets pass and the evidence that shows it.
 pub struct Known {
     pub allowance: Allowance<Seen, String>,
-    pub shows: fn(&Evidence) -> bool,
+    pub shown_by: Shows,
+}
+
+impl Known {
+    /// Whether the evidence shows this difference.
+    pub fn shows(&self, evidence: &Evidence) -> bool {
+        match (&self.shown_by, evidence) {
+            (Shows::Compared(shows), Evidence::Compared(e)) => shows(e),
+            (Shows::RefusedByPallas(shows), Evidence::RefusedByPallas(e)) => shows(e),
+            (Shows::RefusedByLedger(shows), Evidence::RefusedByLedger(e)) => shows(e),
+            _ => false,
+        }
+    }
 }
 
 const KEPT_AS_READ: Owner = Owner::Rule {
     clause: "Everything else is accepted and kept as read: duplicates, emptiness, sizes, trailing bytes, indefinite or non canonical encodings.",
+};
+
+const SOURCE_READS_ALIKE: Owner = Owner::Rule {
+    clause: "Decode accepts an input any source decoder accepts and reads it to the value that source reads.",
 };
 
 const CONTENT_IN_VALIDATE: Owner = Owner::Rule {
@@ -231,29 +299,19 @@ fn beyond_u64(byte: u8) -> bool {
     byte >> 5 == 1 || byte == 0xc2 || byte == 0xc3
 }
 
-/// Whether the ledger refuses a sample pallas reads without trailing bytes.
-fn refused_and_read_whole(e: &Evidence) -> bool {
-    e.axis == Axis::Verdict && e.refused_by_ledger && e.refusal.is_none() && e.trailing == 0
-}
-
-/// Whether pallas refuses a sample the ledger accepts.
-fn refused_by_pallas(e: &Evidence) -> bool {
-    !e.refused_by_ledger && e.refusal.is_some()
-}
-
 const fn known(
     name: &'static str,
     allows: Disagreement,
     owner: Owner,
     shown: fn(&Answer<Seen, String>) -> bool,
-    shows: fn(&Evidence) -> bool,
+    shown_by: Shows,
 ) -> Known {
     Known {
         allowance: Allowance {
             allowed: Allowed::new(name, allows, owner),
             shown,
         },
-        shows,
+        shown_by,
     }
 }
 
@@ -262,7 +320,7 @@ pub const OTHER_FORM_KEPT: Known = known(
     Disagreement::Accepts,
     KEPT_AS_READ,
     accepts,
-    |e| refused_and_read_whole(e) && e.same_as_accepted,
+    Shows::RefusedByLedger(|e| e.trailing == 0 && e.same_as_accepted),
 );
 
 pub const REFUSED_CONTENT_KEPT: Known = known(
@@ -270,7 +328,7 @@ pub const REFUSED_CONTENT_KEPT: Known = known(
     Disagreement::Accepts,
     CONTENT_IN_VALIDATE,
     accepts,
-    |e| refused_and_read_whole(e) && !e.same_as_accepted && e.kept(),
+    Shows::RefusedByLedger(|e| e.trailing == 0 && !e.same_as_accepted && e.kept()),
 );
 
 pub const OTHER_ENCODING_KEPT: Known = known(
@@ -278,11 +336,15 @@ pub const OTHER_ENCODING_KEPT: Known = known(
     Disagreement::Values,
     KEPT_AS_READ,
     differs,
-    |e| {
-        e.axis == Axis::Bytes
-            && !e.refused_by_ledger
-            && (e.written_as_read || (e.kept() && e.ledger_form_only()))
-    },
+    Shows::Compared(|e| e.axis == Axis::Bytes && e.kept() && e.ledger_form_only()),
+);
+
+pub const SOURCE_FORM_KEPT: Known = known(
+    "the ledger writes another form its decoder reads as the value kept as read",
+    Disagreement::Values,
+    SOURCE_READS_ALIKE,
+    differs,
+    Shows::Compared(|e| e.axis == Axis::Bytes && e.kept() && e.ledger_writes_source_form()),
 );
 
 pub const EXTRA_ITEM: Known = known(
@@ -290,7 +352,7 @@ pub const EXTRA_ITEM: Known = known(
     Disagreement::Accepts,
     EXTRA_ITEM_DROPPED,
     accepts,
-    |e| refused_and_read_whole(e) && e.first_owned(Change::ItemsDropped),
+    Shows::RefusedByLedger(|e| e.read_whole_with(Change::ItemsDropped)),
 );
 
 pub const PART_READ_ENDS_INSIDE: Known = known(
@@ -298,7 +360,7 @@ pub const PART_READ_ENDS_INSIDE: Known = known(
     Disagreement::Accepts,
     PART_READ,
     accepts,
-    |e| e.axis == Axis::Verdict && e.refused_by_ledger && e.refusal.is_none() && e.stopped_inside,
+    Shows::RefusedByLedger(|e| e.stopped_inside),
 );
 
 pub const MISSING_LAST_FIELD_NULL: Known = known(
@@ -306,7 +368,7 @@ pub const MISSING_LAST_FIELD_NULL: Known = known(
     Disagreement::Accepts,
     MISSING_AS_NULL,
     accepts,
-    |e| refused_and_read_whole(e) && e.first_owned(Change::NullsAdded),
+    Shows::RefusedByLedger(|e| e.read_whole_with(Change::NullsAdded)),
 );
 
 pub const REPEATED_KEY_DROPPED: Known = known(
@@ -314,7 +376,7 @@ pub const REPEATED_KEY_DROPPED: Known = known(
     Disagreement::Accepts,
     REPEATED_KEY_MERGED,
     accepts,
-    |e| refused_and_read_whole(e) && e.first_owned(Change::DuplicateKeysMerged),
+    Shows::RefusedByLedger(|e| e.read_whole_with(Change::DuplicateKeysMerged)),
 );
 
 pub const UNKNOWN_KEY_DROPPED: Known = known(
@@ -322,7 +384,7 @@ pub const UNKNOWN_KEY_DROPPED: Known = known(
     Disagreement::Accepts,
     NO_FIELD_FOR_KEY,
     accepts,
-    |e| refused_and_read_whole(e) && e.first_owned(Change::EntriesDropped),
+    Shows::RefusedByLedger(|e| e.read_whole_with(Change::EntriesDropped)),
 );
 
 pub const UNKNOWN_KEY_UNWRITTEN: Known = known(
@@ -330,11 +392,11 @@ pub const UNKNOWN_KEY_UNWRITTEN: Known = known(
     Disagreement::Values,
     NO_FIELD_FOR_KEY,
     differs,
-    |e| {
+    Shows::Compared(|e| {
         e.axis == Axis::Bytes
             && e.round_trip.is_ok()
             && e.ledger_writes_other_than(Change::EntriesDropped)
-    },
+    }),
 );
 
 pub const FRACTION_UNDER_ANY_TAG: Known = known(
@@ -342,7 +404,7 @@ pub const FRACTION_UNDER_ANY_TAG: Known = known(
     Disagreement::Accepts,
     FRACTION_ANY_TAG,
     accepts,
-    |e| refused_and_read_whole(e) && e.first_owned(Change::FractionTag),
+    Shows::RefusedByLedger(|e| e.read_whole_with(Change::FractionTag)),
 );
 
 pub const EMBEDDED_UNDER_ANY_TAG: Known = known(
@@ -350,7 +412,7 @@ pub const EMBEDDED_UNDER_ANY_TAG: Known = known(
     Disagreement::Accepts,
     EMBEDDED_ANY_TAG,
     accepts,
-    |e| refused_and_read_whole(e) && e.first_owned(Change::EmbeddedTag),
+    Shows::RefusedByLedger(|e| e.read_whole_with(Change::EmbeddedTag)),
 );
 
 pub const INDEFINITE_TEXT: Known = known(
@@ -358,7 +420,7 @@ pub const INDEFINITE_TEXT: Known = known(
     Disagreement::Refuses,
     STRING_DEFINITE,
     refuses,
-    |e| refused_by_pallas(e) && e.refuses_at("expected text (definite length)", indefinite_text),
+    Shows::RefusedByPallas(|e| e.refuses_at("expected text (definite length)", indefinite_text)),
 );
 
 pub const INDEFINITE_EMBEDDED_BYTES: Known = known(
@@ -366,7 +428,7 @@ pub const INDEFINITE_EMBEDDED_BYTES: Known = known(
     Disagreement::Refuses,
     STRING_DEFINITE,
     refuses,
-    |e| refused_by_pallas(e) && e.refuses_at("expected bytes (definite length)", indefinite_bytes),
+    Shows::RefusedByPallas(|e| e.refuses_at("expected bytes (definite length)", indefinite_bytes)),
 );
 
 pub const EMBEDDED_REST: Known = known(
@@ -374,7 +436,7 @@ pub const EMBEDDED_REST: Known = known(
     Disagreement::Accepts,
     EMBEDDED_REST_DROPPED,
     accepts,
-    |e| refused_and_read_whole(e) && e.first_owned(Change::EmbeddedBytesDropped),
+    Shows::RefusedByLedger(|e| e.read_whole_with(Change::EmbeddedBytesDropped)),
 );
 
 pub const UNKNOWN_COST_MODELS: Known = known(
@@ -382,15 +444,14 @@ pub const UNKNOWN_COST_MODELS: Known = known(
     Disagreement::Values,
     COST_MODELS_UNWRITTEN,
     differs,
-    |e| {
-        !e.refused_by_ledger
-            && e.unknown_cost_models_lost()
+    Shows::Compared(|e| {
+        e.unknown_cost_models_lost()
             && match e.axis {
                 Axis::RoundTrip => true,
                 Axis::Bytes => e.ledger_writes_other_than(Change::EntriesDropped),
                 Axis::Verdict => false,
             }
-    },
+    }),
 );
 
 pub const FLAT_ENUM_INDEFINITE: Known = known(
@@ -398,7 +459,7 @@ pub const FLAT_ENUM_INDEFINITE: Known = known(
     Disagreement::Refuses,
     FLAT_ENUM_DEFINITE,
     refuses,
-    |e| refused_by_pallas(e) && e.refuses_with("flat enum requires definite-length array"),
+    Shows::RefusedByPallas(|e| e.refuses_with("flat enum requires definite-length array")),
 );
 
 pub const PAIR_INDEFINITE: Known = known(
@@ -406,7 +467,7 @@ pub const PAIR_INDEFINITE: Known = known(
     Disagreement::Refuses,
     PAIR_DEFINITE,
     refuses,
-    |e| refused_by_pallas(e) && e.refuses_at("invalid 2-tuple length", indefinite_array),
+    Shows::RefusedByPallas(|e| e.refuses_at("invalid 2-tuple length", indefinite_array)),
 );
 
 pub const FRACTION_BEYOND_U64: Known = known(
@@ -414,7 +475,7 @@ pub const FRACTION_BEYOND_U64: Known = known(
     Disagreement::Refuses,
     TYPE_CANNOT_HOLD,
     refuses,
-    |e| refused_by_pallas(e) && e.refuses_at("expected u64", beyond_u64),
+    Shows::RefusedByPallas(|e| e.refuses_at("expected u64", beyond_u64)),
 );
 
 pub const EMPTY_NONEMPTY_SET: Known = known(
@@ -422,5 +483,5 @@ pub const EMPTY_NONEMPTY_SET: Known = known(
     Disagreement::Refuses,
     TYPE_CANNOT_HOLD,
     refuses,
-    |e| refused_by_pallas(e) && e.refuses_with("too few elements for a nonempty set"),
+    Shows::RefusedByPallas(|e| e.refuses_with("too few elements for a nonempty set")),
 );

@@ -1,0 +1,16 @@
+diff --git a/pallas-primitives/src/conway/model.rs b/pallas-primitives/src/conway/model.rs
+index a0fa6b7ab..df7c187f4 100644
+--- a/pallas-primitives/src/conway/model.rs
++++ b/pallas-primitives/src/conway/model.rs
+@@ -154,9 +154,9 @@ pub enum DRep {
+     Key(#[n(0)] AddrKeyhash),
+     #[n(1)]
+     Script(#[n(0)] ScriptHash),
+-    #[n(2)]
+-    Abstain,
+     #[n(3)]
++    Abstain,
++    #[n(2)]
+     NoConfidence,
+ }
+ 

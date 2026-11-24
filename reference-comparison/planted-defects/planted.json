@@ -44,5 +44,49 @@
       "mapping: class \"top-witness later v1alpha sub 1 output 0 payload\" disagrees (values) 10",
       "mapping: class \"top-witness later v1beta sub 1 output 0 payload\" disagrees (values) 10"
     ]
+  },
+  {
+    "planted": "guard-credential-kind-flipped",
+    "patched": "pallas-head",
+    "pallas": "20223bc95abb6ae7536858a01ddeddaacd4b741c",
+    "test": "dataset-dijkstra",
+    "expected": [
+      "decode: class \"guards valid bytes\" disagrees (values) 55",
+      "decode: class \"guards valid round trip\" disagrees (values) 55",
+      "decode: class \"sub_transaction_body manual-valid bytes\" disagrees (values) 1",
+      "decode: class \"sub_transaction_body manual-valid round trip\" disagrees (values) 1",
+      "decode: class \"sub_transaction_body valid bytes\" disagrees (values) 45",
+      "decode: class \"sub_transaction_body valid round trip\" disagrees (values) 45"
+    ]
+  },
+  {
+    "planted": "drep-abstain-written-as-no-confidence",
+    "patched": "pallas-head",
+    "pallas": "20223bc95abb6ae7536858a01ddeddaacd4b741c",
+    "test": "dataset-conway",
+    "expected": [
+      "decode: class \"certificate invalid-zap-0 verdict\" disagrees (accepts) 28",
+      "decode: class \"certificate manual-invalid verdict\" disagrees (accepts) 1",
+      "decode: class \"certificate manual-valid bytes\" disagrees (values) 3",
+      "decode: class \"certificate manual-valid round trip\" disagrees (values) 3",
+      "decode: class \"certificate valid bytes\" disagrees (values) 46",
+      "decode: class \"certificate valid round trip\" disagrees (values) 46",
+      "decode: class \"certificates invalid-zap-0 verdict\" disagrees (accepts) 81",
+      "decode: class \"certificates invalid-zap-1 verdict\" disagrees (accepts) 7",
+      "decode: class \"certificates invalid-zap-2 verdict\" disagrees (accepts) 6",
+      "decode: class \"certificates invalid-zap-3 verdict\" disagrees (accepts) 1",
+      "decode: class \"certificates manual-valid bytes\" disagrees (values) 2",
+      "decode: class \"certificates manual-valid round trip\" disagrees (values) 2",
+      "decode: class \"certificates valid bytes\" disagrees (values) 81",
+      "decode: class \"certificates valid round trip\" disagrees (values) 81",
+      "decode: class \"drep manual-valid bytes\" disagrees (values) 4",
+      "decode: class \"drep manual-valid round trip\" disagrees (values) 4",
+      "decode: class \"drep valid bytes\" disagrees (values) 4",
+      "decode: class \"drep valid round trip\" disagrees (values) 4",
+      "decode: class \"transaction_body invalid-zap-0 verdict\" disagrees (accepts) 49",
+      "decode: class \"transaction_body invalid-zap-1 verdict\" disagrees (accepts) 13",
+      "decode: class \"transaction_body invalid-zap-2 verdict\" disagrees (accepts) 8",
+      "decode: class \"transaction_body invalid-zap-3 verdict\" disagrees (accepts) 1"
+    ]
   }
 ]
