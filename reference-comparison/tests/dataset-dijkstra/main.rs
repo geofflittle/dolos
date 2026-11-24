@@ -13,10 +13,7 @@ const DIJKSTRA: Era = Era {
     generator_table: "dijkstraRules",
     rules: rules::RULES,
     differences: &[
-        OTHER_FORM_KEPT,
-        REFUSED_CONTENT_KEPT,
         OTHER_ENCODING_KEPT,
-        EXTRA_ITEM,
         INDEFINITE_TEXT,
         INDEFINITE_EMBEDDED_BYTES,
         PAIR_INDEFINITE,
