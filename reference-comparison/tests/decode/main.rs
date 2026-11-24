@@ -598,7 +598,7 @@ fn aux(a: &d::AuxiliaryData) -> Value {
         ),
         d::AuxiliaryData::ShelleyMa(x) => (
             metadata(Some(&x.transaction_metadata)),
-            natives(x.auxiliary_scripts.as_ref()),
+            natives(Some(&x.auxiliary_scripts)),
             map([]),
         ),
         d::AuxiliaryData::PostAlonzo(x) => {
