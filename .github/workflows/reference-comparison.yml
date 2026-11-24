@@ -188,11 +188,7 @@ jobs:
           rc=0
           cargo nextest run --no-fail-fast --test ${{ matrix.test }} --no-capture > "$RUNNER_TEMP/clean.out" 2>&1 || rc=$?
           cat "$RUNNER_TEMP/clean.out"
-          if [ "$rc" -ne 0 ] && [ "$rc" -ne 100 ]; then
-            echo "::error::the run exited $rc, which is neither a pass nor a failing test"
-            exit 1
-          fi
-          awk '/panicked at tests\//{f=1;next} f&&(/^note:/||/^$/||/^test /){f=0} f' "$RUNNER_TEMP/clean.out" | sort > "$RUNNER_TEMP/clean"
+          bash ../.github/scripts/judged-failure-lines.sh "$RUNNER_TEMP/clean.out" "$rc" "$RUNNER_TEMP/clean"
       - name: Apply the planted defect
         working-directory: ${{ matrix.patched }}
         env:
@@ -217,7 +213,7 @@ jobs:
             echo "::error::the run exited $rc, and a failing test exits 100"
             exit 1
           fi
-          awk '/panicked at tests\//{f=1;next} f&&(/^note:/||/^$/||/^test /){f=0} f' "$RUNNER_TEMP/planted.out" | sort > "$RUNNER_TEMP/planted"
+          bash ../.github/scripts/judged-failure-lines.sh "$RUNNER_TEMP/planted.out" "$rc" "$RUNNER_TEMP/planted"
           comm -13 "$RUNNER_TEMP/clean" "$RUNNER_TEMP/planted" > "$RUNNER_TEMP/added"
           comm -23 "$RUNNER_TEMP/clean" "$RUNNER_TEMP/planted" > "$RUNNER_TEMP/removed"
           jq -r '.[]' <<< "$EXPECTED" | sort > "$RUNNER_TEMP/expected"
