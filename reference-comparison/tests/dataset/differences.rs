@@ -416,3 +416,11 @@ pub const FRACTION_BEYOND_U64: Known = known(
     refuses,
     |e| refused_by_pallas(e) && e.refuses_at("expected u64", beyond_u64),
 );
+
+pub const EMPTY_NONEMPTY_SET: Known = known(
+    "an empty set is refused where the rule is a nonempty set",
+    Disagreement::Refuses,
+    TYPE_CANNOT_HOLD,
+    refuses,
+    |e| refused_by_pallas(e) && e.refuses_with("too few elements for a nonempty set"),
+);
