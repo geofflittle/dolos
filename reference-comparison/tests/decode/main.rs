@@ -267,7 +267,7 @@ fn output(x: &d::TransactionOutput) -> Value {
             ])
         }
         d::TransactionOutput::PostAlonzo(o) => {
-            let (coin, multi) = match &*o.value {
+            let (coin, multi) = match &o.value {
                 conway::Value::Coin(c) => (cb(c), map([])),
                 conway::Value::Multiasset(c, m) => (cb(c), assets(m)),
             };
@@ -376,7 +376,7 @@ fn top_guards(x: Option<&d::RequiredTopLevelGuards>) -> Value {
 }
 
 fn donation(x: Option<&d::PositiveCoin>) -> Value {
-    cb(&x.map(|coin| u64::from(**coin)).unwrap_or(0))
+    cb(&x.map(|coin| u64::from(*coin)).unwrap_or(0))
 }
 
 /// The fields a top level body and a sub transaction body both hold, by the

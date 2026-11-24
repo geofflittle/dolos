@@ -5,9 +5,8 @@ use pallas_codec::utils::CborWrap;
 use pallas_primitives::{
     AddrKeyhash, AssetName, BigInt, BoundedBytes, Bytes, Coin, Constr, DnsName, Epoch, ExUnits,
     Hash, IPv4, IPv6, KeepRaw, Metadata, Metadatum, NetworkId, NonZeroInt, PlutusData,
-    PlutusScript, PolicyId, PoolKeyhash, PoolMetadata, PositiveCoin, ProtocolVersion,
-    RationalNumber, Relay, RewardAccount, ScriptHash, StakeCredential, TransactionInput,
-    UnitInterval, VrfKeyhash, dijkstra,
+    PlutusScript, PolicyId, PoolKeyhash, PoolMetadata, PositiveCoin, ProtocolVersion, Relay,
+    RewardAccount, ScriptHash, StakeCredential, TransactionInput, VrfKeyhash, dijkstra,
 };
 
 use ledger_oracle_judge::comparison::Owner;
@@ -138,7 +137,7 @@ pub const RULES: &[(&str, Reader)] = &[
     ("mint", read!(dijkstra::Mint)),
     ("native_script", read!(dijkstra::NativeScript)),
     ("network_id", read!(NetworkId)),
-    ("nonnegative_interval", read!(RationalNumber)),
+    ("nonnegative_interval", read!(dijkstra::NonNegativeInterval)),
     ("nonzero_int64", read!(NonZeroInt)),
     ("operational_cert", read!(dijkstra::OperationalCert)),
     ("peras_certificate", read!(dijkstra::PerasCertificate)),
@@ -177,7 +176,7 @@ pub const RULES: &[(&str, Reader)] = &[
     ("script_hash", read!(ScriptHash)),
     ("signature", read!(Bytes)),
     ("slot", read!(u64)),
-    ("slot_interval", read!(u64)),
+    ("slot_interval", read!(u32)),
     ("stake_credential", read!(StakeCredential)),
     (
         "starting_account_balance_intervals",
@@ -194,7 +193,7 @@ pub const RULES: &[(&str, Reader)] = &[
     ("transaction_input", read!(TransactionInput)),
     ("transaction_output", read!(dijkstra::TransactionOutput<'_>)),
     ("transaction_witness_set", read!(dijkstra::WitnessSet<'_>)),
-    ("unit_interval", read!(UnitInterval)),
+    ("unit_interval", read!(dijkstra::UnitInterval)),
     ("url", read!(String)),
     ("value", read!(dijkstra::Value)),
     ("vkey", read!(Bytes)),
