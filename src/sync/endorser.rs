@@ -457,7 +457,10 @@ mod tests {
 
         let child = header_cbor(&certifies_nothing());
         let mut child: dijkstra::Header = minicbor::decode(&child).unwrap();
-        child.header_body.block_body_contains_leios_cert = true;
+        let dijkstra::HeaderBody::Leios(body) = &mut child.header_body else {
+            panic!("fixture precondition: a twelve field header body");
+        };
+        body.block_body_contains_leios_cert = true;
         let child = minicbor::to_vec(&child).unwrap();
         let child = dijkstra_header(&child);
         assert_eq!(

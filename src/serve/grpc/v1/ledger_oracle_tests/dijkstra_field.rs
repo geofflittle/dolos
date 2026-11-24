@@ -485,11 +485,16 @@ fn ledger_tx(bytes: &[u8]) -> Result<([u8; 32], TxFields), minicbor::decode::Err
 /// The Dijkstra fields a block's bytes state.
 fn ledger_block(bytes: &[u8]) -> Result<BlockFields, minicbor::decode::Error> {
     let (_, block): (u16, dijkstra::Block) = minicbor::decode(bytes)?;
-    let header = &block.header.header_body;
     let body = &block.block_body;
-    let announcement = match &header.eb_announcement {
-        Nullable::Some(a) => Some((Bytes(a.eb_hash.to_vec()), a.eb_size)),
-        Nullable::Null | Nullable::Undefined => None,
+    let (announcement, certifies) = match &block.header.header_body {
+        dijkstra::HeaderBody::Leios(header) => {
+            let announcement = match &header.eb_announcement {
+                Nullable::Some(a) => Some((Bytes(a.eb_hash.to_vec()), a.eb_size)),
+                Nullable::Null | Nullable::Undefined => None,
+            };
+            (announcement, header.block_body_contains_leios_cert)
+        }
+        dijkstra::HeaderBody::Praos(_) => (None, false),
     };
     let certificate = match &body.leios_certificate {
         Nullable::Some(c) => Some((Bytes(c.signers.to_vec()), Bytes(c.signature.to_vec()))),
@@ -502,7 +507,7 @@ fn ledger_block(bytes: &[u8]) -> Result<BlockFields, minicbor::decode::Error> {
     Ok(BlockFields {
         header: Header {
             endorser_block_announcement: announcement,
-            body_contains_leios_certificate: header.block_body_contains_leios_cert,
+            body_contains_leios_certificate: certifies,
         },
         body: Body {
             leios_certificate: certificate,

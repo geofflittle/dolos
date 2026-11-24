@@ -23,7 +23,7 @@ use pallas::{
         primitives::{
             dijkstra::{
                 Block, BlockBody, BlockTransaction, Header, HeaderBody, HeaderVersionInfo,
-                MempoolTransaction, OperationalCert,
+                LeiosHeaderBody, MempoolTransaction, OperationalCert,
             },
             KeepRaw, MaybeIndefArray, Nullable, VrfCert,
         },
@@ -147,7 +147,7 @@ pub(super) fn block(
         .collect::<Result<_, _>>()?;
     let number = tip.map_or(1, |t| t.number + 1);
     let header = Header {
-        header_body: HeaderBody {
+        header_body: HeaderBody::Leios(LeiosHeaderBody {
             block_number: number,
             slot,
             prev_hash: tip.map(|t| t.hash),
@@ -168,7 +168,7 @@ pub(super) fn block(
             },
             block_body_contains_leios_cert: false,
             eb_announcement: Nullable::Null,
-        },
+        }),
         body_signature: vec![0; 448].into(),
     };
     let block = Block {
