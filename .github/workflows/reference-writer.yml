@@ -1,0 +1,122 @@
+name: Reference writer
+
+on:
+  push:
+    paths:
+      - oracle/writer/**
+      - oracle/image/**
+      - oracle/*.sh
+      - reference-comparison/records/**
+      - .github/workflows/reference-writer.yml
+  workflow_dispatch:
+    inputs:
+      ledger:
+        description: The cardano-ledger commit to build the writer at, instead of every pin under reference-comparison/records
+        required: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  pins:
+    name: pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      pins: ${{ steps.pins.outputs.pins }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: reference-comparison/records
+          persist-credentials: false
+      - name: List the ledger pins
+        id: pins
+        env:
+          LEDGER: ${{ inputs.ledger }}
+        run: |
+          if [ -n "$LEDGER" ]; then
+            pins=$(jq -nc --arg p "$LEDGER" '[$p]')
+          else
+            pins=$(find reference-comparison/records -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort | jq -Rnc '[inputs]')
+          fi
+          if [ "$(jq length <<< "$pins")" -eq 0 ]; then
+            echo "::error::no ledger pin is selected"
+            exit 1
+          fi
+          if ! jq -e 'all(test("^[0-9a-f]{40}$"))' <<< "$pins" > /dev/null; then
+            echo "::error::a ledger pin is not a full commit hash: $pins"
+            exit 1
+          fi
+          echo "pins=$pins" >> "$GITHUB_OUTPUT"
+
+  records:
+    name: records
+    needs: pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        ledger: ${{ fromJSON(needs.pins.outputs.pins) }}
+    env:
+      LEDGER: ${{ matrix.ledger }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Name the image
+        id: names
+        run: sh oracle/writer-image.sh "$LEDGER" >> "$GITHUB_OUTPUT"
+      - name: Pull the writer image
+        env:
+          IMAGE: ${{ steps.names.outputs.image }}
+        run: |
+          # An empty docker configuration, so the pull carries no registry token.
+          DOCKER_CONFIG=$(mktemp -d)
+          export DOCKER_CONFIG
+          if ! docker pull "$IMAGE"; then
+            echo "::error::$IMAGE cannot be pulled without a token"
+            exit 1
+          fi
+          echo "$IMAGE: $(docker image inspect --format '{{.Size}}' "$IMAGE") bytes" >> "$GITHUB_STEP_SUMMARY"
+      - name: Write the records
+        env:
+          IMAGE: ${{ steps.names.outputs.image }}
+        run: |
+          dir=reference-comparison/records/$LEDGER
+          rm -rf "$dir"
+          mkdir -p "$dir"
+          for layer in decode mapping networking; do
+            docker run --rm "$IMAGE" "$layer" > "$dir/$layer.jsonl"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: records-${{ matrix.ledger }}
+          path: reference-comparison/records/${{ matrix.ledger }}
+          if-no-files-found: ignore
+      - name: Compare with the committed records
+        run: |
+          dir=reference-comparison/records/$LEDGER
+          committed=$(git ls-files -- "$dir" | wc -l)
+          if [ "$committed" -eq 0 ]; then
+            echo "::error::no records are committed at $LEDGER, so the written records have nothing to equal"
+            exit 1
+          fi
+          changes=$(git status --porcelain --untracked-files=all -- "$dir")
+          if [ -n "$changes" ]; then
+            while read -r state path; do
+              case $state in
+                D) echo "::error file=$path::$path is committed and was not written" ;;
+                '??') echo "::error file=$path::$path was written and is not committed" ;;
+                *) echo "::error file=$path::$path differs from the committed file ($state)"
+                   cmp <(git show "HEAD:$path") "$path" || true ;;
+              esac
+            done <<< "$changes"
+            exit 1
+          fi
+          echo "records at $LEDGER equal the $committed committed files" | tee -a "$GITHUB_STEP_SUMMARY"
