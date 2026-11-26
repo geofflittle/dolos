@@ -379,7 +379,16 @@ where
 
             let mapper = interop::Mapper::new(NoInputs);
             Ok(evaluate_tx(&domain, &chain, &tx_raw, |evaluation| {
-                tx_eval_to_u5c(evaluation, |r| mapper.map_redeemer(r))
+                tx_eval_to_u5c(evaluation, |r| u5c::cardano::Redeemer {
+                    purpose: mapper.map_multi_era_purpose(&r.multi_era_tag()).into(),
+                    payload: mapper.map_plutus_datum(r.data()).into(),
+                    index: r.index(),
+                    ex_units: Some(ExUnits {
+                        steps: r.ex_units().steps,
+                        memory: r.ex_units().mem,
+                    }),
+                    original_cbor: r.encode().into(),
+                })
             }))
         })
         .await?;

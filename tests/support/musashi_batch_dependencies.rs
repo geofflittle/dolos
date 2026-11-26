@@ -12,7 +12,10 @@ use pallas::{
 use std::sync::Arc;
 
 fn input(index: u64) -> n::TransactionInput {
-    n::TransactionInput::new([42; 32].into(), u16::try_from(index).unwrap())
+    n::TransactionInput {
+        transaction_id: [42; 32].into(),
+        index,
+    }
 }
 
 fn fixture(children: &[u64], references: &[u64], missing: Option<u64>) -> (ToyDomain, Vec<u8>) {
@@ -29,9 +32,7 @@ fn fixture(children: &[u64], references: &[u64], missing: Option<u64>) -> (ToyDo
     let output = |coin| {
         n::TransactionOutput::PostAlonzo(KeepRaw::from(n::PostAlonzoTransactionOutput {
             address: address.clone().into(),
-            value: pallas::ledger::primitives::conway::Value::Coin(coin)
-                .try_into()
-                .unwrap(),
+            value: n::Value::Coin(coin),
             datum_option: None,
             script_ref: None,
         }))
@@ -150,7 +151,7 @@ fn batch_duplicate_spending_references_still_reject() {
         assert!(
             match (children, &error) {
                 ([1, 1], DomainError::ChainError(ChainError::CborDecodingError(error))) =>
-                    error.to_string().contains("a repeated element"),
+                    error.to_string().contains("repeated element"),
                 (
                     [0, 1],
                     DomainError::ChainError(ChainError::Phase1ValidationRejected(

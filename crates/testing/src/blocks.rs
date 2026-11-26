@@ -171,7 +171,7 @@ pub fn make_dijkstra_block_with_tx(
     slot: BlockSlot,
     tx_body: dijkstra::TransactionBody<'static>,
 ) -> (ChainPoint, RawBlock) {
-    let header_body = dijkstra::HeaderBody {
+    let header_body = dijkstra::HeaderBody::Leios(dijkstra::LeiosHeaderBody {
         block_number: 1,
         slot,
         prev_hash: Some(Hash::from([9u8; 32])),
@@ -192,7 +192,7 @@ pub fn make_dijkstra_block_with_tx(
         },
         block_body_contains_leios_cert: false,
         eb_announcement: Nullable::Null,
-    };
+    });
 
     let header = dijkstra::Header {
         header_body,

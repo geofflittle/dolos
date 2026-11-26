@@ -260,9 +260,7 @@ fn synthetic(
         n::TransactionOutput::PostAlonzo(
             n::PostAlonzoTransactionOutput {
                 address: address.clone().into(),
-                value: pallas::ledger::primitives::conway::Value::Coin(coin)
-                    .try_into()
-                    .unwrap(),
+                value: n::Value::Coin(coin),
                 datum_option: None,
                 script_ref: None,
             }
@@ -275,7 +273,10 @@ fn synthetic(
         .iter()
         .enumerate()
         .map(|(index, amount)| {
-            let input = n::TransactionInput::new([90 + index as u8; 32].into(), 0);
+            let input = n::TransactionInput {
+                transaction_id: [90 + index as u8; 32].into(),
+                index: 0,
+            };
             delta.produced_utxo.insert(
                 TxoRef(input.transaction_id, 0),
                 Arc::new(EraCbor(8, minicbor::to_vec(output(20_000_000)).unwrap())),
@@ -458,16 +459,17 @@ fn registration(
         n::TransactionOutput::PostAlonzo(
             n::PostAlonzoTransactionOutput {
                 address: address.clone(),
-                value: pallas::ledger::primitives::conway::Value::Coin(coin)
-                    .try_into()
-                    .unwrap(),
+                value: n::Value::Coin(coin),
                 datum_option: None,
                 script_ref: None,
             }
             .into(),
         )
     };
-    let input = n::TransactionInput::new([120; 32].into(), 0);
+    let input = n::TransactionInput {
+        transaction_id: [120; 32].into(),
+        index: 0,
+    };
     let mut delta = UtxoSetDelta::default();
     delta.produced_utxo.insert(
         TxoRef(input.transaction_id, 0),

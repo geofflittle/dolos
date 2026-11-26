@@ -450,7 +450,7 @@ macro_rules! ledger_common {
             script_data_hash: ledger_hash(body.script_data_hash.as_ref()),
             network_id: body.network_id.map(|n| u32::from(u8::from(n))),
             treasury_value: body.treasury_value.map(|v| Integer::of(v.into())),
-            treasury_donation: body.donation.map(|v| Integer::of(u64::from(*v).into())),
+            treasury_donation: body.donation.map(|v| Integer::of(u64::from(v).into())),
         }
     }};
 }
@@ -485,7 +485,11 @@ fn ledger_tx(bytes: &[u8]) -> Result<([u8; 32], TxFields), minicbor::decode::Err
 /// The Dijkstra fields a block's bytes state.
 fn ledger_block(bytes: &[u8]) -> Result<BlockFields, minicbor::decode::Error> {
     let (_, block): (u16, dijkstra::Block) = minicbor::decode(bytes)?;
-    let header = &block.header.header_body;
+    let dijkstra::HeaderBody::Leios(header) = &block.header.header_body else {
+        return Err(minicbor::decode::Error::message(
+            "a Praos header body states no Leios field",
+        ));
+    };
     let body = &block.block_body;
     let announcement = match &header.eb_announcement {
         Nullable::Some(a) => Some((Bytes(a.eb_hash.to_vec()), a.eb_size)),

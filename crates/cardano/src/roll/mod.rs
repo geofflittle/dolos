@@ -1015,7 +1015,7 @@ pub(crate) mod dijkstra_fixture {
             collateral_return: None,
             total_collateral: None,
             reference_inputs: None,
-            voting_procedures: Some(votes().try_into().unwrap()),
+            voting_procedures: Some(votes()),
             proposal_procedures: Some(dijkstra::NonEmptySet::try_from(vec![proposal]).unwrap()),
             treasury_value: None,
             donation: None,
@@ -1025,14 +1025,6 @@ pub(crate) mod dijkstra_fixture {
             account_balance_intervals: None,
             starting_account_balance_intervals: None,
         }
-    }
-
-    /// A donation of the given amount.
-    fn positive_coin(amount: u64) -> dijkstra::PositiveCoin {
-        pallas::ledger::primitives::PositiveCoin::try_from(amount)
-            .unwrap()
-            .try_into()
-            .unwrap()
     }
 
     /// A body that spends and creates nothing, donates the amount given, and
@@ -1060,7 +1052,7 @@ pub(crate) mod dijkstra_fixture {
             voting_procedures: governance.voting_procedures,
             proposal_procedures: governance.proposal_procedures,
             treasury_value: None,
-            donation: Some(positive_coin(sub_donation)),
+            donation: Some(dijkstra::PositiveCoin::try_from(sub_donation).unwrap()),
             required_top_level_guards: None,
             direct_deposits: None,
             account_balance_intervals: None,
@@ -1075,7 +1067,7 @@ pub(crate) mod dijkstra_fixture {
         dijkstra::TransactionBody {
             voting_procedures: None,
             proposal_procedures: None,
-            donation: Some(positive_coin(donation)),
+            donation: Some(dijkstra::PositiveCoin::try_from(donation).unwrap()),
             sub_transactions: Some(dijkstra::NonEmptySet::try_from(vec![sub]).unwrap()),
             ..body_with_governance(dijkstra::GovAction::Information)
         }
@@ -1158,9 +1150,7 @@ pub(crate) mod dijkstra_fixture {
     ) -> dijkstra::SubTransaction<'static> {
         let output = dijkstra::PostAlonzoTransactionOutput {
             address: Bytes::from([[0x60].as_slice(), &[0x01; 28]].concat()),
-            value: pallas::ledger::primitives::conway::Value::Coin(2_000_000)
-                .try_into()
-                .unwrap(),
+            value: dijkstra::Value::Coin(2_000_000),
             datum_option: Some(KeepRaw::from(dijkstra::DatumOption::Hash(hash))),
             script_ref: None,
         };
@@ -1219,7 +1209,7 @@ pub(crate) mod dijkstra_fixture {
             bool,
         )>,
     ) -> OwnedMultiEraBlock {
-        let header_body = dijkstra::HeaderBody {
+        let header_body = dijkstra::HeaderBody::Leios(dijkstra::LeiosHeaderBody {
             block_number: 1,
             slot: SLOT,
             prev_hash: Some(Hash::from([9u8; 32])),
@@ -1240,7 +1230,7 @@ pub(crate) mod dijkstra_fixture {
             },
             block_body_contains_leios_cert: false,
             eb_announcement: Nullable::Null,
-        };
+        });
 
         let header = dijkstra::Header {
             header_body,

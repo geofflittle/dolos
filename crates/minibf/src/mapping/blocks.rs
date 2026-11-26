@@ -10,7 +10,10 @@ use dolos_cardano::ChainSummary;
 use itertools::Itertools as _;
 use pallas::{
     crypto::hash::{Hash, Hasher},
-    ledger::traverse::{MultiEraBlock, MultiEraHeader, MultiEraTx},
+    ledger::{
+        primitives::dijkstra,
+        traverse::{MultiEraBlock, MultiEraHeader, MultiEraTx},
+    },
 };
 
 use super::{bech32_pool, IntoModel};
@@ -183,20 +186,16 @@ impl<'a> BlockModelBuilder<'a> {
                         .to_string(),
                 ),
             ),
-            MultiEraHeader::Dijkstra(x) => (
-                Some(hex::encode(
-                    x.header_body
-                        .operational_cert
-                        .operational_cert_hot_vkey
-                        .as_slice(),
-                )),
-                Some(
-                    x.header_body
-                        .operational_cert
-                        .operational_cert_sequence_number
-                        .to_string(),
-                ),
-            ),
+            MultiEraHeader::Dijkstra(x) => {
+                let cert = match &x.header_body {
+                    dijkstra::HeaderBody::Praos(body) => &body.operational_cert,
+                    dijkstra::HeaderBody::Leios(body) => &body.operational_cert,
+                };
+                (
+                    Some(hex::encode(cert.operational_cert_hot_vkey.as_slice())),
+                    Some(cert.operational_cert_sequence_number.to_string()),
+                )
+            }
             // Byron headers carry no operational certificate, so an absent one
             // is the right answer and the only right one. Still written out
             // rather than folded into the arm below, because these two mean

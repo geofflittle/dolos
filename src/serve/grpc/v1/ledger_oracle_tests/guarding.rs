@@ -201,9 +201,7 @@ async fn declared_budget_and_estimation_are_distinct() {
             .0
             .clone();
         for value in r.values_mut() {
-            value.ex_units = pallas::ledger::primitives::ExUnits { mem: 1, steps: 1 }
-                .try_into()
-                .unwrap();
+            value.ex_units = n::ExUnits { mem: 1, steps: 1 };
         }
         tx.transaction_witness_set.redeemer = Some(n::Redeemers(r).into());
     });
@@ -266,9 +264,7 @@ async fn reference_input_provides_guard_code() {
     let output = n::TransactionOutput::PostAlonzo(
         n::PostAlonzoTransactionOutput {
             address: [vec![0x60], vec![0x55; 28]].concat().into(),
-            value: pallas::ledger::primitives::conway::Value::Coin(5_000_000)
-                .try_into()
-                .unwrap(),
+            value: n::Value::Coin(5_000_000),
             datum_option: None,
             script_ref: Some(CborWrap(n::ScriptRef::PlutusV4Script(script))),
         }
@@ -283,9 +279,12 @@ async fn reference_input_provides_guard_code() {
     };
     f.group.seed(&[&entry]);
     tx.transaction_body.reference_inputs = Some(
-        vec![n::TransactionInput::new([0x77; 32].into(), 0)]
-            .try_into()
-            .unwrap(),
+        vec![n::TransactionInput {
+            transaction_id: [0x77; 32].into(),
+            index: 0,
+        }]
+        .try_into()
+        .unwrap(),
     );
     tx.transaction_witness_set.plutus_v4_script = None;
     let raw = minicbor::to_vec(tx).unwrap();
@@ -386,9 +385,12 @@ async fn missing_reference_input_is_reported() {
     let f = fixture(900);
     let raw = mutation(&f, |tx| {
         tx.transaction_body.reference_inputs = Some(
-            vec![n::TransactionInput::new([0x78; 32].into(), 0)]
-                .try_into()
-                .unwrap(),
+            vec![n::TransactionInput {
+                transaction_id: [0x78; 32].into(),
+                index: 0,
+            }]
+            .try_into()
+            .unwrap(),
         );
     });
     let (evaluated, estimated) = reports(&f, &raw);

@@ -309,9 +309,7 @@ fn independent_registrations() -> (
         n::TransactionOutput::PostAlonzo(
             n::PostAlonzoTransactionOutput {
                 address: address.clone().into(),
-                value: pallas::ledger::primitives::conway::Value::Coin(coin)
-                    .try_into()
-                    .unwrap(),
+                value: n::Value::Coin(coin),
                 datum_option: None,
                 script_ref: None,
             }
@@ -327,7 +325,10 @@ fn independent_registrations() -> (
     let template = MultiEraTx::decode_for_era(Era::Dijkstra, &control).unwrap();
     let mut delta = UtxoSetDelta::default();
     let transactions = [81u8, 82].map(|id| {
-        let input = n::TransactionInput::new([id; 32].into(), 0);
+        let input = n::TransactionInput {
+            transaction_id: [id; 32].into(),
+            index: 0,
+        };
         delta.produced_utxo.insert(
             TxoRef(input.transaction_id, 0),
             std::sync::Arc::new(EraCbor(8, minicbor::to_vec(output(20_000_000)).unwrap())),
@@ -444,7 +445,10 @@ fn v4_reference_script_beside_a_v3_script_evaluates() {
         vec![0].into(),
     ))));
     *inner = KeepRaw::from(changed);
-    let extra = n::TransactionInput::new([121; 32].into(), 0);
+    let extra = n::TransactionInput {
+        transaction_id: [121; 32].into(),
+        index: 0,
+    };
     let mut delta = UtxoSetDelta::default();
     delta.produced_utxo.insert(
         TxoRef(extra.transaction_id, 0),
