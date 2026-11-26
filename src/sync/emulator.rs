@@ -87,14 +87,14 @@ impl Worker {
                     vrf_vkey: empty_bytes(),
                     vrf_result: pallas::ledger::primitives::babbage::VrfCert(
                         empty_bytes(),
-                        empty_bytes(),
+                        Bytes::from(vec![0; 80]),
                     ),
                     block_body_size: 0,
                     operational_cert: pallas::ledger::primitives::conway::OperationalCert {
-                        operational_cert_hot_vkey: empty_bytes(),
+                        operational_cert_hot_vkey: Bytes::from(vec![0; 32]),
                         operational_cert_sequence_number: 0,
                         operational_cert_kes_period: 0,
-                        operational_cert_sigma: empty_bytes(),
+                        operational_cert_sigma: Bytes::from(vec![0; 64]),
                     },
                     protocol_version: (1, 0),
                 },

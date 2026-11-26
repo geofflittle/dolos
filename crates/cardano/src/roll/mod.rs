@@ -1213,16 +1213,16 @@ pub(crate) mod dijkstra_fixture {
             block_number: 1,
             slot: SLOT,
             prev_hash: Some(Hash::from([9u8; 32])),
-            issuer_vkey: Bytes::from(vec![0x10, 0x11]),
-            vrf_vkey: Bytes::from(vec![0x12, 0x13]),
-            vrf_result: VrfCert(Bytes::from(vec![0x14]), Bytes::from(vec![0x15])),
+            issuer_vkey: Bytes::from(vec![0x10; 32]),
+            vrf_vkey: Bytes::from(vec![0x12; 32]),
+            vrf_result: VrfCert(Bytes::from(vec![0x14; 64]), Bytes::from(vec![0x15; 80])),
             block_body_size: 0,
             block_body_hash: Hash::from([0u8; 32]),
             operational_cert: pallas::ledger::primitives::babbage::OperationalCert {
-                operational_cert_hot_vkey: Bytes::from(vec![0x16]),
+                operational_cert_hot_vkey: Bytes::from(vec![0x16; 32]),
                 operational_cert_sequence_number: 1,
                 operational_cert_kes_period: 0,
-                operational_cert_sigma: Bytes::from(vec![0x17]),
+                operational_cert_sigma: Bytes::from(vec![0x17; 64]),
             },
             header_version_info: dijkstra::HeaderVersionInfo {
                 highest_supported_major_version: 12,
@@ -1234,7 +1234,7 @@ pub(crate) mod dijkstra_fixture {
 
         let header = dijkstra::Header {
             header_body,
-            body_signature: Bytes::from(vec![0x18]),
+            body_signature: Bytes::from(vec![0x18; 448]),
         };
 
         let txs = txs

@@ -114,6 +114,7 @@ refused[DijkstraMalformed("empty required top-level guards")] | leaves DecoderEr
 refused[DijkstraMalformed("empty starting account balance intervals")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k27
 refused[DijkstraMalformed("empty voting procedures")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k19,sub.k19
 refused[DijkstraMalformed("empty withdrawals")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k5,sub.k5
+refused[DijkstraMalformed("execution units")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w5,sub.w5
 refused[DijkstraMalformed("key witness")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.w0,sub.w0
 refused[DijkstraMalformed("metadata")] | leaves DecoderErrorDeserialiseFailure | reads top.aux,sub.aux
 refused[DijkstraMalformed("multi-asset value")] | leaves DecoderErrorDeserialiseFailure,DecoderErrorCustom | reads top.k1,sub.k1,top.k9,sub.k9
