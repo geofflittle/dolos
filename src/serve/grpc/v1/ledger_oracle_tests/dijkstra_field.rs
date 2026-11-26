@@ -450,7 +450,7 @@ macro_rules! ledger_common {
             script_data_hash: ledger_hash(body.script_data_hash.as_ref()),
             network_id: body.network_id.map(|n| u32::from(u8::from(n))),
             treasury_value: body.treasury_value.map(|v| Integer::of(v.into())),
-            treasury_donation: body.donation.map(|v| Integer::of(u64::from(*v).into())),
+            treasury_donation: body.donation.map(|v| Integer::of(u64::from(v).into())),
         }
     }};
 }

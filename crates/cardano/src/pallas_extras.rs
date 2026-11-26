@@ -540,8 +540,8 @@ pub fn tx_treasury_donation(tx: &MultiEraTx) -> Option<Lovelace> {
         // that carries the field has to read it, because the wildcard below
         // stops the node rather than answering, and a chain past the Dijkstra
         // hard fork puts every one of its transactions through here.
-        MultiEraTx::Dijkstra(x) => x.transaction_body.donation.map(|x| u64::from(*x)),
-        MultiEraTx::DijkstraSub(x, _) => x.sub_transaction_body.donation.map(|x| u64::from(*x)),
+        MultiEraTx::Dijkstra(x) => x.transaction_body.donation.map(u64::from),
+        MultiEraTx::DijkstraSub(x, _) => x.sub_transaction_body.donation.map(u64::from),
         MultiEraTx::AlonzoCompatible(..) => None,
         MultiEraTx::Babbage(..) => None,
         MultiEraTx::Byron(..) => None,
