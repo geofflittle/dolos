@@ -2556,7 +2556,8 @@ async fn a_declared_entry_naming_an_unjudged_record_prints_stale_manifest() {
         "{intact}"
     );
     let declared = judge_supp(|m| {
-        m.declared.insert(supp(u32::MAX), Feature(label.to_string()));
+        m.declared
+            .insert(supp(u32::MAX), Feature(label.to_string()));
     })
     .await;
     let lines = failing(&declared, Judge::Validation);
