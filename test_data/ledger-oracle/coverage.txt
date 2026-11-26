@@ -712,7 +712,7 @@ leaf:TooManyCollateralInputs 1
 leaf:NoCollateralInputs 1
 leaf:IncorrectTotalCollateralField 1
 leaf:PtrPresentInCollateralReturn 1
-leaf:DecoderErrorDeserialiseFailure 39
+leaf:DecoderErrorDeserialiseFailure 43
 leaf:DecoderErrorCustom 4
 leaf:DecoderErrorLeftover 1
 rule:refused[CborDecodingError].refused 46
@@ -841,7 +841,7 @@ rule:refused[DijkstraMalformed("empty_voting_procedures")].refused 0
 rule:refused[DijkstraMalformed("empty_voting_procedures")].accepted 386
 rule:refused[DijkstraMalformed("empty_withdrawals")].refused 0
 rule:refused[DijkstraMalformed("empty_withdrawals")].accepted 47
-rule:refused[DijkstraMalformed("execution_units")].refused 1
+rule:refused[DijkstraMalformed("execution_units")].refused 0
 rule:refused[DijkstraMalformed("execution_units")].accepted 816
 rule:refused[DijkstraMalformed("key_witness")].refused 0
 rule:refused[DijkstraMalformed("key_witness")].accepted 11490
@@ -983,7 +983,7 @@ rule:unsupported[subtransaction_body_fields].refused 0
 rule:unsupported[subtransaction_body_fields].accepted 256
 rule:unsupported[witness_fields].refused 0
 rule:unsupported[witness_fields].accepted 11490
-entry:receive_tx 25597
+entry:receive_tx 25601
 entry:estimate_tx_calls 14230
 entry:redeemer_arguments 1213
 entry:min_fee 13191
