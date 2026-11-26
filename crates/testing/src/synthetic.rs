@@ -74,6 +74,26 @@ pub struct SyntheticBlockConfig {
     pub spend_previous_outputs: bool,
 }
 
+/// The metadatum for `text`, split into strings of at most 64 bytes.
+fn text_metadatum(text: &str) -> alonzo::Metadatum {
+    const MAX: usize = 64;
+    if text.len() <= MAX {
+        return alonzo::Metadatum::Text(text.to_string());
+    }
+    let mut chunks = Vec::new();
+    let mut chunk = String::new();
+    for c in text.chars() {
+        if chunk.len() + c.len_utf8() > MAX {
+            chunks.push(alonzo::Metadatum::Text(std::mem::take(&mut chunk)));
+        }
+        chunk.push(c);
+    }
+    if !chunk.is_empty() {
+        chunks.push(alonzo::Metadatum::Text(chunk));
+    }
+    alonzo::Metadatum::Array(chunks)
+}
+
 /// Build a testnet Shelley address with both payment and stake key parts.
 /// Used by SyntheticBlockConfig to create addresses that carry a stake
 /// credential (required for stake registration certificates in synthetic
@@ -237,10 +257,7 @@ pub fn build_synthetic_blocks(
         })
         .unwrap_or(Network::Testnet);
     let metadata_entries = if cfg.metadata_entries.is_empty() {
-        vec![(
-            cfg.metadata_label,
-            alonzo::Metadatum::Text(cfg.metadata_value.clone()),
-        )]
+        vec![(cfg.metadata_label, text_metadatum(&cfg.metadata_value))]
     } else {
         cfg.metadata_entries.clone()
     };

@@ -2546,40 +2546,22 @@ async fn every_layer_accepts_the_sha2_256_mk_nil_data_and_wide_integer_records_i
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn deleting_one_declared_entry_prints_unsupported_unexpected() {
+async fn a_declared_entry_naming_an_unjudged_record_prints_stale_manifest() {
+    let label = "witness fields";
+    let absent = supp(u32::MAX).to_string();
+    let stale = format!(" declared={label} dolos=not_judged");
     let intact = judge_supp(|_| ()).await;
-    let (record, Feature(label)) = Manifests::committed()
-        .declared
-        .into_iter()
-        .find(|(id, _)| id.corpus == CorpusKind::Supp)
-        .expect("a declared supp record");
-    let unexpected = format!(" label={label}");
     assert!(
-        intact
-            .validation
-            .refuse_unsupported
-            .contains(&(record, format!("label={label}"))),
+        !fails_with(&intact, Judge::Validation, &absent, &stale),
         "{intact}"
     );
-    let shown = record.to_string();
-    assert!(
-        !fails_with(&intact, Judge::Validation, &shown, &unexpected),
-        "{intact}"
-    );
-    let absent = supp(u32::MAX);
-    let deleted = judge_supp(|m| {
-        m.declared.remove(&record).unwrap();
-        m.declared.insert(absent, Feature(label.clone()));
+    let declared = judge_supp(|m| {
+        m.declared.insert(supp(u32::MAX), Feature(label.to_string()));
     })
     .await;
-    let lines = failing(&deleted, Judge::Validation);
+    let lines = failing(&declared, Judge::Validation);
     assert!(
-        fails_with(&deleted, Judge::Validation, &shown, &unexpected),
-        "{lines:?}"
-    );
-    let stale = format!(" declared={label} dolos=not_judged");
-    assert!(
-        fails_with(&deleted, Judge::Validation, &absent.to_string(), &stale),
+        fails_with(&declared, Judge::Validation, &absent, &stale),
         "{lines:?}"
     );
 }

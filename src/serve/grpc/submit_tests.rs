@@ -118,8 +118,8 @@ async fn estimation_rpc_placeholder_budgets() {
             steps: 4805427,
         },
         n::ExUnits {
-            mem: u64::MAX,
-            steps: u64::MAX,
+            mem: i64::MAX as u64,
+            steps: i64::MAX as u64,
         },
     ] {
         let changed = derivative(&bytes, false, Some(budget));
