@@ -116,14 +116,6 @@ impl Evidence {
     fn refuses_at(&self, text: &str, holds: fn(u8) -> bool) -> bool {
         self.refuses_with(text) && self.refused_byte.is_some_and(holds)
     }
-
-    /// Whether the value read back loses the cost models of languages its
-    /// type has no field for.
-    fn unknown_cost_models_lost(&self) -> bool {
-        self.round_trip
-            .as_ref()
-            .is_err_and(|how| how.contains("unknown: {"))
-    }
 }
 
 /// Whether every change found is one of `kept` or `owned`.
@@ -177,10 +169,6 @@ const REPEATED_KEY_MERGED: Owner = Owner::Defect {
 
 const EMBEDDED_REST_DROPPED: Owner = Owner::Defect {
     defect: "an embedded encoding keeps only its first item",
-};
-
-const COST_MODELS_UNWRITTEN: Owner = Owner::Defect {
-    defect: "CostModels writes no cost model past key 2",
 };
 
 const FLAT_ENUM_DEFINITE: Owner = Owner::Defect {
@@ -375,22 +363,6 @@ pub const EMBEDDED_REST: Known = known(
     EMBEDDED_REST_DROPPED,
     accepts,
     |e| refused_and_read_whole(e) && e.first_owned(Change::EmbeddedBytesDropped),
-);
-
-pub const UNKNOWN_COST_MODELS: Known = known(
-    "cost models of unknown languages are not written",
-    Disagreement::Values,
-    COST_MODELS_UNWRITTEN,
-    differs,
-    |e| {
-        !e.refused_by_ledger
-            && e.unknown_cost_models_lost()
-            && match e.axis {
-                Axis::RoundTrip => true,
-                Axis::Bytes => e.ledger_writes_other_than(Change::EntriesDropped),
-                Axis::Verdict => false,
-            }
-    },
 );
 
 pub const FLAT_ENUM_INDEFINITE: Known = known(
