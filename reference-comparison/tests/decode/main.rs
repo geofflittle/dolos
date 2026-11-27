@@ -656,23 +656,37 @@ fn tx(
 }
 
 fn block(b: &d::Block) -> Value {
-    let h = &b.header.header_body;
-    let header = obj(vec![
-        ("block_no", cb(&h.block_number)),
-        ("slot", cb(&h.slot)),
-        ("prev", cb(&h.prev_hash)),
-        ("issuer_vk", cb(&h.issuer_vkey)),
-        ("vrf_vk", cb(&h.vrf_vkey)),
-        ("vrf", cb(&h.vrf_result)),
-        ("body_size", cb(&h.block_body_size)),
-        ("body_hash", cb(&h.block_body_hash)),
-        ("ocert", cb(&h.operational_cert)),
-        ("version", cb(&h.header_version_info)),
-        ("leios_cert", json!(h.block_body_contains_leios_cert)),
-        ("eb", nullable(&h.eb_announcement, cb)),
-        ("sig", cb(&b.header.body_signature)),
-        ("hash", cb(&Hasher::<256>::hash(b.header.raw_cbor()))),
-    ]);
+    let mut fields = match &b.header.header_body {
+        d::HeaderBody::Praos(h) => vec![
+            ("block_no", cb(&h.block_number)),
+            ("slot", cb(&h.slot)),
+            ("prev", cb(&h.prev_hash)),
+            ("issuer_vk", cb(&h.issuer_vkey)),
+            ("vrf_vk", cb(&h.vrf_vkey)),
+            ("vrf", cb(&h.vrf_result)),
+            ("body_size", cb(&h.block_body_size)),
+            ("body_hash", cb(&h.block_body_hash)),
+            ("ocert", cb(&h.operational_cert)),
+            ("version", cb(&h.protocol_version)),
+        ],
+        d::HeaderBody::Leios(h) => vec![
+            ("block_no", cb(&h.block_number)),
+            ("slot", cb(&h.slot)),
+            ("prev", cb(&h.prev_hash)),
+            ("issuer_vk", cb(&h.issuer_vkey)),
+            ("vrf_vk", cb(&h.vrf_vkey)),
+            ("vrf", cb(&h.vrf_result)),
+            ("body_size", cb(&h.block_body_size)),
+            ("body_hash", cb(&h.block_body_hash)),
+            ("ocert", cb(&h.operational_cert)),
+            ("version", cb(&h.header_version_info)),
+            ("leios_cert", json!(h.block_body_contains_leios_cert)),
+            ("eb", nullable(&h.eb_announcement, cb)),
+        ],
+    };
+    fields.push(("sig", cb(&b.header.body_signature)));
+    fields.push(("hash", cb(&Hasher::<256>::hash(b.header.raw_cbor()))));
+    let header = obj(fields);
     let txs = b
         .block_body
         .transactions

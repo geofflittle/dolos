@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 env:
-  PALLAS_REF: ${{ inputs.pallas_ref || '20223bc95abb6ae7536858a01ddeddaacd4b741c' }}
+  PALLAS_REF: ${{ inputs.pallas_ref || 'c19cfc8864f45a3da68ef5b96ae75518f01793c6' }}
   COMPARISONS: ${{ inputs.comparisons || 'decode mapping networking' }}
   TOOLCHAIN: nightly-2026-09-04
 

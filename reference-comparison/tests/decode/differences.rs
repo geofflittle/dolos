@@ -95,6 +95,10 @@ pub const LIST: &[Entry] = &[
         accepts("an extra array item is dropped", EXTRA_ITEM_DROPPED, any),
     ),
     (
+        "wits set-empty",
+        accepts("an empty set is kept as read", KEPT_AS_READ, any),
+    ),
+    (
         "wits zap",
         accepts("a size is kept as read", KEPT_AS_READ, any),
     ),

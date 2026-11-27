@@ -2,7 +2,7 @@
   {
     "planted": "fraction-any-tag",
     "patched": "pallas-head",
-    "pallas": "598356e0a021c70477c1f18a507b40d078ed634f",
+    "pallas": "c19cfc8864f45a3da68ef5b96ae75518f01793c6",
     "test": "decode",
     "expected": [
       "decode: class \"body rational-tag\" disagrees (accepts) 3",
@@ -13,7 +13,7 @@
   {
     "planted": "tx-zap-entry-removed",
     "patched": "dolos",
-    "pallas": "598356e0a021c70477c1f18a507b40d078ed634f",
+    "pallas": "c19cfc8864f45a3da68ef5b96ae75518f01793c6",
     "test": "decode",
     "expected": [
       "decode: class \"tx zap\" disagrees (accepts) 4"
